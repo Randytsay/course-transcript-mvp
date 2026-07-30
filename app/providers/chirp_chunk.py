@@ -27,7 +27,7 @@ def main():
     atomic(CHUNK/'manifest.json',{'chunk_index':index,'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':op.operation.name,'status':'SUBMITTED','created_at':datetime.now(UTC).isoformat()})
     response=op.result(timeout=3600); fr=response.results[uri]; result_kind=fr._pb.WhichOneof('result'); error={'code':fr.error.code,'message':fr.error.message} if fr.error else None
     record={'chunk_index':index,'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':op.operation.name,'status':'FAILED','error':error,'result_oneof':result_kind,'google_cloud_speech_version':importlib.metadata.version('google-cloud-speech'),'output_field':None,'gcs_uri':None,'created_at':datetime.now(UTC).isoformat()}
-    if error or result_kind!='cloud_storage_result': atomic(CHUNK/'manifest.json',record); raise RuntimeError(str(record))
+    if (error and error['code']!=0) or result_kind!='cloud_storage_result': atomic(CHUNK/'manifest.json',record); raise RuntimeError(str(record))
     csr=fr.cloud_storage_result; field='native_format_uri' if getattr(csr,'native_format_uri','') else 'uri'; result_uri=getattr(csr,field); record.update(output_field=field,gcs_uri=result_uri)
     rb,rn=result_uri.removeprefix('gs://').split('/',1); raw=storage.Client().bucket(rb).blob(rn).download_as_text(); (CHUNK/'chirp-raw.json').write_text(raw,encoding='utf-8')
     parsed=cloud_speech.BatchRecognizeResults.from_json(raw); words=[]
