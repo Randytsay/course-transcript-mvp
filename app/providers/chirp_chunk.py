@@ -24,6 +24,7 @@ def main():
     config=cloud_speech.RecognitionConfig(auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),language_codes=['cmn-Hant-TW'],model='chirp_3',features=cloud_speech.RecognitionFeatures(enable_word_time_offsets=True))
     uri=f'gs://{bucket_name}/{object_name}'; out=f'gs://{bucket_name}/jobs/voice_11386603-seg1/chunks/{name}/chirp-output/'
     op=client.batch_recognize(request=cloud_speech.BatchRecognizeRequest(recognizer=f'projects/{project}/locations/us/recognizers/_',config=config,files=[cloud_speech.BatchRecognizeFileMetadata(uri=uri)],recognition_output_config=cloud_speech.RecognitionOutputConfig(gcs_output_config=cloud_speech.GcsOutputConfig(uri=out))))
+    atomic(CHUNK/'manifest.json',{'chunk_index':index,'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':op.operation.name,'status':'SUBMITTED','created_at':datetime.now(UTC).isoformat()})
     response=op.result(timeout=3600); fr=response.results[uri]; result_kind=fr._pb.WhichOneof('result'); error={'code':fr.error.code,'message':fr.error.message} if fr.error else None
     record={'chunk_index':index,'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':op.operation.name,'status':'FAILED','error':error,'result_oneof':result_kind,'google_cloud_speech_version':importlib.metadata.version('google-cloud-speech'),'output_field':None,'gcs_uri':None,'created_at':datetime.now(UTC).isoformat()}
     if error or result_kind!='cloud_storage_result': atomic(CHUNK/'manifest.json',record); raise RuntimeError(str(record))
