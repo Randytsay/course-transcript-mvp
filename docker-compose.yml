@@ -5,7 +5,8 @@ services:
       dockerfile: Dockerfile
     image: course-transcript-infrastructure-test:local
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
     volumes:
@@ -14,3 +15,30 @@ services:
       - ./tmp:/app/tmp
       - ./data:/app/data
     command: []
+
+  api:
+    profiles: ["web"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-api:local
+    environment:
+      COURSE_TRANSCRIPT_DATA_DIR: /app/data
+      COURSE_TRANSCRIPT_CORS_ORIGINS: http://localhost:3000
+    volumes:
+      - ./data:/app/data:ro
+      - ./logs:/app/logs:ro
+    command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  frontend:
+    profiles: ["web"]
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: /api/v1
+      API_INTERNAL_BASE_URL: http://api:8000
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:3000:3000"

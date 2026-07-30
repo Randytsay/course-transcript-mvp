@@ -13,5 +13,4 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
-ENTRYPOINT ["python", "-m", "app.infrastructure_test"]
-
+CMD ["python", "-m", "app.infrastructure_test"]

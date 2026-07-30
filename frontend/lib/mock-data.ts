@@ -79,11 +79,11 @@ export const jobs: TranscriptJob[] = [
 ];
 
 export const transcriptSegments: TranscriptSegment[] = [
-  { id: 126, startMs: 748120, endMs: 753480, rawText: "女性在不同的生命階段需要的營養支持不太一樣", correctedText: "女性在不同的生命階段，需要的營養支持不太一樣。" },
-  { id: 127, startMs: 753480, endMs: 758920, rawText: "特別是進入更年期之前就要開始注意日常保養", correctedText: "特別是在進入更年期之前，就要開始注意日常保養。" },
-  { id: 128, startMs: 758920, endMs: 764300, rawText: "接下來介紹的是美安的 OPC 三還有相關的抗氧化營養", correctedText: "接下來介紹的是美安的 OPC-3，以及相關的抗氧化營養。", uncertainTerms: ["OPC-3"] },
-  { id: 129, startMs: 764300, endMs: 769840, rawText: "這不是單一成分而是讓整體配方可以互相協同", correctedText: "這不是單一成分，而是讓整體配方可以互相協同。" },
-  { id: 130, startMs: 769840, endMs: 775240, rawText: "在實際分享的時候要先了解對方目前最在意的問題", correctedText: "實際分享時，要先了解對方目前最在意的問題。" }
+  { id: "126", startMs: 748120, endMs: 753480, rawText: "女性在不同的生命階段需要的營養支持不太一樣", correctedText: "女性在不同的生命階段，需要的營養支持不太一樣。", revision: 0 },
+  { id: "127", startMs: 753480, endMs: 758920, rawText: "特別是進入更年期之前就要開始注意日常保養", correctedText: "特別是在進入更年期之前，就要開始注意日常保養。", revision: 0 },
+  { id: "128", startMs: 758920, endMs: 764300, rawText: "接下來介紹的是美安的 OPC 三還有相關的抗氧化營養", correctedText: "接下來介紹的是美安的 OPC-3，以及相關的抗氧化營養。", uncertainTerms: ["OPC-3"], revision: 0 },
+  { id: "129", startMs: 764300, endMs: 769840, rawText: "這不是單一成分而是讓整體配方可以互相協同", correctedText: "這不是單一成分，而是讓整體配方可以互相協同。", revision: 0 },
+  { id: "130", startMs: 769840, endMs: 775240, rawText: "在實際分享的時候要先了解對方目前最在意的問題", correctedText: "實際分享時，要先了解對方目前最在意的問題。", revision: 0 }
 ];
 
 export const reviewTerms: ReviewTerm[] = [

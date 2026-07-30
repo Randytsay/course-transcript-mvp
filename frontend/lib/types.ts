@@ -18,12 +18,20 @@ export interface PipelineStep {
 }
 
 export interface TranscriptSegment {
-  id: number;
+  id: string;
   startMs: number;
   endMs: number;
   rawText: string;
   correctedText: string;
   uncertainTerms?: string[];
+  revision: number;
+}
+
+export interface Artifact {
+  id: string;
+  name: string;
+  sizeBytes: number;
+  updatedAt: string;
 }
 
 export interface ReviewTerm {
