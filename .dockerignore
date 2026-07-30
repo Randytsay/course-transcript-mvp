@@ -1,0 +1,13 @@
+.env
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+._*
+**/._*
+data/
+logs/
+tmp/
+secrets/
+tests/
+

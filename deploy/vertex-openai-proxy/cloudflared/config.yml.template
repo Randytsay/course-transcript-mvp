@@ -1,0 +1,10 @@
+tunnel: TUNNEL_UUID
+credentials-file: /opt/vertex-openai-proxy/cloudflared/credentials.json
+
+ingress:
+  - hostname: vertex-api.ccwu.cc
+    service: http://127.0.0.1:4000
+    originRequest:
+      connectTimeout: 30s
+      keepAliveTimeout: 90s
+  - service: http_status:404

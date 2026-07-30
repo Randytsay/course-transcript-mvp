@@ -1,0 +1,19 @@
+[Unit]
+Description=Vertex AI OpenAI-compatible LiteLLM proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/vertex-openai-proxy
+EnvironmentFile=/opt/vertex-openai-proxy/.env
+Environment=GOOGLE_APPLICATION_CREDENTIALS=/opt/vertex-openai-proxy/secrets/gcp-sa.json
+ExecStart=/opt/vertex-openai-proxy/venv/bin/litellm --config /opt/vertex-openai-proxy/litellm-config.yaml --port 4000
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

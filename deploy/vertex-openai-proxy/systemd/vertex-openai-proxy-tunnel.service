@@ -1,0 +1,16 @@
+[Unit]
+Description=Cloudflare Tunnel for Vertex OpenAI proxy
+After=vertex-openai-proxy.service
+Wants=vertex-openai-proxy.service
+
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/cloudflared tunnel --no-autoupdate --config /opt/vertex-openai-proxy/cloudflared/config.yml run
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

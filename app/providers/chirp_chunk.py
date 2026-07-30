@@ -1,0 +1,37 @@
+"""Run and verify exactly one Chirp 3 chunk using GCS output."""
+from __future__ import annotations
+
+import importlib.metadata
+import json
+import os
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+
+from google.cloud import speech_v2, storage
+from google.cloud.speech_v2.types import cloud_speech
+
+ROOT=Path('/app'); JOB=ROOT/'data'/'jobs'/'voice_11386603-seg1'
+def atomic(path:Path, data:object):
+    temp=path.with_suffix(path.suffix+'.tmp'); temp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8'); temp.replace(path)
+def ms(v): return round(v.total_seconds()*1000)
+def main():
+    index=int(os.environ['CHUNK_INDEX']); start=float(os.environ['CHUNK_START_SECONDS']); end=float(os.environ['CHUNK_END_SECONDS']); name=f'chunk-{index:03d}'; CHUNK=JOB/'chunks'/name
+    project,bucket_name=os.environ['GOOGLE_CLOUD_PROJECT'],os.environ['GCS_BUCKET']; CHUNK.mkdir(parents=True,exist_ok=True)
+    audio=CHUNK/'audio.flac'; subprocess.run(['ffmpeg','-y','-ss',str(start),'-i',str(JOB/'normalized.flac'),'-t',str(end-start),'-c:a','flac',str(audio)],check=True,stdout=subprocess.DEVNULL,stderr=subprocess.PIPE)
+    bucket=storage.Client().bucket(bucket_name); object_name=f'jobs/voice_11386603-seg1/chunks/{name}/audio.flac'; blob=bucket.blob(object_name); blob.upload_from_filename(audio,content_type='audio/flac')
+    client=speech_v2.SpeechClient(client_options={'api_endpoint':'us-speech.googleapis.com'})
+    config=cloud_speech.RecognitionConfig(auto_decoding_config=cloud_speech.AutoDetectDecodingConfig(),language_codes=['cmn-Hant-TW'],model='chirp_3',features=cloud_speech.RecognitionFeatures(enable_word_time_offsets=True))
+    uri=f'gs://{bucket_name}/{object_name}'; out=f'gs://{bucket_name}/jobs/voice_11386603-seg1/chunks/{name}/chirp-output/'
+    op=client.batch_recognize(request=cloud_speech.BatchRecognizeRequest(recognizer=f'projects/{project}/locations/us/recognizers/_',config=config,files=[cloud_speech.BatchRecognizeFileMetadata(uri=uri)],recognition_output_config=cloud_speech.RecognitionOutputConfig(gcs_output_config=cloud_speech.GcsOutputConfig(uri=out))))
+    response=op.result(timeout=3600); fr=response.results[uri]; result_kind=fr._pb.WhichOneof('result'); error={'code':fr.error.code,'message':fr.error.message} if fr.error else None
+    record={'chunk_index':index,'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':op.operation.name,'status':'FAILED','error':error,'result_oneof':result_kind,'google_cloud_speech_version':importlib.metadata.version('google-cloud-speech'),'output_field':None,'gcs_uri':None,'created_at':datetime.now(UTC).isoformat()}
+    if error or result_kind!='cloud_storage_result': atomic(CHUNK/'manifest.json',record); raise RuntimeError(str(record))
+    csr=fr.cloud_storage_result; field='native_format_uri' if getattr(csr,'native_format_uri','') else 'uri'; result_uri=getattr(csr,field); record.update(output_field=field,gcs_uri=result_uri)
+    rb,rn=result_uri.removeprefix('gs://').split('/',1); raw=storage.Client().bucket(rb).blob(rn).download_as_text(); (CHUNK/'chirp-raw.json').write_text(raw,encoding='utf-8')
+    parsed=cloud_speech.BatchRecognizeResults.from_json(raw); words=[]
+    for r in parsed.results:
+      for w in r.alternatives[0].words: words.append({'word':w.word,'start_ms':ms(w.start_offset)+round(start*1000),'end_ms':ms(w.end_offset)+round(start*1000)})
+    record.update(status='SUCCEEDED',word_count=len(words),max_end_ms=max((w['end_ms'] for w in words),default=0)); atomic(CHUNK/'words.json',{'chunk_index':index,'words':words}); atomic(CHUNK/'manifest.json',record)
+    print(f'CHIRP_{name}=PASS words={len(words)}')
+if __name__=='__main__': main()

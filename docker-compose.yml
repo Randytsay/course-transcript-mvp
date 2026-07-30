@@ -1,0 +1,16 @@
+services:
+  infrastructure-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-infrastructure-test:local
+    env_file:
+      - .env
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
+    volumes:
+      - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
+      - ./logs:/app/logs
+      - ./tmp:/app/tmp
+      - ./data:/app/data
+    command: []
