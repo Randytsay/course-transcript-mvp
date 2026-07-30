@@ -1,4 +1,4 @@
-"""Recover completed chunk-000 from its existing GCS result without a new ASR call."""
+"""Recover a completed chunk from its existing GCS result without a new ASR call."""
 from __future__ import annotations
 import json, os
 from pathlib import Path
