@@ -1,0 +1,11 @@
+/node_modules
+/.next/
+/out/
+.env
+.env*.local
+npm-debug.log*
+.DS_Store
+*.pem
+*.key
+*gcp-sa*.json
+*service-account*.json
