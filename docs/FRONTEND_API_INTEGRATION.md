@@ -39,7 +39,7 @@ no host port and is reachable only over the Docker network. Do not expose it
 through a reverse proxy until authentication and a reviewed access policy exist.
 
 ```bash
-docker compose --profile web up -d --build
+docker compose --profile web up -d --build api frontend
 curl http://127.0.0.1:3000/api/v1/health
 ```
 
