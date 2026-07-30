@@ -34,13 +34,13 @@ npm run dev
 
 ## Run on the VPS without public exposure
 
-The Compose `web` profile binds the frontend to `127.0.0.1:3000`; the API has
+The Compose `web` profile binds the frontend to `127.0.0.1:3300`; the API has
 no host port and is reachable only over the Docker network. Do not expose it
 through a reverse proxy until authentication and a reviewed access policy exist.
 
 ```bash
 docker compose --profile web up -d --build api frontend
-curl http://127.0.0.1:3000/api/v1/health
+curl http://127.0.0.1:3300/api/v1/health
 ```
 
 ## Explicitly deferred
