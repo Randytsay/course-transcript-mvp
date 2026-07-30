@@ -18,7 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path("/app")
-JOB = ROOT / "data" / "jobs" / "voice_11386603-seg1"
+JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
+JOB = ROOT / "data" / "jobs" / JOB_NAME
 
 
 def audio_duration_seconds(path: Path) -> float | None:

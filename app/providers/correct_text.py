@@ -19,7 +19,8 @@ from google import genai
 from google.genai import types
 
 ROOT = Path("/app")
-JOB = ROOT / "data" / "jobs" / "voice_11386603-seg1"
+JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
+JOB = ROOT / "data" / "jobs" / JOB_NAME
 WORK = JOB / "correct-work"
 
 WINDOW_TARGET_MS = 30_000

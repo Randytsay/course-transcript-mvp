@@ -4,11 +4,11 @@ import json, os
 from pathlib import Path
 from google.cloud import storage
 from google.cloud.speech_v2.types import cloud_speech
-ROOT=Path('/app'); JOB=ROOT/'data'/'jobs'/'voice_11386603-seg1'
+ROOT=Path('/app'); JOB_NAME=os.environ.get('JOB_NAME','voice_11386603-seg1'); JOB=ROOT/'data'/'jobs'/JOB_NAME
 def ms(v): return round(v.total_seconds()*1000)
 def main():
  index=int(os.environ.get('CHUNK_INDEX','0')); start=float(os.environ.get('CHUNK_START_SECONDS','0')); end=float(os.environ.get('CHUNK_END_SECONDS','900')); name=f'chunk-{index:03d}'; CHUNK=JOB/'chunks'/name
- b=storage.Client().bucket(os.environ['GCS_BUCKET']); blobs=list(b.list_blobs(prefix=f'jobs/voice_11386603-seg1/chunks/{name}/chirp-output/'))
+ b=storage.Client().bucket(os.environ['GCS_BUCKET']); blobs=list(b.list_blobs(prefix=f'jobs/{JOB_NAME}/chunks/{name}/chirp-output/'))
  if len(blobs)!=1: raise RuntimeError(f'Expected one result object, found {len(blobs)}')
  raw=blobs[0].download_as_text(); (CHUNK/'chirp-raw.json').write_text(raw,encoding='utf-8'); parsed=cloud_speech.BatchRecognizeResults.from_json(raw); words=[]
  for r in parsed.results:

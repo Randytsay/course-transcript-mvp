@@ -12,10 +12,14 @@ import os
 from pathlib import Path
 
 ROOT = Path("/app")
-JOB = ROOT / "data" / "jobs" / "voice_11386603-seg1"
+JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
+JOB = ROOT / "data" / "jobs" / JOB_NAME
 CHUNKS = JOB / "chunks"
 
-BOUNDARIES_MS = [895_000, 1_785_000, 2_675_000]
+# Boundaries are derived from chunk layout (15-minute chunks, 10s overlap).
+# For 4-chunk layouts: 895s, 1785s, 2675s.
+# For 5-chunk layouts (longer files): 895s, 1785s, 2675s, 3565s.
+BOUNDARIES_MS = [895_000, 1_785_000, 2_675_000, 3_565_000]
 
 
 def midpoint_ms(word: dict) -> int:

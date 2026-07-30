@@ -11,10 +11,12 @@ Gemini correction has meaningful context per segment.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 ROOT = Path("/app")
-JOB = ROOT / "data" / "jobs" / "voice_11386603-seg1"
+JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
+JOB = ROOT / "data" / "jobs" / JOB_NAME
 
 TARGET_MIN_MS = 2_000
 TARGET_MAX_MS = 5_000
