@@ -46,22 +46,8 @@ SCHEMA = {
 }
 
 
-def correct_window(model: str, segments: list[dict]) -> list[dict]:
-    """Send one window of segments to Gemini, return list of {index, corrected_text}."""
-    index = segments[0]["segment_index"]
-    work_path = WORK / f"window-{index:04d}.json"
-    if work_path.exists():
-        cached = json.loads(work_path.read_text(encoding="utf-8"))
-        return cached
-
-    project = os.environ["GOOGLE_CLOUD_PROJECT"]
-    location = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
-    client = genai.Client(vertexai=True, project=project, location=location)
-
-    items = [
-        {"index": s["segment_index"], "text": s["text"]}
-        for s in segments
-    ]
+def call_gemini(client, model: str, items: list[dict]):
+    """Single Gemini call. Returns (corrected_segments, usage_metadata)."""
     prompt = (
         "You are correcting an ASR transcript (Traditional-Chinese course) produced by Chirp 3. "
         "Rules: (1) Convert Simplified Chinese to Traditional Chinese; "
@@ -72,7 +58,6 @@ def correct_window(model: str, segments: list[dict]) -> list[dict]:
         "with the SAME count of segments. Output empty string only if the segment is pure noise.\n\n"
         f"Segments: {json.dumps(items, ensure_ascii=False)}"
     )
-
     response = client.models.generate_content(
         model=model,
         contents=prompt,
@@ -83,21 +68,50 @@ def correct_window(model: str, segments: list[dict]) -> list[dict]:
         ),
     )
     answer = json.loads(response.text)
-    corrected = answer.get("segments", [])
+    return answer.get("segments", []), response.usage_metadata
 
+
+def correct_window(model: str, segments: list[dict]) -> list[dict]:
+    """Send one window of segments to Gemini, return list of {index, corrected_text}.
+
+    Tolerant: if Gemini returns fewer segments than input, the original text
+    is preserved for the missing ones.
+    """
+    index = segments[0]["segment_index"]
+    work_path = WORK / f"window-{index:04d}.json"
+    if work_path.exists():
+        cached = json.loads(work_path.read_text(encoding="utf-8"))
+        return cached["segments"]
+
+    project = os.environ["GOOGLE_CLOUD_PROJECT"]
+    location = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
+    client = genai.Client(vertexai=True, project=project, location=location)
+
+    items = [
+        {"index": s["segment_index"], "text": s["text"]}
+        for s in segments
+    ]
+
+    corrected, usage = call_gemini(client, model, items)
     if len(corrected) != len(segments):
-        raise RuntimeError(
-            f"Window starting at segment {index}: expected {len(segments)} corrected segments, "
-            f"got {len(corrected)}"
+        # Retry once with stronger emphasis on count
+        retry_items = [
+            {**it, "required_count": len(items)}
+            for it in items
+        ]
+        corrected, usage = call_gemini(client, model, retry_items)
+    if len(corrected) != len(segments):
+        # Final fallback: use original text for missing ones
+        print(
+            f"  warn: window@{index} gemini returned {len(corrected)} of {len(segments)}; "
+            f"filling missing with original text",
+            flush=True,
         )
-
-    for src, gemini_seg in zip(segments, corrected):
-        if gemini_seg.get("index") != src["segment_index"]:
-            raise RuntimeError(
-                f"Index mismatch: expected {src['segment_index']}, got {gemini_seg.get('index')}"
-            )
-
-    usage = response.usage_metadata
+        by_idx = {seg.get("index"): seg.get("corrected_text", "") for seg in corrected}
+        corrected = [
+            {"index": s["segment_index"], "corrected_text": by_idx.get(s["segment_index"], s["text"])}
+            for s in segments
+        ]
     work_path.write_text(
         json.dumps(
             {

@@ -63,6 +63,7 @@ def main() -> int:
 
     # Merge by midpoint ownership at each boundary
     merged_words: list[dict] = []
+    dropped_anomalies = 0
     for idx, manifest in enumerate(manifests):
         chunk_index = manifest["chunk_index"]
         words = words_by_chunk.get(chunk_index, [])
@@ -71,6 +72,10 @@ def main() -> int:
         boundary = BOUNDARIES_MS[idx] if idx < len(BOUNDARIES_MS) else None
 
         for word in words:
+            # Drop malformed words Chirp occasionally returns
+            if word["end_ms"] < word["start_ms"]:
+                dropped_anomalies += 1
+                continue
             mp = midpoint_ms(word)
             if boundary is not None and mp >= boundary:
                 # This word belongs to the next chunk; skip it here
@@ -78,6 +83,9 @@ def main() -> int:
             merged_words.append(word)
 
     merged_words.sort(key=lambda w: (w["start_ms"], w["end_ms"]))
+
+    if dropped_anomalies:
+        print(f"MERGE: dropped {dropped_anomalies} anomalous words (end_ms < start_ms)")
 
     # Validate monotonic and continuous
     gaps = 0
