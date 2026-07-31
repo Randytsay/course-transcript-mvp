@@ -6,8 +6,8 @@ import os
 import subprocess
 from pathlib import Path
 
-ROOT = Path("/app")
-JOB = ROOT / "data" / "jobs" / os.environ["JOB_NAME"]
+DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+JOB = DATA_DIR / "jobs" / os.environ["JOB_NAME"]
 
 
 def atomic(path: Path, value: object) -> None:

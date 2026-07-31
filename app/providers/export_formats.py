@@ -13,8 +13,8 @@ from reportlab.pdfbase.cidfonts import UnicodeCIDFont
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 
-ROOT = Path("/app")
-JOB = ROOT / "data" / "jobs" / os.environ.get(
+DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+JOB = DATA_DIR / "jobs" / os.environ.get(
     "JOB_NAME", "voice_11386603-seg1"
 )
 

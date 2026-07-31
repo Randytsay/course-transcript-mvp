@@ -12,7 +12,7 @@ from pathlib import Path
 from google.cloud import speech_v2, storage
 from google.cloud.speech_v2.types import cloud_speech
 
-ROOT=Path('/app'); JOB_NAME=os.environ.get('JOB_NAME','voice_11386603-seg1'); JOB=ROOT/'data'/'jobs'/JOB_NAME
+DATA_DIR=Path(os.environ.get('COURSE_TRANSCRIPT_DATA_DIR','/app/data')); JOB_NAME=os.environ.get('JOB_NAME','voice_11386603-seg1'); JOB=DATA_DIR/'jobs'/JOB_NAME
 def atomic(path:Path, data:object):
     temp=path.with_suffix(path.suffix+'.tmp'); temp.write_text(json.dumps(data,ensure_ascii=False,indent=2)+'\n',encoding='utf-8'); temp.replace(path)
 def ms(v): return round(v.total_seconds()*1000)

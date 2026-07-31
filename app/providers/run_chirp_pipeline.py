@@ -23,9 +23,9 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-ROOT = Path("/app")
+DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
-JOB = ROOT / "data" / "jobs" / JOB_NAME
+JOB = DATA_DIR / "jobs" / JOB_NAME
 CHUNKS = JOB / "chunks"
 
 CHUNK_DURATION_S = 900   # 15 minutes per chunk

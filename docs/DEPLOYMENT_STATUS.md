@@ -17,7 +17,9 @@ Verified:
 - Only the frontend publishes a host port, bound to `127.0.0.1:3300`.
 - GCP credential and rclone mounts are read-only and limited by service role.
 - Non-paid fake-provider E2E passes timeline, fixed segments, correction,
-  multi-format export, QA, output validation, and 14/14 canonical artifacts.
+  multi-format export, QA, output validation, usage and final processing
+  manifest. The full isolated worker reached `awaiting_review` with 16/16
+  canonical artifacts and zero cloud requests on the local development host.
 - SQLite test state survived a four-service restart; the test row was removed.
 - Frontend same-origin proxy reached the real API and performed a read-only
   Drive root browse; no paid operation started.

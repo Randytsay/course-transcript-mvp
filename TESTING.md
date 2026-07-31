@@ -22,5 +22,16 @@ ports, unauthenticated Access redirect, authenticated frontend/API access, and
 an idle paid worker with zero approved queued jobs. A health response alone is
 not end-to-end proof.
 
+The isolated full worker check is:
+
+```bash
+python -m app.pipeline.fake_e2e
+```
+
+It uses a temporary SQLite database and six-second generated audio, forces the
+fake providers, requires `awaiting_review` plus 16/16 canonical artifacts, and
+deletes the temporary directory. It has no credential dependency and makes
+zero cloud requests.
+
 The first real five-minute request is a separate acceptance gate and requires
 the user's explicit source, exact estimate, model confirmation, and approval.

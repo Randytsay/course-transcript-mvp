@@ -7,8 +7,8 @@ from pathlib import Path
 
 import jieba
 
-ROOT = Path("/app")
-JOB = ROOT / "data" / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
+DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 # Chinese ASR may expose one character per timed ``word``.  Subtitle layout
 # must therefore work on lexical units, never directly on provider words.
 TARGET_MIN_MS, TARGET_MAX_MS, HARD_GAP_MS, MAX_CHARS = 1_200, 6_500, 1_500, 34

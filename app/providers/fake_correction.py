@@ -7,8 +7,8 @@ from pathlib import Path
 
 from app.providers.correct_text import atomic_text, timestamp, write_review_terms
 
-ROOT = Path("/app")
-JOB = ROOT / "data" / "jobs" / os.environ["JOB_NAME"]
+DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+JOB = DATA_DIR / "jobs" / os.environ["JOB_NAME"]
 
 
 def main() -> int:

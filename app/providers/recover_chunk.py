@@ -12,9 +12,9 @@ from google.cloud.speech_v2.types import cloud_speech
 from app.providers.chirp_chunk import has_speech
 
 
-ROOT = Path("/app")
+DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
-JOB = ROOT / "data" / "jobs" / JOB_NAME
+JOB = DATA_DIR / "jobs" / JOB_NAME
 
 
 def ms(value: object) -> int:

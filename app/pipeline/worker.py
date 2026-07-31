@@ -638,6 +638,7 @@ def run_paid_job(
                 ),
                 "drive_upload_started": False,
                 "source_media_preserved_in_drive": True,
+                "fake_provider": fake_provider,
                 "artifacts": _artifact_evidence(job_dir),
             }
         _atomic_json(job_dir / "pipeline-manifest.json", processing_manifest)
