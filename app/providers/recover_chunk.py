@@ -8,12 +8,13 @@ ROOT=Path('/app'); JOB_NAME=os.environ.get('JOB_NAME','voice_11386603-seg1'); JO
 def ms(v): return round(v.total_seconds()*1000)
 def main():
  index=int(os.environ.get('CHUNK_INDEX','0')); start=float(os.environ.get('CHUNK_START_SECONDS','0')); end=float(os.environ.get('CHUNK_END_SECONDS','900')); name=f'chunk-{index:03d}'; CHUNK=JOB/'chunks'/name
+ prior=json.loads((CHUNK/'manifest.json').read_text(encoding='utf-8')) if (CHUNK/'manifest.json').exists() else {}
  b=storage.Client().bucket(os.environ['GCS_BUCKET']); blobs=list(b.list_blobs(prefix=f'jobs/{JOB_NAME}/chunks/{name}/chirp-output/'))
  if len(blobs)!=1: raise RuntimeError(f'Expected one result object, found {len(blobs)}')
  raw=blobs[0].download_as_text(); (CHUNK/'chirp-raw.json').write_text(raw,encoding='utf-8'); parsed=cloud_speech.BatchRecognizeResults.from_json(raw); words=[]
  for r in parsed.results:
   for w in r.alternatives[0].words: words.append({'word':w.word,'start_ms':ms(w.start_offset),'end_ms':ms(w.end_offset)})
  for word in words: word['start_ms']+=round(start*1000); word['end_ms']+=round(start*1000)
- payload={'chunk_index':index,'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'status':'SUCCEEDED' if words else 'EMPTY','gcs_uri':f'gs://{b.name}/{blobs[0].name}','word_count':len(words),'max_end_ms':max((w['end_ms'] for w in words),default=0)}
+ payload={'chunk_index':index,'role':prior.get('role','base'),'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':prior.get('operation_name'),'status':'SUCCEEDED' if words else 'EMPTY','result_oneof':'cloud_storage_result','output_field':'gcs_prefix_recovery','gcs_uri':f'gs://{b.name}/{blobs[0].name}','word_count':len(words),'max_end_ms':max((w['end_ms'] for w in words),default=0)}
  (CHUNK/'words.json').write_text(json.dumps({'chunk_index':index,'words':words},ensure_ascii=False,indent=2)+'\n',encoding='utf-8'); (CHUNK/'manifest.json').write_text(json.dumps(payload,ensure_ascii=False,indent=2)+'\n',encoding='utf-8'); print(f'RECOVER_{name}=PASS words={len(words)}')
 if __name__=='__main__': main()
