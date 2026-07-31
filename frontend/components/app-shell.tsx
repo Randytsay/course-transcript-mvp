@@ -17,7 +17,7 @@ import {
   Sparkles,
   X
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const navigation = [
   { href: "/", label: "儀表板", icon: Gauge, match: (path: string) => path === "/" },
@@ -39,6 +39,21 @@ export default function AppShell({
 }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [fontSize, setFontSize] = useState<"standard" | "large" | "xlarge">("large");
+
+  useEffect(() => {
+    // 讀取本地儲存的字體大小設定（預設使用 large 大字體，對老花友善）
+    const saved = localStorage.getItem("course-transcript-font-size");
+    const initialSize = saved === "standard" || saved === "large" || saved === "xlarge" ? saved : "large";
+    setFontSize(initialSize);
+    document.documentElement.setAttribute("data-font-size", initialSize);
+  }, []);
+
+  function handleFontSizeChange(size: "standard" | "large" | "xlarge") {
+    setFontSize(size);
+    document.documentElement.setAttribute("data-font-size", size);
+    localStorage.setItem("course-transcript-font-size", size);
+  }
 
   return (
     <div className="app-frame">
@@ -85,8 +100,16 @@ export default function AppShell({
 
       <main className="main-area">
         <header className="topbar">
-          <button className="icon-button mobile-menu" onClick={() => setMenuOpen(true)} aria-label="開啟選單"><Menu size={21} /></button>
-          <div className="search-box"><Search size={17} /><input aria-label="搜尋任務" placeholder="搜尋檔名、課程或任務編號" /><kbd>⌘ K</kbd></div>
+          <button className="icon-button mobile-menu" onClick={() => setMenuOpen(true)} aria-label="開啟選單"><Menu size={26} /></button>
+          <div className="search-box"><Search size={20} /><input aria-label="搜尋任務" placeholder="搜尋檔名、課程或任務編號" /><kbd>⌘ K</kbd></div>
+          
+          <div className="font-size-switcher">
+            <span className="font-size-label">字體切換：</span>
+            <button className={`font-size-btn ${fontSize === "standard" ? "active" : ""}`} onClick={() => handleFontSizeChange("standard")}>A 標準</button>
+            <button className={`font-size-btn ${fontSize === "large" ? "active" : ""}`} onClick={() => handleFontSizeChange("large")}>A+ 大字</button>
+            <button className={`font-size-btn ${fontSize === "xlarge" ? "active" : ""}`} onClick={() => handleFontSizeChange("xlarge")}>A++ 特大</button>
+          </div>
+
           <div className="topbar-status"><span className="status-dot status-dot--success" /><span>服務正常</span></div>
         </header>
 
