@@ -58,6 +58,32 @@ services:
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
     command: ["python", "-m", "app.jobs.preflight"]
 
+  pipeline-worker:
+    profiles: ["web"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-pipeline-worker:local
+    environment:
+      COURSE_TRANSCRIPT_DATA_DIR: /app/data
+      COURSE_TRANSCRIPT_COST_LIMIT_USD: "200"
+      COURSE_TRANSCRIPT_COST_WARNING_THRESHOLDS_USD: "50,100,160,190"
+      COURSE_TRANSCRIPT_MINIMUM_FREE_SPACE_GB: "3"
+      COURSE_TRANSCRIPT_PIPELINE_WORKER_ID: "pipeline-worker-1"
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-course-transcript-mvp}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
+      GCS_BUCKET: ${GCS_BUCKET:-course-transcript-mvp}
+      RCLONE_CONFIG: /run/secrets/rclone.conf
+      CHIRP_MAX_PARALLEL_CHUNKS: "3"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./tmp:/app/tmp
+      - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
+      - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
+    command: ["python", "-m", "app.pipeline.worker"]
+
   frontend:
     profiles: ["web"]
     build:
@@ -69,5 +95,6 @@ services:
     depends_on:
       - api
       - worker
+      - pipeline-worker
     ports:
       - "127.0.0.1:3300:3000"

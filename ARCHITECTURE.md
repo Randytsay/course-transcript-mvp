@@ -34,7 +34,12 @@ Cloudflare Access
      └─ SQLite batches/jobs/cost ledger
   → sequential Worker
      ├─ non-paid preflight
-     └─ paid pipeline only after explicit approval
+     └─ approved pipeline worker
+        ├─ Drive copy/checksum + FFmpeg normalization
+        ├─ chunk-000 canary, then ≤3 parallel Chirp chunks
+        ├─ midpoint merge + immutable subtitle segments
+        ├─ Gemini 3.6 Flash text-only correction
+        └─ local exports/QA/checksums → awaiting_review
 ```
 
 ## Long-file contract
@@ -44,9 +49,10 @@ The production target uses 15-minute chunks with 10-second overlap. A chunk is
 successful only after its GCS JSON, results, alternatives, words, monotonic
 timestamps, and manifest are present.
 
-## Current job
+## Runtime and review boundary
 
-`voice_11386603-seg1` is the first formal long-file validation (55:49.345).
+`voice_11386603-seg1` is retained as the first formal long-file evidence
+(55:49.345).
 It completed Chirp 3 base chunks 000–004 plus five targeted Chirp patch chunks
 005–009. The authoritative merge contains 16,898 valid words and 862 fixed
 subtitle segments. The final tail is 105 ms short of FFprobe duration, within
@@ -64,3 +70,12 @@ underlying Chirp timings and has no Gemini timing input. Gemini correction is
 complete using `gemini-3.6-flash` only: 120 raw per-window responses, one
 global terminology record, and 654 corrected segments across 1,103 readable
 subtitle cues. Do not upload to Drive until QA and explicit user approval.
+
+The web API never performs Drive upload. Mutation requests require Cloudflare
+Access identity plus the exact production Origin. The API and workers share a
+SQLite WAL file; only the pipeline worker receives the read-only GCP credential
+mount. A global lease permits one active source job while up to three chunks of
+that source may run in parallel.
+
+See `docs/DATABASE_SCHEMA.md`, `docs/STATE_MACHINE.md`, and `docs/API.md` for
+the durable contract.

@@ -20,10 +20,10 @@ export default function DashboardPage() {
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "無法讀取任務"))
       .finally(() => setLoading(false));
   }, []);
-  const reviewing = jobs.filter((job) => job.status === "review").length;
-  const active = jobs.filter((job) => ["preflight", "queued", "downloading", "normalizing", "transcribing", "correcting"].includes(job.status)).length;
+  const reviewing = jobs.filter((job) => ["review", "awaiting_review"].includes(job.status)).length;
+  const active = jobs.filter((job) => ["preflight", "queued", "downloading", "normalizing", "transcribing", "merging", "segmenting", "correcting", "exporting", "quality_check"].includes(job.status)).length;
   const awaitingConfirmation = jobs.filter((job) => job.status === "awaiting_confirmation").length;
-  const completed = jobs.filter((job) => job.status === "completed" || job.status === "review").length;
+  const completed = jobs.filter((job) => ["completed", "review", "awaiting_review"].includes(job.status)).length;
   const metrics = [
     { label: "處理中任務", value: String(active), detail: active ? "後端目前正在處理" : "目前沒有處理中的任務", icon: Activity, tone: "blue" },
     { label: "待人工確認", value: String(reviewing + awaitingConfirmation), detail: awaitingConfirmation ? `${awaitingConfirmation} 個待確認費用` : reviewing ? `${reviewing} 個待內容審查` : "目前沒有待確認項目", icon: TriangleAlert, tone: "amber" },

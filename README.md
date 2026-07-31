@@ -30,7 +30,8 @@ the timing layer is complete.
 8. Merge words by midpoint ownership boundaries.
 9. Build fixed subtitle segments; Gemini may only return corrected text for the
    existing IDs, order, and timestamps.
-10. Generate QA and stop for review before any Drive upload.
+10. Generate every local artifact, verify checksums, and stop for review before
+    any Drive upload.
 
 The web batch is a queue, not parallel source processing: only one source job
 may hold an active worker lease. There is no scheduled Drive scan.
@@ -53,17 +54,26 @@ rclone configuration or permanent credentials.
 For a completed job, `app.providers.export_formats` produces a local-only
 export manifest and these review artifacts:
 
-- raw and corrected `.srt`, `.vtt`, `.ass`
-- raw and corrected structured JSON
-- raw, timestamped, and corrected `.txt` / `.md`
-- `transcript-segments.csv` and global terminology CSV/JSON
-- raw Chirp evidence, merge decisions, ±10-second join QA, and QA reports
+- `transcript_raw.txt`, `transcript_corrected.txt`,
+  `transcript_timestamped.txt`
+- `transcript.srt`, `transcript.vtt`, `transcript.json`, `transcript.csv`
+- `transcript.docx`, `transcript.pdf`
+- glossary candidates/decisions, join QA, JSON/HTML QA, usage report, and
+  `processing_manifest.json`
+- compatibility copies of the earlier hyphenated names plus raw provider
+  evidence
 
 Run `python -m app.providers.validate_outputs` after QA. It checks immutable
 segment timing, subtitle structures, CSV row counts, raw provider evidence,
 Gemini 3.6 Flash correction records, glossary, and join QA without modifying
-files. Google Docs/DOCX/PDF and Drive upload are deliberately outside this
-local-review milestone and require separate OAuth plus explicit approval.
+files. DOCX/PDF are local files; Google Docs and Drive upload remain disabled
+until separate OAuth design and explicit approval.
+
+The paid pipeline worker is implemented and selects only jobs whose exact
+estimate/revision were approved. It supports durable evidence-based resume,
+pause/resume, failed-stage retry, usage deduplication, and stops at
+`awaiting_review`. `COURSE_TRANSCRIPT_FAKE_PROVIDER=1` replaces provider calls
+with deterministic evidence for non-paid integration testing.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md), [RUNBOOK.md](RUNBOOK.md), and
 [HANDOVER.md](HANDOVER.md) before changing or running the pipeline.

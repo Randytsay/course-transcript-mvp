@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from contextlib import closing
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import Mock, patch
@@ -143,6 +144,107 @@ class StoreTests(unittest.TestCase):
                 project_limit_usd=Decimal("200"),
                 actor="owner@example.test",
             )
+
+    def test_usage_evidence_is_idempotent_per_dedupe_key(self) -> None:
+        job = self._create_job()
+        self.store.acquire_lease(job["id"], "preflight-worker")
+        estimated = self.store.record_preflight_result(
+            job_id=job["id"],
+            duration_seconds=120,
+            source_checksum="a" * 64,
+            media_format="mp3",
+            audio_codec="mp3",
+            estimated_cost_usd=Decimal("0.25"),
+            pricing_version="test",
+            worker_id="preflight-worker",
+        )
+        approved = self.store.approve_job(
+            job_id=job["id"],
+            expected_revision=estimated["revision"],
+            confirmed_estimated_cost_usd=Decimal("0.25"),
+            project_limit_usd=Decimal("200"),
+            actor="owner@example.test",
+        )
+        self.store.acquire_lease(approved["id"], "pipeline-worker")
+        for _ in range(2):
+            self.store.record_usage(
+                job_id=approved["id"],
+                dedupe_key="chirp-base-audio",
+                provider="google-cloud-speech",
+                model="chirp_3",
+                input_units=120,
+                output_units=None,
+                estimated_cost_usd=Decimal("0.25"),
+                usage={"unit": "estimated_billable_audio_seconds"},
+                worker_id="pipeline-worker",
+            )
+        with closing(self.store.connect()) as connection:
+            count = connection.execute(
+                """
+                SELECT COUNT(*) AS count
+                FROM usage_records
+                WHERE job_id = ? AND dedupe_key = ?
+                """,
+                (approved["id"], "chirp-base-audio"),
+            ).fetchone()["count"]
+        self.assertEqual(count, 1)
+
+    def test_pause_resume_and_failed_stage_retry_keep_approval(self) -> None:
+        job = self._create_job()
+        self.store.acquire_lease(job["id"], "preflight-worker")
+        estimated = self.store.record_preflight_result(
+            job_id=job["id"],
+            duration_seconds=120,
+            source_checksum="b" * 64,
+            media_format="mp3",
+            audio_codec="mp3",
+            estimated_cost_usd=Decimal("0.25"),
+            pricing_version="test",
+            worker_id="preflight-worker",
+        )
+        approved = self.store.approve_job(
+            job_id=job["id"],
+            expected_revision=estimated["revision"],
+            confirmed_estimated_cost_usd=Decimal("0.25"),
+            project_limit_usd=Decimal("200"),
+            actor="owner@example.test",
+        )
+        paused = self.store.pause_job(
+            job_id=job["id"],
+            expected_revision=approved["revision"],
+            actor="owner@example.test",
+        )
+        self.assertEqual(paused["status"], "paused")
+        resumed = self.store.resume_job(
+            job_id=job["id"],
+            expected_revision=paused["revision"],
+            actor="owner@example.test",
+        )
+        self.assertEqual(resumed["status"], "queued")
+        self.store.acquire_lease(job["id"], "pipeline-worker")
+        self.store.begin_stage(
+            job_id=job["id"],
+            stage="export",
+            status="exporting",
+            detail="test",
+            progress=90,
+            input_checksum="b" * 64,
+            worker_id="pipeline-worker",
+        )
+        failed = self.store.fail_job(
+            job_id=job["id"],
+            stage="export",
+            error="synthetic failure",
+            worker_id="pipeline-worker",
+        )
+        retried = self.store.retry_failed_stage(
+            job_id=job["id"],
+            expected_revision=failed["revision"],
+            stage="export",
+            actor="owner@example.test",
+        )
+        self.assertEqual(retried["status"], "queued")
+        self.assertIsNotNone(retried["approved_at"])
 
     def test_batch_creates_ordered_preflight_jobs(self) -> None:
         preview = self.store.create_batch_preview(

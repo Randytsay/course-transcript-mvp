@@ -20,9 +20,14 @@ ACTIVE_STATUSES = frozenset(
         "downloading",
         "normalizing",
         "transcribing",
+        "merging",
+        "segmenting",
         "correcting",
+        "exporting",
+        "quality_check",
     }
 )
+PAUSABLE_STATUSES = ACTIVE_STATUSES - {"preflight", "awaiting_confirmation"}
 JOB_ID_SAFE = re.compile(r"[^a-z0-9]+")
 
 
@@ -199,6 +204,7 @@ class JobStore:
                 CREATE TABLE IF NOT EXISTS usage_records (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     job_id TEXT NOT NULL REFERENCES jobs(id),
+                    dedupe_key TEXT,
                     provider TEXT NOT NULL,
                     model TEXT NOT NULL,
                     input_units INTEGER,
@@ -240,6 +246,14 @@ class JobStore:
             self._ensure_column(connection, "jobs", "source_checksum", "TEXT")
             self._ensure_column(connection, "jobs", "media_format", "TEXT")
             self._ensure_column(connection, "jobs", "audio_codec", "TEXT")
+            self._ensure_column(connection, "usage_records", "dedupe_key", "TEXT")
+            connection.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS usage_dedupe_idx
+                ON usage_records(job_id, dedupe_key)
+                WHERE dedupe_key IS NOT NULL
+                """
+            )
             connection.execute(
                 """
                 CREATE INDEX IF NOT EXISTS jobs_batch_idx
@@ -606,6 +620,26 @@ class JobStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def list_job_events(self, job_id: str) -> list[dict[str, Any]]:
+        self.get_job(job_id)
+        with closing(self.connect()) as connection:
+            rows = connection.execute(
+                """
+                SELECT id, event_type, actor, payload_json, created_at
+                FROM job_events
+                WHERE job_id = ?
+                ORDER BY id DESC
+                """,
+                (job_id,),
+            ).fetchall()
+        return [
+            {
+                **dict(row),
+                "payload": json.loads(row["payload_json"] or "{}"),
+            }
+            for row in rows
+        ]
+
     def set_cost_estimate(
         self,
         *,
@@ -738,7 +772,7 @@ class JobStore:
                     error = ?, updated_at = ?, revision = revision + 1
                 WHERE id = ?
                 """,
-                (stage, "本機媒體檢查失敗", safe_error, now, job_id),
+                (stage, f"{stage} 階段失敗", safe_error, now, job_id),
             )
             self._clear_lease(connection, job_id, worker_id)
             self._event(
@@ -761,6 +795,7 @@ class JobStore:
                     (row["batch_id"], now, row["batch_id"]),
                 )
                 self._refresh_batch_estimate(connection, row["batch_id"], now)
+                self._refresh_batch_state(connection, row["batch_id"], now)
         return self.get_job(job_id)
 
     def next_job_for_status(self, status: str) -> dict[str, Any] | None:
@@ -775,6 +810,202 @@ class JobStore:
                 (status,),
             ).fetchone()
         return dict(row) if row is not None else None
+
+    def next_paid_job(self) -> dict[str, Any] | None:
+        """Return one approved or resumable paid-pipeline job.
+
+        Selection does not acquire a lease. The caller must immediately call
+        ``acquire_lease``; the global lease invariant resolves worker races.
+        """
+        statuses = (
+            "queued",
+            "downloading",
+            "normalizing",
+            "transcribing",
+            "merging",
+            "segmenting",
+            "correcting",
+            "exporting",
+            "quality_check",
+        )
+        with closing(self.connect()) as connection:
+            row = connection.execute(
+                f"""
+                SELECT * FROM jobs
+                WHERE status IN ({','.join('?' for _ in statuses)})
+                  AND approved_at IS NOT NULL
+                  AND CAST(reserved_cost_usd AS REAL) > 0
+                ORDER BY created_at, batch_id, queue_position
+                LIMIT 1
+                """,
+                statuses,
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def begin_stage(
+        self,
+        *,
+        job_id: str,
+        stage: str,
+        status: str,
+        detail: str,
+        progress: int,
+        input_checksum: str | None,
+        worker_id: str,
+    ) -> dict[str, Any]:
+        now = _iso()
+        with self.transaction() as connection:
+            self._require_lease(connection, job_id, worker_id)
+            connection.execute(
+                """
+                INSERT INTO stage_runs(
+                    job_id, stage, status, attempt_count, input_checksum,
+                    started_at, completed_at, error
+                ) VALUES (?, ?, 'running', 1, ?, ?, NULL, NULL)
+                ON CONFLICT(job_id, stage) DO UPDATE SET
+                    status = 'running',
+                    attempt_count = stage_runs.attempt_count + 1,
+                    input_checksum = excluded.input_checksum,
+                    started_at = excluded.started_at,
+                    completed_at = NULL,
+                    error = NULL
+                """,
+                (job_id, stage, input_checksum, now),
+            )
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = ?, active_stage = ?, stage_detail = ?,
+                    progress = ?, error = NULL, updated_at = ?,
+                    revision = revision + 1
+                WHERE id = ?
+                """,
+                (status, stage, detail, progress, now, job_id),
+            )
+            self._event(
+                connection,
+                job_id,
+                "stage_started",
+                worker_id,
+                {"stage": stage, "status": status},
+            )
+            batch_id = connection.execute(
+                "SELECT batch_id FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()["batch_id"]
+            if batch_id:
+                self._refresh_batch_state(connection, batch_id, now)
+        return self.get_job(job_id)
+
+    def complete_stage(
+        self,
+        *,
+        job_id: str,
+        stage: str,
+        detail: str,
+        progress: int,
+        worker_id: str,
+    ) -> dict[str, Any]:
+        now = _iso()
+        with self.transaction() as connection:
+            self._require_lease(connection, job_id, worker_id)
+            updated = connection.execute(
+                """
+                UPDATE stage_runs
+                SET status = 'completed', completed_at = ?, error = NULL
+                WHERE job_id = ? AND stage = ?
+                """,
+                (now, job_id, stage),
+            )
+            if updated.rowcount != 1:
+                raise JobConflict("階段尚未開始，無法標記完成")
+            connection.execute(
+                """
+                UPDATE jobs
+                SET stage_detail = ?, progress = ?, updated_at = ?,
+                    revision = revision + 1
+                WHERE id = ?
+                """,
+                (detail, progress, now, job_id),
+            )
+            self._event(
+                connection,
+                job_id,
+                "stage_completed",
+                worker_id,
+                {"stage": stage},
+            )
+        return self.get_job(job_id)
+
+    def record_usage(
+        self,
+        *,
+        job_id: str,
+        dedupe_key: str,
+        provider: str,
+        model: str,
+        input_units: int | None,
+        output_units: int | None,
+        estimated_cost_usd: Decimal,
+        usage: dict[str, Any],
+        worker_id: str,
+    ) -> None:
+        with self.transaction() as connection:
+            self._require_lease(connection, job_id, worker_id)
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO usage_records(
+                    job_id, dedupe_key, provider, model, input_units, output_units,
+                    estimated_cost_usd, usage_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    dedupe_key,
+                    provider,
+                    model,
+                    input_units,
+                    output_units,
+                    str(estimated_cost_usd),
+                    json.dumps(usage, ensure_ascii=False, sort_keys=True),
+                    _iso(),
+                ),
+            )
+
+    def finish_for_review(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+    ) -> dict[str, Any]:
+        now = _iso()
+        with self.transaction() as connection:
+            self._require_lease(connection, job_id, worker_id)
+            row = connection.execute(
+                "SELECT batch_id FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise JobNotFound("Job not found")
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'awaiting_review', active_stage = 'review',
+                    stage_detail = '本機輸出與 QA 已完成，等待人工審查',
+                    progress = 100, updated_at = ?, revision = revision + 1
+                WHERE id = ?
+                """,
+                (now, job_id),
+            )
+            self._clear_lease(connection, job_id, worker_id)
+            self._event(
+                connection,
+                job_id,
+                "local_outputs_ready_for_review",
+                worker_id,
+                {"drive_upload_started": False},
+            )
+            if row["batch_id"]:
+                self._refresh_batch_state(connection, row["batch_id"], now)
+        return self.get_job(job_id)
 
     def approve_batch(
         self,
@@ -983,6 +1214,147 @@ class JobStore:
             ),
         }
 
+    def append_audit_event(
+        self,
+        *,
+        job_id: str,
+        event_type: str,
+        actor: str,
+        payload: dict[str, Any],
+    ) -> None:
+        with self.transaction() as connection:
+            exists = connection.execute(
+                "SELECT 1 FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if exists is None:
+                raise JobNotFound("Job not found")
+            self._event(connection, job_id, event_type, actor, payload)
+
+    def pause_job(
+        self,
+        *,
+        job_id: str,
+        expected_revision: int,
+        actor: str,
+    ) -> dict[str, Any]:
+        now = _iso()
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise JobNotFound("Job not found")
+            if row["revision"] != expected_revision:
+                raise JobConflict("任務已更新，請重新載入後再操作")
+            if row["status"] not in PAUSABLE_STATUSES or not row["approved_at"]:
+                raise JobConflict("此任務目前不可暫停")
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'paused', stage_detail = '已要求暫停；保留完成證據',
+                    updated_at = ?, revision = revision + 1
+                WHERE id = ?
+                """,
+                (now, job_id),
+            )
+            self._event(
+                connection,
+                job_id,
+                "job_paused",
+                actor,
+                {"active_stage": row["active_stage"]},
+            )
+            if row["batch_id"]:
+                self._refresh_batch_state(connection, row["batch_id"], now)
+        return self.get_job(job_id)
+
+    def resume_job(
+        self,
+        *,
+        job_id: str,
+        expected_revision: int,
+        actor: str,
+    ) -> dict[str, Any]:
+        now = _iso()
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise JobNotFound("Job not found")
+            if row["revision"] != expected_revision:
+                raise JobConflict("任務已更新，請重新載入後再操作")
+            if row["status"] != "paused" or not row["approved_at"]:
+                raise JobConflict("只有已核准且暫停中的任務可以繼續")
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'queued', stage_detail = '等待 Worker 從完成證據續跑',
+                    error = NULL, locked_by = NULL, lease_expires_at = NULL,
+                    last_heartbeat_at = NULL, updated_at = ?,
+                    revision = revision + 1
+                WHERE id = ?
+                """,
+                (now, job_id),
+            )
+            self._event(connection, job_id, "job_resumed", actor, {})
+            if row["batch_id"]:
+                self._refresh_batch_state(connection, row["batch_id"], now)
+        return self.get_job(job_id)
+
+    def retry_failed_stage(
+        self,
+        *,
+        job_id: str,
+        expected_revision: int,
+        stage: str,
+        actor: str,
+    ) -> dict[str, Any]:
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{1,40}", stage):
+            raise JobConflict("重試階段名稱無效")
+        now = _iso()
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise JobNotFound("Job not found")
+            if row["revision"] != expected_revision:
+                raise JobConflict("任務已更新，請重新載入後再操作")
+            if row["status"] != "failed" or not row["approved_at"]:
+                raise JobConflict("只有已核准且失敗的任務可以重試")
+            if row["active_stage"] != stage:
+                raise JobConflict("只能重試目前記錄的失敗階段")
+            connection.execute(
+                """
+                UPDATE stage_runs
+                SET status = 'pending', error = NULL
+                WHERE job_id = ? AND stage = ?
+                """,
+                (job_id, stage),
+            )
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'queued', stage_detail = '等待 Worker 重試失敗階段',
+                    error = NULL, locked_by = NULL, lease_expires_at = NULL,
+                    last_heartbeat_at = NULL, updated_at = ?,
+                    revision = revision + 1
+                WHERE id = ?
+                """,
+                (now, job_id),
+            )
+            self._event(
+                connection,
+                job_id,
+                "failed_stage_retry_requested",
+                actor,
+                {"stage": stage},
+            )
+            if row["batch_id"]:
+                self._refresh_batch_state(connection, row["batch_id"], now)
+        return self.get_job(job_id)
+
     @staticmethod
     def _event(
         connection: sqlite3.Connection,
@@ -1067,6 +1439,51 @@ class JobStore:
             WHERE id = ?
             """,
             (status, str(total), failed, now, batch_id),
+        )
+
+    @staticmethod
+    def _refresh_batch_state(
+        connection: sqlite3.Connection,
+        batch_id: str,
+        now: str,
+    ) -> None:
+        rows = connection.execute(
+            "SELECT status FROM jobs WHERE batch_id = ? ORDER BY queue_position",
+            (batch_id,),
+        ).fetchall()
+        if not rows:
+            return
+        statuses = [row["status"] for row in rows]
+        ready = sum(
+            status in {"awaiting_review", "completed"} for status in statuses
+        )
+        failed = sum(status == "failed" for status in statuses)
+        if ready + failed == len(statuses):
+            status = (
+                "awaiting_review"
+                if failed == 0
+                else "partial_failure"
+                if ready
+                else "failed"
+            )
+        elif any(
+            status
+            in ACTIVE_STATUSES - {"preflight", "awaiting_confirmation"}
+            for status in statuses
+        ):
+            status = "processing"
+        elif all(status == "awaiting_confirmation" for status in statuses):
+            status = "awaiting_confirmation"
+        else:
+            status = "preflight"
+        connection.execute(
+            """
+            UPDATE batches
+            SET status = ?, completed_count = ?, failed_count = ?,
+                updated_at = ?, revision = revision + 1
+            WHERE id = ?
+            """,
+            (status, ready, failed, now, batch_id),
         )
 
     @staticmethod

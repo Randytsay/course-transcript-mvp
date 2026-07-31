@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sqlite3
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -46,6 +47,22 @@ ARTIFACT_ALLOWLIST = frozenset(
         "transcript-corrected.md",
         "transcript-timestamped.txt",
         "transcript-segments.csv",
+        "transcript.json",
+        "transcript.csv",
+        "transcript.docx",
+        "transcript.pdf",
+        "transcript_raw.txt",
+        "transcript_corrected.txt",
+        "transcript_timestamped.txt",
+        "transcript.srt",
+        "transcript.vtt",
+        "glossary_candidates.csv",
+        "glossary_decisions.yaml",
+        "join_qa.json",
+        "qa_report.json",
+        "qa_report.html",
+        "usage_report.json",
+        "processing_manifest.json",
         "export-manifest.json",
         "qa-report.json",
         "qa-report.md",
@@ -55,7 +72,7 @@ ARTIFACT_ALLOWLIST = frozenset(
     }
 )
 
-app = FastAPI(title="Course Transcript MVP API", version="0.3.0")
+app = FastAPI(title="Course Transcript MVP API", version="0.4.0")
 
 # The deployed frontend should use same-origin /api through a reverse proxy.
 # CORS is restricted to explicit local development origins only.
@@ -121,6 +138,22 @@ class ApproveBatchRequest(BaseModel):
     confirmed_estimated_cost_usd: Decimal = Field(gt=0)
 
 
+class ReviewTermDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["confirmed", "ignored"]
+    approved_value: str | None = Field(default=None, max_length=200)
+    scope: Literal["session", "course", "instructor", "global"] = "session"
+
+
+class JobActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+
+
+class RetryStageRequest(JobActionRequest):
+    stage: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,40}$")
+
+
 def _store() -> JobStore:
     global _store_cache
     path = DATA_DIR / "course-transcript.db"
@@ -156,6 +189,15 @@ def _read_json(path: Path, default: Any = None) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return default
+
+
+def _atomic_json(path: Path, payload: object) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 def _job_dir(job_id: str) -> Path:
@@ -298,6 +340,37 @@ def _database_pipeline(record: dict[str, Any]) -> list[dict[str, str]]:
 
 def _database_job_summary(record: dict[str, Any]) -> dict[str, Any]:
     duration_seconds = float(record["duration_seconds"] or 0)
+    directory = JOBS_DIR / record["id"]
+    qa = _read_json(directory / "qa-report.json") if directory.is_dir() else None
+    qa = qa if isinstance(qa, dict) else None
+    pipeline = (
+        _pipeline(directory, qa)
+        if directory.is_dir()
+        and record["status"]
+        not in {"preflight", "awaiting_confirmation", "queued", "failed"}
+        else _database_pipeline(record)
+    )
+    active_to_pipeline = {
+        "download": "source",
+        "normalize": "source",
+        "chirp": "chirp",
+        "merge": "merge",
+        "segment": "subtitles",
+        "correction": "gemini",
+        "export": "qa",
+        "qa": "qa",
+        "validation": "qa",
+    }
+    active_pipeline_id = active_to_pipeline.get(record.get("active_stage"))
+    if active_pipeline_id and record["status"] not in {
+        "awaiting_review",
+        "failed",
+        "paused",
+    }:
+        for item in pipeline:
+            if item["id"] == active_pipeline_id and item["status"] != "completed":
+                item["status"] = "running"
+                item["detail"] = record["stage_detail"] or item["detail"]
     return {
         "id": record["id"],
         "filename": record["source_name"],
@@ -311,9 +384,9 @@ def _database_job_summary(record: dict[str, Any]) -> dict[str, Any]:
         "updated_at": record["updated_at"],
         "language": record["language_code"],
         "model": "Chirp 3 + Gemini 3.6 Flash",
-        "words": 0,
-        "review_terms": 0,
-        "pipeline": _database_pipeline(record),
+        "words": int((qa or {}).get("chirp", {}).get("word_count", 0) or 0),
+        "review_terms": len(_read_json(directory / "review-terms.json", []) or []),
+        "pipeline": pipeline,
         "active_stage": record["active_stage"],
         "stage_detail": record["stage_detail"],
         "error": record["error"],
@@ -369,6 +442,88 @@ def get_job(job_id: str) -> dict[str, Any]:
     return _database_job_summary(record) if record else _job_summary(_job_dir(job_id))
 
 
+@app.get("/api/v1/jobs/{job_id}/events")
+def get_job_events(job_id: str) -> dict[str, Any]:
+    try:
+        events = _store().list_job_events(job_id)
+    except JobNotFound as exc:
+        if (JOBS_DIR / job_id).is_dir():
+            return {"events": []}
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"events": events}
+
+
+def _job_action_result(record: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "job": _database_job_summary(record),
+        "paid_operation_started": False,
+    }
+
+
+@app.post("/api/v1/jobs/{job_id}/pause")
+def pause_job(
+    job_id: str,
+    payload: JobActionRequest,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _mutation_actor(request)
+    try:
+        return _job_action_result(
+            _store().pause_job(
+                job_id=job_id,
+                expected_revision=payload.expected_revision,
+                actor=actor,
+            )
+        )
+    except JobNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except JobConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/jobs/{job_id}/resume")
+def resume_job(
+    job_id: str,
+    payload: JobActionRequest,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _mutation_actor(request)
+    try:
+        return _job_action_result(
+            _store().resume_job(
+                job_id=job_id,
+                expected_revision=payload.expected_revision,
+                actor=actor,
+            )
+        )
+    except JobNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except JobConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/jobs/{job_id}/retry-stage")
+def retry_stage(
+    job_id: str,
+    payload: RetryStageRequest,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _mutation_actor(request)
+    try:
+        return _job_action_result(
+            _store().retry_failed_stage(
+                job_id=job_id,
+                expected_revision=payload.expected_revision,
+                stage=payload.stage,
+                actor=actor,
+            )
+        )
+    except JobNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except JobConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @app.get("/api/v1/jobs/{job_id}/segments")
 def get_segments(job_id: str) -> dict[str, list[dict[str, Any]]]:
     if not (JOBS_DIR / job_id).is_dir() and _database_job(job_id):
@@ -402,6 +557,79 @@ def get_review_terms(job_id: str) -> dict[str, list[dict[str, Any]]]:
     directory = _job_dir(job_id)
     terms = _read_json(directory / "review-terms.json", [])
     return {"review_terms": terms if isinstance(terms, list) else []}
+
+
+@app.patch("/api/v1/jobs/{job_id}/review-terms/{term_id}")
+def decide_review_term(
+    job_id: str,
+    term_id: str,
+    payload: ReviewTermDecisionRequest,
+    request: Request,
+) -> dict[str, Any]:
+    actor = _mutation_actor(request)
+    if not re.fullmatch(r"[a-f0-9]{16}", term_id):
+        raise HTTPException(status_code=404, detail="Review term not found")
+    directory = _job_dir(job_id)
+    path = directory / "review-terms.json"
+    terms = _read_json(path, [])
+    if not isinstance(terms, list):
+        raise HTTPException(status_code=409, detail="Review terms are invalid")
+    selected = next(
+        (
+            item
+            for item in terms
+            if isinstance(item, dict) and item.get("id") == term_id
+        ),
+        None,
+    )
+    if selected is None:
+        raise HTTPException(status_code=404, detail="Review term not found")
+    approved_value = (payload.approved_value or selected.get("suggestion") or "").strip()
+    if payload.action == "confirmed" and not approved_value:
+        raise HTTPException(status_code=422, detail="Confirmed term needs a value")
+    decided_at = datetime.now(UTC).isoformat()
+    selected.update(
+        {
+            "status": payload.action,
+            "scope": payload.scope,
+            "approved_value": approved_value if payload.action == "confirmed" else None,
+            "decided_by": actor,
+            "decided_at": decided_at,
+        }
+    )
+    _atomic_json(path, terms)
+    decisions_path = directory / "term-decisions.json"
+    decisions = _read_json(decisions_path, [])
+    decisions = decisions if isinstance(decisions, list) else []
+    decisions.append(
+        {
+            "term_id": term_id,
+            "action": payload.action,
+            "scope": payload.scope,
+            "approved_value": selected["approved_value"],
+            "actor": actor,
+            "decided_at": decided_at,
+            "applied_to_transcript": False,
+        }
+    )
+    _atomic_json(decisions_path, decisions)
+    if _database_job(job_id):
+        _store().append_audit_event(
+            job_id=job_id,
+            event_type="review_term_decided",
+            actor=actor,
+            payload={
+                "term_id": term_id,
+                "action": payload.action,
+                "scope": payload.scope,
+                "applied_to_transcript": False,
+            },
+        )
+    return {
+        "term": selected,
+        "original_transcript_modified": False,
+        "decision_recorded": True,
+    }
 
 
 @app.get("/api/v1/jobs/{job_id}/artifacts")

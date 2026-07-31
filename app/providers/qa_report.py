@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
+from html import escape
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -20,6 +22,38 @@ def atomic(path: Path, value: object) -> None:
 def duration_ms() -> int:
     result = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", str(JOB / "normalized.flac")], capture_output=True, text=True, check=True)
     return round(float(result.stdout.strip()) * 1000)
+
+
+def audible_between(start_ms: int, end_ms: int) -> bool | None:
+    if end_ms <= start_ms:
+        return False
+    result = subprocess.run(
+        [
+            "ffmpeg",
+            "-hide_banner",
+            "-nostats",
+            "-ss",
+            f"{start_ms / 1000:.3f}",
+            "-i",
+            str(JOB / "normalized.flac"),
+            "-t",
+            f"{(end_ms - start_ms) / 1000:.3f}",
+            "-af",
+            "volumedetect",
+            "-f",
+            "null",
+            "-",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    match = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", result.stderr)
+    if not match:
+        return None
+    return float(match.group(1)) > float(
+        os.environ.get("CHIRP_SPEECH_MEAN_VOLUME_DB", "-50")
+    )
 
 
 def main() -> int:
@@ -40,7 +74,14 @@ def main() -> int:
     long_gaps = [{"before": a["segment_id"], "after": b["segment_id"], "gap_ms": int(b["start_ms"]) - int(a["end_ms"])} for a, b in zip(segments, segments[1:]) if int(b["start_ms"]) - int(a["end_ms"]) > 5000]
     if long_gaps: warnings.append(f"subtitle gaps over 5 seconds: {len(long_gaps)}")
     audio = duration_ms(); end = int(segments[-1]["end_ms"]) if segments else 0; uncovered = max(0, audio - end)
-    if uncovered > 1000: errors.append(f"audio tail uncovered: {uncovered}ms")
+    if uncovered > 1000:
+        tail_audible = audible_between(end, audio)
+        if tail_audible is True:
+            errors.append(f"audible audio tail uncovered: {uncovered}ms")
+        elif tail_audible is False:
+            warnings.append(f"silent audio tail not subtitled: {uncovered}ms")
+        else:
+            errors.append(f"unable to verify uncovered audio tail: {uncovered}ms")
     correction_invariant = None
     if corrected:
         correction_invariant = len(corrected["segments"]) == len(segments) and all((a["segment_id"], a["start_ms"], a["end_ms"]) == (b["segment_id"], b["start_ms"], b["end_ms"]) for a, b in zip(segments, corrected["segments"]))
@@ -49,6 +90,22 @@ def main() -> int:
     atomic(JOB / "qa-report.json", report)
     md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
     temporary = JOB / "qa-report.md.tmp"; temporary.write_text("\n".join(md) + "\n", encoding="utf-8"); temporary.replace(JOB / "qa-report.md")
+    html = [
+        "<!doctype html><html lang=\"zh-Hant\"><meta charset=\"utf-8\">",
+        f"<title>QA Report: {escape(JOB.name)}</title>",
+        "<style>body{font-family:system-ui,sans-serif;max-width:900px;margin:40px auto;line-height:1.6}code{background:#f3f4f6;padding:2px 5px} .pass{color:#087f5b}.fail{color:#c92a2a}</style>",
+        f"<h1>QA Report: {escape(JOB.name)}</h1>",
+        f"<p>Status: <strong class=\"{'pass' if report['status'] == 'PASS' else 'fail'}\">{report['status']}</strong></p>",
+        "<h2>Errors</h2><ul>",
+        *([f"<li>{escape(item)}</li>" for item in errors] or ["<li>None</li>"]),
+        "</ul><h2>Warnings</h2><ul>",
+        *([f"<li>{escape(item)}</li>" for item in warnings] or ["<li>None</li>"]),
+        "</ul></html>",
+    ]
+    temporary = JOB / "qa_report.html.tmp"
+    temporary.write_text("".join(html), encoding="utf-8")
+    temporary.replace(JOB / "qa_report.html")
+    atomic(JOB / "qa_report.json", report)
     print(f"QA={report['status']} errors={len(errors)} warnings={len(warnings)}")
     return 0 if not errors else 2
 

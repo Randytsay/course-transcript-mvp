@@ -5,7 +5,13 @@ export type JobStatus =
   | "downloading"
   | "normalizing"
   | "transcribing"
+  | "merging"
+  | "segmenting"
   | "correcting"
+  | "exporting"
+  | "quality_check"
+  | "paused"
+  | "awaiting_review"
   | "review"
   | "completed"
   | "failed";
@@ -43,6 +49,8 @@ export interface ReviewTerm {
   timestamp: string;
   confidence: "low" | "medium";
   status: "pending" | "confirmed" | "ignored";
+  scope?: "session" | "course" | "instructor" | "global";
+  approvedValue?: string | null;
 }
 
 export interface TranscriptJob {
@@ -61,6 +69,18 @@ export interface TranscriptJob {
   words: number;
   reviewTerms: number;
   pipeline: PipelineStep[];
+  activeStage?: string | null;
+  stageDetail?: string | null;
+  error?: string | null;
+  revision: number;
+}
+
+export interface JobEvent {
+  id: number;
+  eventType: string;
+  actor: string;
+  payload: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface DriveEntry {

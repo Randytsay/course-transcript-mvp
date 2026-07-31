@@ -71,10 +71,9 @@ the following generators complete:
 - `export_formats`
 
 Validated artifacts include raw and corrected SRT/VTT/ASS, structured JSON,
-TXT, Markdown, segment CSV, terminology CSV/JSON, merge decisions, join QA,
-raw Chirp evidence, raw Gemini responses, and QA reports. `Google Docs`,
-`DOCX`, and `PDF` are intentionally not generated in this local-review stage:
-they require a separate Drive/Docs OAuth setup and explicit upload approval.
+TXT, Markdown, CSV, DOCX, PDF, terminology evidence, merge decisions, join QA,
+raw provider responses, JSON/HTML QA, usage, and checksummed processing
+manifest. Google Docs and Drive upload remain intentionally disabled.
 
 ## Chinese subtitle segmentation
 
@@ -116,6 +115,19 @@ the same SQLite transaction.
 Before deployment, run:
 
 ```bash
-python -m unittest tests.test_job_core tests.test_preflight tests.test_api -v
+python -m unittest discover -s tests -v
 npm --prefix frontend run build
+npm --prefix frontend audit --omit=dev
 ```
+
+The production `pipeline-worker` stays idle until a revision-checked cost
+approval changes a job to `queued`. To exercise the same deterministic stages
+without cloud cost, set `COURSE_TRANSCRIPT_FAKE_PROVIDER=1` only on a dedicated
+test worker/job, then remove it before production. Never use health alone as
+proof; verify state transitions, artifacts, read-back hashes, restart
+persistence, and logs.
+
+Pause/resume and failed-stage retry are available on the job page. Pause is
+observed at the next worker heartbeat; completed evidence remains intact.
+Retry resumes only the recorded failed stage and downstream stages—output
+failure never invalidates completed ASR evidence.

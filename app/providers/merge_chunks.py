@@ -33,7 +33,7 @@ def load_chunks() -> list[tuple[dict, list[dict]]]:
         if not manifest_path.exists() or not words_path.exists():
             raise RuntimeError(f"missing manifest or words for {directory.name}")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("status") != "SUCCEEDED":
+        if manifest.get("status") not in {"SUCCEEDED", "EMPTY_SILENCE"}:
             raise RuntimeError(f"{directory.name} status is {manifest.get('status')}")
         words = json.loads(words_path.read_text(encoding="utf-8")).get("words", [])
         result.append((manifest, words))
@@ -67,19 +67,22 @@ def main() -> int:
                 clean.append(word)
         valid_words.append(clean)
 
-    # Chunk i owns [lower_boundary, upper_boundary).  For the ordinary
-    # 10-second overlap this produces 895 / 1785 / 2675 seconds.  For a tail
-    # recovery chunk it uses the actual prior coverage, preventing a false gap.
+    # Chunk i owns [lower_boundary, upper_boundary). The boundary is the
+    # midpoint of the adjacent source intervals, not a text-similarity result.
+    # For 15-minute chunks with a 10-second total overlap this produces
+    # 895 / 1785 / 2675 seconds. Empty, verified-silence chunks are valid and
+    # therefore cannot be treated as missing transcription evidence.
     boundaries: list[int] = []
     for index in range(len(chunks) - 1):
-        previous_words = valid_words[index]
-        next_manifest, next_words = chunks[index + 1]
-        if not previous_words or not next_words:
-            raise RuntimeError(f"cannot derive ownership boundary at chunks {index}/{index + 1}")
-        previous_end = max(int(word["end_ms"]) for word in previous_words)
-        next_start = min(int(word["start_ms"]) for word in next_words)
+        previous_manifest = chunks[index][0]
+        next_manifest = chunks[index + 1][0]
+        previous_end = int(previous_manifest["source_end_ms"])
+        next_start = int(next_manifest["source_start_ms"])
         if previous_end < next_start:
-            raise RuntimeError(f"actual chunk coverage has a gap before chunk {next_manifest['chunk_index']}")
+            raise RuntimeError(
+                f"chunk source intervals have a gap before chunk "
+                f"{next_manifest['chunk_index']}"
+            )
         boundaries.append((previous_end + next_start) // 2)
 
     pre_merge = {

@@ -109,6 +109,64 @@ def timestamp(value: int, sep: str = ",") -> str:
     return f"{h:02}:{m:02}:{s:02}{sep}{ms:03}"
 
 
+def write_review_terms(final: list[dict], terms: list[dict]) -> None:
+    variant_to_canonical: dict[str, str] = {}
+    confidence_by_term: dict[str, str] = {}
+    for term in terms:
+        canonical = str(term.get("canonical", "")).strip()
+        confidence = str(term.get("confidence", "low")).lower()
+        if canonical:
+            variant_to_canonical[canonical] = canonical
+            confidence_by_term[canonical] = confidence
+        for variant in term.get("variants", []):
+            value = str(variant).strip()
+            if value:
+                variant_to_canonical[value] = canonical or value
+                confidence_by_term[value] = confidence
+    prior_path = JOB / "review-terms.json"
+    prior = (
+        {
+            item["id"]: item
+            for item in json.loads(prior_path.read_text(encoding="utf-8"))
+            if isinstance(item, dict) and item.get("id")
+        }
+        if prior_path.exists()
+        else {}
+    )
+    review: list[dict] = []
+    seen: set[str] = set()
+    for segment in final:
+        for unresolved in segment.get("uncertain_terms", []):
+            heard = str(unresolved).strip()
+            if not heard or heard in seen:
+                continue
+            seen.add(heard)
+            term_id = hashlib.sha256(heard.encode("utf-8")).hexdigest()[:16]
+            existing = prior.get(term_id, {})
+            review.append(
+                {
+                    "id": term_id,
+                    "heard": heard,
+                    "suggestion": variant_to_canonical.get(heard, heard),
+                    "timestamp": timestamp(int(segment["start_ms"]))[:-4],
+                    "confidence": (
+                        "medium"
+                        if confidence_by_term.get(heard) == "medium"
+                        else "low"
+                    ),
+                    "status": existing.get("status", "pending"),
+                    "scope": existing.get("scope", "session"),
+                    "approved_value": existing.get("approved_value"),
+                    "decided_by": existing.get("decided_by"),
+                    "decided_at": existing.get("decided_at"),
+                }
+            )
+    atomic_text(
+        prior_path,
+        json.dumps(review, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
 def main() -> int:
     source = json.loads((JOB / "subtitles.json").read_text(encoding="utf-8"))
     raw = source["segments"]
@@ -130,6 +188,7 @@ def main() -> int:
     atomic_text(JOB / "subtitles-corrected.vtt", "WEBVTT\n\n" + "\n\n".join(f"{timestamp(item['start_ms'], '.')} --> {timestamp(item['end_ms'], '.')}\n{item['corrected_text']}" for item in final) + "\n")
     atomic_text(JOB / "transcript-corrected.txt", "\n".join(item["corrected_text"] for item in final) + "\n")
     atomic_text(JOB / "transcript-corrected.md", "# 校正逐字稿\n\n" + "\n".join(f"[{timestamp(item['start_ms'])[:-4]}] {item['corrected_text']}" for item in final) + "\n")
+    write_review_terms(final, terms)
     print(f"CORRECT=PASS segments={len(final)} changed={payload['corrected_count']} terms={len(terms)}")
     return 0
 

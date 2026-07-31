@@ -2,7 +2,7 @@
 
 Reads JOB_NAME env var (default voice_11386603-seg1) and computes the chunk
 plan from the actual audio duration. Each chunk is 15 minutes long with
-10-second overlap on each side of the merge boundary.
+10 seconds of total overlap around each merge boundary.
 
 Boundaries (merge at midpoint < b):
   boundary 1 =  895s (between chunk-000 and chunk-001)
@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 ROOT = Path("/app")
@@ -28,10 +29,17 @@ JOB = ROOT / "data" / "jobs" / JOB_NAME
 CHUNKS = JOB / "chunks"
 
 CHUNK_DURATION_S = 900   # 15 minutes per chunk
-OVERLAP_S = 10           # 10 seconds overlap on each side of each boundary
-WIDTH_S = CHUNK_DURATION_S + 2 * OVERLAP_S  # 920s per chunk
+OVERLAP_S = 10           # total overlap between adjacent chunks
+MAX_PARALLEL_CHUNKS = int(os.environ.get("CHIRP_MAX_PARALLEL_CHUNKS", "3"))
 
-KEEP_ENV = ("GOOGLE_CLOUD_PROJECT", "GCS_BUCKET", "GOOGLE_APPLICATION_CREDENTIALS", "JOB_NAME")
+KEEP_ENV = (
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GCS_BUCKET",
+    "GOOGLE_APPLICATION_CREDENTIALS",
+    "JOB_NAME",
+    "LANGUAGE_CODE",
+)
 
 
 def audio_duration_seconds(path: Path) -> float:
@@ -56,18 +64,19 @@ def normalize_audio(source: Path, normalized: Path) -> None:
 def compute_chunk_plan(total_seconds: float) -> list[tuple[int, float, float]]:
     """Compute (index, start_seconds, end_seconds) for each chunk.
 
-    Each chunk spans 15 minutes + 10s overlap on each side of its boundaries.
-    Boundaries are placed at 895, 1785, 2675, 3565, ...
+    Each chunk is at most 15 minutes and overlaps the next chunk by 10 seconds.
+    Ownership boundaries are therefore placed at 895, 1785, 2675, ...
     """
     plan: list[tuple[int, float, float]] = []
     index = 0
-    cursor = 0.0
-    while cursor < total_seconds:
-        start = max(0.0, cursor - OVERLAP_S)
-        end = min(total_seconds, cursor + CHUNK_DURATION_S + OVERLAP_S)
+    start = 0.0
+    while start < total_seconds:
+        end = min(total_seconds, start + CHUNK_DURATION_S)
         plan.append((index, round(start, 1), round(end, 1)))
+        if end >= total_seconds:
+            break
         index += 1
-        cursor += CHUNK_DURATION_S
+        start = end - OVERLAP_S
     return plan
 
 
@@ -95,54 +104,108 @@ def env_with(chunk_env: dict[str, str]) -> dict[str, str]:
     return env
 
 
+def _source_path() -> Path:
+    configured = os.environ.get("SOURCE_MEDIA_PATH")
+    if configured:
+        path = Path(configured)
+        if path.is_file() and path.parent == JOB:
+            return path
+        raise RuntimeError("SOURCE_MEDIA_PATH must be an existing file inside the job")
+    candidates = sorted(JOB.glob("source-original.*"))
+    if len(candidates) != 1:
+        raise RuntimeError("expected exactly one source-original media file")
+    return candidates[0]
+
+
+def _write_plan(plan: list[tuple[int, float, float]], total_seconds: float) -> None:
+    payload = {
+        "job": JOB_NAME,
+        "duration_seconds": total_seconds,
+        "chunk_duration_seconds": CHUNK_DURATION_S,
+        "overlap_seconds": OVERLAP_S,
+        "chunks": [
+            {
+                "chunk_index": index,
+                "source_start_ms": round(start * 1000),
+                "source_end_ms": round(end * 1000),
+                "role": "base",
+            }
+            for index, start, end in plan
+        ],
+    }
+    target = JOB / "chunk-plan.json"
+    temporary = target.with_suffix(".json.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(target)
+
+
+def process_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
+    existing = check_chunk(index)
+    if existing in {"SUCCEEDED", "EMPTY_SILENCE"}:
+        return index, True, f"chunk-{index:03d}: already {existing}"
+    chunk_env = {
+        "CHUNK_INDEX": str(index),
+        "CHUNK_START_SECONDS": str(start),
+        "CHUNK_END_SECONDS": str(end),
+        "CHUNK_ROLE": "base",
+    }
+    if existing == "SUBMITTED":
+        result = run_subprocess(
+            "app.providers.recover_chunk", env_with(chunk_env), timeout=600
+        )
+    else:
+        result = run_subprocess(
+            "app.providers.chirp_chunk", env_with(chunk_env), timeout=7200
+        )
+    message = (result.stdout or "").strip()
+    if result.returncode != 0:
+        message = f"{message}\n{(result.stderr or '')[:500]}".strip()
+    return index, result.returncode == 0, message
+
+
 def main() -> int:
-    source = JOB / "source.mp3"
-    if not source.exists():
-        print(f"PIPELINE=FAIL source not found: {source}")
-        return 1
-
     print(f"=== Chirp Pipeline: {JOB_NAME} ===")
-
-    total_seconds = audio_duration_seconds(source)
-    print(f"Audio duration: {total_seconds:.1f}s ({total_seconds / 60:.2f} min)")
 
     # Build a canonical normalized.flac if missing (one-time per job)
     normalized = JOB / "normalized.flac"
     if not normalized.exists():
+        try:
+            source = _source_path()
+        except RuntimeError as exc:
+            print(f"PIPELINE=FAIL {exc}")
+            return 1
         print("Building normalized.flac (16kHz mono) ...")
         normalize_audio(source, normalized)
+    total_seconds = audio_duration_seconds(normalized)
+    print(f"Audio duration: {total_seconds:.1f}s ({total_seconds / 60:.2f} min)")
 
     plan = compute_chunk_plan(total_seconds)
+    _write_plan(plan, total_seconds)
     print(f"Chunk plan ({len(plan)} chunks):")
     for index, start, end in plan:
         print(f"  chunk-{index:03d}: {start:.1f}s → {end:.1f}s ({end - start:.0f}s)")
 
-    # Phase 1: process each chunk
+    # Canary: chunk-000 must complete and validate before any parallel requests.
+    first_index, first_ok, first_message = process_chunk(*plan[0])
+    print(first_message)
+    if not first_ok:
+        print(f"PIPELINE=FAIL chunk-{first_index:03d} canary failed")
+        return 1
+
+    # Remaining chunks may proceed concurrently, bounded by quota-safe config.
     all_succeeded = True
-    for index, start, end in plan:
-        existing = check_chunk(index)
-        if existing == "SUCCEEDED":
-            print(f"  chunk-{index:03d}: already SUCCEEDED, skipping")
-            continue
-        chunk_env = {
-            "CHUNK_INDEX": str(index),
-            "CHUNK_START_SECONDS": str(start),
-            "CHUNK_END_SECONDS": str(end),
-        }
-        if existing == "SUBMITTED":
-            print(f"  chunk-{index:03d}: previously SUBMITTED, attempting recovery...")
-            result = run_subprocess("app.providers.recover_chunk", env_with(chunk_env), timeout=120)
-        else:
-            print(f"\n=== Submitting chunk-{index:03d} ({start}s → {end}s) ===")
-            result = run_subprocess("app.providers.chirp_chunk", env_with(chunk_env), timeout=7200)
-        print(result.stdout)
-        if result.stderr:
-            print(f"STDERR: {result.stderr[:500]}")
-        if result.returncode != 0:
-            print(f"  chunk-{index:03d}: FAILED")
-            all_succeeded = False
-        else:
-            print(f"  chunk-{index:03d}: PASS")
+    remaining = plan[1:]
+    with ThreadPoolExecutor(max_workers=max(1, MAX_PARALLEL_CHUNKS)) as pool:
+        futures = {pool.submit(process_chunk, *item): item[0] for item in remaining}
+        for future in as_completed(futures):
+            index, succeeded, message = future.result()
+            print(message)
+            if not succeeded:
+                print(f"  chunk-{index:03d}: FAILED")
+                all_succeeded = False
 
     if not all_succeeded:
         print("\nPIPELINE=FAIL some chunks failed")

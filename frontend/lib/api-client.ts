@@ -6,6 +6,7 @@ import type {
   CreatedBatch,
   DriveDirectory,
   PipelineStep,
+  JobEvent,
   ReviewTerm,
   TranscriptJob,
   TranscriptSegment,
@@ -23,6 +24,10 @@ type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt"
   created_at: string;
   updated_at: string;
   review_terms: number;
+  active_stage: string | null;
+  stage_detail: string | null;
+  error: string | null;
+  revision: number;
   pipeline: Array<{ id: string; label: string; detail: string; status: PipelineStep["status"] }>;
 };
 
@@ -47,6 +52,10 @@ function mapJob(job: ApiJob): TranscriptJob {
     words: job.words,
     reviewTerms: job.review_terms,
     pipeline: job.pipeline,
+    activeStage: job.active_stage,
+    stageDetail: job.stage_detail,
+    error: job.error,
+    revision: job.revision,
   };
 }
 
@@ -70,6 +79,10 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
   return fetchJson<T>(path, { method: "POST", body: JSON.stringify(body) });
 }
 
+function patchJson<T>(path: string, body: unknown): Promise<T> {
+  return fetchJson<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+}
+
 export async function getJobs(): Promise<TranscriptJob[]> {
   const result = await fetchJson<{ jobs: ApiJob[] }>("/jobs");
   return result.jobs.map(mapJob);
@@ -85,13 +98,78 @@ export async function getSegments(id: string): Promise<TranscriptSegment[]> {
 }
 
 export async function getReviewTerms(id: string): Promise<ReviewTerm[]> {
-  const result = await fetchJson<{ review_terms: Array<{ id: string; heard: string; suggestion: string; timestamp: string; confidence: "low" | "medium"; status: "pending" | "confirmed" | "ignored" }> }>(`/jobs/${encodeURIComponent(id)}/review-terms`);
-  return result.review_terms;
+  const result = await fetchJson<{ review_terms: Array<{ id: string; heard: string; suggestion: string; timestamp: string; confidence: "low" | "medium"; status: "pending" | "confirmed" | "ignored"; scope?: "session" | "course" | "instructor" | "global"; approved_value?: string | null }> }>(`/jobs/${encodeURIComponent(id)}/review-terms`);
+  return result.review_terms.map((term) => ({ ...term, approvedValue: term.approved_value }));
+}
+
+export async function decideReviewTerm(
+  jobId: string,
+  termId: string,
+  action: "confirmed" | "ignored",
+  approvedValue: string,
+  scope: "session" | "course" | "instructor" | "global",
+): Promise<ReviewTerm> {
+  const result = await patchJson<{ term: { id: string; heard: string; suggestion: string; timestamp: string; confidence: "low" | "medium"; status: "pending" | "confirmed" | "ignored"; scope: "session" | "course" | "instructor" | "global"; approved_value?: string | null } }>(
+    `/jobs/${encodeURIComponent(jobId)}/review-terms/${encodeURIComponent(termId)}`,
+    { action, approved_value: approvedValue, scope },
+  );
+  return { ...result.term, approvedValue: result.term.approved_value };
 }
 
 export async function getArtifacts(id: string): Promise<Artifact[]> {
   const result = await fetchJson<{ artifacts: Array<{ id: string; name: string; size_bytes: number; updated_at: string }> }>(`/jobs/${encodeURIComponent(id)}/artifacts`);
   return result.artifacts.map((item) => ({ id: item.id, name: item.name, sizeBytes: item.size_bytes, updatedAt: formatDate(item.updated_at) }));
+}
+
+export async function getJobEvents(id: string): Promise<JobEvent[]> {
+  const result = await fetchJson<{
+    events: Array<{
+      id: number;
+      event_type: string;
+      actor: string;
+      payload: Record<string, unknown>;
+      created_at: string;
+    }>;
+  }>(`/jobs/${encodeURIComponent(id)}/events`);
+  return result.events.map((event) => ({
+    id: event.id,
+    eventType: event.event_type,
+    actor: event.actor,
+    payload: event.payload,
+    createdAt: formatDate(event.created_at),
+  }));
+}
+
+async function jobAction(
+  id: string,
+  action: "pause" | "resume",
+  revision: number,
+): Promise<TranscriptJob> {
+  const result = await postJson<{ job: ApiJob }>(
+    `/jobs/${encodeURIComponent(id)}/${action}`,
+    { expected_revision: revision },
+  );
+  return mapJob(result.job);
+}
+
+export function pauseJob(id: string, revision: number): Promise<TranscriptJob> {
+  return jobAction(id, "pause", revision);
+}
+
+export function resumeJob(id: string, revision: number): Promise<TranscriptJob> {
+  return jobAction(id, "resume", revision);
+}
+
+export async function retryFailedStage(
+  id: string,
+  revision: number,
+  stage: string,
+): Promise<TranscriptJob> {
+  const result = await postJson<{ job: ApiJob }>(
+    `/jobs/${encodeURIComponent(id)}/retry-stage`,
+    { expected_revision: revision, stage },
+  );
+  return mapJob(result.job);
 }
 
 export async function browseDrive(sourcePath: string): Promise<DriveDirectory> {

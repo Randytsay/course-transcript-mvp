@@ -36,13 +36,13 @@ approval before Drive upload.
   splits a lexical unit solely to meet a duration target.
 - `app/providers/correct_text.py`: global terminology extraction followed by
   `gemini-3.6-flash` text-only correction per fixed subtitle window.
-- `app/providers/export_formats.py`: deterministic local ASS and segment CSV
-  exports; no external upload.
+- `app/providers/export_formats.py`: deterministic TXT/SRT/VTT/JSON/CSV/
+  DOCX/PDF exports with read-back hashes; no external upload.
 - `app/providers/validate_outputs.py`: read-only end-to-end artifact verifier.
-- `app/api.py` and `frontend/`: loopback-only, read-only review workspace. It
-  exposes only an allowlist of derived artifacts. Its authenticated batch
-  mutations support explicit files or one recursive folder without Drive
-  scheduling.
+- `app/api.py` and `frontend/`: private workspace with Drive browse, one/many/
+  recursive-folder batch selection, preflight, exact-cost approval, live
+  status/events, pause/resume, failed-stage retry, transcript/term/QA review,
+  and allowlisted downloads.
 - `app/jobs/source.py`: strict rclone path validation, one-level private Drive
   browsing, explicit multi-file preview, and bounded recursive folder preview.
 - `app/jobs/store.py`: SQLite WAL batches/jobs, immutable previews, revision
@@ -51,6 +51,11 @@ approval before Drive upload.
   worker; removes the temporary source before awaiting cost approval.
 - `frontend/app/batches/[id]`: live preflight status and explicit whole-batch
   paid-operation authorization.
+- `app/pipeline/worker.py`: approved-job-only paid runner with global lease,
+  heartbeat, evidence-based resume, idempotent usage, complete local exports,
+  and a hard stop at `awaiting_review`.
+- `app/providers/fake_timeline.py` and `fake_correction.py`: non-paid provider
+  substitutes for Docker/VPS integration tests.
 
 The current GitHub branch is `agent/frontend-api-integration`; keep its draft
 PR until a human accepts the local outputs. The formal job currently passes
@@ -58,7 +63,9 @@ strict QA and output validation, but still requires human content review before
 any Drive upload. Never use any numbered historical `phase*` script for new
 work.
 
-The paid queue runner is the next implementation layer. Do not mistake
-`queued` for a completed Chirp call: the current worker intentionally stops
-after local preflight unless/until the paid pipeline adapter is connected and
-the operator has approved the estimate.
+At this handoff the local test suite and frontend production build pass. The
+remaining acceptance work is ARM64 Docker/VPS deployment, non-paid fake E2E,
+restart persistence, and authenticated browser verification. After those pass,
+stop for the user's explicit choice of a five-minute Drive source, exact
+estimate, models, and paid-test approval. Never start a real request merely
+because a job page is visible.

@@ -30,6 +30,22 @@ class ApiTests(unittest.TestCase):
         (job / "subtitles-corrected.json").write_text(json.dumps({"segments": [{"segment_id": "seg-1", "start_ms": 100, "end_ms": 900, "corrected_text": "校正後", "uncertain_terms": ["術語"]}]}), encoding="utf-8")
         (job / "qa-report.json").write_text(json.dumps({"status": "PASS", "audio": {"duration_ms": 2000}, "chirp": {"word_count": 2}}), encoding="utf-8")
         (job / "subtitles.ass").write_text("[Script Info]\n", encoding="utf-8")
+        (job / "review-terms.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "id": "a" * 16,
+                        "heard": "都率天",
+                        "suggestion": "兜率天",
+                        "timestamp": "00:00:01",
+                        "confidence": "low",
+                        "status": "pending",
+                        "scope": "session",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
         import app.api as api
         api.DATA_DIR = self.data
         api.JOBS_DIR = self.data / "jobs"
@@ -139,6 +155,24 @@ class ApiTests(unittest.TestCase):
                 },
             )
             self.assertEqual(wrong_origin.status_code, 403)
+
+    def test_term_decision_preserves_original_transcript(self) -> None:
+        original = (self.data / "jobs" / "sample-job" / "subtitles.json").read_bytes()
+        decided = self.client.patch(
+            f"/api/v1/jobs/sample-job/review-terms/{'a' * 16}",
+            json={
+                "action": "confirmed",
+                "approved_value": "兜率天",
+                "scope": "session",
+            },
+        )
+        self.assertEqual(decided.status_code, 200)
+        self.assertFalse(decided.json()["original_transcript_modified"])
+        self.assertEqual(decided.json()["term"]["status"], "confirmed")
+        self.assertEqual(
+            (self.data / "jobs" / "sample-job" / "subtitles.json").read_bytes(),
+            original,
+        )
 
     def test_browse_preview_and_create_multi_file_batch(self) -> None:
         entries = [
