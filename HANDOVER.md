@@ -42,5 +42,7 @@ approval before Drive upload.
   exposes only an allowlist of derived artifacts and never mounts credentials.
 
 The current GitHub branch is `agent/frontend-api-integration`; keep its draft
-PR until a human accepts the local outputs. Never use any numbered historical
-`phase*` script for new work.
+PR until a human accepts the local outputs. The formal job currently passes
+strict QA and output validation, but still requires human content review before
+any Drive upload. Never use any numbered historical `phase*` script for new
+work.

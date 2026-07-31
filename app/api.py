@@ -116,7 +116,8 @@ def _job_summary(directory: Path) -> dict[str, Any]:
     failed = any(item["status"] == "failed" for item in stages)
     review = any(item["status"] == "warning" for item in stages) or (directory / "subtitles.json").exists()
     completed = all(item["status"] == "completed" for item in stages)
-    status = "failed" if failed else "completed" if completed else "review" if review else "transcribing"
+    # A local QA pass is ready for human review, not permission to publish.
+    status = "failed" if failed else "review" if review else "completed" if completed else "transcribing"
     completed_count = sum(item["status"] == "completed" for item in stages)
     progress = round(completed_count * 100 / len(stages))
     source = next(iter(sorted(directory.glob("source.*"))), None)
