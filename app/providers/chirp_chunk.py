@@ -26,6 +26,9 @@ def main():
     op=client.batch_recognize(request=cloud_speech.BatchRecognizeRequest(recognizer=f'projects/{project}/locations/us/recognizers/_',config=config,files=[cloud_speech.BatchRecognizeFileMetadata(uri=uri)],recognition_output_config=cloud_speech.RecognitionOutputConfig(gcs_output_config=cloud_speech.GcsOutputConfig(uri=out))))
     role=os.getenv('CHUNK_ROLE','base')
     atomic(CHUNK/'manifest.json',{'chunk_index':index,'role':role,'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':op.operation.name,'status':'SUBMITTED','created_at':datetime.now(UTC).isoformat()})
+    if os.getenv('SUBMIT_ONLY') == '1':
+        print(f'CHIRP_{name}=SUBMITTED operation={op.operation.name}')
+        return
     response=op.result(timeout=3600); fr=response.results[uri]; result_kind=fr._pb.WhichOneof('result'); error={'code':fr.error.code,'message':fr.error.message} if fr.error and fr.error.code else None
     record={'chunk_index':index,'role':role,'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':op.operation.name,'status':'FAILED','error':error,'result_oneof':result_kind,'google_cloud_speech_version':importlib.metadata.version('google-cloud-speech'),'output_field':None,'gcs_uri':None,'created_at':datetime.now(UTC).isoformat()}
     if (error and error['code']!=0) or result_kind!='cloud_storage_result': atomic(CHUNK/'manifest.json',record); raise RuntimeError(str(record))
