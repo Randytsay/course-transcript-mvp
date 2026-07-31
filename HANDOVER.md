@@ -31,8 +31,9 @@ approval before Drive upload.
   roles; never re-submits a completed chunk.
 - `app/providers/merge_chunks.py`: authoritative midpoint merge plus targeted
   patch replacement and ±10-second join QA.
-- `app/providers/build_srt.py`: fixed immutable segment IDs and raw
-  SRT/VTT/TXT/Markdown exports.
+- `app/providers/build_srt.py`: lexical Chinese subtitle segmentation using
+  local `jieba`, then fixed IDs and raw SRT/VTT/TXT/Markdown exports. It never
+  splits a lexical unit solely to meet a duration target.
 - `app/providers/correct_text.py`: global terminology extraction followed by
   `gemini-3.6-flash` text-only correction per fixed subtitle window.
 - `app/providers/export_formats.py`: deterministic local ASS and segment CSV

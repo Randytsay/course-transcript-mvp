@@ -45,3 +45,12 @@ TXT, Markdown, segment CSV, terminology CSV/JSON, merge decisions, join QA,
 raw Chirp evidence, raw Gemini responses, and QA reports. `Google Docs`,
 `DOCX`, and `PDF` are intentionally not generated in this local-review stage:
 they require a separate Drive/Docs OAuth setup and explicit upload approval.
+
+## Chinese subtitle segmentation
+
+Run `build_srt` only after merging the Chirp word timeline. The builder uses
+`jieba` locally to map character-level ASR timings to Chinese lexical units,
+then chooses boundaries at real speech gaps, punctuation (including ASR ASCII
+punctuation), and safe cue lengths. Do not reintroduce a fixed-duration split
+that can cut `時` from `間`. Gemini receives the resulting fixed cues for
+text-only correction and must not change their timing.

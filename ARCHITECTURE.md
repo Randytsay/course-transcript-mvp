@@ -28,7 +28,10 @@ chunks own all other words by midpoint ownership. This preserves raw GCS JSON,
 allows repair of real speech gaps without re-sending the whole recording, and
 prevents text-similarity merging from deleting words.
 
-Gemini correction is complete using `gemini-3.6-flash` only: 122 raw
-per-window responses, one global terminology record, and 458 corrected
-segments. IDs, ordering, start times, and end times remain immutable. Do not
-upload to Drive until QA and explicit user approval.
+The final reading subtitle layer groups Chirp's character-level timing into
+Traditional-Chinese lexical units before selecting sentence and pause
+boundaries. It never splits a lexical unit such as `時間`; it preserves the
+underlying Chirp timings and has no Gemini timing input. Gemini correction is
+complete using `gemini-3.6-flash` only: 120 raw per-window responses, one
+global terminology record, and 654 corrected segments across 1,103 readable
+subtitle cues. Do not upload to Drive until QA and explicit user approval.
