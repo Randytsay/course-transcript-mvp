@@ -13,6 +13,14 @@ from app.jobs.source import DriveEntry, SourceMetadata
 
 class ApiTests(unittest.TestCase):
     def setUp(self) -> None:
+        self.access_env = patch.dict(
+            os.environ,
+            {
+                "COURSE_TRANSCRIPT_REQUIRE_ACCESS_HEADERS": "false",
+                "COURSE_TRANSCRIPT_PUBLIC_ORIGIN": "",
+            },
+        )
+        self.access_env.start()
         self.tmp = tempfile.TemporaryDirectory()
         self.data = Path(self.tmp.name)
         job = self.data / "jobs" / "sample-job"
@@ -31,6 +39,7 @@ class ApiTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+        self.access_env.stop()
 
     def test_read_only_job_api(self) -> None:
         self.assertEqual(self.client.get("/api/v1/health").status_code, 200)

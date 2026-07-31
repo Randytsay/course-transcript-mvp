@@ -11,7 +11,11 @@ import type {
   TranscriptSegment,
 } from "./types";
 
-const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1").replace(/\/$/, "");
+// Production and local `next dev` both use the same-origin rewrite. Keeping the
+// default relative is important because NEXT_PUBLIC_* values are compiled into
+// browser bundles and a container runtime environment cannot safely repair an
+// already-built absolute localhost URL.
+const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
 type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms"> & {
   source_path: string;
