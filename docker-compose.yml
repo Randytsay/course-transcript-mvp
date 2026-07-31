@@ -22,6 +22,8 @@ services:
       context: .
       dockerfile: Dockerfile
     image: course-transcript-api:local
+    restart: unless-stopped
+    stop_grace_period: 20s
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
       COURSE_TRANSCRIPT_CORS_ORIGINS: http://localhost:3000
@@ -29,6 +31,9 @@ services:
       COURSE_TRANSCRIPT_COST_WARNING_THRESHOLDS_USD: "50,100,160,190"
       COURSE_TRANSCRIPT_ALLOWED_SOURCE_PREFIX: "gdrive:"
       COURSE_TRANSCRIPT_BATCH_MAX_FILES: "100"
+      COURSE_TRANSCRIPT_DRIVE_BROWSE_MAX_ENTRIES: "500"
+      COURSE_TRANSCRIPT_DRIVE_BROWSE_CACHE_SECONDS: "60"
+      COURSE_TRANSCRIPT_RCLONE_FAST_LIST: "false"
       COURSE_TRANSCRIPT_REQUIRE_ACCESS_HEADERS: "true"
       COURSE_TRANSCRIPT_PUBLIC_ORIGIN: "https://transcript.randy88.ccwu.cc"
       RCLONE_CONFIG: /run/secrets/rclone.conf
@@ -37,6 +42,16 @@ services:
       - ./logs:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
     command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).read()"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   worker:
     profiles: ["web"]
@@ -44,6 +59,8 @@ services:
       context: .
       dockerfile: Dockerfile
     image: course-transcript-worker:local
+    restart: unless-stopped
+    stop_grace_period: 30s
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
       COURSE_TRANSCRIPT_COST_LIMIT_USD: "200"
@@ -64,6 +81,8 @@ services:
       context: .
       dockerfile: Dockerfile
     image: course-transcript-pipeline-worker:local
+    restart: unless-stopped
+    stop_grace_period: 45s
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
       COURSE_TRANSCRIPT_COST_LIMIT_USD: "200"
@@ -89,12 +108,27 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    restart: unless-stopped
+    stop_grace_period: 20s
     environment:
       NEXT_PUBLIC_API_BASE_URL: /api/v1
       API_INTERNAL_BASE_URL: http://api:8000
     depends_on:
-      - api
-      - worker
-      - pipeline-worker
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_started
+      pipeline-worker:
+        condition: service_started
     ports:
       - "127.0.0.1:3300:3000"
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 25s
