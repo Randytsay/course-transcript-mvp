@@ -63,9 +63,14 @@ strict QA and output validation, but still requires human content review before
 any Drive upload. Never use any numbered historical `phase*` script for new
 work.
 
-At this handoff the local test suite and frontend production build pass. The
-remaining acceptance work is ARM64 Docker/VPS deployment, non-paid fake E2E,
-restart persistence, and authenticated browser verification. After those pass,
-stop for the user's explicit choice of a five-minute Drive source, exact
-estimate, models, and paid-test approval. Never start a real request merely
-because a job page is visible.
+At this handoff the local and ARM64 suites pass, the VPS Compose services are
+running, the non-paid fake E2E passes, restart persistence is proven, the
+frontend-to-API Drive browse path works, and the public hostname redirects an
+unauthenticated request to Cloudflare Access. The remaining human check is a
+refresh in the already authenticated browser followed by selection/preflight
+of a small file. Then stop for explicit confirmation of that source, exact
+estimate, models, and paid-test approval. Never click the cost authorization
+or start a real request merely because a job page is visible.
+
+Deployed Git evidence: branch `agent/frontend-api-integration`, commit
+`5d4ed4d`, Draft PR #2. See `docs/DEPLOYMENT_STATUS.md`.
