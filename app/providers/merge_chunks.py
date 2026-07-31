@@ -45,11 +45,16 @@ def load_chunks() -> list[tuple[dict, list[dict]]]:
 
 def main() -> int:
     try:
-        chunks = load_chunks()
+        all_chunks = load_chunks()
     except RuntimeError as exc:
         print(f"MERGE=FAIL {exc}")
         return 1
 
+    chunks = [pair for pair in all_chunks if pair[0].get("role", "base") == "base"]
+    patches = [pair for pair in all_chunks if pair[0].get("role") == "patch"]
+    if not chunks:
+        print("MERGE=FAIL no base chunks")
+        return 1
     valid_words: list[list[dict]] = []
     anomalies: list[dict] = []
     for manifest, words in chunks:
@@ -103,6 +108,18 @@ def main() -> int:
         merged.extend(kept)
         decisions.append({"chunk_index": manifest["chunk_index"], "lower_midpoint_ms": lower, "upper_midpoint_ms": upper, "input_word_count": len(words), "kept_word_count": len(kept), "rejected_by_ownership": rejected})
 
+    # A targeted patch owns its complete source window. This intentionally
+    # replaces any baseline words there, so a known speech gap can be repaired
+    # without reprocessing the entire long recording.
+    patch_decisions = []
+    for manifest, patch_words in sorted(patches, key=lambda pair: int(pair[0]["source_start_ms"])):
+        valid_patch = [word for word in patch_words if int(word["end_ms"]) > int(word["start_ms"])]
+        start, end = int(manifest["source_start_ms"]), int(manifest["source_end_ms"])
+        before = len(merged)
+        merged = [word for word in merged if not (start <= midpoint(word) < end)]
+        removed = before - len(merged)
+        merged.extend(valid_patch)
+        patch_decisions.append({"chunk_index": manifest["chunk_index"], "source_start_ms": start, "source_end_ms": end, "baseline_words_replaced": removed, "patch_words_inserted": len(valid_patch)})
     merged.sort(key=lambda word: (int(word["start_ms"]), int(word["end_ms"])))
     if any(int(after["start_ms"]) < int(before["start_ms"]) for before, after in zip(merged, merged[1:])):
         print("MERGE=FAIL non-monotonic merged word starts")
@@ -116,7 +133,7 @@ def main() -> int:
             "window_end_ms": boundary + 10_000,
             "words": [word for word in merged if max(0, boundary - 10_000) <= midpoint(word) <= boundary + 10_000],
         })
-    atomic_json(JOB / "merge-decisions.json", {"job": JOB.name, "boundaries_ms": boundaries, "decisions": decisions, "dropped_anomalies": anomalies})
+    atomic_json(JOB / "merge-decisions.json", {"job": JOB.name, "boundaries_ms": boundaries, "decisions": decisions, "patch_decisions": patch_decisions, "dropped_anomalies": anomalies})
     atomic_json(JOB / "join-qa.json", {"job": JOB.name, "joins": join_qa})
 
     output = {

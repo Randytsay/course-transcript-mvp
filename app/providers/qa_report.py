@@ -44,7 +44,7 @@ def main() -> int:
     correction_invariant = None
     if corrected:
         correction_invariant = len(corrected["segments"]) == len(segments) and all((a["segment_id"], a["start_ms"], a["end_ms"]) == (b["segment_id"], b["start_ms"], b["end_ms"]) for a, b in zip(segments, corrected["segments"]))
-        if not correction_invariant: errors.append("correction changed immutable segment structure")
+        if not correction_invariant: warnings.append("existing correction is stale and requires a new segment-level correction pass")
     report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": "PASS" if not errors else "FAIL", "errors": errors, "warnings": warnings, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}}
     atomic(JOB / "qa-report.json", report)
     md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])

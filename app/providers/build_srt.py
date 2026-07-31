@@ -34,7 +34,10 @@ def segment_words(words: list[dict]) -> list[dict]:
             return
         index = len(segments) + 1
         text = "".join(str(word["word"]) for word in current)
-        segments.append({"segment_id": f"seg-{index:04d}", "start_ms": int(current[0]["start_ms"]), "end_ms": int(current[-1]["end_ms"]), "raw_text": text, "text": text, "word_count": len(current)})
+        start = int(current[0]["start_ms"])
+        if segments:
+            start = max(start, int(segments[-1]["end_ms"]))
+        segments.append({"segment_id": f"seg-{index:04d}", "start_ms": start, "end_ms": int(current[-1]["end_ms"]), "raw_text": text, "text": text, "word_count": len(current)})
         current.clear()
 
     for word in words:
