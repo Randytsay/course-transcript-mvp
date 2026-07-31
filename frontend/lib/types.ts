@@ -73,6 +73,8 @@ export interface TranscriptJob {
   stageDetail?: string | null;
   error?: string | null;
   revision: number;
+  batchId?: string | null;
+  estimatedCostUsd?: string | null;
 }
 
 export interface JobEvent {

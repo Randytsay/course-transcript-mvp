@@ -18,7 +18,7 @@ import type {
 // already-built absolute localhost URL.
 const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
-type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms"> & {
+type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd"> & {
   source_path: string;
   duration_seconds: number;
   created_at: string;
@@ -28,6 +28,8 @@ type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt"
   stage_detail: string | null;
   error: string | null;
   revision: number;
+  batch_id?: string | null;
+  estimated_cost_usd?: string | null;
   pipeline: Array<{ id: string; label: string; detail: string; status: PipelineStep["status"] }>;
 };
 
@@ -56,6 +58,8 @@ function mapJob(job: ApiJob): TranscriptJob {
     stageDetail: job.stage_detail,
     error: job.error,
     revision: job.revision,
+    batchId: job.batch_id ?? null,
+    estimatedCostUsd: job.estimated_cost_usd ?? null,
   };
 }
 

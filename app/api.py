@@ -390,6 +390,7 @@ def _database_job_summary(record: dict[str, Any]) -> dict[str, Any]:
         "active_stage": record["active_stage"],
         "stage_detail": record["stage_detail"],
         "error": record["error"],
+        "batch_id": record.get("batch_id"),
         "estimated_cost_usd": record["estimated_cost_usd"],
         "reserved_cost_usd": record["reserved_cost_usd"],
         "actual_cost_usd": record["actual_cost_usd"],

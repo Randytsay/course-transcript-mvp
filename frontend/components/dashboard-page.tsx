@@ -40,6 +40,7 @@ export default function DashboardPage() {
   const reviewing = jobs.filter((job) => ["review", "awaiting_review"].includes(job.status)).length;
   const active = jobs.filter((job) => ["preflight", "queued", "downloading", "normalizing", "transcribing", "merging", "segmenting", "correcting", "exporting", "quality_check"].includes(job.status)).length;
   const awaitingConfirmation = jobs.filter((job) => job.status === "awaiting_confirmation").length;
+  const firstAwaitingJob = jobs.find((job) => job.status === "awaiting_confirmation");
   const completed = jobs.filter((job) => ["completed", "review", "awaiting_review"].includes(job.status)).length;
   const visibleJobs = useMemo(() => showAll ? jobs : jobs.slice(0, 4), [jobs, showAll]);
   const metrics = [
@@ -50,6 +51,23 @@ export default function DashboardPage() {
   ];
   return (
     <AppShell title="轉錄儀表板" description="掌握長檔辨識進度、人工審查與輸出狀態。" actions={<Link href="/jobs/new" className="button button--primary"><Plus size={17} />新增轉錄任務</Link>}>
+      {firstAwaitingJob && (
+        <div style={{ marginBottom: "20px", padding: "16px 20px", background: "#fff7ed", border: "2px solid #f59e0b", borderRadius: "12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+            <TriangleAlert size={26} className="text-warning" style={{ flexShrink: 0 }} />
+            <div>
+              <strong style={{ fontSize: "16px", color: "#9a3412" }}>有 {awaitingConfirmation} 個任務正在等待費用確認授權</strong>
+              <p style={{ margin: "4px 0 0", fontSize: "14px", color: "#c2410c" }}>
+                例如：<strong>{firstAwaitingJob.filename}</strong> (預估費用 US$ {firstAwaitingJob.estimatedCostUsd ?? "2.68"})。確認後將自動開始轉錄。
+              </p>
+            </div>
+          </div>
+          <Link href={firstAwaitingJob.batchId ? `/batches/${firstAwaitingJob.batchId}` : `/jobs/${firstAwaitingJob.id}`} className="button button--primary button--large">
+            <CheckCircle2 size={18} /> 立即確認費用並排入處理
+          </Link>
+        </div>
+      )}
+
       <section className="metric-grid" aria-label="轉錄統計">
         {metrics.map((metric) => {
           const Icon = metric.icon;
@@ -69,7 +87,15 @@ export default function DashboardPage() {
               <div className="jobs-table__row" role="row" key={job.id}>
                 <div className="job-file-cell"><div className="file-icon"><FileAudio2 size={20} /></div><div><Link href={`/jobs/${job.id}`} className="job-name">{job.filename}</Link><span>{job.course} · {job.duration}</span></div></div>
                 <div className="job-progress-cell"><ProgressRing value={job.progress} /><span>{job.progress === 100 ? "處理完成" : `${job.progress}%`}</span></div>
-                <div><StatusBadge status={job.status} /></div>
+                <div>
+                  {job.status === "awaiting_confirmation" ? (
+                    <Link href={job.batchId ? `/batches/${job.batchId}` : `/jobs/${job.id}`} className="button button--confirm button--small" style={{ fontSize: "12px", padding: "6px 12px" }}>
+                      <CheckCircle2 size={14} /> 確認費用 US${job.estimatedCostUsd ?? "2.68"}
+                    </Link>
+                  ) : (
+                    <StatusBadge status={job.status} />
+                  )}
+                </div>
                 <div className="updated-cell"><Clock3 size={15} />{job.updatedAt}</div>
                 <div className="row-action"><Link className="icon-button" href={`/jobs/${job.id}`} aria-label={`查看 ${job.filename}`}><MoreHorizontal size={19} /></Link></div>
               </div>

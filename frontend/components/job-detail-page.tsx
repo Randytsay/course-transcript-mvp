@@ -1,9 +1,9 @@
 "use client";
 
 import AppShell from "./app-shell";
-import { decideReviewTerm, getArtifacts, getJob, getJobEvents, getReviewTerms, getSegments, pauseJob, resumeJob, retryFailedStage } from "@/lib/api-client";
+import { approveBatch, decideReviewTerm, getArtifacts, getBatch, getJob, getJobEvents, getReviewTerms, getSegments, pauseJob, resumeJob, retryFailedStage } from "@/lib/api-client";
 import type { Artifact, JobEvent, ReviewTerm, TranscriptJob, TranscriptSegment } from "@/lib/types";
-import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, Clock3, ExternalLink, FileJson, FileText, FolderUp, Gauge, Headphones, Pause, Play, RotateCcw, TriangleAlert } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, Clock3, ExternalLink, FileJson, FileText, FolderUp, Gauge, Headphones, LoaderCircle, Pause, Play, RotateCcw, TriangleAlert } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import StatusBadge from "./status-badge";
@@ -27,6 +27,8 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
   const [termDrafts, setTermDrafts] = useState<Record<string, { value: string; scope: "session" | "course" | "instructor" | "global" }>>({});
   const [decidingTerm, setDecidingTerm] = useState<string | null>(null);
   const [jobAction, setJobAction] = useState<"pause" | "resume" | "retry" | null>(null);
+  const [confirmedCost, setConfirmedCost] = useState(false);
+  const [approvingCost, setApprovingCost] = useState(false);
 
   useEffect(() => {
     Promise.all([getJob(jobId), getSegments(jobId), getReviewTerms(jobId), getArtifacts(jobId), getJobEvents(jobId)])
@@ -38,6 +40,24 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
   }, [jobId]);
 
   const pendingCount = useMemo(() => reviewTerms.filter((term) => term.status === "pending").length, [reviewTerms]);
+
+  async function approveJobCost() {
+    if (!job?.batchId || !confirmedCost) return;
+    setApprovingCost(true);
+    setActionError(null);
+    try {
+      const batch = await getBatch(job.batchId);
+      if (batch.estimatedCostUsd) {
+        await approveBatch(batch.id, batch.revision, batch.estimatedCostUsd);
+        const updated = await getJob(job.id);
+        setJob(updated);
+      }
+    } catch (cause: unknown) {
+      setActionError(cause instanceof Error ? cause.message : "費用確認授權失敗");
+    } finally {
+      setApprovingCost(false);
+    }
+  }
   async function control(action: "pause" | "resume" | "retry") {
     if (!job) return;
     setJobAction(action);
@@ -79,6 +99,33 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
       <div className="job-overview-main"><StatusBadge status={job.status} /><span className="job-id">Job ID: {job.id}</span><span className="job-meta"><Clock3 size={15} />更新於 {job.updatedAt}</span></div>
       <div className="job-overview-stats"><div><span>字詞數</span><strong>{job.words.toLocaleString()}</strong></div><div><span>待確認</span><strong className="text-warning">{pendingCount}</strong></div><div><span>時間軸</span><strong className={qaStep?.status === "warning" ? "text-warning" : "text-success"}>{qaStep?.status === "warning" ? "需修正" : "待 QA"}</strong></div></div>
     </section>
+
+    {job.status === "awaiting_confirmation" && (
+      <section className="qa-notice" style={{ marginBottom: "16px", padding: "18px", background: "#fff7ed", border: "2px solid #f59e0b", borderRadius: "12px" }}>
+        <TriangleAlert size={28} className="text-warning" style={{ flexShrink: 0, marginTop: "2px" }} />
+        <div style={{ flex: 1 }}>
+          <strong style={{ fontSize: "16px", color: "#9a3412" }}>預估辨識費用待確認：US$ {job.estimatedCostUsd ?? "2.68"}</strong>
+          <p style={{ fontSize: "14px", color: "#c2410c", marginTop: "4px" }}>
+            本機 Preflight 格式與時長檢查已完成（影音時長 {job.duration}）。確認授權後，系統將自動排入付費轉錄佇列 (Chirp 3 + Gemini 3.6 Flash)。
+          </p>
+          <div style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", fontWeight: 600, color: "#7c2d12", cursor: "pointer" }}>
+              <input type="checkbox" checked={confirmedCost} onChange={(e) => setConfirmedCost(e.target.checked)} style={{ width: "18px", height: "18px", accentColor: "var(--brand)" }} />
+              我確認預估費用 US$ {job.estimatedCostUsd ?? "2.68"}，並授權排入處理
+            </label>
+            <button className="button button--primary button--large" disabled={!confirmedCost || approvingCost} onClick={() => void approveJobCost()}>
+              {approvingCost ? <LoaderCircle className="spin" size={18} /> : <CheckCircle2 size={18} />}
+              確認費用並排入處理
+            </button>
+            {job.batchId && (
+              <Link href={`/batches/${job.batchId}`} className="button button--secondary button--large">
+                查看完整批次 (Batch)
+              </Link>
+            )}
+          </div>
+        </div>
+      </section>
+    )}
     <section className="pipeline-strip" aria-label="處理管線">
       {job.pipeline.map((step, index) => <div className={`pipeline-step pipeline-step--${step.status}`} key={step.id}><div className="pipeline-step__node">{step.status === "completed" ? <Check size={15} /> : step.status === "warning" ? <TriangleAlert size={15} /> : <Circle size={13} />}</div><div><strong>{step.label}</strong><span>{step.detail}</span></div>{index < job.pipeline.length - 1 && <span className="pipeline-step__line" />}</div>)}
     </section>
