@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import csv
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -66,9 +67,11 @@ def windows(segments: list[dict]) -> list[list[dict]]:
 def correct_window(items: list[dict], terms: list[dict]) -> dict[str, dict]:
     first = items[0]["segment_id"]
     path = WORK / f"{first}.json"
+    source_segments = [{"segment_id": item["segment_id"], "raw_text": item["raw_text"]} for item in items]
     if path.exists():
         record = json.loads(path.read_text(encoding="utf-8"))
-        return {entry["segment_id"]: entry for entry in record["segments"]}
+        if record.get("model") == MODEL and record.get("source_segments") == source_segments:
+            return {entry["segment_id"]: entry for entry in record["segments"]}
     prompt = """Correct Traditional-Chinese ASR text only. Preserve meaning; do not summarize, add information, split, merge, reorder, or alter segment IDs/timestamps. Apply only clear corrections. Return exactly one object for every input segment with the same segment_id. uncertain_terms must list unresolved terms.\n\nGlobal terminology:\n""" + json.dumps(terms, ensure_ascii=False) + "\n\nSegments:\n" + json.dumps([{ "segment_id": x["segment_id"], "text": x["raw_text"] } for x in items], ensure_ascii=False)
     response = client().models.generate_content(model=MODEL, contents=prompt, config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=CORRECTION_SCHEMA, temperature=0))
     received = json.loads(response.text).get("segments", [])
@@ -78,7 +81,7 @@ def correct_window(items: list[dict], terms: list[dict]) -> dict[str, dict]:
         answer = by_id.get(item["segment_id"], {})
         text = answer.get("corrected_text") if isinstance(answer.get("corrected_text"), str) else item["raw_text"]
         final.append({"segment_id": item["segment_id"], "corrected_text": text, "uncertain_terms": answer.get("uncertain_terms", []), "fallback_to_raw": item["segment_id"] not in by_id})
-    record = {"model": MODEL, "source_start_ms": items[0]["start_ms"], "source_end_ms": items[-1]["end_ms"], "usage_metadata": response.usage_metadata.model_dump(mode="json") if response.usage_metadata else None, "raw_response": response.text, "segments": final}
+    record = {"model": MODEL, "source_start_ms": items[0]["start_ms"], "source_end_ms": items[-1]["end_ms"], "source_segments": source_segments, "source_sha256": hashlib.sha256(json.dumps(source_segments, ensure_ascii=False, separators=(",", ":")).encode("utf-8")).hexdigest(), "usage_metadata": response.usage_metadata.model_dump(mode="json") if response.usage_metadata else None, "raw_response": response.text, "segments": final}
     atomic_text(path, json.dumps(record, ensure_ascii=False, indent=2) + "\n")
     return {entry["segment_id"]: entry for entry in final}
 
