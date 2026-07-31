@@ -1,10 +1,14 @@
 """Strict, read-only rclone source browsing and inspection."""
 from __future__ import annotations
 
+import hashlib
 import json
+import logging
 import os
 import re
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Literal
@@ -28,6 +32,15 @@ MEDIA_EXTENSIONS = frozenset(
 )
 CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 SelectionMode = Literal["files", "folder"]
+LOGGER = logging.getLogger(__name__)
+
+# Browsing the same folder repeatedly is common in the web UI. Keep a short,
+# process-local cache so moving into a child directory and returning does not
+# immediately trigger another Google Drive request. Entries are immutable
+# dataclasses and are safe to share between callers.
+_DIRECTORY_CACHE: dict[str, tuple[float, tuple["DriveEntry", ...]]] = {}
+_DIRECTORY_CACHE_LOCK = threading.Lock()
+_DIRECTORY_CACHE_MAX_ITEMS = 128
 
 
 class SourceInspectionError(ValueError):
@@ -78,6 +91,25 @@ def _allowed_prefix() -> str:
     return os.environ.get("COURSE_TRANSCRIPT_ALLOWED_SOURCE_PREFIX", "gdrive:")
 
 
+def _cache_ttl_seconds() -> float:
+    raw = os.environ.get("COURSE_TRANSCRIPT_DRIVE_BROWSE_CACHE_SECONDS", "60")
+    try:
+        return max(0.0, min(float(raw), 600.0))
+    except ValueError:
+        return 60.0
+
+
+def _path_fingerprint(path: str) -> str:
+    """Return a non-reversible identifier suitable for performance logs."""
+    return hashlib.sha256(path.encode("utf-8")).hexdigest()[:12]
+
+
+def _clear_directory_cache() -> None:
+    """Clear the process cache. Intended for tests and controlled refreshes."""
+    with _DIRECTORY_CACHE_LOCK:
+        _DIRECTORY_CACHE.clear()
+
+
 def _validate_common_path(source_path: str, allowed_prefix: str) -> tuple[str, str]:
     candidate = source_path.strip()
     if not candidate or CONTROL_CHARACTERS.search(candidate):
@@ -121,6 +153,12 @@ def _run_lsjson(
     command = ["rclone", "lsjson"]
     if recursive:
         command.append("--recursive")
+        if os.environ.get("COURSE_TRANSCRIPT_RCLONE_FAST_LIST", "false").lower() in {
+            "1",
+            "true",
+            "yes",
+        }:
+            command.append("--fast-list")
     if files_only:
         command.append("--files-only")
     command.extend(["--no-mimetype", candidate])
@@ -151,9 +189,66 @@ def _join_remote_path(parent: str, child: str) -> str:
     return f"{root}{separator}{child.lstrip('/')}"
 
 
+def _parent_remote_path(source_path: str) -> str:
+    allowed_root = _allowed_prefix().rstrip("/")
+    relative = source_path[len(allowed_root) :].strip("/")
+    parent_relative = str(PurePosixPath(relative).parent)
+    if parent_relative in {"", "."}:
+        return allowed_root
+    return _join_remote_path(allowed_root, parent_relative)
+
+
+def _cache_get(directory: str) -> list[DriveEntry] | None:
+    ttl = _cache_ttl_seconds()
+    if ttl <= 0:
+        return None
+    now = time.monotonic()
+    with _DIRECTORY_CACHE_LOCK:
+        cached = _DIRECTORY_CACHE.get(directory)
+        if cached is None:
+            return None
+        created_at, entries = cached
+        if now - created_at > ttl:
+            _DIRECTORY_CACHE.pop(directory, None)
+            return None
+        return list(entries)
+
+
+def _cache_put(directory: str, entries: list[DriveEntry]) -> None:
+    if _cache_ttl_seconds() <= 0:
+        return
+    now = time.monotonic()
+    with _DIRECTORY_CACHE_LOCK:
+        expired = [
+            key
+            for key, (created_at, _) in _DIRECTORY_CACHE.items()
+            if now - created_at > _cache_ttl_seconds()
+        ]
+        for key in expired:
+            _DIRECTORY_CACHE.pop(key, None)
+        if len(_DIRECTORY_CACHE) >= _DIRECTORY_CACHE_MAX_ITEMS:
+            oldest = min(
+                _DIRECTORY_CACHE,
+                key=lambda key: _DIRECTORY_CACHE[key][0],
+            )
+            _DIRECTORY_CACHE.pop(oldest, None)
+        _DIRECTORY_CACHE[directory] = (now, tuple(entries))
+
+
 def list_rclone_directory(source_path: str) -> tuple[str, list[DriveEntry]]:
     """List one Drive directory level without exposing rclone configuration."""
     directory = validate_directory_path(source_path, _allowed_prefix())
+    started = time.monotonic()
+    cached = _cache_get(directory)
+    if cached is not None:
+        LOGGER.info(
+            "drive_browse cache_hit=true path_id=%s items=%d duration_ms=%d",
+            _path_fingerprint(directory),
+            len(cached),
+            round((time.monotonic() - started) * 1000),
+        )
+        return directory, cached
+
     payload = _run_lsjson(directory, recursive=False)
     if not isinstance(payload, list):
         raise SourceInspectionError("Drive 資料夾回傳格式不正確")
@@ -189,7 +284,58 @@ def list_rclone_directory(source_path: str) -> tuple[str, list[DriveEntry]]:
             )
         )
     entries.sort(key=lambda entry: (not entry.is_dir, entry.name.casefold()))
+    _cache_put(directory, entries)
+    LOGGER.info(
+        "drive_browse cache_hit=false path_id=%s items=%d duration_ms=%d",
+        _path_fingerprint(directory),
+        len(entries),
+        round((time.monotonic() - started) * 1000),
+    )
     return directory, entries
+
+
+def _metadata_from_directory_entries(source_paths: list[str]) -> list[SourceMetadata]:
+    """Resolve explicit files by listing each parent folder once.
+
+    The browser already navigates these folders, so the short listing cache will
+    usually satisfy this without another Drive request. If a folder is too
+    large, unavailable, or a file changed, the caller falls back to an exact
+    stat for only the unresolved file.
+    """
+    ordered_candidates = [
+        validate_source_path(path, _allowed_prefix()) for path in source_paths
+    ]
+    by_parent: dict[str, list[str]] = {}
+    for candidate in ordered_candidates:
+        by_parent.setdefault(_parent_remote_path(candidate), []).append(candidate)
+
+    resolved: dict[str, SourceMetadata] = {}
+    for parent, candidates in by_parent.items():
+        try:
+            _, entries = list_rclone_directory(parent)
+        except SourceInspectionError:
+            entries = []
+        entries_by_path = {entry.source_path: entry for entry in entries}
+        for candidate in candidates:
+            entry = entries_by_path.get(candidate)
+            if (
+                entry is not None
+                and not entry.is_dir
+                and entry.supported_media
+                and entry.size_bytes > 0
+            ):
+                resolved[candidate] = SourceMetadata(
+                    source_path=candidate,
+                    name=entry.name,
+                    size_bytes=entry.size_bytes,
+                    modified_at=entry.modified_at,
+                    mime_type=entry.mime_type,
+                )
+
+    return [
+        resolved.get(candidate) or inspect_rclone_source(candidate)
+        for candidate in ordered_candidates
+    ]
 
 
 def inspect_rclone_selection(
@@ -205,7 +351,7 @@ def inspect_rclone_selection(
             raise SourceInspectionError("至少選擇一個影音檔")
         if len(unique_paths) > maximum_files:
             raise SourceInspectionError(f"單一批次最多 {maximum_files} 個影音檔")
-        return [inspect_rclone_source(path) for path in unique_paths]
+        return _metadata_from_directory_entries(unique_paths)
 
     if len(source_paths) != 1:
         raise SourceInspectionError("整個資料夾模式一次只能指定一個資料夾")
