@@ -82,10 +82,7 @@ def _pipeline(directory: Path, qa: dict[str, Any] | None) -> list[dict[str, str]
     subtitles = (directory / "subtitles.json").exists()
     corrected = (directory / "subtitles-corrected.json").exists()
     qa_exists = (directory / "qa-report.json").exists()
-    qa_unsafe = bool(qa and (
-        (qa.get("subtitles_initial") or {}).get("min_segment_ms", 0) < 0
-        or (qa.get("chirp") or {}).get("coverage_pct", 100) < 99
-    ))
+    qa_unsafe = bool(qa and qa.get("status") not in {None, "PASS"})
 
     def state(done: bool, active: bool = False, warning: bool = False) -> str:
         if warning:
@@ -109,8 +106,10 @@ def _job_summary(directory: Path) -> dict[str, Any]:
     qa = qa if isinstance(qa, dict) else None
     subtitle = _read_json(directory / "subtitles.json", {})
     subtitle = subtitle if isinstance(subtitle, dict) else {}
-    words = int((qa or {}).get("chirp", {}).get("total_words", 0) or 0)
-    duration_seconds = (qa or {}).get("audio", {}).get("duration_seconds")
+    words = int((qa or {}).get("chirp", {}).get("word_count", 0) or 0)
+    duration_seconds = (qa or {}).get("audio", {}).get("duration_ms")
+    if duration_seconds is not None:
+        duration_seconds = float(duration_seconds) / 1000
     if duration_seconds is None:
         duration_seconds = subtitle.get("total_duration_ms", 0) / 1000
     stages = _pipeline(directory, qa)
@@ -194,7 +193,14 @@ def get_review_terms(job_id: str) -> dict[str, list[dict[str, Any]]]:
 @app.get("/api/v1/jobs/{job_id}/artifacts")
 def get_artifacts(job_id: str) -> dict[str, list[dict[str, Any]]]:
     directory = _job_dir(job_id)
-    allowed = ["subtitles.srt", "subtitles-corrected.srt", "subtitles.json", "subtitles-corrected.json", "qa-report.json", "qa-report.md", "merged-words.json"]
+    allowed = [
+        "subtitles.srt", "subtitles.vtt", "subtitles.ass", "subtitles-corrected.srt",
+        "subtitles-corrected.vtt", "subtitles-corrected.ass", "subtitles.json",
+        "subtitles-corrected.json", "transcript-raw.txt", "transcript-raw.md",
+        "transcript-corrected.txt", "transcript-corrected.md", "transcript-timestamped.txt",
+        "transcript-segments.csv", "export-manifest.json", "qa-report.json", "qa-report.md",
+        "merged-words.json", "merge-decisions.json", "join-qa.json",
+    ]
     artifacts = []
     for name in allowed:
         path = directory / name

@@ -15,7 +15,8 @@ class ApiTests(unittest.TestCase):
         (job / "source.mp3").write_bytes(b"not media")
         (job / "subtitles.json").write_text(json.dumps({"segments": [{"segment_id": "seg-1", "start_ms": 100, "end_ms": 900, "raw_text": "原文"}]}), encoding="utf-8")
         (job / "subtitles-corrected.json").write_text(json.dumps({"segments": [{"segment_id": "seg-1", "start_ms": 100, "end_ms": 900, "corrected_text": "校正後", "uncertain_terms": ["術語"]}]}), encoding="utf-8")
-        (job / "qa-report.json").write_text(json.dumps({"audio": {"duration_seconds": 2}, "chirp": {"total_words": 2, "coverage_pct": 100}, "subtitles_initial": {"min_segment_ms": 800}}), encoding="utf-8")
+        (job / "qa-report.json").write_text(json.dumps({"status": "PASS", "audio": {"duration_ms": 2000}, "chirp": {"word_count": 2}}), encoding="utf-8")
+        (job / "subtitles.ass").write_text("[Script Info]\n", encoding="utf-8")
         import app.api as api
         api.DATA_DIR = self.data
         api.JOBS_DIR = self.data / "jobs"
@@ -30,6 +31,11 @@ class ApiTests(unittest.TestCase):
         segment = self.client.get("/api/v1/jobs/sample-job/segments").json()["segments"][0]
         self.assertEqual(segment["corrected_text"], "校正後")
         self.assertEqual(segment["start_ms"], 100)
+        job_data = self.client.get("/api/v1/jobs/sample-job").json()
+        self.assertEqual(job_data["words"], 2)
+        self.assertEqual(job_data["duration_seconds"], 2.0)
+        artifact_ids = {item["id"] for item in self.client.get("/api/v1/jobs/sample-job/artifacts").json()["artifacts"]}
+        self.assertIn("subtitles.ass", artifact_ids)
         self.assertEqual(self.client.get("/api/v1/jobs/../secrets").status_code, 404)
 
 
