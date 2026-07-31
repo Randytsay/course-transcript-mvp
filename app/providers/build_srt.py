@@ -11,8 +11,8 @@ ROOT = Path("/app")
 JOB = ROOT / "data" / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 # Chinese ASR may expose one character per timed ``word``.  Subtitle layout
 # must therefore work on lexical units, never directly on provider words.
-TARGET_MIN_MS, TARGET_MAX_MS, HARD_GAP_MS, MAX_CHARS = 1_200, 5_500, 1_500, 34
-PREFERRED_BREAK_CHARS = set("，、；：。！？!?")
+TARGET_MIN_MS, TARGET_MAX_MS, HARD_GAP_MS, MAX_CHARS = 1_200, 6_500, 1_500, 34
+PREFERRED_BREAK_CHARS = set("，,、；;：:。！？!?")
 
 
 def atomic_text(path: Path, text: str) -> None:
