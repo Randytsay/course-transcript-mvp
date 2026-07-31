@@ -19,7 +19,9 @@ Verified:
 - Non-paid fake-provider E2E passes timeline, fixed segments, correction,
   multi-format export, QA, output validation, usage and final processing
   manifest. The full isolated worker reached `awaiting_review` with 16/16
-  canonical artifacts and zero cloud requests on the local development host.
+  canonical artifacts on both the development host and the deployed ARM64
+  image. The ARM64 run used `--network none`, proving zero cloud requests.
+- The deployed ARM64 image passes all 24 Python tests.
 - SQLite test state survived a four-service restart; the test row was removed.
 - Frontend same-origin proxy reached the real API and performed a read-only
   Drive root browse; no paid operation started.
