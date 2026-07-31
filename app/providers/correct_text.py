@@ -6,6 +6,8 @@ import csv
 import hashlib
 import json
 import os
+import threading
+import time
 from pathlib import Path
 
 from google import genai
@@ -15,8 +17,8 @@ ROOT = Path("/app")
 JOB = ROOT / "data" / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 WORK = JOB / "correction-v2"
 MODEL = "gemini-3.6-flash"
-WINDOW_MS, MAX_WORKERS = 30_000, 3
-_CLIENT: genai.Client | None = None
+WINDOW_MS, MAX_WORKERS = 30_000, 2
+_CLIENTS = threading.local()
 
 TERMS_SCHEMA = {"type": "object", "properties": {"terms": {"type": "array", "items": {"type": "object", "properties": {"canonical": {"type": "string"}, "variants": {"type": "array", "items": {"type": "string"}}, "confidence": {"type": "string"}}, "required": ["canonical", "variants", "confidence"]}}}, "required": ["terms"]}
 CORRECTION_SCHEMA = {"type": "object", "properties": {"segments": {"type": "array", "items": {"type": "object", "properties": {"segment_id": {"type": "string"}, "corrected_text": {"type": "string"}, "uncertain_terms": {"type": "array", "items": {"type": "string"}}}, "required": ["segment_id", "corrected_text", "uncertain_terms"]}}}, "required": ["segments"]}
@@ -29,10 +31,26 @@ def atomic_text(path: Path, text: str) -> None:
 
 
 def client() -> genai.Client:
-    global _CLIENT
-    if _CLIENT is None:
-        _CLIENT = genai.Client(vertexai=True, project=os.environ["GOOGLE_CLOUD_PROJECT"], location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"))
-    return _CLIENT
+    existing = getattr(_CLIENTS, "client", None)
+    if existing is None:
+        existing = genai.Client(vertexai=True, project=os.environ["GOOGLE_CLOUD_PROJECT"], location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"))
+        _CLIENTS.client = existing
+    return existing
+
+
+def generate_json(prompt: str, schema: dict) -> object:
+    """Retry a text-only request without invalidating completed window caches."""
+    last_error: Exception | None = None
+    for attempt in range(5):
+        try:
+            return client().models.generate_content(model=MODEL, contents=prompt, config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=schema, temperature=0))
+        except Exception as exc:  # The SDK can close a shared HTTP client after a transient failure.
+            last_error = exc
+            _CLIENTS.client = None
+            if attempt == 4:
+                raise
+            time.sleep(min(30, 2 ** (attempt + 1)))
+    raise RuntimeError("unreachable") from last_error
 
 
 def generate_terms(raw_segments: list[dict]) -> list[dict]:
@@ -43,7 +61,7 @@ def generate_terms(raw_segments: list[dict]) -> list[dict]:
         return json.loads(cache.read_text(encoding="utf-8")).get("terms", [])
     source = [{"segment_id": item["segment_id"], "text": item["raw_text"]} for item in raw_segments]
     prompt = """Extract only repeated or domain-specific terminology from this Traditional Chinese ASR transcript. Do not rewrite the transcript. For each term return a canonical spelling, observed variants, and confidence high/medium/low. Unknown terms must remain low confidence. JSON only.\n\n""" + json.dumps(source, ensure_ascii=False)
-    response = client().models.generate_content(model=MODEL, contents=prompt, config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=TERMS_SCHEMA, temperature=0))
+    response = generate_json(prompt, TERMS_SCHEMA)
     payload = json.loads(response.text)
     record = {"model": MODEL, "usage_metadata": response.usage_metadata.model_dump(mode="json") if response.usage_metadata else None, "terms": payload.get("terms", []), "raw_response": response.text}
     atomic_text(cache, json.dumps(record, ensure_ascii=False, indent=2) + "\n")
@@ -73,7 +91,7 @@ def correct_window(items: list[dict], terms: list[dict]) -> dict[str, dict]:
         if record.get("model") == MODEL and record.get("source_segments") == source_segments:
             return {entry["segment_id"]: entry for entry in record["segments"]}
     prompt = """Correct Traditional-Chinese ASR text only. Preserve meaning; do not summarize, add information, split, merge, reorder, or alter segment IDs/timestamps. Apply only clear corrections. Return exactly one object for every input segment with the same segment_id. uncertain_terms must list unresolved terms.\n\nGlobal terminology:\n""" + json.dumps(terms, ensure_ascii=False) + "\n\nSegments:\n" + json.dumps([{ "segment_id": x["segment_id"], "text": x["raw_text"] } for x in items], ensure_ascii=False)
-    response = client().models.generate_content(model=MODEL, contents=prompt, config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=CORRECTION_SCHEMA, temperature=0))
+    response = generate_json(prompt, CORRECTION_SCHEMA)
     received = json.loads(response.text).get("segments", [])
     by_id = {entry.get("segment_id"): entry for entry in received}
     final = []
