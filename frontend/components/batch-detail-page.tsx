@@ -17,6 +17,13 @@ import { approveBatch, getBatch } from "@/lib/api-client";
 import type { BatchDetail } from "@/lib/types";
 import StatusBadge from "./status-badge";
 
+const IDLE_BATCH_STATUSES = new Set([
+  "awaiting_confirmation",
+  "awaiting_review",
+  "completed",
+  "failed",
+]);
+
 function duration(seconds: number) {
   const total = Math.round(seconds);
   return `${Math.floor(total / 3600)} 小時 ${Math.floor((total % 3600) / 60)} 分`;
@@ -38,10 +45,14 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
   }, [batchId]);
 
   useEffect(() => {
-    void load();
-    const timer = window.setInterval(() => void load(), 4000);
+    if (!batch) void load();
+    if (batch && IDLE_BATCH_STATUSES.has(batch.status)) return;
+
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 4000);
     return () => window.clearInterval(timer);
-  }, [load]);
+  }, [batch, load]);
 
   const preflightDone = useMemo(
     () => batch?.jobs.filter((job) => ["awaiting_confirmation", "failed", "queued"].includes(job.status)).length ?? 0,
