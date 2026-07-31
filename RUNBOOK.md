@@ -7,6 +7,36 @@
 - Never overwrite Drive source media.
 - Do not send whole long media to Chirp when word timestamps are enabled.
 - Do not auto-upload final files to Drive; obtain user approval after QA.
+- Do not print, commit, or copy a Cloudflare Tunnel token. Its VPS file must
+  remain `/opt/course-transcript/secrets/cloudflare-tunnel.env`, owned by root
+  with mode `600`.
+- Do not publish a Cloudflare hostname or change DNS until Cloudflare Access
+  has an explicit Allow policy approved by the user.
+
+## Cloudflare Tunnel connector
+
+The connector is defined separately in `docker-compose.cloudflare.yml` so it
+does not alter the existing web services. It has no host port, no GCP
+credential mount, and reaches the frontend only through the Docker network.
+
+Start or inspect it on the VPS without printing the token:
+
+```bash
+sudo docker compose --env-file /opt/course-transcript/secrets/cloudflare-tunnel.env \
+  -f docker-compose.yml -f docker-compose.cloudflare.yml \
+  --profile tunnel up -d cloudflared
+sudo docker compose --env-file /opt/course-transcript/secrets/cloudflare-tunnel.env \
+  -f docker-compose.yml -f docker-compose.cloudflare.yml \
+  ps cloudflared
+sudo docker compose --env-file /opt/course-transcript/secrets/cloudflare-tunnel.env \
+  -f docker-compose.yml -f docker-compose.cloudflare.yml \
+  logs --tail=50 cloudflared
+```
+
+Expected first result: the tunnel reports healthy connections in Cloudflare;
+no public route exists yet. After the user creates a Cloudflare Access
+application, a published hostname may map only to `http://frontend:3000`.
+Never map the hostname directly to `api:8000`.
 
 ## Chirp result parsing
 

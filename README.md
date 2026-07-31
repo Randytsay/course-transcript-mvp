@@ -10,6 +10,9 @@ the timing layer is complete.
 - Docker mounts it only as /run/secrets/gcp-sa.json:ro.
 - Tests create only test-prefixed GCS objects and clean them up.
 - The rclone check records only the root-folder item count, never names.
+- Cloudflare Tunnel credentials are stored only at
+  `/opt/course-transcript/secrets/cloudflare-tunnel.env` on the VPS. They are
+  not copied into this repository, image, logs, or chat.
 
 ## Current workflow
 
@@ -41,6 +44,25 @@ local-review milestone and require separate OAuth plus explicit approval.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md), [RUNBOOK.md](RUNBOOK.md), and
 [HANDOVER.md](HANDOVER.md) before changing or running the pipeline.
+
+## Private web access through Cloudflare Tunnel
+
+The review frontend remains loopback-only. `docker-compose.cloudflare.yml`
+adds an outbound-only `cloudflared` connector on the same Docker network, with
+no published host port and no access to the GCP service-account key.
+
+On the VPS, after a root-owned tunnel token has been placed in
+`/opt/course-transcript/secrets/cloudflare-tunnel.env`, start it with:
+
+```bash
+sudo docker compose --env-file /opt/course-transcript/secrets/cloudflare-tunnel.env \
+  -f docker-compose.yml -f docker-compose.cloudflare.yml \
+  --profile tunnel up -d cloudflared
+```
+
+Do not add a public hostname until a Cloudflare Access application with an
+explicit Allow policy is in place. The published route will target
+`http://frontend:3000` inside the Docker network; the API remains unexposed.
 
 ## Phase 1 run
 
