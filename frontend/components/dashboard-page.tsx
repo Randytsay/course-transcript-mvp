@@ -7,23 +7,41 @@ import { getCosts, getJobs } from "@/lib/api-client";
 import type { CostSummary, TranscriptJob } from "@/lib/types";
 import ProgressRing from "./progress-ring";
 import StatusBadge from "./status-badge";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 export default function DashboardPage() {
   const [jobs, setJobs] = useState<TranscriptJob[]>([]);
   const [costs, setCosts] = useState<CostSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    Promise.all([getJobs(), getCosts()])
-      .then(([nextJobs, nextCosts]) => { setJobs(nextJobs); setCosts(nextCosts); })
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "無法讀取任務"))
-      .finally(() => setLoading(false));
+  const [showAll, setShowAll] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const [nextJobs, nextCosts] = await Promise.all([getJobs(), getCosts()]);
+      setJobs(nextJobs);
+      setCosts(nextCosts);
+      setError(null);
+    } catch (cause: unknown) {
+      setError(cause instanceof Error ? cause.message : "無法讀取任務");
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") void load();
+    }, 10000);
+    return () => window.clearInterval(timer);
+  }, [load]);
+
   const reviewing = jobs.filter((job) => ["review", "awaiting_review"].includes(job.status)).length;
   const active = jobs.filter((job) => ["preflight", "queued", "downloading", "normalizing", "transcribing", "merging", "segmenting", "correcting", "exporting", "quality_check"].includes(job.status)).length;
   const awaitingConfirmation = jobs.filter((job) => job.status === "awaiting_confirmation").length;
   const completed = jobs.filter((job) => ["completed", "review", "awaiting_review"].includes(job.status)).length;
+  const visibleJobs = useMemo(() => showAll ? jobs : jobs.slice(0, 4), [jobs, showAll]);
   const metrics = [
     { label: "處理中任務", value: String(active), detail: active ? "後端目前正在處理" : "目前沒有處理中的任務", icon: Activity, tone: "blue" },
     { label: "待人工確認", value: String(reviewing + awaitingConfirmation), detail: awaitingConfirmation ? `${awaitingConfirmation} 個待確認費用` : reviewing ? `${reviewing} 個待內容審查` : "目前沒有待確認項目", icon: TriangleAlert, tone: "amber" },
@@ -41,13 +59,13 @@ export default function DashboardPage() {
 
       <section className="dashboard-grid">
         <div className="panel panel--jobs" id="jobs">
-          <div className="panel-header"><div><h2>最近任務</h2><p>目前顯示最近更新的 4 筆工作。</p></div><button className="button button--ghost">查看全部 <ArrowRight size={16} /></button></div>
+          <div className="panel-header"><div><h2>最近任務</h2><p>{showAll ? `目前顯示全部 ${jobs.length} 筆工作。` : `目前顯示最近 ${Math.min(4, jobs.length)} 筆工作。`}</p></div>{jobs.length > 4 && <button type="button" className="button button--ghost" onClick={() => setShowAll((current) => !current)}>{showAll ? "收合" : "查看全部"} <ArrowRight size={16} /></button>}</div>
           <div className="jobs-table" role="table" aria-label="最近轉錄任務">
             <div className="jobs-table__header" role="row"><span>檔案與課程</span><span>處理進度</span><span>狀態</span><span>更新時間</span><span /></div>
             {loading && <div className="empty-state">正在讀取後端任務資料…</div>}
             {error && <div className="empty-state empty-state--error">後端目前無法連線：{error}</div>}
             {!loading && !error && jobs.length === 0 && <div className="empty-state">尚無已登記的本機任務。</div>}
-            {jobs.map((job) => (
+            {visibleJobs.map((job) => (
               <div className="jobs-table__row" role="row" key={job.id}>
                 <div className="job-file-cell"><div className="file-icon"><FileAudio2 size={20} /></div><div><Link href={`/jobs/${job.id}`} className="job-name">{job.filename}</Link><span>{job.course} · {job.duration}</span></div></div>
                 <div className="job-progress-cell"><ProgressRing value={job.progress} /><span>{job.progress === 100 ? "處理完成" : `${job.progress}%`}</span></div>
