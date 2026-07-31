@@ -17,6 +17,18 @@ timestamps, and manifest are present.
 
 ## Current job
 
-`voice_11386603-seg1` is the first formal long-file validation. Chunk 000
-passed with 4,473 words; chunks 001–003 are running. Do not upload to Drive
-until QA and explicit user approval.
+`voice_11386603-seg1` is the first formal long-file validation (55:49.345).
+It completed Chirp 3 base chunks 000–004 plus four targeted Chirp patch chunks
+005–008. The authoritative merge contains 16,888 valid words and 862 fixed
+subtitle segments. The final tail is 105 ms short of FFprobe duration, within
+the local output QA threshold; it is not a transcription gap.
+
+Chirp patch chunks replace words only inside their exact source windows. Base
+chunks own all other words by midpoint ownership. This preserves raw GCS JSON,
+allows repair of real speech gaps without re-sending the whole recording, and
+prevents text-similarity merging from deleting words.
+
+Gemini correction is complete using `gemini-3.6-flash` only: 122 raw
+per-window responses, one global terminology record, and 455 corrected
+segments. IDs, ordering, start times, and end times remain immutable. Do not
+upload to Drive until QA and explicit user approval.

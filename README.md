@@ -22,6 +22,23 @@ the timing layer is complete.
    existing IDs, order, and timestamps.
 7. Generate QA and stop for review before any Drive upload.
 
+## Validated local output set
+
+For a completed job, `app.providers.export_formats` produces a local-only
+export manifest and these review artifacts:
+
+- raw and corrected `.srt`, `.vtt`, `.ass`
+- raw and corrected structured JSON
+- raw, timestamped, and corrected `.txt` / `.md`
+- `transcript-segments.csv` and global terminology CSV/JSON
+- raw Chirp evidence, merge decisions, ±10-second join QA, and QA reports
+
+Run `python -m app.providers.validate_outputs` after QA. It checks immutable
+segment timing, subtitle structures, CSV row counts, raw provider evidence,
+Gemini 3.6 Flash correction records, glossary, and join QA without modifying
+files. Google Docs/DOCX/PDF and Drive upload are deliberately outside this
+local-review milestone and require separate OAuth plus explicit approval.
+
 Read [ARCHITECTURE.md](ARCHITECTURE.md), [RUNBOOK.md](RUNBOOK.md), and
 [HANDOVER.md](HANDOVER.md) before changing or running the pipeline.
 
