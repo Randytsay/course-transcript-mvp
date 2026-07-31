@@ -1,0 +1,16 @@
+services:
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    # The official image is intentionally shell-less. Supply this interpolation
+    # variable through Docker Compose's --env-file option on the VPS; it is not
+    # copied into Git, the image, or a container environment variable.
+    command:
+      - tunnel
+      - --no-autoupdate
+      - run
+      - --token
+      - ${CLOUDFLARE_TUNNEL_TOKEN:?supply the VPS tunnel env file with --env-file}
+    security_opt:
+      - no-new-privileges:true

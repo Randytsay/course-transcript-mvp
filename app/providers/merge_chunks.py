@@ -1,103 +1,156 @@
-"""Merge chunked Chirp word results by midpoint ownership.
+"""Create the authoritative Chirp word timeline using midpoint ownership.
 
-Boundaries (in seconds from RUNBOOK.md): 895, 1785, 2675.
-A word belongs to the earlier chunk if its midpoint < boundary,
-otherwise to the later chunk.  Produces one authoritative word
-timeline for the full audio file.
+Each word is owned by exactly one chunk.  Ownership boundaries are derived
+from the actual previous word coverage and the next chunk's start, rather than
+from text similarity.  This handles a targeted tail-recovery chunk safely.
 """
 from __future__ import annotations
 
 import json
 import os
+from datetime import UTC, datetime
 from pathlib import Path
 
-ROOT = Path("/app")
-JOB = ROOT / "data" / "jobs" / "voice_11386603-seg1"
+DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 CHUNKS = JOB / "chunks"
 
-BOUNDARIES_MS = [895_000, 1_785_000, 2_675_000]
+
+def atomic_json(path: Path, value: object) -> None:
+    temp = path.with_suffix(path.suffix + ".tmp")
+    temp.write_text(json.dumps(value, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temp.replace(path)
 
 
-def midpoint_ms(word: dict) -> int:
-    return (word["start_ms"] + word["end_ms"]) // 2
+def midpoint(word: dict) -> int:
+    return (int(word["start_ms"]) + int(word["end_ms"])) // 2
+
+
+def load_chunks() -> list[tuple[dict, list[dict]]]:
+    result: list[tuple[dict, list[dict]]] = []
+    for directory in sorted(CHUNKS.glob("chunk-*")):
+        manifest_path, words_path = directory / "manifest.json", directory / "words.json"
+        if not manifest_path.exists() or not words_path.exists():
+            raise RuntimeError(f"missing manifest or words for {directory.name}")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("status") not in {"SUCCEEDED", "EMPTY_SILENCE"}:
+            raise RuntimeError(f"{directory.name} status is {manifest.get('status')}")
+        words = json.loads(words_path.read_text(encoding="utf-8")).get("words", [])
+        result.append((manifest, words))
+    result.sort(key=lambda pair: int(pair[0]["chunk_index"]))
+    if not result:
+        raise RuntimeError("no completed chunks")
+    return result
 
 
 def main() -> int:
-    # Discover completed chunks
-    chunk_dirs = sorted(
-        d for d in CHUNKS.iterdir()
-        if d.is_dir() and d.name.startswith("chunk-")
-    )
-    if not chunk_dirs:
-        print("MERGE=FAIL no chunk directories found")
+    try:
+        all_chunks = load_chunks()
+    except RuntimeError as exc:
+        print(f"MERGE=FAIL {exc}")
         return 1
 
-    manifests = []
-    words_by_chunk: dict[int, list[dict]] = {}
+    chunks = [pair for pair in all_chunks if pair[0].get("role", "base") == "base"]
+    patches = [pair for pair in all_chunks if pair[0].get("role") == "patch"]
+    if not chunks:
+        print("MERGE=FAIL no base chunks")
+        return 1
+    valid_words: list[list[dict]] = []
+    anomalies: list[dict] = []
+    for manifest, words in chunks:
+        clean = []
+        for offset, word in enumerate(words):
+            start, end = int(word["start_ms"]), int(word["end_ms"])
+            if end <= start:
+                anomalies.append({"chunk_index": manifest["chunk_index"], "word_offset": offset, "word": word, "reason": "non_positive_duration"})
+            else:
+                clean.append(word)
+        valid_words.append(clean)
 
-    for d in chunk_dirs:
-        manifest_path = d / "manifest.json"
-        words_path = d / "words.json"
-        if not manifest_path.exists():
-            print(f"MERGE=FAIL missing manifest {manifest_path}")
-            return 1
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("status") != "SUCCEEDED":
-            print(f"MERGE=FAIL chunk {d.name} status={manifest.get('status')}")
-            return 1
-        manifests.append(manifest)
+    # Chunk i owns [lower_boundary, upper_boundary). The boundary is the
+    # midpoint of the adjacent source intervals, not a text-similarity result.
+    # For 15-minute chunks with a 10-second total overlap this produces
+    # 895 / 1785 / 2675 seconds. Empty, verified-silence chunks are valid and
+    # therefore cannot be treated as missing transcription evidence.
+    boundaries: list[int] = []
+    for index in range(len(chunks) - 1):
+        previous_manifest = chunks[index][0]
+        next_manifest = chunks[index + 1][0]
+        previous_end = int(previous_manifest["source_end_ms"])
+        next_start = int(next_manifest["source_start_ms"])
+        if previous_end < next_start:
+            raise RuntimeError(
+                f"chunk source intervals have a gap before chunk "
+                f"{next_manifest['chunk_index']}"
+            )
+        boundaries.append((previous_end + next_start) // 2)
 
-        if words_path.exists():
-            words_data = json.loads(words_path.read_text(encoding="utf-8"))
-            words_by_chunk[manifest["chunk_index"]] = words_data.get("words", [])
-        else:
-            print(f"MERGE=FAIL missing words.json in {d.name}")
-            return 1
+    pre_merge = {
+        "job": JOB.name,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "chunks": [
+            {"chunk_index": manifest["chunk_index"], "source_start_ms": manifest["source_start_ms"], "source_end_ms": manifest["source_end_ms"], "words": words}
+            for (manifest, _), words in zip(chunks, valid_words)
+        ],
+        "dropped_anomalies": anomalies,
+    }
+    atomic_json(JOB / "pre-merge-words.json", pre_merge)
 
-    manifests.sort(key=lambda m: m["chunk_index"])
-    print(f"MERGE: found {len(manifests)} succeeded chunks")
-
-    # Merge by midpoint ownership at each boundary
-    merged_words: list[dict] = []
-    for idx, manifest in enumerate(manifests):
-        chunk_index = manifest["chunk_index"]
-        words = words_by_chunk.get(chunk_index, [])
-
-        # Apply the right boundary if this is not the last chunk
-        boundary = BOUNDARIES_MS[idx] if idx < len(BOUNDARIES_MS) else None
-
+    merged: list[dict] = []
+    decisions: list[dict] = []
+    for index, ((manifest, _), words) in enumerate(zip(chunks, valid_words)):
+        lower = boundaries[index - 1] if index else None
+        upper = boundaries[index] if index < len(boundaries) else None
+        kept, rejected = [], 0
         for word in words:
-            mp = midpoint_ms(word)
-            if boundary is not None and mp >= boundary:
-                # This word belongs to the next chunk; skip it here
+            point = midpoint(word)
+            if (lower is not None and point < lower) or (upper is not None and point >= upper):
+                rejected += 1
                 continue
-            merged_words.append(word)
+            kept.append(word)
+        merged.extend(kept)
+        decisions.append({"chunk_index": manifest["chunk_index"], "lower_midpoint_ms": lower, "upper_midpoint_ms": upper, "input_word_count": len(words), "kept_word_count": len(kept), "rejected_by_ownership": rejected})
 
-    merged_words.sort(key=lambda w: (w["start_ms"], w["end_ms"]))
+    # A targeted patch owns its complete source window. This intentionally
+    # replaces any baseline words there, so a known speech gap can be repaired
+    # without reprocessing the entire long recording.
+    patch_decisions = []
+    for manifest, patch_words in sorted(patches, key=lambda pair: int(pair[0]["source_start_ms"])):
+        valid_patch = [word for word in patch_words if int(word["end_ms"]) > int(word["start_ms"])]
+        start, end = int(manifest["source_start_ms"]), int(manifest["source_end_ms"])
+        before = len(merged)
+        merged = [word for word in merged if not (start <= midpoint(word) < end)]
+        removed = before - len(merged)
+        merged.extend(valid_patch)
+        patch_decisions.append({"chunk_index": manifest["chunk_index"], "source_start_ms": start, "source_end_ms": end, "baseline_words_replaced": removed, "patch_words_inserted": len(valid_patch)})
+    merged.sort(key=lambda word: (int(word["start_ms"]), int(word["end_ms"])))
+    if any(int(after["start_ms"]) < int(before["start_ms"]) for before, after in zip(merged, merged[1:])):
+        print("MERGE=FAIL non-monotonic merged word starts")
+        return 1
 
-    # Validate monotonic and continuous
-    gaps = 0
-    for i in range(1, len(merged_words)):
-        gap = merged_words[i]["start_ms"] - merged_words[i - 1]["end_ms"]
-        if gap > 5000:
-            gaps += 1
+    join_qa = []
+    for boundary in boundaries:
+        join_qa.append({
+            "boundary_ms": boundary,
+            "window_start_ms": max(0, boundary - 10_000),
+            "window_end_ms": boundary + 10_000,
+            "words": [word for word in merged if max(0, boundary - 10_000) <= midpoint(word) <= boundary + 10_000],
+        })
+    atomic_json(JOB / "merge-decisions.json", {"job": JOB.name, "boundaries_ms": boundaries, "decisions": decisions, "patch_decisions": patch_decisions, "dropped_anomalies": anomalies})
+    atomic_json(JOB / "join-qa.json", {"job": JOB.name, "joins": join_qa})
 
     output = {
         "job": JOB.name,
-        "total_words": len(merged_words),
-        "total_duration_ms": max((w["end_ms"] for w in merged_words), default=0),
-        "gap_count_gt_5s": gaps,
-        "boundaries_ms": BOUNDARIES_MS,
-        "chunks_merged": [m["chunk_index"] for m in manifests],
-        "words": merged_words,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "total_words": len(merged),
+        "total_duration_ms": max((int(word["end_ms"]) for word in merged), default=0),
+        "boundaries_ms": boundaries,
+        "chunks_merged": [manifest["chunk_index"] for manifest, _ in chunks],
+        "dropped_anomaly_count": len(anomalies),
+        "words": merged,
     }
-
-    (JOB / "merged-words.json").write_text(
-        json.dumps(output, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-    print(f"MERGE=PASS total_words={len(merged_words)} gaps_gt_5s={gaps}")
+    atomic_json(JOB / "merged-words.json", output)
+    print(f"MERGE=PASS words={len(merged)} joins={len(boundaries)} anomalies_dropped={len(anomalies)}")
     return 0
 
 

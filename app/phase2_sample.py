@@ -30,7 +30,7 @@ def main() -> int:
     project = os.environ["GOOGLE_CLOUD_PROJECT"]
     bucket_name = os.environ["GCS_BUCKET"]
     seconds = int(os.getenv("PHASE2_SAMPLE_SECONDS", "300"))
-    model = os.getenv("PHASE2_MODEL", "gemini-2.5-flash")
+    model = os.getenv("PHASE2_MODEL", "gemini-3.6-flash")
     if not SOURCE.is_file():
         raise FileNotFoundError(f"Expected approved sample at {SOURCE}")
     TMP.mkdir(parents=True, exist_ok=True)

@@ -5,13 +5,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && apt-get install -y --no-install-recommends ffmpeg rclone \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
+COPY tests ./tests
 
-ENTRYPOINT ["python", "-m", "app.infrastructure_test"]
-
+CMD ["python", "-m", "app.infrastructure_test"]
