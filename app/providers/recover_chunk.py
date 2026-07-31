@@ -15,6 +15,6 @@ def main():
  for r in parsed.results:
   for w in r.alternatives[0].words: words.append({'word':w.word,'start_ms':ms(w.start_offset),'end_ms':ms(w.end_offset)})
  for word in words: word['start_ms']+=round(start*1000); word['end_ms']+=round(start*1000)
- payload={'chunk_index':index,'role':prior.get('role','base'),'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':prior.get('operation_name'),'status':'SUCCEEDED' if words else 'EMPTY','result_oneof':'cloud_storage_result','output_field':'gcs_prefix_recovery','gcs_uri':f'gs://{b.name}/{blobs[0].name}','word_count':len(words),'max_end_ms':max((w['end_ms'] for w in words),default=0)}
+ payload={'chunk_index':index,'role':os.environ.get('CHUNK_ROLE',prior.get('role','base')),'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':prior.get('operation_name'),'status':'SUCCEEDED' if words else 'EMPTY','result_oneof':'cloud_storage_result','output_field':'gcs_prefix_recovery','gcs_uri':f'gs://{b.name}/{blobs[0].name}','word_count':len(words),'max_end_ms':max((w['end_ms'] for w in words),default=0)}
  (CHUNK/'words.json').write_text(json.dumps({'chunk_index':index,'words':words},ensure_ascii=False,indent=2)+'\n',encoding='utf-8'); (CHUNK/'manifest.json').write_text(json.dumps(payload,ensure_ascii=False,indent=2)+'\n',encoding='utf-8'); print(f'RECOVER_{name}=PASS words={len(words)}')
 if __name__=='__main__': main()
