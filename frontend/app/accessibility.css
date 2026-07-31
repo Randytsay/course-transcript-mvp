@@ -1,0 +1,138 @@
+:root {
+  /* Large is the default so the first paint already matches the preferred UI. */
+  --base-scale: 1.35;
+  --ui-height: 52px;
+  --text-muted: #5f6b7a;
+}
+
+/* Strong, consistent keyboard focus for all interactive controls. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 3px solid #6366f1;
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+
+/* Raise contrast for helper text that previously used low-contrast grays. */
+.page-heading p,
+.panel-header p,
+.quick-panel p,
+.metric-copy small,
+.job-file-cell span,
+.updated-cell,
+.service-state,
+.section-heading p,
+.form-actions > span,
+.cost-note p,
+.job-meta,
+.segment-time,
+.segment-raw,
+.qa-card small,
+.review-sidebar__header p,
+.batch-job-row > div:nth-child(3) span,
+.batch-approval-card > small,
+.drive-browser__toolbar > span:nth-child(2),
+.drive-entry > span:nth-child(3),
+.drive-entry > span:nth-child(4) {
+  color: var(--text-muted);
+}
+
+/* Dark sidebar needs a lighter muted color than the content area. */
+.brand-caption,
+.pipeline-card span,
+.account-copy span {
+  color: #b8c1cf;
+}
+
+.mobile-font-size-button {
+  display: none;
+  flex: 0 0 auto;
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--brand-dark);
+  background: var(--brand-soft);
+  border-color: #c7d2fe;
+}
+
+.font-size-btn[aria-pressed="true"] {
+  background: #fff;
+  color: var(--brand-dark);
+  box-shadow: 0 2px 4px rgba(15, 23, 42, 0.12);
+}
+
+/* Prevent long filenames and large type from forcing horizontal page overflow. */
+.drive-entry__name,
+.batch-job-row > div:nth-child(3),
+.job-file-cell > div:last-child,
+.segment-copy,
+.term-comparison > div {
+  min-width: 0;
+}
+
+.transcript-segment {
+  text-align: left;
+}
+
+.approval-check input,
+.file-check {
+  min-width: 24px;
+  min-height: 24px;
+}
+
+@media (max-width: 900px) {
+  .font-size-switcher {
+    display: none;
+  }
+
+  .mobile-font-size-button {
+    display: inline-grid;
+  }
+
+  .topbar .search-box {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+@media (max-width: 680px) {
+  .topbar {
+    padding-inline: 12px;
+  }
+
+  .mobile-font-size-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  .search-box input::placeholder {
+    color: #667085;
+  }
+
+  [data-font-size="xlarge"] .search-box input {
+    font-size: var(--font-sm);
+  }
+
+  [data-font-size="xlarge"] .page-actions .button {
+    width: 100%;
+  }
+
+  [data-font-size="xlarge"] .drive-entry {
+    grid-template-columns: 44px minmax(0, 1fr);
+    row-gap: 6px;
+  }
+
+  [data-font-size="xlarge"] .drive-entry > span:nth-child(3),
+  [data-font-size="xlarge"] .drive-entry > span:nth-child(4) {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

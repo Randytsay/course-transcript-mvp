@@ -26,6 +26,13 @@ const navigation = [
   { href: "/#glossary", label: "術語庫", icon: Library, match: () => false }
 ];
 
+type FontSize = "standard" | "large" | "xlarge";
+const fontSizes: FontSize[] = ["standard", "large", "xlarge"];
+
+function nextFontSize(current: FontSize): FontSize {
+  return fontSizes[(fontSizes.indexOf(current) + 1) % fontSizes.length];
+}
+
 export default function AppShell({
   children,
   title,
@@ -39,17 +46,16 @@ export default function AppShell({
 }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [fontSize, setFontSize] = useState<"standard" | "large" | "xlarge">("large");
+  const [fontSize, setFontSize] = useState<FontSize>("large");
 
   useEffect(() => {
-    // 讀取本地儲存的字體大小設定（預設使用 large 大字體，對老花友善）
     const saved = localStorage.getItem("course-transcript-font-size");
-    const initialSize = saved === "standard" || saved === "large" || saved === "xlarge" ? saved : "large";
+    const initialSize: FontSize = saved === "standard" || saved === "large" || saved === "xlarge" ? saved : "large";
     setFontSize(initialSize);
     document.documentElement.setAttribute("data-font-size", initialSize);
   }, []);
 
-  function handleFontSizeChange(size: "standard" | "large" | "xlarge") {
+  function handleFontSizeChange(size: FontSize) {
     setFontSize(size);
     document.documentElement.setAttribute("data-font-size", size);
     localStorage.setItem("course-transcript-font-size", size);
@@ -83,7 +89,7 @@ export default function AppShell({
         <div className="sidebar-spacer" />
         <div className="pipeline-card">
           <div className="pipeline-card__icon"><ShieldCheck size={18} /></div>
-          <div><strong>系統狀態正常</strong><span>Chirp、Gemini、GCS 已連線</span></div>
+          <div><strong>私人工作區已啟用</strong><span>實際服務狀態請查看儀表板與任務紀錄</span></div>
         </div>
         <nav className="secondary-nav" aria-label="次要導覽">
           <a href="#help" className="nav-item"><CircleHelp size={18} /><span>使用說明</span></a>
@@ -102,15 +108,23 @@ export default function AppShell({
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMenuOpen(true)} aria-label="開啟選單"><Menu size={26} /></button>
           <div className="search-box"><Search size={20} /><input aria-label="搜尋任務" placeholder="搜尋檔名、課程或任務編號" /><kbd>⌘ K</kbd></div>
-          
-          <div className="font-size-switcher">
-            <span className="font-size-label">字體切換：</span>
-            <button className={`font-size-btn ${fontSize === "standard" ? "active" : ""}`} onClick={() => handleFontSizeChange("standard")}>A 標準</button>
-            <button className={`font-size-btn ${fontSize === "large" ? "active" : ""}`} onClick={() => handleFontSizeChange("large")}>A+ 大字</button>
-            <button className={`font-size-btn ${fontSize === "xlarge" ? "active" : ""}`} onClick={() => handleFontSizeChange("xlarge")}>A++ 特大</button>
-          </div>
 
-          <div className="topbar-status"><span className="status-dot status-dot--success" /><span>服務正常</span></div>
+          <div className="font-size-switcher" role="group" aria-label="字體大小">
+            <span className="font-size-label">字體切換：</span>
+            <button type="button" aria-pressed={fontSize === "standard"} className={`font-size-btn ${fontSize === "standard" ? "active" : ""}`} onClick={() => handleFontSizeChange("standard")}>A 標準</button>
+            <button type="button" aria-pressed={fontSize === "large"} className={`font-size-btn ${fontSize === "large" ? "active" : ""}`} onClick={() => handleFontSizeChange("large")}>A+ 大字</button>
+            <button type="button" aria-pressed={fontSize === "xlarge"} className={`font-size-btn ${fontSize === "xlarge" ? "active" : ""}`} onClick={() => handleFontSizeChange("xlarge")}>A++ 特大</button>
+          </div>
+          <button
+            type="button"
+            className="icon-button mobile-font-size-button"
+            aria-label={`目前為${fontSize === "standard" ? "標準" : fontSize === "large" ? "大字" : "特大字"}，點擊切換下一級字體`}
+            onClick={() => handleFontSizeChange(nextFontSize(fontSize))}
+          >
+            <span aria-hidden="true">Aa</span>
+          </button>
+
+          <div className="topbar-status"><span className="status-dot status-dot--success" /><span>私人連線</span></div>
         </header>
 
         <div className="content-wrap">
