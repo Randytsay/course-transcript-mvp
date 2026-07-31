@@ -36,6 +36,10 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(job_data["duration_seconds"], 2.0)
         artifact_ids = {item["id"] for item in self.client.get("/api/v1/jobs/sample-job/artifacts").json()["artifacts"]}
         self.assertIn("subtitles.ass", artifact_ids)
+        opened = self.client.get("/api/v1/jobs/sample-job/artifacts/subtitles.ass")
+        self.assertEqual(opened.status_code, 200)
+        self.assertIn("inline", opened.headers["content-disposition"])
+        self.assertEqual(self.client.get("/api/v1/jobs/sample-job/artifacts/../../source.mp3").status_code, 404)
         self.assertEqual(self.client.get("/api/v1/jobs/../secrets").status_code, 404)
 
 

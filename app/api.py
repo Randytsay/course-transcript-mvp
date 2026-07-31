@@ -14,10 +14,19 @@ from typing import Any
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 APP_ROOT = Path(__file__).resolve().parents[1]
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", APP_ROOT / "data"))
 JOBS_DIR = DATA_DIR / "jobs"
+ARTIFACT_ALLOWLIST = frozenset({
+    "subtitles.srt", "subtitles.vtt", "subtitles.ass", "subtitles-corrected.srt",
+    "subtitles-corrected.vtt", "subtitles-corrected.ass", "subtitles.json",
+    "subtitles-corrected.json", "transcript-raw.txt", "transcript-raw.md",
+    "transcript-corrected.txt", "transcript-corrected.md", "transcript-timestamped.txt",
+    "transcript-segments.csv", "export-manifest.json", "qa-report.json", "qa-report.md",
+    "merged-words.json", "merge-decisions.json", "join-qa.json",
+})
 
 app = FastAPI(title="Course Transcript MVP API", version="0.1.0")
 
@@ -194,17 +203,20 @@ def get_review_terms(job_id: str) -> dict[str, list[dict[str, Any]]]:
 @app.get("/api/v1/jobs/{job_id}/artifacts")
 def get_artifacts(job_id: str) -> dict[str, list[dict[str, Any]]]:
     directory = _job_dir(job_id)
-    allowed = [
-        "subtitles.srt", "subtitles.vtt", "subtitles.ass", "subtitles-corrected.srt",
-        "subtitles-corrected.vtt", "subtitles-corrected.ass", "subtitles.json",
-        "subtitles-corrected.json", "transcript-raw.txt", "transcript-raw.md",
-        "transcript-corrected.txt", "transcript-corrected.md", "transcript-timestamped.txt",
-        "transcript-segments.csv", "export-manifest.json", "qa-report.json", "qa-report.md",
-        "merged-words.json", "merge-decisions.json", "join-qa.json",
-    ]
     artifacts = []
-    for name in allowed:
+    for name in sorted(ARTIFACT_ALLOWLIST):
         path = directory / name
         if path.is_file():
             artifacts.append({"id": name, "name": name, "size_bytes": path.stat().st_size, "updated_at": _iso_mtime(path)})
     return {"artifacts": artifacts}
+
+
+@app.get("/api/v1/jobs/{job_id}/artifacts/{artifact_name}")
+def open_artifact(job_id: str, artifact_name: str) -> FileResponse:
+    """Serve only derived, allowlisted artifacts from a controlled job directory."""
+    if artifact_name not in ARTIFACT_ALLOWLIST:
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    path = _job_dir(job_id) / artifact_name
+    if not path.is_file():
+        raise HTTPException(status_code=404, detail="Artifact not found")
+    return FileResponse(path, filename=artifact_name, content_disposition_type="inline")
