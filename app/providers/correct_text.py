@@ -15,6 +15,7 @@ JOB = ROOT / "data" / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 WORK = JOB / "correction-v2"
 MODEL = "gemini-3.6-flash"
 WINDOW_MS, MAX_WORKERS = 30_000, 3
+_CLIENT: genai.Client | None = None
 
 TERMS_SCHEMA = {"type": "object", "properties": {"terms": {"type": "array", "items": {"type": "object", "properties": {"canonical": {"type": "string"}, "variants": {"type": "array", "items": {"type": "string"}}, "confidence": {"type": "string"}}, "required": ["canonical", "variants", "confidence"]}}}, "required": ["terms"]}
 CORRECTION_SCHEMA = {"type": "object", "properties": {"segments": {"type": "array", "items": {"type": "object", "properties": {"segment_id": {"type": "string"}, "corrected_text": {"type": "string"}, "uncertain_terms": {"type": "array", "items": {"type": "string"}}}, "required": ["segment_id", "corrected_text", "uncertain_terms"]}}}, "required": ["segments"]}
@@ -27,7 +28,10 @@ def atomic_text(path: Path, text: str) -> None:
 
 
 def client() -> genai.Client:
-    return genai.Client(vertexai=True, project=os.environ["GOOGLE_CLOUD_PROJECT"], location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"))
+    global _CLIENT
+    if _CLIENT is None:
+        _CLIENT = genai.Client(vertexai=True, project=os.environ["GOOGLE_CLOUD_PROJECT"], location=os.getenv("GOOGLE_CLOUD_LOCATION", "global"))
+    return _CLIENT
 
 
 def generate_terms(raw_segments: list[dict]) -> list[dict]:
