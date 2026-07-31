@@ -5,10 +5,14 @@ import json
 import os
 from pathlib import Path
 
+import jieba
+
 ROOT = Path("/app")
 JOB = ROOT / "data" / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
-TARGET_MIN_MS, TARGET_MAX_MS, HARD_GAP_MS = 2_000, 5_000, 1_500
-SPLIT_CHARS = set("。！？!?")
+# Chinese ASR may expose one character per timed ``word``.  Subtitle layout
+# must therefore work on lexical units, never directly on provider words.
+TARGET_MIN_MS, TARGET_MAX_MS, HARD_GAP_MS, MAX_CHARS = 1_200, 5_500, 1_500, 34
+PREFERRED_BREAK_CHARS = set("，、；：。！？!?")
 
 
 def atomic_text(path: Path, text: str) -> None:
@@ -25,7 +29,35 @@ def srt_time(value: int, separator: str = ",") -> str:
     return f"{hours:02}:{minutes:02}:{seconds:02}{separator}{milliseconds:03}"
 
 
+def lexical_units(words: list[dict]) -> list[dict]:
+    """Map Chinese tokenization back to the immutable Chirp word timings."""
+    source = "".join(str(word["word"]) for word in words)
+    character_to_word: list[int] = []
+    for index, word in enumerate(words):
+        character_to_word.extend([index] * len(str(word["word"])))
+    tokens = jieba.lcut(source, HMM=False)
+    if "".join(tokens) != source:
+        tokens = list(source)
+    units: list[dict] = []
+    offset = 0
+    for token in tokens:
+        if not token:
+            continue
+        first = character_to_word[offset]
+        last = character_to_word[offset + len(token) - 1]
+        units.append({
+            "text": token,
+            "start_ms": int(words[first]["start_ms"]),
+            "end_ms": int(words[last]["end_ms"]),
+            "word_start": first,
+            "word_end": last,
+        })
+        offset += len(token)
+    return units
+
+
 def segment_words(words: list[dict]) -> list[dict]:
+    units = lexical_units(words)
     segments: list[dict] = []
     current: list[dict] = []
 
@@ -33,24 +65,34 @@ def segment_words(words: list[dict]) -> list[dict]:
         if not current:
             return
         index = len(segments) + 1
-        text = "".join(str(word["word"]) for word in current)
+        text = "".join(str(unit["text"]) for unit in current)
         start = int(current[0]["start_ms"])
         if segments:
             start = max(start, int(segments[-1]["end_ms"]))
-        segments.append({"segment_id": f"seg-{index:04d}", "start_ms": start, "end_ms": int(current[-1]["end_ms"]), "raw_text": text, "text": text, "word_count": len(current)})
+        segments.append({
+            "segment_id": f"seg-{index:04d}",
+            "start_ms": start,
+            "end_ms": int(current[-1]["end_ms"]),
+            "raw_text": text,
+            "text": text,
+            "word_count": current[-1]["word_end"] - current[0]["word_start"] + 1,
+        })
         current.clear()
 
-    for word in words:
+    for unit in units:
         if not current:
-            current.append(word)
+            current.append(unit)
             continue
         previous = current[-1]
-        gap = int(word["start_ms"]) - int(previous["end_ms"])
-        duration = int(word["end_ms"]) - int(current[0]["start_ms"])
-        sentence_end = any(char in str(previous["word"]) for char in SPLIT_CHARS)
-        if gap >= HARD_GAP_MS or duration >= TARGET_MAX_MS or (duration >= TARGET_MIN_MS and sentence_end) or duration >= TARGET_MIN_MS * 2:
+        gap = int(unit["start_ms"]) - int(previous["end_ms"])
+        prospective_duration = int(unit["end_ms"]) - int(current[0]["start_ms"])
+        prospective_chars = sum(len(str(item["text"])) for item in current) + len(str(unit["text"]))
+        if gap >= HARD_GAP_MS or (prospective_duration > TARGET_MAX_MS and current) or (prospective_chars > MAX_CHARS and prospective_duration >= TARGET_MIN_MS):
             flush()
-        current.append(word)
+        current.append(unit)
+        duration = int(current[-1]["end_ms"]) - int(current[0]["start_ms"])
+        if duration >= TARGET_MIN_MS and any(char in str(unit["text"]) for char in PREFERRED_BREAK_CHARS):
+            flush()
     flush()
     return segments
 
