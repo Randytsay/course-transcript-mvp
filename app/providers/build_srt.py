@@ -1,13 +1,4 @@
-"""Build SRT subtitle file from merged Chirp word timeline.
-
-Strategy: greedily accumulate words into segments, breaking when:
-- a hard silence gap (>= 1500ms) is detected between words
-- a sentence-ending punctuation is hit
-- target segment length is reached
-
-Targets aim for ~2-5s segments with a sane character budget so
-Gemini correction has meaningful context per segment.
-"""
+"""Build immutable subtitle segments and text exports from Chirp word timing."""
 from __future__ import annotations
 
 import json
@@ -15,21 +6,23 @@ import os
 from pathlib import Path
 
 ROOT = Path("/app")
-JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
-JOB = ROOT / "data" / "jobs" / JOB_NAME
-
-TARGET_MIN_MS = 2_000
-TARGET_MAX_MS = 5_000
-HARD_GAP_MS = 1_500
+JOB = ROOT / "data" / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
+TARGET_MIN_MS, TARGET_MAX_MS, HARD_GAP_MS = 2_000, 5_000, 1_500
 SPLIT_CHARS = set("。！？!?")
 
 
-def srt_time(ms: int) -> str:
-    ms = max(0, ms)
-    h, ms = divmod(ms, 3_600_000)
-    m, ms = divmod(ms, 60_000)
-    s, ms = divmod(ms, 1_000)
-    return f"{h:02}:{m:02}:{s:02},{ms:03}"
+def atomic_text(path: Path, text: str) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    temporary.replace(path)
+
+
+def srt_time(value: int, separator: str = ",") -> str:
+    value = max(0, value)
+    hours, value = divmod(value, 3_600_000)
+    minutes, value = divmod(value, 60_000)
+    seconds, milliseconds = divmod(value, 1_000)
+    return f"{hours:02}:{minutes:02}:{seconds:02}{separator}{milliseconds:03}"
 
 
 def segment_words(words: list[dict]) -> list[dict]:
@@ -39,36 +32,22 @@ def segment_words(words: list[dict]) -> list[dict]:
     def flush() -> None:
         if not current:
             return
-        segments.append({
-            "start_ms": current[0]["start_ms"],
-            "end_ms": current[-1]["end_ms"],
-            "text": "".join(w["word"] for w in current),
-            "word_count": len(current),
-        })
+        index = len(segments) + 1
+        text = "".join(str(word["word"]) for word in current)
+        segments.append({"segment_id": f"seg-{index:04d}", "start_ms": int(current[0]["start_ms"]), "end_ms": int(current[-1]["end_ms"]), "raw_text": text, "text": text, "word_count": len(current)})
         current.clear()
 
-    for idx, word in enumerate(words):
+    for word in words:
         if not current:
             current.append(word)
             continue
-
-        prev = current[-1]
-        gap = word["start_ms"] - prev["end_ms"]
-        seg_duration = word["end_ms"] - current[0]["start_ms"]
-        last_word = prev["word"]
-        ends_sentence = any(c in last_word for c in SPLIT_CHARS)
-
-        if gap >= HARD_GAP_MS:
+        previous = current[-1]
+        gap = int(word["start_ms"]) - int(previous["end_ms"])
+        duration = int(word["end_ms"]) - int(current[0]["start_ms"])
+        sentence_end = any(char in str(previous["word"]) for char in SPLIT_CHARS)
+        if gap >= HARD_GAP_MS or duration >= TARGET_MAX_MS or (duration >= TARGET_MIN_MS and sentence_end) or duration >= TARGET_MIN_MS * 2:
             flush()
-        elif seg_duration >= TARGET_MAX_MS:
-            flush()
-        elif seg_duration >= TARGET_MIN_MS and ends_sentence:
-            flush()
-        elif seg_duration >= TARGET_MIN_MS * 2:
-            flush()
-
         current.append(word)
-
     flush()
     return segments
 
@@ -76,41 +55,24 @@ def segment_words(words: list[dict]) -> list[dict]:
 def main() -> int:
     merged_path = JOB / "merged-words.json"
     if not merged_path.exists():
-        print("BUILD_SRT=FAIL merged-words.json not found, run merge_chunks first")
+        print("BUILD=FAIL merged-words.json missing")
         return 1
-
-    merged = json.loads(merged_path.read_text(encoding="utf-8"))
-    words = merged["words"]
-
+    words = json.loads(merged_path.read_text(encoding="utf-8")).get("words", [])
     segments = segment_words(words)
-
-    # SRT body
-    cues = [
-        f"{i}\n{srt_time(s['start_ms'])} --> {srt_time(s['end_ms'])}\n{s['text']}"
-        for i, s in enumerate(segments, 1)
-    ]
-    srt_body = "\n\n".join(cues) + "\n"
-
-    out_srt = JOB / "subtitles.srt"
-    out_json = JOB / "subtitles.json"
-    out_srt.write_text(srt_body, encoding="utf-8")
-    out_json.write_text(
-        json.dumps(
-            {
-                "source": "chirp_3_merged",
-                "segment_count": len(segments),
-                "total_duration_ms": segments[-1]["end_ms"] if segments else 0,
-                "segments": segments,
-            },
-            ensure_ascii=False,
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    avg_dur = (sum(s["end_ms"] - s["start_ms"] for s in segments) / max(1, len(segments))) / 1000
-    print(f"BUILD_SRT=PASS segments={len(segments)} avg_seconds={avg_dur:.2f}")
+    if not segments or any(segment["end_ms"] <= segment["start_ms"] for segment in segments):
+        print("BUILD=FAIL invalid fixed segments")
+        return 1
+    payload = {"source": "chirp_3_merged", "segment_count": len(segments), "total_duration_ms": segments[-1]["end_ms"], "segments": segments}
+    atomic_text(JOB / "subtitles.json", json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+    srt = "\n\n".join(f"{index}\n{srt_time(segment['start_ms'])} --> {srt_time(segment['end_ms'])}\n{segment['raw_text']}" for index, segment in enumerate(segments, 1)) + "\n"
+    atomic_text(JOB / "subtitles.srt", srt)
+    vtt = "WEBVTT\n\n" + "\n\n".join(f"{srt_time(segment['start_ms'], '.')} --> {srt_time(segment['end_ms'], '.')}\n{segment['raw_text']}" for segment in segments) + "\n"
+    atomic_text(JOB / "subtitles.vtt", vtt)
+    timestamped = "\n".join(f"[{srt_time(segment['start_ms'])[:-4]}] {segment['raw_text']}" for segment in segments) + "\n"
+    atomic_text(JOB / "transcript-raw.txt", "\n".join(segment["raw_text"] for segment in segments) + "\n")
+    atomic_text(JOB / "transcript-timestamped.txt", timestamped)
+    atomic_text(JOB / "transcript-raw.md", "# 原始逐字稿\n\n" + timestamped)
+    print(f"BUILD=PASS segments={len(segments)}")
     return 0
 
 
