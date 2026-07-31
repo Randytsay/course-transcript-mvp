@@ -25,10 +25,38 @@ services:
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
       COURSE_TRANSCRIPT_CORS_ORIGINS: http://localhost:3000
+      COURSE_TRANSCRIPT_COST_LIMIT_USD: "200"
+      COURSE_TRANSCRIPT_COST_WARNING_THRESHOLDS_USD: "50,100,160,190"
+      COURSE_TRANSCRIPT_ALLOWED_SOURCE_PREFIX: "gdrive:"
+      COURSE_TRANSCRIPT_BATCH_MAX_FILES: "100"
+      COURSE_TRANSCRIPT_REQUIRE_ACCESS_HEADERS: ${COURSE_TRANSCRIPT_REQUIRE_ACCESS_HEADERS:-false}
+      COURSE_TRANSCRIPT_PUBLIC_ORIGIN: ${COURSE_TRANSCRIPT_PUBLIC_ORIGIN:-}
+      RCLONE_CONFIG: /run/secrets/rclone.conf
     volumes:
-      - ./data:/app/data:ro
+      - ./data:/app/data
       - ./logs:/app/logs:ro
+      - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
     command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  worker:
+    profiles: ["web"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-worker:local
+    environment:
+      COURSE_TRANSCRIPT_DATA_DIR: /app/data
+      COURSE_TRANSCRIPT_COST_LIMIT_USD: "200"
+      COURSE_TRANSCRIPT_COST_WARNING_THRESHOLDS_USD: "50,100,160,190"
+      COURSE_TRANSCRIPT_MINIMUM_FREE_SPACE_GB: "3"
+      COURSE_TRANSCRIPT_WORKER_ID: "preflight-worker-1"
+      RCLONE_CONFIG: /run/secrets/rclone.conf
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./tmp:/app/tmp
+      - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
+    command: ["python", "-m", "app.jobs.preflight"]
 
   frontend:
     profiles: ["web"]
@@ -40,5 +68,6 @@ services:
       API_INTERNAL_BASE_URL: http://api:8000
     depends_on:
       - api
+      - worker
     ports:
       - "127.0.0.1:3300:3000"

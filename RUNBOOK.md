@@ -84,3 +84,38 @@ then chooses boundaries at real speech gaps, punctuation (including ASR ASCII
 punctuation), and safe cue lengths. Do not reintroduce a fixed-duration split
 that can cut `時` from `間`. Gemini receives the resulting fixed cues for
 text-only correction and must not change their timing.
+
+## Web batch preflight
+
+Set these non-secret production values in `/opt/course-transcript/.env`:
+
+```dotenv
+COURSE_TRANSCRIPT_REQUIRE_ACCESS_HEADERS=true
+COURSE_TRANSCRIPT_PUBLIC_ORIGIN=https://transcript.randy88.ccwu.cc
+COURSE_TRANSCRIPT_COST_LIMIT_USD=200
+COURSE_TRANSCRIPT_COST_WARNING_THRESHOLDS_USD=50,100,160,190
+RCLONE_CONFIG_HOST_PATH=/home/ubuntu/.config/rclone/rclone.conf
+```
+
+The rclone config remains a host secret and is mounted read-only at
+`/run/secrets/rclone.conf`. Do not print its contents. Start the private web
+stack with:
+
+```bash
+sudo docker compose --env-file .env \
+  -f docker-compose.yml -f docker-compose.cloudflare.yml \
+  --profile web --profile tunnel up -d --build
+```
+
+Creating a batch performs only read-only listing and local preflight.
+`awaiting_confirmation` means no paid API call has started. The operator must
+open `/batches/{id}`, review the exact estimate, check the authorization box,
+and confirm. Exceeding the application US$200 estimate cap is rejected inside
+the same SQLite transaction.
+
+Before deployment, run:
+
+```bash
+python -m unittest tests.test_job_core tests.test_preflight tests.test_api -v
+npm --prefix frontend run build
+```

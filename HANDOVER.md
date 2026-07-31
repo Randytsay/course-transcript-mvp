@@ -40,10 +40,25 @@ approval before Drive upload.
   exports; no external upload.
 - `app/providers/validate_outputs.py`: read-only end-to-end artifact verifier.
 - `app/api.py` and `frontend/`: loopback-only, read-only review workspace. It
-  exposes only an allowlist of derived artifacts and never mounts credentials.
+  exposes only an allowlist of derived artifacts. Its authenticated batch
+  mutations support explicit files or one recursive folder without Drive
+  scheduling.
+- `app/jobs/source.py`: strict rclone path validation, one-level private Drive
+  browsing, explicit multi-file preview, and bounded recursive folder preview.
+- `app/jobs/store.py`: SQLite WAL batches/jobs, immutable previews, revision
+  gates, US$200 estimate reservation, global one-source lease and heartbeat.
+- `app/jobs/preflight.py`: sequential, non-paid rclone copy/checksum/FFprobe
+  worker; removes the temporary source before awaiting cost approval.
+- `frontend/app/batches/[id]`: live preflight status and explicit whole-batch
+  paid-operation authorization.
 
 The current GitHub branch is `agent/frontend-api-integration`; keep its draft
 PR until a human accepts the local outputs. The formal job currently passes
 strict QA and output validation, but still requires human content review before
 any Drive upload. Never use any numbered historical `phase*` script for new
 work.
+
+The paid queue runner is the next implementation layer. Do not mistake
+`queued` for a completed Chirp call: the current worker intentionally stops
+after local preflight unless/until the paid pipeline adapter is connected and
+the operator has approved the estimate.

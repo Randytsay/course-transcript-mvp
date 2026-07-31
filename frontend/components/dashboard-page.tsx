@@ -3,30 +3,37 @@
 import AppShell from "./app-shell";
 import Link from "next/link";
 import { Activity, ArrowRight, CheckCircle2, Clock3, FileAudio2, MoreHorizontal, Plus, ShieldCheck, Sparkles, TimerReset, TriangleAlert } from "lucide-react";
-import { getJobs } from "@/lib/api-client";
-import type { TranscriptJob } from "@/lib/types";
+import { getCosts, getJobs } from "@/lib/api-client";
+import type { CostSummary, TranscriptJob } from "@/lib/types";
 import ProgressRing from "./progress-ring";
 import StatusBadge from "./status-badge";
 import { useEffect, useState } from "react";
 
-const metrics = [
-  { label: "處理中任務", value: "3", detail: "1 個正在校正", icon: Activity, tone: "blue" },
-  { label: "待人工審查", value: "1", detail: "15 個詞彙待確認", icon: TriangleAlert, tone: "amber" },
-  { label: "本月完成", value: "18.6h", detail: "共 27 支錄音", icon: CheckCircle2, tone: "green" },
-  { label: "平均處理時間", value: "0.42×", detail: "相較原始音訊長度", icon: TimerReset, tone: "violet" }
-];
-
 export default function DashboardPage() {
   const [jobs, setJobs] = useState<TranscriptJob[]>([]);
+  const [costs, setCosts] = useState<CostSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  useEffect(() => { getJobs().then(setJobs).catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "無法讀取任務")).finally(() => setLoading(false)); }, []);
+  useEffect(() => {
+    Promise.all([getJobs(), getCosts()])
+      .then(([nextJobs, nextCosts]) => { setJobs(nextJobs); setCosts(nextCosts); })
+      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "無法讀取任務"))
+      .finally(() => setLoading(false));
+  }, []);
   const reviewing = jobs.filter((job) => job.status === "review").length;
-  const active = jobs.filter((job) => ["queued", "downloading", "normalizing", "transcribing", "correcting"].includes(job.status)).length;
+  const active = jobs.filter((job) => ["preflight", "queued", "downloading", "normalizing", "transcribing", "correcting"].includes(job.status)).length;
+  const awaitingConfirmation = jobs.filter((job) => job.status === "awaiting_confirmation").length;
+  const completed = jobs.filter((job) => job.status === "completed" || job.status === "review").length;
+  const metrics = [
+    { label: "處理中任務", value: String(active), detail: active ? "後端目前正在處理" : "目前沒有處理中的任務", icon: Activity, tone: "blue" },
+    { label: "待人工確認", value: String(reviewing + awaitingConfirmation), detail: awaitingConfirmation ? `${awaitingConfirmation} 個待確認費用` : reviewing ? `${reviewing} 個待內容審查` : "目前沒有待確認項目", icon: TriangleAlert, tone: "amber" },
+    { label: "已有輸出", value: String(completed), detail: "包含待審查與已完成任務", icon: CheckCircle2, tone: "green" },
+    { label: "剩餘預估額度", value: costs ? `US$${costs.remainingEstimatedBudgetUsd}` : "—", detail: "上限 US$200；非實際帳務", icon: TimerReset, tone: "violet" },
+  ];
   return (
     <AppShell title="轉錄儀表板" description="掌握長檔辨識進度、人工審查與輸出狀態。" actions={<Link href="/jobs/new" className="button button--primary"><Plus size={17} />新增轉錄任務</Link>}>
       <section className="metric-grid" aria-label="轉錄統計">
-        {[{ ...metrics[0], value: String(active), detail: active ? "正在由後端處理" : "目前沒有處理中的任務" }, { ...metrics[1], value: String(reviewing), detail: reviewing ? "需要人工審查" : "目前沒有待確認項目" }, ...metrics.slice(2)].map((metric) => {
+        {metrics.map((metric) => {
           const Icon = metric.icon;
           return <article className="metric-card" key={metric.label}><div className={`metric-icon metric-icon--${metric.tone}`}><Icon size={20} /></div><div className="metric-copy"><span>{metric.label}</span><strong>{metric.value}</strong><small>{metric.detail}</small></div></article>;
         })}
@@ -54,7 +61,7 @@ export default function DashboardPage() {
 
         <aside className="dashboard-side">
           <div className="panel health-panel">
-            <div className="panel-header panel-header--compact"><div><h2>管線健康度</h2><p>最近 24 小時</p></div><span className="health-score">98%</span></div>
+            <div className="panel-header panel-header--compact"><div><h2>管線連線狀態</h2><p>來自目前 API 回應</p></div><span className="health-score">{error ? "異常" : loading ? "檢查中" : "正常"}</span></div>
             <div className="health-list">
               <div><span className="service-icon service-icon--green"><ShieldCheck size={16} /></span><div><strong>Google Drive</strong><small>僅由 worker 讀取</small></div><span className="service-state">未由前端探測</span></div>
               <div><span className="service-icon service-icon--blue"><FileAudio2 size={16} /></span><div><strong>Chirp 3</strong><small>由任務記錄反映</small></div><span className="service-state">請查看任務</span></div>

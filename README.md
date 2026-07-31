@@ -16,14 +16,37 @@ the timing layer is complete.
 
 ## Current workflow
 
-1. Read a user-approved Google Drive audio file through rclone.
-2. Normalize with FFmpeg.
-3. Split to ≤15-minute Chirp chunks with 10-second overlap.
-4. Run Chirp 3 BatchRecognize with GCS output and word timestamps.
-5. Merge words by midpoint ownership boundaries.
-6. Build fixed subtitle segments; Gemini may only return corrected text for the
+1. After Cloudflare Access login, browse one Drive directory level at a time.
+2. Select one file, multiple files, or one folder recursively (maximum 100
+   supported media files per batch).
+3. Create a zero-cost preflight batch. The sequential worker copies one source
+   at a time, runs checksum/FFprobe, records an estimated cost, and removes the
+   temporary copy.
+4. The user must explicitly confirm the whole batch estimate before any paid
+   transcription can be queued.
+5. Read the approved Google Drive source through rclone and normalize with FFmpeg.
+6. Split to ≤15-minute Chirp chunks with 10-second overlap.
+7. Run Chirp 3 BatchRecognize with GCS output and word timestamps.
+8. Merge words by midpoint ownership boundaries.
+9. Build fixed subtitle segments; Gemini may only return corrected text for the
    existing IDs, order, and timestamps.
-7. Generate QA and stop for review before any Drive upload.
+10. Generate QA and stop for review before any Drive upload.
+
+The web batch is a queue, not parallel source processing: only one source job
+may hold an active worker lease. There is no scheduled Drive scan.
+
+## Batch API and safety gates
+
+- `POST /api/v1/drive/browse`: authenticated, read-only single-directory listing.
+- `POST /api/v1/drive/preview-batch`: validates explicit files or recursively
+  expands one folder, then creates a 30-minute preview.
+- `POST /api/v1/batches`: creates only local preflight jobs.
+- `GET /api/v1/batches/{id}`: returns child jobs, duration, status and estimate.
+- `POST /api/v1/batches/{id}/approve`: revision- and exact-cost-guarded approval.
+
+Production mutations require Cloudflare Access identity headers and the exact
+`https://transcript.randy88.ccwu.cc` Origin. Browser responses never contain
+rclone configuration or permanent credentials.
 
 ## Validated local output set
 

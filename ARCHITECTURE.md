@@ -8,6 +8,35 @@
 - Chirp 3 in `us`: word timestamps and subtitle timing.
 - Google Vertex AI Gemini 3.6 Flash: text-only correction, never subtitle timing.
 
+## Web batch boundary
+
+The frontend can select explicit media files or recursively preview one Drive
+folder. This is an operator-triggered, read-only rclone listing; it is not a
+Drive scanner. A batch preview is immutable, expires after 30 minutes, and can
+be consumed once.
+
+SQLite stores `batch_previews`, `source_previews`, `batches`, `jobs`,
+`job_events`, `stage_runs`, and `usage_records`. Each media file is an
+independent resumable job. A batch may contain many preflight/queued jobs, but
+the lease manager permits only one unexpired source-processing lease globally.
+
+The preflight worker has rclone and FFprobe but no GCP credential mount. It
+copies one source into a controlled temporary directory, records SHA-256,
+duration, format and codec, calculates the application-side estimate, then
+removes the temporary source. Only a revision-checked, exact-total batch
+approval may reserve cost and move jobs to `queued`.
+
+```text
+Cloudflare Access
+  → Next.js (only tunnel target)
+  → FastAPI
+     ├─ read-only rclone browse/preview
+     └─ SQLite batches/jobs/cost ledger
+  → sequential Worker
+     ├─ non-paid preflight
+     └─ paid pipeline only after explicit approval
+```
+
 ## Long-file contract
 
 Chirp 3 word timestamps limit each BatchRecognize source file to 20 minutes.

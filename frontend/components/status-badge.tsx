@@ -1,6 +1,8 @@
 import type { JobStatus } from "@/lib/types";
 
 const statusLabels: Record<JobStatus, string> = {
+  preflight: "媒體檢查",
+  awaiting_confirmation: "待確認費用",
   queued: "排隊中",
   downloading: "下載中",
   normalizing: "音訊處理",

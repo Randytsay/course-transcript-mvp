@@ -1,4 +1,6 @@
 export type JobStatus =
+  | "preflight"
+  | "awaiting_confirmation"
   | "queued"
   | "downloading"
   | "normalizing"
@@ -59,4 +61,78 @@ export interface TranscriptJob {
   words: number;
   reviewTerms: number;
   pipeline: PipelineStep[];
+}
+
+export interface DriveEntry {
+  sourcePath: string;
+  name: string;
+  isDir: boolean;
+  sizeBytes: number;
+  modifiedAt: string | null;
+  mimeType: string | null;
+  supportedMedia: boolean;
+}
+
+export interface DriveDirectory {
+  currentPath: string;
+  parentPath: string | null;
+  entries: DriveEntry[];
+}
+
+export interface BatchPreviewItem {
+  previewId: string;
+  sourcePath: string;
+  name: string;
+  sizeBytes: number;
+  modifiedAt: string | null;
+}
+
+export interface BatchPreview {
+  batchPreviewId: string;
+  selectionMode: "files" | "folder";
+  sourceRoot: string | null;
+  itemCount: number;
+  totalSizeBytes: number;
+  expiresAt: string;
+  items: BatchPreviewItem[];
+  paidOperationStarted: false;
+}
+
+export interface CreatedBatch {
+  batchId: string;
+  status: string;
+  itemCount: number;
+  jobIds: string[];
+  createdAt: string;
+  paidOperationStarted: false;
+  nextAction: string;
+}
+
+export interface CostSummary {
+  projectLimitUsd: string;
+  committedEstimatedCostUsd: string;
+  recordedActualCostUsd: string;
+  remainingEstimatedBudgetUsd: string;
+  warningThresholdsUsd: string[];
+  pricingVersion: string;
+  accountingNote: string;
+}
+
+export interface BatchDetail {
+  id: string;
+  name: string;
+  status: string;
+  selectionMode: "files" | "folder";
+  sourceRoot: string | null;
+  itemCount: number;
+  completedCount: number;
+  failedCount: number;
+  estimatedCostUsd: string | null;
+  reservedCostUsd: string;
+  actualCostUsd: string;
+  totalDurationSeconds: number;
+  createdAt: string;
+  updatedAt: string;
+  revision: number;
+  jobs: TranscriptJob[];
 }
