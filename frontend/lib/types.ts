@@ -81,6 +81,7 @@ export interface TranscriptJob {
   chirpMaxParallelChunks?: number;
   outputFormats: OutputFormat[];
   drivePublished?: boolean;
+  drivePublicationStatus?: string | null;
 }
 
 export interface JobEvent {

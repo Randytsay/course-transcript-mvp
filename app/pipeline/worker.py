@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.costs import CostConfig, estimate_job_cost
-from app.jobs.drive_publish import publish_outputs, source_parent_destination
+from app.jobs.drive_publish import DrivePublishError, publish_outputs, source_parent_destination
 from app.jobs.store import JobConflict, JobStore
 
 
@@ -704,7 +704,14 @@ def run_paid_job(
             evidence=("qa-report.json", "export-manifest.json"),
         )
         _record_usage_evidence(store, leased, data_dir, worker_id)
-        publication = _auto_publish_to_source(store, leased, data_dir, worker_id)
+        publication = None
+        publication_error = None
+        try:
+            publication = _auto_publish_to_source(store, leased, data_dir, worker_id)
+        except DrivePublishError as exc:
+            # Publication is derived output delivery, never a reason to lose
+            # completed paid ASR evidence or repeat Gemini/Chirp work.
+            publication_error = _safe_error(str(exc))
         processing_manifest = {
                 "job_id": leased["id"],
                 "status": "AWAITING_HUMAN_REVIEW",
@@ -715,7 +722,11 @@ def run_paid_job(
                     else None
                 ),
                 "drive_upload_started": publication is not None,
-                "drive_publication_status": publication.get("status") if publication else "not_requested",
+                "drive_publication_status": (
+                    publication.get("status") if publication else
+                    "pending_retry" if publication_error else "not_requested"
+                ),
+                "drive_publication_error": publication_error,
                 "source_media_preserved_in_drive": True,
                 "fake_provider": fake_provider,
                 "artifacts": _artifact_evidence(job_dir),
@@ -726,6 +737,7 @@ def run_paid_job(
             job_id=leased["id"],
             worker_id=worker_id,
             drive_published=publication is not None,
+            drive_publication_error=publication_error,
         )
     except PipelinePaused:
         store.release_lease(leased["id"], worker_id)

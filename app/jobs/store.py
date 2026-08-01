@@ -1007,6 +1007,7 @@ class JobStore:
         job_id: str,
         worker_id: str,
         drive_published: bool = False,
+        drive_publication_error: str | None = None,
     ) -> dict[str, Any]:
         now = _iso()
         with self.transaction() as connection:
@@ -1019,7 +1020,11 @@ class JobStore:
             detail = (
                 "本機輸出與 QA 已完成，已輸出至原始 Drive 資料夾；仍可審查詞彙"
                 if drive_published
-                else "本機輸出與 QA 已完成，等待人工審查"
+                else (
+                    "本機輸出與 QA 已完成；Drive 回寫待重試，仍可審查詞彙"
+                    if drive_publication_error
+                    else "本機輸出與 QA 已完成，等待人工審查"
+                )
             )
             connection.execute(
                 """
@@ -1035,9 +1040,18 @@ class JobStore:
             self._event(
                 connection,
                 job_id,
-                "drive_outputs_published" if drive_published else "local_outputs_ready_for_review",
+                (
+                    "drive_outputs_published"
+                    if drive_published
+                    else "drive_publication_pending"
+                    if drive_publication_error
+                    else "local_outputs_ready_for_review"
+                ),
                 worker_id,
-                {"drive_upload_started": drive_published},
+                {
+                    "drive_upload_started": drive_published,
+                    "drive_publication_error": drive_publication_error,
+                },
             )
             if row["batch_id"]:
                 self._refresh_batch_state(connection, row["batch_id"], now)

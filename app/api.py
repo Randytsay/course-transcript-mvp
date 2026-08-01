@@ -408,6 +408,7 @@ def _database_job_summary(record: dict[str, Any]) -> dict[str, Any]:
         "chirp_max_parallel_chunks": record.get("chirp_max_parallel_chunks", 3),
         "output_formats": _output_formats(record.get("output_formats_json")),
         "drive_published": bool(manifest.get("drive_upload_started")),
+        "drive_publication_status": manifest.get("drive_publication_status"),
         "estimated_cost_usd": record["estimated_cost_usd"],
         "reserved_cost_usd": record["reserved_cost_usd"],
         "actual_cost_usd": record["actual_cost_usd"],

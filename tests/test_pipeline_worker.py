@@ -237,6 +237,33 @@ class PipelineWorkerTests(unittest.TestCase):
         manifest = json.loads((job_dir / "pipeline-manifest.json").read_text())
         self.assertTrue(manifest["drive_upload_started"])
 
+    def test_drive_publication_error_keeps_paid_results_awaiting_review(self) -> None:
+        record = self._job(approved=True)
+        job_dir = self.data / "jobs" / record["id"]
+        job_dir.mkdir(parents=True)
+        source = job_dir / "source-original.mp3"
+        source.write_bytes(b"test")
+
+        def fake_module_stage(store: JobStore, item: dict, data_dir: Path, worker_id: str, **kwargs: object) -> None:
+            stage = str(kwargs["stage"])
+            store.begin_stage(job_id=item["id"], stage=stage, status=str(kwargs["status"]), detail=str(kwargs["detail"]), progress=int(kwargs["progress_start"]), input_checksum=item["source_checksum"], worker_id=worker_id)
+            store.complete_stage(job_id=item["id"], stage=stage, detail=f"{stage} done", progress=int(kwargs["progress_end"]), worker_id=worker_id)
+
+        with (
+            patch.dict("os.environ", {"COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE": "true"}),
+            patch.object(worker, "_download_source", return_value=source),
+            patch.object(worker, "_normalize"),
+            patch.object(worker, "_run_module_stage", side_effect=fake_module_stage),
+            patch.object(worker, "_record_usage_evidence"),
+            patch.object(worker, "_artifact_evidence", return_value=[]),
+            patch.object(worker, "publish_outputs", side_effect=worker.DrivePublishError("rate limited")),
+        ):
+            finished = worker.run_paid_job(self.store, record, data_dir=self.data, worker_id="pipeline-test")
+        self.assertEqual(finished["status"], "awaiting_review")
+        self.assertIn("Drive 回寫待重試", finished["stage_detail"])
+        manifest = json.loads((job_dir / "pipeline-manifest.json").read_text())
+        self.assertEqual(manifest["drive_publication_status"], "pending_retry")
+
 
 class ExportTests(unittest.TestCase):
     def test_exports_docx_pdf_and_checksummed_interchange_files(self) -> None:
