@@ -32,6 +32,11 @@ def main():
     op=client.batch_recognize(request=cloud_speech.BatchRecognizeRequest(recognizer=f'projects/{project}/locations/us/recognizers/_',config=config,files=[cloud_speech.BatchRecognizeFileMetadata(uri=uri)],recognition_output_config=cloud_speech.RecognitionOutputConfig(gcs_output_config=cloud_speech.GcsOutputConfig(uri=out))))
     role=os.getenv('CHUNK_ROLE','base')
     atomic(CHUNK/'manifest.json',{'chunk_index':index,'role':role,'source_start_ms':round(start*1000),'source_end_ms':round(end*1000),'operation_name':op.operation.name,'status':'SUBMITTED','created_at':datetime.now(UTC).isoformat()})
+    # Long-running-operation polling has a much lower quota than submission.
+    # The pipeline therefore treats the private GCS output as the completion
+    # signal and lets recover_chunk read that result later.  This avoids a
+    # transient polling 429 turning a successfully submitted operation into a
+    # failed transcription job.
     if os.getenv('SUBMIT_ONLY') == '1':
         print(f'CHIRP_{name}=SUBMITTED operation={op.operation.name}')
         return

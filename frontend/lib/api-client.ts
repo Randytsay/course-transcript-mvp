@@ -8,6 +8,7 @@ import type {
   PipelineStep,
   JobEvent,
   ReviewTerm,
+  OutputFormat,
   TranscriptJob,
   TranscriptSegment,
 } from "./types";
@@ -18,7 +19,7 @@ import type {
 // already-built absolute localhost URL.
 const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
-type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd" | "chirpMaxParallelChunks"> & {
+type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd" | "chirpMaxParallelChunks" | "outputFormats"> & {
   source_path: string;
   duration_seconds: number;
   created_at: string;
@@ -31,6 +32,7 @@ type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt"
   batch_id?: string | null;
   estimated_cost_usd?: string | null;
   chirp_max_parallel_chunks?: number;
+  output_formats?: OutputFormat[];
   pipeline: Array<{ id: string; label: string; detail: string; status: PipelineStep["status"] }>;
 };
 
@@ -62,6 +64,7 @@ function mapJob(job: ApiJob): TranscriptJob {
     batchId: job.batch_id ?? null,
     estimatedCostUsd: job.estimated_cost_usd ?? null,
     chirpMaxParallelChunks: job.chirp_max_parallel_chunks ?? 3,
+    outputFormats: job.output_formats ?? ["srt", "txt", "csv"],
   };
 }
 
@@ -309,7 +312,7 @@ export async function previewBatch(
   };
 }
 
-export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks: number = 3): Promise<CreatedBatch> {
+export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks: number = 3, outputFormats: OutputFormat[] = ["srt", "txt", "csv"]): Promise<CreatedBatch> {
   const result = await postJson<{
     batch_id: string;
     status: string;
@@ -326,6 +329,7 @@ export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks
     enable_subtitles: true,
     require_human_review: true,
     chirp_max_parallel_chunks: chirpMaxParallelChunks,
+    output_formats: outputFormats,
   });
   return {
     batchId: result.batch_id,

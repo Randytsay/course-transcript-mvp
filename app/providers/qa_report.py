@@ -56,6 +56,36 @@ def audible_between(start_ms: int, end_ms: int) -> bool | None:
     )
 
 
+def tail_patch_verified(end_ms: int, audio_ms: int) -> bool:
+    """Return true when a targeted Chirp patch covered the residual tail.
+
+    A volume threshold alone cannot distinguish trailing room noise or a
+    recording's decay from speech.  When a successful patch covers the exact
+    residual range and has no word after the final subtitle, Chirp has already
+    examined that audio.  Keep it as a warning rather than falsely failing QA.
+    """
+    for manifest_path in (JOB / "chunks").glob("chunk-*/manifest.json"):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            manifest.get("role") != "patch"
+            or manifest.get("status") not in {"SUCCEEDED", "EMPTY_SILENCE"}
+            or int(manifest.get("source_start_ms", audio_ms + 1)) > end_ms
+            or int(manifest.get("source_end_ms", 0)) < audio_ms
+        ):
+            continue
+        words_path = manifest_path.with_name("words.json")
+        try:
+            words = json.loads(words_path.read_text(encoding="utf-8")).get("words", [])
+        except (OSError, json.JSONDecodeError):
+            continue
+        if all(int(word.get("end_ms", 0)) <= end_ms for word in words):
+            return True
+    return False
+
+
 def main() -> int:
     merged = json.loads((JOB / "merged-words.json").read_text(encoding="utf-8"))
     raw = json.loads((JOB / "subtitles.json").read_text(encoding="utf-8"))
@@ -76,7 +106,11 @@ def main() -> int:
     audio = duration_ms(); end = int(segments[-1]["end_ms"]) if segments else 0; uncovered = max(0, audio - end)
     if uncovered > 1000:
         tail_audible = audible_between(end, audio)
-        if tail_audible is True:
+        if tail_audible is True and tail_patch_verified(end, audio):
+            warnings.append(
+                f"audible audio tail verified by targeted Chirp patch: {uncovered}ms"
+            )
+        elif tail_audible is True:
             errors.append(f"audible audio tail uncovered: {uncovered}ms")
         elif tail_audible is False:
             warnings.append(f"silent audio tail not subtitled: {uncovered}ms")

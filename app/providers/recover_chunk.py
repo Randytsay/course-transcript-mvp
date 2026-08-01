@@ -48,6 +48,12 @@ def main() -> None:
             prefix=f"jobs/{JOB_NAME}/chunks/{name}/chirp-output/"
         )
     )
+    if not blobs and os.environ.get("ALLOW_PENDING") == "1":
+        # The operation has already been submitted.  The caller must wait and
+        # retry this GCS-only check, rather than resubmitting audio or polling
+        # the Speech long-running-operation endpoint.
+        print(f"RECOVER_{name}=PENDING")
+        raise SystemExit(75)
     if len(blobs) != 1:
         raise RuntimeError(f"Expected one result object, found {len(blobs)}")
 

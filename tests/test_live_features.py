@@ -33,15 +33,22 @@ class ParallelismValidationTests(unittest.TestCase):
         return payload
 
     def test_default_and_allowed_values(self) -> None:
-        self.assertEqual(
-            CreateBatchWithParallelismRequest.model_validate(self._payload()).chirp_max_parallel_chunks,
-            3,
-        )
+        default = CreateBatchWithParallelismRequest.model_validate(self._payload())
+        self.assertEqual(default.chirp_max_parallel_chunks, 3)
+        self.assertEqual(default.output_formats, ["srt", "txt", "csv"])
         for value in range(1, 6):
             parsed = CreateBatchWithParallelismRequest.model_validate(
                 self._payload(value)
             )
             self.assertEqual(parsed.chirp_max_parallel_chunks, value)
+
+    def test_output_formats_are_forward_compatible_input(self) -> None:
+        payload = self._payload()
+        payload["output_formats"] = ["srt", "pdf"]
+        self.assertEqual(
+            CreateBatchWithParallelismRequest.model_validate(payload).output_formats,
+            ["srt", "pdf"],
+        )
 
     def test_invalid_json_types_are_rejected(self) -> None:
         for value in (0, -1, "3", 2.5):

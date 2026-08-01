@@ -4,12 +4,14 @@ import tempfile
 import unittest
 import json
 import hashlib
+import subprocess
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
 from app.jobs.store import JobConflict, JobStore
 from app.pipeline import worker
+from app.providers import run_chirp_pipeline
 from app.providers.run_chirp_pipeline import compute_chunk_plan
 from app.providers import export_formats
 
@@ -31,6 +33,47 @@ class ChunkPlanTests(unittest.TestCase):
             for before, after in zip(plan, plan[1:])
         ]
         self.assertEqual(boundaries, [895, 1785, 2675])
+
+
+class ChirpRecoveryTests(unittest.TestCase):
+    def test_submitted_chunk_is_retained_without_a_second_submission(self) -> None:
+        """A polling retry must reuse the existing paid operation."""
+        with tempfile.TemporaryDirectory() as temporary:
+            chunks = Path(temporary)
+            manifest = chunks / "chunk-000" / "manifest.json"
+            manifest.parent.mkdir()
+            manifest.write_text('{"status": "SUBMITTED"}', encoding="utf-8")
+            original_chunks = run_chirp_pipeline.CHUNKS
+            run_chirp_pipeline.CHUNKS = chunks
+            try:
+                with patch.object(run_chirp_pipeline, "run_subprocess") as runner:
+                    index, succeeded, detail = run_chirp_pipeline.submit_chunk(
+                        0, 0.0, 900.0
+                    )
+            finally:
+                run_chirp_pipeline.CHUNKS = original_chunks
+        self.assertEqual((index, succeeded), (0, True))
+        self.assertIn("existing operation retained", detail)
+        runner.assert_not_called()
+
+    def test_new_submission_uses_submit_only_mode(self) -> None:
+        """Completion is recovered from GCS, never LRO polling."""
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="CHIRP_chunk-001=SUBMITTED", stderr=""
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            original_chunks = run_chirp_pipeline.CHUNKS
+            run_chirp_pipeline.CHUNKS = Path(temporary)
+            try:
+                with patch.object(
+                    run_chirp_pipeline, "run_subprocess", return_value=completed
+                ) as runner:
+                    _, succeeded, _ = run_chirp_pipeline.submit_chunk(1, 890.0, 1790.0)
+            finally:
+                run_chirp_pipeline.CHUNKS = original_chunks
+        self.assertTrue(succeeded)
+        _, environment = runner.call_args.args
+        self.assertEqual(environment["SUBMIT_ONLY"], "1")
 
 
 class PipelineWorkerTests(unittest.TestCase):

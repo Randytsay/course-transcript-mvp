@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.jobs import CostConfig, JobConflict, JobNotFound, JobStore
+from app.jobs import CostConfig, JobConflict, JobNotFound, JobStore, normalize_output_formats
 from app.jobs.source import (
     SourceInspectionError,
     inspect_rclone_selection,
@@ -114,6 +114,7 @@ class CreateJobRequest(BaseModel):
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = True
+    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
 
 class CreateBatchRequest(BaseModel):
@@ -124,6 +125,7 @@ class CreateBatchRequest(BaseModel):
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = True
+    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
 
 class ApproveJobRequest(BaseModel):
@@ -189,6 +191,14 @@ def _read_json(path: Path, default: Any = None) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return default
+
+
+def _output_formats(value: object) -> list[str]:
+    try:
+        parsed = json.loads(str(value)) if value else None
+        return normalize_output_formats(parsed if isinstance(parsed, list) else None)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return normalize_output_formats(None)
 
 
 def _atomic_json(path: Path, payload: object) -> None:
@@ -392,6 +402,7 @@ def _database_job_summary(record: dict[str, Any]) -> dict[str, Any]:
         "error": record["error"],
         "batch_id": record.get("batch_id"),
         "chirp_max_parallel_chunks": record.get("chirp_max_parallel_chunks", 3),
+        "output_formats": _output_formats(record.get("output_formats_json")),
         "estimated_cost_usd": record["estimated_cost_usd"],
         "reserved_cost_usd": record["reserved_cost_usd"],
         "actual_cost_usd": record["actual_cost_usd"],
@@ -986,12 +997,15 @@ def create_batch(
             enable_gemini_correction=payload.enable_gemini_correction,
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
+            output_formats=payload.output_formats,
             actor=actor,
         )
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     batch = result["batch"]
     return {
         "batch_id": batch["id"],
@@ -1072,12 +1086,15 @@ def create_job(payload: CreateJobRequest, request: Request) -> dict[str, Any]:
             enable_gemini_correction=payload.enable_gemini_correction,
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
+            output_formats=payload.output_formats,
             actor=actor,
         )
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "job_id": record["id"],
         "status": record["status"],

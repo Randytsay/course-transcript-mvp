@@ -8,7 +8,7 @@ from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api import _mutation_actor, _store, app
-from app.jobs import JobConflict, JobNotFound
+from app.jobs import JobConflict, JobNotFound, normalize_output_formats
 from app.live_error import safe_chunk_error
 import app.live_features as live_features
 
@@ -27,6 +27,7 @@ class CreateJobWithParallelismRequest(BaseModel):
     enable_subtitles: bool = True
     require_human_review: bool = True
     chirp_max_parallel_chunks: int = Field(default=3, ge=1, strict=True)
+    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
 
 class CreateBatchWithParallelismRequest(BaseModel):
@@ -38,6 +39,7 @@ class CreateBatchWithParallelismRequest(BaseModel):
     enable_subtitles: bool = True
     require_human_review: bool = True
     chirp_max_parallel_chunks: int = Field(default=3, ge=1, strict=True)
+    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
 
 def _parallelism_limit() -> int:
@@ -97,12 +99,15 @@ def create_batch_with_parallelism(
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
             chirp_max_parallel_chunks=parallelism,
+            output_formats=payload.output_formats,
             actor=actor,
         )
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     batch = result["batch"]
     return {
         "batch_id": batch["id"],
@@ -110,6 +115,7 @@ def create_batch_with_parallelism(
         "item_count": batch["item_count"],
         "job_ids": [job["id"] for job in result["jobs"]],
         "chirp_max_parallel_chunks": parallelism,
+        "output_formats": normalize_output_formats(payload.output_formats),
         "created_at": batch["created_at"],
         "paid_operation_started": False,
         "next_action": "等待各檔案本機 preflight 取得音訊長度與批次預估費用",
@@ -132,16 +138,20 @@ def create_job_with_parallelism(
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
             chirp_max_parallel_chunks=parallelism,
+            output_formats=payload.output_formats,
             actor=actor,
         )
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "job_id": record["id"],
         "status": record["status"],
         "chirp_max_parallel_chunks": parallelism,
+        "output_formats": normalize_output_formats(payload.output_formats),
         "created_at": record["created_at"],
         "paid_operation_started": False,
         "next_action": "等待本機 preflight 取得音訊長度與預估費用",

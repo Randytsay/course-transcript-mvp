@@ -14,6 +14,16 @@ function formatTime(ms: number) {
 }
 function size(bytes: number) { return `${Math.max(1, Math.round(bytes / 1024))} KB`; }
 
+function timestampToMs(value: string): number | null {
+  const match = value.trim().match(/^(\d{1,2}):(\d{2}):(\d{2})(?:[,.](\d{1,3}))?$/);
+  if (!match) return null;
+  const [, hours, minutes, seconds, milliseconds = "0"] = match;
+  const minuteValue = Number(minutes);
+  const secondValue = Number(seconds);
+  if (minuteValue > 59 || secondValue > 59) return null;
+  return (((Number(hours) * 60 + minuteValue) * 60 + secondValue) * 1000) + Number(milliseconds.padEnd(3, "0"));
+}
+
 export default function JobDetailPage({ jobId }: { jobId: string }) {
   const [job, setJob] = useState<TranscriptJob | null>(null);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
@@ -34,8 +44,10 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
   const [liveCost, setLiveCost] = useState<LiveCost | null>(null);
   const [expandedChunks, setExpandedChunks] = useState<Record<number, string>>({});
   const [loadingChunkText, setLoadingChunkText] = useState<number | null>(null);
+  const [segmentJumpTargetId, setSegmentJumpTargetId] = useState<string | null>(null);
 
   const pollController = useRef<AbortController | null>(null);
+  const segmentRefs = useRef(new Map<string, HTMLButtonElement>());
 
   const loadData = useCallback(async (isPolling = false) => {
     if (pollController.current) {
@@ -101,6 +113,17 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
       document.removeEventListener("visibilitychange", handleVisibility);
     };
   }, [loadData]);
+
+  useEffect(() => {
+    if (!segmentJumpTargetId || tab !== "transcript") return;
+    const frame = window.requestAnimationFrame(() => {
+      const target = segmentRefs.current.get(segmentJumpTargetId);
+      target?.scrollIntoView({ behavior: "smooth", block: "center" });
+      target?.focus({ preventScroll: true });
+      setSegmentJumpTargetId(null);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [segmentJumpTargetId, tab, segments]);
 
   async function toggleChunkText(chunkIndex: number) {
     if (expandedChunks[chunkIndex]) {
@@ -169,6 +192,28 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
     } finally {
       setDecidingTerm(null);
     }
+  }
+  function jumpToTermTimestamp(term: ReviewTerm) {
+    const targetMs = timestampToMs(term.timestamp);
+    if (targetMs === null) {
+      setActionError(`詞彙「${term.heard}」的時間碼格式無法定位。`);
+      return;
+    }
+    const matchingSegment = segments.find((segment) => segment.startMs <= targetMs && targetMs < segment.endMs)
+      ?? segments.reduce<TranscriptSegment | null>((closest, segment) => {
+        if (!closest) return segment;
+        const distance = Math.abs(((segment.startMs + segment.endMs) / 2) - targetMs);
+        const closestDistance = Math.abs(((closest.startMs + closest.endMs) / 2) - targetMs);
+        return distance < closestDistance ? segment : closest;
+      }, null);
+    if (!matchingSegment) {
+      setActionError("正式逐字稿尚未產生，暫時無法定位此詞彙。");
+      return;
+    }
+    setActionError(null);
+    setActiveSegmentId(matchingSegment.id);
+    setSegmentJumpTargetId(matchingSegment.id);
+    setTab("transcript");
   }
   if (error) return <AppShell title="任務不可用" description={error}><div className="empty-state empty-state--error">此任務不存在，或後端 API 暫時無法讀取。</div></AppShell>;
   if (!job) return <AppShell title="載入任務"><div className="empty-state">正在取得真實任務資料…</div></AppShell>;
@@ -296,11 +341,11 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
               <strong style={{ display: "block", fontSize: "16px", marginBottom: "8px" }}>正式逐字稿尚未完成</strong>
               目前可先查看上方已完成分段的「Chirp 即時原始稿」。
             </div>
-          ) : segments.map((segment) => <button className={`transcript-segment ${activeSegmentId === segment.id ? "transcript-segment--active" : ""}`} key={segment.id} onClick={() => setActiveSegmentId(segment.id)}><span className="segment-time">{formatTime(segment.startMs)}</span><span className="segment-copy"><span className="segment-corrected">{segment.correctedText}</span><span className="segment-raw">Chirp 原文：{segment.rawText}</span></span>{segment.uncertainTerms?.length ? <span className="segment-warning"><AlertTriangle size={15} />需確認</span> : <span className="segment-ok"><CheckCircle2 size={16} /></span>}</button>)}</div>}
+          ) : segments.map((segment) => <button className={`transcript-segment ${activeSegmentId === segment.id ? "transcript-segment--active" : ""}`} key={segment.id} ref={(element) => { if (element) segmentRefs.current.set(segment.id, element); else segmentRefs.current.delete(segment.id); }} onClick={() => setActiveSegmentId(segment.id)}><span className="segment-time">{formatTime(segment.startMs)}</span><span className="segment-copy"><span className="segment-corrected">{segment.correctedText}</span><span className="segment-raw">Chirp 原文：{segment.rawText}</span></span>{segment.uncertainTerms?.length ? <span className="segment-warning"><AlertTriangle size={15} />需確認</span> : <span className="segment-ok"><CheckCircle2 size={16} /></span>}</button>)}</div>}
         {tab === "qa" && <div className="qa-grid"><article className="qa-card"><Gauge size={20} /><div><span>目前 QA 狀態</span><strong className={qaStep?.status === "warning" ? "text-warning" : "text-success"}>{qaStep?.detail ?? "尚未產生"}</strong><small>以後端實際 QA 報告為準，不由前端推測。</small></div></article><div className="qa-notice"><TriangleAlert size={19} /><div><strong>Drive 發布仍鎖定</strong><p>需完成時間軸與人工詞彙審查，且由你明確確認後才會啟用。</p></div></div><article className="qa-card"><Clock3 size={20} /><div><span>階段與錯誤紀錄</span><strong>{events.length} 筆事件</strong><small>{events.slice(0, 8).map((event) => `${event.createdAt} · ${event.eventType}`).join("｜") || "尚無事件"}</small></div></article></div>}
         {tab === "files" && <div className="file-output-list">{artifacts.length === 0 ? <div className="empty-state">尚未產生可展示的產物。</div> : artifacts.map((artifact) => <div className="output-file" key={artifact.id}><span className="output-file__icon">{artifact.name.endsWith(".json") ? <FileJson size={19} /> : <FileText size={19} />}</span><div><strong>{artifact.name}</strong><span>{size(artifact.sizeBytes)} · {artifact.updatedAt}</span></div><a className="button button--ghost" href={`/api/v1/jobs/${encodeURIComponent(job.id)}/artifacts/${encodeURIComponent(artifact.id)}`} target="_blank" rel="noreferrer" aria-label={`開啟 ${artifact.name}`}><ExternalLink size={16} />開啟</a></div>)}</div>}
       </div></div>
-      <aside className="review-sidebar"><div className="review-sidebar__header"><div><h2>待確認詞彙</h2><p>決定只記錄於審查資料，不覆蓋原始稿。</p></div><span className="review-count">{pendingCount}</span></div>{actionError && <div className="qa-notice"><TriangleAlert size={17} /><div><strong>詞彙決定未儲存</strong><p>{actionError}</p></div></div>}<div className="term-list">{reviewTerms.length === 0 ? <div className="empty-state">尚無已匯出的術語候選。</div> : reviewTerms.map((term) => { const draft = termDrafts[term.id] ?? { value: term.suggestion, scope: "session" as const }; return <article className={`term-card term-card--${term.status}`} key={term.id}><div className="term-card__top"><span className="term-time">{term.timestamp}</span><span>{term.status === "pending" ? "待確認" : term.status === "confirmed" ? "已確認" : "已忽略"}</span></div><div className="term-comparison"><div><span>辨識內容</span><strong>{term.heard}</strong></div><div className="term-arrow">→</div><div><span>建議修正</span><strong>{term.suggestion}</strong></div></div>{term.status === "pending" && <div className="term-decision"><input aria-label={`${term.heard} 核准寫法`} value={draft.value} onChange={(event) => setTermDrafts((current) => ({ ...current, [term.id]: { ...draft, value: event.target.value } }))} /><select aria-label={`${term.heard} 套用範圍`} value={draft.scope} onChange={(event) => setTermDrafts((current) => ({ ...current, [term.id]: { ...draft, scope: event.target.value as typeof draft.scope } }))}><option value="session">只限本堂</option><option value="course">同課程</option><option value="instructor">同講師</option><option value="global">全域候選</option></select><div><button className="button button--primary" disabled={decidingTerm === term.id || !draft.value.trim()} onClick={() => decide(term, "confirmed")}>確認</button><button className="button button--ghost" disabled={decidingTerm === term.id} onClick={() => decide(term, "ignored")}>忽略</button></div></div>}</article>; })}</div></aside>
+      <aside className="review-sidebar"><div className="review-sidebar__header"><div><h2>待確認詞彙</h2><p>決定只記錄於審查資料，不覆蓋原始稿。</p></div><span className="review-count">{pendingCount}</span></div>{actionError && <div className="qa-notice"><TriangleAlert size={17} /><div><strong>詞彙操作未完成</strong><p>{actionError}</p></div></div>}<div className="term-list">{reviewTerms.length === 0 ? <div className="empty-state">尚無已匯出的術語候選。</div> : reviewTerms.map((term) => { const draft = termDrafts[term.id] ?? { value: term.suggestion, scope: "session" as const }; return <article className={`term-card term-card--${term.status}`} key={term.id}><div className="term-card__top"><button className="term-time" type="button" onClick={() => jumpToTermTimestamp(term)} title="捲動到對應逐字稿"><Clock3 size={12} />{term.timestamp}</button><span>{term.status === "pending" ? "待確認" : term.status === "confirmed" ? "已確認" : "已忽略"}</span></div><div className="term-comparison"><div><span>辨識內容</span><strong>{term.heard}</strong></div><div className="term-arrow">→</div><div><span>建議修正</span><strong>{term.suggestion}</strong></div></div>{term.status === "pending" && <div className="term-decision"><input aria-label={`${term.heard} 核准寫法`} value={draft.value} onChange={(event) => setTermDrafts((current) => ({ ...current, [term.id]: { ...draft, value: event.target.value } }))} /><select aria-label={`${term.heard} 套用範圍`} value={draft.scope} onChange={(event) => setTermDrafts((current) => ({ ...current, [term.id]: { ...draft, scope: event.target.value as typeof draft.scope } }))}><option value="session">只限本堂</option><option value="course">同課程</option><option value="instructor">同講師</option><option value="global">全域候選</option></select><div><button className="button button--primary" disabled={decidingTerm === term.id || !draft.value.trim()} onClick={() => decide(term, "confirmed")}>確認</button><button className="button button--ghost" disabled={decidingTerm === term.id} onClick={() => decide(term, "ignored")}>忽略</button></div></div>}</article>; })}</div></aside>
     </section>
   </AppShell>;
 }

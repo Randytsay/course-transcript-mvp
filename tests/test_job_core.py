@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from contextlib import closing
@@ -280,6 +281,10 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(result["batch"]["item_count"], 2)
         self.assertEqual(
             [job["queue_position"] for job in result["jobs"]], [0, 1]
+        )
+        self.assertEqual(
+            json.loads(result["jobs"][0]["output_formats_json"]),
+            ["srt", "txt", "csv"],
         )
         first, second = result["jobs"]
         self.store.acquire_lease(first["id"], "worker-a")

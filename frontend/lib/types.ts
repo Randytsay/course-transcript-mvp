@@ -17,6 +17,7 @@ export type JobStatus =
   | "failed";
 
 export type PipelineStepStatus = "completed" | "running" | "pending" | "warning" | "failed";
+export type OutputFormat = "srt" | "txt" | "csv" | "vtt" | "ass" | "docx" | "pdf";
 
 export interface PipelineStep {
   id: string;
@@ -76,6 +77,7 @@ export interface TranscriptJob {
   batchId?: string | null;
   estimatedCostUsd?: string | null;
   chirpMaxParallelChunks?: number;
+  outputFormats: OutputFormat[];
 }
 
 export interface JobEvent {

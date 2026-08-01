@@ -61,6 +61,12 @@ to recover the single GCS result object. Set `CHUNK_ROLE=patch` explicitly for
 a targeted repair; the recovery script preserves that role. `SUBMIT_ONLY=1`
 can create the operation without consuming polling quota.
 
+The production Chirp pipeline now uses this behaviour by default: it submits
+each operation once, then polls the private GCS output prefix serially until
+the result object appears. It does not call the Speech long-running-operation
+endpoint while waiting. A `SUBMITTED` chunk is therefore recoverable evidence,
+not a reason to submit the same audio again.
+
 ## Current validated local exports
 
 Run `python -m app.providers.validate_outputs` in the worker container after
@@ -113,6 +119,13 @@ Creating a batch performs only read-only listing and local preflight.
 open `/batches/{id}`, review the exact estimate, check the authorization box,
 and confirm. Exceeding the application US$200 estimate cap is rejected inside
 the same SQLite transaction.
+
+At batch creation, the web UI stores the requested user-facing attachments in
+each job's `output_formats_json`. The default is `srt`, `txt`, and `csv`; VTT,
+ASS, DOCX, and PDF are optional. This selection controls future download/
+Drive-publication choices only. JSON, raw provider responses, word timelines,
+manifests, and QA evidence remain private VPS artifacts regardless of that
+selection and must not be deleted merely because they are not selected.
 
 Before deployment, run:
 
