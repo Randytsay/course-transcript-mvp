@@ -127,6 +127,29 @@ Drive-publication choices only. JSON, raw provider responses, word timelines,
 manifests, and QA evidence remain private VPS artifacts regardless of that
 selection and must not be deleted merely because they are not selected.
 
+## Explicit Drive publication recovery
+
+Drive publication is intentionally not a pipeline or web-API action. After
+the user has approved a reviewed job for publication, use
+`app.jobs.drive_publish` as a separate, one-job operator action. It refuses to
+run unless `PUBLISH_TO_DRIVE=1` is set for that one invocation.
+
+The publisher uploads one selected attachment at a time with `rclone copyto
+--checksum`, a one-request-per-second ceiling, bounded retries, and a
+30/60/120-second backoff (with small jitter) for `rateLimitExceeded`. It writes
+`drive-publish-state.json` beside the job artifacts after every attempt. A
+completed file is not sent again when the command is resumed; a successful
+copy must also pass a precise remote-size read-back before it is recorded as
+completed. The state file never records an rclone response, OAuth material, or
+other secrets.
+
+Use the read-only rclone config mount. A message that rclone could not save a
+refreshed token is not proof of either success or failure: rely on the command
+exit status and the recorded remote-size read-back. If the publisher ends in
+`rate_limited`, stop rather than repeatedly listing the Drive folder, wait for
+the recorded window, then rerun the same explicitly approved command. Do not
+turn this into an automatic upload trigger.
+
 Before deployment, run:
 
 ```bash
