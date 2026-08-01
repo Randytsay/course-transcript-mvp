@@ -1,4 +1,5 @@
 import LiveJobPage from "@/components/live-job-page";
+import JobControls from "@/components/job-controls";
 import Link from "next/link";
 
 type PageProps = {
@@ -10,28 +11,58 @@ export default async function Page({ params }: PageProps) {
   return (
     <>
       <LiveJobPage jobId={id} />
-      <Link
-        href={`/jobs/${id}/review`}
+      <nav
+        aria-label="任務延伸功能"
         style={{
           position: "fixed",
           right: "24px",
-          bottom: "24px",
+          bottom: "104px",
           zIndex: 70,
-          minHeight: "48px",
-          padding: "0 18px",
-          borderRadius: "12px",
-          display: "inline-flex",
-          alignItems: "center",
-          justifyContent: "center",
-          color: "#fff",
-          background: "#3730a3",
-          boxShadow: "0 10px 28px rgba(55,48,163,.28)",
-          fontSize: "1rem",
-          fontWeight: 750,
+          display: "flex",
+          gap: "10px",
+          flexWrap: "wrap",
+          justifyContent: "flex-end",
         }}
       >
-        完整審查與輸出
-      </Link>
+        <Link
+          href={`/jobs/${id}/performance`}
+          style={{
+            minHeight: "48px",
+            padding: "0 18px",
+            borderRadius: "12px",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#27324a",
+            background: "#fff",
+            border: "2px solid #aeb9c8",
+            boxShadow: "0 10px 28px rgba(15,23,42,.16)",
+            fontSize: "1rem",
+            fontWeight: 750,
+          }}
+        >
+          效能與費用分析
+        </Link>
+        <Link
+          href={`/jobs/${id}/review`}
+          style={{
+            minHeight: "48px",
+            padding: "0 18px",
+            borderRadius: "12px",
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#fff",
+            background: "#3730a3",
+            boxShadow: "0 10px 28px rgba(55,48,163,.28)",
+            fontSize: "1rem",
+            fontWeight: 750,
+          }}
+        >
+          完整審查與輸出
+        </Link>
+      </nav>
+      <JobControls jobId={id} />
     </>
   );
 }
