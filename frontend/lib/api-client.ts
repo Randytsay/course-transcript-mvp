@@ -89,12 +89,65 @@ function patchJson<T>(path: string, body: unknown): Promise<T> {
   return fetchJson<T>(path, { method: "PATCH", body: JSON.stringify(body) });
 }
 
+export interface ChunkProgress {
+  chunkIndex: number;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  status: string;
+  wordCount: number;
+  hasTranscript: boolean;
+  updatedAt: string;
+  error: string | null;
+}
+
+export interface ChunkProgressResponse {
+  jobId: string;
+  jobStatus: string;
+  completedCount: number;
+  totalCount: number;
+  parallelism: number;
+  canaryCompleted: boolean;
+  updatedAt: string;
+  chunks: ChunkProgress[];
+}
+
+export interface ChunkTranscript {
+  chunkIndex: number;
+  startMs: number;
+  endMs: number;
+  status: string;
+  wordCount: number;
+  rawText: string;
+  isFinal: boolean;
+  warning: string;
+}
+
+export interface LiveCost {
+  estimatedTotalUsd: string;
+  estimatedAccruedUsd: string;
+  estimatedRemainingUsd: string;
+  chirpEstimatedUsd: string;
+  geminiEstimatedUsd: string;
+  submittedChunkCount: number;
+  completedChunkCount: number;
+  isEstimate: boolean;
+}
+
 export async function getJobChunks(jobId: string): Promise<ChunkProgressResponse> {
   return fetchJson<ChunkProgressResponse>(`/jobs/${encodeURIComponent(jobId)}/chunks`);
 }
 
 export async function getJobChunkTranscript(jobId: string, chunkIndex: number): Promise<ChunkTranscript> {
   return fetchJson<ChunkTranscript>(`/jobs/${encodeURIComponent(jobId)}/chunks/${chunkIndex}/transcript`);
+}
+
+export async function getBillingSummary(): Promise<BillingSummary> {
+  return fetchJson<BillingSummary>("/billing/summary");
+}
+
+export async function getJobLiveCost(jobId: string): Promise<LiveCost> {
+  return fetchJson<LiveCost>(`/jobs/${encodeURIComponent(jobId)}/live-cost`);
 }
 
 export async function getJobs(): Promise<TranscriptJob[]> {

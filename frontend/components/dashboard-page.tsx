@@ -2,9 +2,9 @@
 
 import AppShell from "./app-shell";
 import Link from "next/link";
-import { Activity, ArrowRight, CheckCircle2, Clock3, FileAudio2, MoreHorizontal, Plus, ShieldCheck, Sparkles, TimerReset, TriangleAlert } from "lucide-react";
-import { getCosts, getJobs } from "@/lib/api-client";
-import type { CostSummary, TranscriptJob } from "@/lib/types";
+import { Activity, ArrowRight, CheckCircle2, Clock3, Coins, FileAudio2, MoreHorizontal, Plus, ShieldCheck, Sparkles, TimerReset, TriangleAlert } from "lucide-react";
+import { getCosts, getJobs, getBillingSummary } from "@/lib/api-client";
+import type { CostSummary, TranscriptJob, BillingSummary } from "@/lib/types";
 import ProgressRing from "./progress-ring";
 import StatusBadge from "./status-badge";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -12,15 +12,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 export default function DashboardPage() {
   const [jobs, setJobs] = useState<TranscriptJob[]>([]);
   const [costs, setCosts] = useState<CostSummary | null>(null);
+  const [billing, setBilling] = useState<BillingSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [nextJobs, nextCosts] = await Promise.all([getJobs(), getCosts()]);
+      const [nextJobs, nextCosts, nextBilling] = await Promise.all([getJobs(), getCosts(), getBillingSummary().catch(() => null)]);
       setJobs(nextJobs);
       setCosts(nextCosts);
+      setBilling(nextBilling);
       setError(null);
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : "無法讀取任務");
@@ -76,7 +78,54 @@ export default function DashboardPage() {
       </section>
 
       <section className="dashboard-grid">
-        <div className="panel panel--jobs" id="jobs">
+        <div style={{ display: "grid", gap: "18px" }}>
+          <div className="panel">
+            <div className="panel-header">
+              <div><h2>Google Cloud 費用</h2><p>GCP帳務資料可能延遲；官方剩餘抵免額請以Billing Overview為準。</p></div>
+              {billing && billing.status === "stale" && <span className="status-badge status-badge--review">帳務資料已超過1小時未更新</span>}
+            </div>
+            {(!billing || billing.status === "disabled") ? (
+              <div className="empty-state">尚未設定Cloud Billing BigQuery匯出</div>
+            ) : billing.status === "error" && !billing.projectGrossCost ? (
+              <div className="empty-state empty-state--error">無法載入帳單資料：{billing.warning}</div>
+            ) : (
+              <div className="metric-grid" style={{ marginBottom: 0, padding: "18px", borderTop: "none" }}>
+                <article className="metric-card">
+                  <div className="metric-icon metric-icon--blue"><Coins size={20} /></div>
+                  <div className="metric-copy">
+                    <span>本專案GCP已回報使用費</span>
+                    <strong>{billing.billingCurrency} {billing.projectGrossCost}</strong>
+                    <small>約 USD {billing.projectGrossCostUsd ?? "無法換算"}</small>
+                  </div>
+                </article>
+                <article className="metric-card">
+                  <div className="metric-icon metric-icon--violet"><Coins size={20} /></div>
+                  <div className="metric-copy">
+                    <span>帳單帳戶已使用促銷抵免</span>
+                    <strong>{billing.billingCurrency} {billing.accountPromotionCreditsUsed}</strong>
+                    <small>約 USD {billing.accountPromotionCreditsUsedUsd ?? "無法換算"}</small>
+                  </div>
+                </article>
+                <article className="metric-card">
+                  <div className="metric-icon metric-icon--amber"><Coins size={20} /></div>
+                  <div className="metric-copy">
+                    <span>目前專案淨費用</span>
+                    <strong>{billing.billingCurrency} {billing.projectNetCost}</strong>
+                  </div>
+                </article>
+                <article className="metric-card">
+                  <div className="metric-icon metric-icon--green"><Coins size={20} /></div>
+                  <div className="metric-copy">
+                    <span>預估剩餘免費抵免額</span>
+                    <strong>USD {billing.estimatedRemainingFreeTrialCreditUsd ?? "暫無法計算"}</strong>
+                    <small>最後更新：{billing.lastBillingDataAt ? new Date(billing.lastBillingDataAt).toLocaleString("zh-TW") : "未知"}</small>
+                  </div>
+                </article>
+              </div>
+            )}
+          </div>
+
+          <div className="panel panel--jobs" id="jobs">
           <div className="panel-header"><div><h2>最近任務</h2><p>{showAll ? `目前顯示全部 ${jobs.length} 筆工作。` : `目前顯示最近 ${Math.min(4, jobs.length)} 筆工作。`}</p></div>{jobs.length > 4 && <button type="button" className="button button--ghost" onClick={() => setShowAll((current) => !current)}>{showAll ? "收合" : "查看全部"} <ArrowRight size={16} /></button>}</div>
           <div className="jobs-table" role="table" aria-label="最近轉錄任務">
             <div className="jobs-table__header" role="row"><span>檔案與課程</span><span>處理進度</span><span>狀態</span><span>更新時間</span><span /></div>
@@ -101,6 +150,7 @@ export default function DashboardPage() {
               </div>
             ))}
           </div>
+        </div>
         </div>
 
         <aside className="dashboard-side">

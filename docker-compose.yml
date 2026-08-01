@@ -103,6 +103,24 @@ services:
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
     command: ["python", "-m", "app.pipeline.worker"]
 
+  billing-worker:
+    profiles: ["web"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-billing-worker:local
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/billing-sa.json
+    volumes:
+      - ./data:/app/data
+      - /opt/course-transcript/secrets/billing-sa.json:/run/secrets/billing-sa.json:ro
+    command: ["python", "-m", "app.billing.worker"]
+
   frontend:
     profiles: ["web"]
     build:

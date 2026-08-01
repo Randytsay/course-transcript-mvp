@@ -141,38 +141,26 @@ export interface CostSummary {
   accountingNote: string;
 }
 
-export interface ChunkProgress {
-  chunkIndex: number;
-  startMs: number;
-  endMs: number;
-  durationMs: number;
+export interface BillingSummary {
   status: string;
-  wordCount: number;
-  hasTranscript: boolean;
-  updatedAt: string;
-  error: string | null;
-}
-
-export interface ChunkProgressResponse {
-  jobId: string;
-  jobStatus: string;
-  completedCount: number;
-  totalCount: number;
-  parallelism: number;
-  canaryCompleted: boolean;
-  updatedAt: string;
-  chunks: ChunkProgress[];
-}
-
-export interface ChunkTranscript {
-  chunkIndex: number;
-  startMs: number;
-  endMs: number;
-  status: string;
-  wordCount: number;
-  rawText: string;
-  isFinal: boolean;
-  warning: string;
+  source?: string;
+  targetProjectId?: string;
+  billingCurrency?: string;
+  projectGrossCost?: string;
+  projectCredits?: string;
+  projectNetCost?: string;
+  projectGrossCostUsd?: string | null;
+  accountPromotionCreditsUsed?: string;
+  accountPromotionCreditsUsedUsd?: string | null;
+  initialFreeTrialCreditUsd?: string;
+  estimatedRemainingFreeTrialCreditUsd?: string | null;
+  coverageStart?: string;
+  coverageEnd?: string;
+  lastBillingDataAt?: string | null;
+  snapshotGeneratedAt?: string;
+  dataAgeSeconds?: number;
+  isEstimatedRemainingCredit?: boolean;
+  warning?: string;
 }
 
 export interface BatchDetail {

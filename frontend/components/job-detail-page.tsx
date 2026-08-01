@@ -1,9 +1,9 @@
 "use client";
 
 import AppShell from "./app-shell";
-import { approveBatch, decideReviewTerm, getArtifacts, getBatch, getJob, getJobEvents, getReviewTerms, getSegments, pauseJob, resumeJob, retryFailedStage, getJobChunks, getJobChunkTranscript } from "@/lib/api-client";
-import type { Artifact, JobEvent, ReviewTerm, TranscriptJob, TranscriptSegment, ChunkProgressResponse } from "@/lib/types";
-import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, Clock3, ExternalLink, FileJson, FileText, FolderUp, Gauge, Headphones, LoaderCircle, Pause, Play, RotateCcw, TriangleAlert, ChevronRight, ChevronDown, Activity } from "lucide-react";
+import { approveBatch, decideReviewTerm, getArtifacts, getBatch, getJob, getJobEvents, getReviewTerms, getSegments, pauseJob, resumeJob, retryFailedStage, getJobChunks, getJobChunkTranscript, getJobLiveCost } from "@/lib/api-client";
+import type { Artifact, JobEvent, ReviewTerm, TranscriptJob, TranscriptSegment, ChunkProgressResponse, LiveCost } from "@/lib/types";
+import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, Clock3, ExternalLink, FileJson, FileText, FolderUp, Gauge, Headphones, LoaderCircle, Pause, Play, RotateCcw, TriangleAlert, ChevronRight, ChevronDown, Activity, Coins } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import StatusBadge from "./status-badge";
@@ -29,8 +29,9 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
   const [jobAction, setJobAction] = useState<"pause" | "resume" | "retry" | null>(null);
   const [confirmedCost, setConfirmedCost] = useState(false);
   const [approvingCost, setApprovingCost] = useState(false);
-
+  
   const [chunksRes, setChunksRes] = useState<ChunkProgressResponse | null>(null);
+  const [liveCost, setLiveCost] = useState<LiveCost | null>(null);
   const [expandedChunks, setExpandedChunks] = useState<Record<number, string>>({});
   const [loadingChunkText, setLoadingChunkText] = useState<number | null>(null);
 
@@ -42,14 +43,15 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
     }
     pollController.current = new AbortController();
     try {
-      const [nextJob, nextSegments, nextTerms, nextArtifacts, nextEvents, nextChunks] = await Promise.all([
+      const [nextJob, nextSegments, nextTerms, nextArtifacts, nextEvents, nextChunks, nextCost] = await Promise.all([
         getJob(jobId), getSegments(jobId), getReviewTerms(jobId), getArtifacts(jobId), getJobEvents(jobId),
-        getJobChunks(jobId).catch(() => null)
+        getJobChunks(jobId).catch(() => null), getJobLiveCost(jobId).catch(() => null)
       ]);
       setJob(nextJob); setSegments(nextSegments); setReviewTerms(nextTerms); setArtifacts(nextArtifacts); setEvents(nextEvents); 
       if (!isPolling && !activeSegmentId) setActiveSegmentId(nextSegments[0]?.id ?? null);
       if (!isPolling) setTermDrafts(Object.fromEntries(nextTerms.map((term) => [term.id, { value: term.approvedValue ?? term.suggestion, scope: term.scope ?? "session" }])));
       setChunksRes(nextChunks);
+      setLiveCost(nextCost);
       setError(null);
     } catch (cause: unknown) {
       if ((cause as Error).name !== 'AbortError') {
@@ -65,9 +67,10 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
     function startPolling() {
       timer = window.setInterval(() => {
         if (document.visibilityState === "visible") {
+          // If terminal state, we can slow down or stop
           setJob((currentJob) => {
             if (currentJob && ["awaiting_review", "completed", "failed", "paused"].includes(currentJob.status)) {
-               // keep polling for now
+               // keep polling but maybe stop later. For now just poll.
             }
             void loadData(true);
             return currentJob;
@@ -209,6 +212,25 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
     </section>
     <section className="review-workspace"><div className="review-main">
       <div className="audio-console"><div className="audio-console__top"><div className="audio-title"><Headphones size={19} /><div><strong>音訊審查</strong><span>安全的音訊串流 API 尚未啟用</span></div></div></div><div className="empty-state">此階段不向瀏覽器暴露 Drive 或 GCS 音訊。完成安全 range streaming 後，才能在此播放與定位。</div></div>
+      
+      {liveCost && (
+        <div style={{ padding: "16px", border: "1px solid var(--border)", borderRadius: "12px", background: "var(--surface)", boxShadow: "var(--shadow-sm)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
+            <Coins size={18} className="text-brand" />
+            <h3 style={{ fontSize: "15px", margin: 0 }}>本任務即時預估費用</h3>
+            <span className="status-badge status-badge--queued" style={{ marginLeft: "auto", fontSize: "11px" }}>系統即時估算，Cloud Billing 為最終依據</span>
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "24px" }}>
+            <div><span style={{ fontSize: "12px", color: "var(--text-muted)" }}>預估總費用</span><strong style={{ display: "block", fontSize: "18px" }}>US$ {liveCost.estimatedTotalUsd}</strong></div>
+            <div><span style={{ fontSize: "12px", color: "var(--text-muted)" }}>已承諾成本 (Accrued)</span><strong style={{ display: "block", fontSize: "18px", color: "var(--brand)" }}>US$ {liveCost.estimatedAccruedUsd}</strong></div>
+            <div><span style={{ fontSize: "12px", color: "var(--text-muted)" }}>剩餘預估成本</span><strong style={{ display: "block", fontSize: "18px" }}>US$ {liveCost.estimatedRemainingUsd}</strong></div>
+          </div>
+          <div style={{ display: "flex", gap: "16px", marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--border-strong)", fontSize: "12px", color: "var(--text-soft)" }}>
+            <span>Chirp (共 {liveCost.submittedChunkCount} 段): US$ {liveCost.chirpEstimatedUsd}</span>
+            <span>Gemini: US$ {liveCost.geminiEstimatedUsd}</span>
+          </div>
+        </div>
+      )}
 
       {chunksRes && chunksRes.chunks.length > 0 && (
         <div style={{ padding: "16px", border: "1px solid var(--border)", borderRadius: "12px", background: "var(--surface)", boxShadow: "var(--shadow-sm)" }}>

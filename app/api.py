@@ -423,6 +423,32 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/v1/billing/summary")
+def get_billing_summary() -> dict[str, Any]:
+    snapshot = Path("/app/data/billing/billing_snapshot.json")
+    if not snapshot.exists():
+        return {
+            "status": "disabled",
+            "warning": "尚未設定Cloud Billing BigQuery匯出",
+            "lastBillingDataAt": None
+        }
+    data = _read_json(snapshot, {})
+    
+    # Check staleness
+    stale_seconds = int(os.environ.get("BILLING_SNAPSHOT_STALE_SECONDS", "3600"))
+    if "snapshotGeneratedAt" in data:
+        try:
+            gen_time = datetime.fromisoformat(data["snapshotGeneratedAt"])
+            age = (datetime.now(UTC) - gen_time).total_seconds()
+            data["dataAgeSeconds"] = age
+            if age > stale_seconds and data.get("status") == "ok":
+                data["status"] = "stale"
+                data["warning"] = "帳務資料已超過1小時未更新"
+        except Exception:
+            pass
+            
+    return data
+
 @app.get("/api/v1/jobs")
 def list_jobs() -> dict[str, list[dict[str, Any]]]:
     records = _store().list_jobs()
@@ -538,6 +564,74 @@ def get_job_chunk_transcript(job_id: str, chunk_index: int) -> dict[str, Any]:
         "warning": "此為Chirp分段原始稿，尚未完成重疊接合、Gemini校正及最終QA。"
     }
 
+
+@app.get("/api/v1/jobs/{job_id}/live-cost")
+def get_job_live_cost(job_id: str) -> dict[str, Any]:
+    record = _database_job(job_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    # We will compute the cost using the module
+    from app.jobs import costs
+    # Read the chunks
+    job_dir = JOBS_DIR / job_id
+    chunks_dir = job_dir / "chunks"
+    
+    total_estimated = Decimal(record.get("estimated_cost_usd", "0"))
+    
+    chirp_duration_s = 0.0
+    completed_chunks = 0
+    submitted_chunks = 0
+    
+    if chunks_dir.is_dir():
+        for d in chunks_dir.iterdir():
+            if d.is_dir() and d.name.startswith("chunk-"):
+                manifest_path = d / "manifest.json"
+                if manifest_path.exists():
+                    m = _read_json(manifest_path, {})
+                    st = m.get("status", "")
+                    submitted_chunks += 1
+                    if st in ("SUCCEEDED", "EMPTY_SILENCE", "SUBMITTED", "RUNNING", "RECOVERING"):
+                        dur_s = (m.get("source_end_ms", 0) - m.get("source_start_ms", 0)) / 1000.0
+                        chirp_duration_s += dur_s
+                    if st in ("SUCCEEDED", "EMPTY_SILENCE"):
+                        completed_chunks += 1
+                        
+    chirp_cost = costs.estimated_usd("speech", "chirp_3", int(chirp_duration_s))
+    gemini_cost = Decimal("0")
+    
+    qa = _read_json(job_dir / "qa-report.json")
+    if qa and isinstance(qa, dict):
+        gemini_stats = qa.get("gemini_correction", {})
+        if gemini_stats.get("applied") and "usage" in gemini_stats:
+            pass # TODO parse usage
+    # Look for correct-work/ window usage
+    correct_dir = job_dir / "correct-work"
+    if correct_dir.is_dir():
+        total_in = 0
+        total_out = 0
+        for w in correct_dir.glob("window-*.json"):
+            data = _read_json(w, {})
+            u = data.get("usage_metadata", {})
+            if u:
+                total_in += int(u.get("promptTokenCount", 0))
+                total_out += int(u.get("candidatesTokenCount", 0))
+        if total_in or total_out:
+            gemini_cost = costs.estimated_usd("vertex", record.get("profile", "highest_accuracy") + "_input", total_in) + costs.estimated_usd("vertex", record.get("profile", "highest_accuracy") + "_output", total_out)
+
+    accrued = chirp_cost + gemini_cost
+    remaining = max(Decimal("0"), total_estimated - accrued)
+    
+    return {
+        "estimatedTotalUsd": str(total_estimated.quantize(Decimal("0.01"))),
+        "estimatedAccruedUsd": str(accrued.quantize(Decimal("0.01"))),
+        "estimatedRemainingUsd": str(remaining.quantize(Decimal("0.01"))),
+        "chirpEstimatedUsd": str(chirp_cost.quantize(Decimal("0.01"))),
+        "geminiEstimatedUsd": str(gemini_cost.quantize(Decimal("0.01"))),
+        "submittedChunkCount": submitted_chunks,
+        "completedChunkCount": completed_chunks,
+        "isEstimate": True
+    }
 
 @app.get("/api/v1/jobs/{job_id}/events")
 def get_job_events(job_id: str) -> dict[str, Any]:
