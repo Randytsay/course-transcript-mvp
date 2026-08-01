@@ -4,14 +4,18 @@ import tempfile
 import unittest
 import json
 import hashlib
+import subprocess
 from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
 from app.jobs.store import JobConflict, JobStore
 from app.pipeline import worker
+from app.providers import run_chirp_pipeline
 from app.providers.run_chirp_pipeline import compute_chunk_plan
 from app.providers import export_formats
+from app.providers import patch_audible_tail
+from app.providers.merge_chunks import patch_extends_timeline
 
 
 class ChunkPlanTests(unittest.TestCase):
@@ -31,6 +35,47 @@ class ChunkPlanTests(unittest.TestCase):
             for before, after in zip(plan, plan[1:])
         ]
         self.assertEqual(boundaries, [895, 1785, 2675])
+
+
+class ChirpRecoveryTests(unittest.TestCase):
+    def test_submitted_chunk_is_retained_without_a_second_submission(self) -> None:
+        """A polling retry must reuse the existing paid operation."""
+        with tempfile.TemporaryDirectory() as temporary:
+            chunks = Path(temporary)
+            manifest = chunks / "chunk-000" / "manifest.json"
+            manifest.parent.mkdir()
+            manifest.write_text('{"status": "SUBMITTED"}', encoding="utf-8")
+            original_chunks = run_chirp_pipeline.CHUNKS
+            run_chirp_pipeline.CHUNKS = chunks
+            try:
+                with patch.object(run_chirp_pipeline, "run_subprocess") as runner:
+                    index, succeeded, detail = run_chirp_pipeline.submit_chunk(
+                        0, 0.0, 900.0
+                    )
+            finally:
+                run_chirp_pipeline.CHUNKS = original_chunks
+        self.assertEqual((index, succeeded), (0, True))
+        self.assertIn("existing operation retained", detail)
+        runner.assert_not_called()
+
+    def test_new_submission_uses_submit_only_mode(self) -> None:
+        """Completion is recovered from GCS, never LRO polling."""
+        completed = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="CHIRP_chunk-001=SUBMITTED", stderr=""
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            original_chunks = run_chirp_pipeline.CHUNKS
+            run_chirp_pipeline.CHUNKS = Path(temporary)
+            try:
+                with patch.object(
+                    run_chirp_pipeline, "run_subprocess", return_value=completed
+                ) as runner:
+                    _, succeeded, _ = run_chirp_pipeline.submit_chunk(1, 890.0, 1790.0)
+            finally:
+                run_chirp_pipeline.CHUNKS = original_chunks
+        self.assertTrue(succeeded)
+        _, environment = runner.call_args.args
+        self.assertEqual(environment["SUBMIT_ONLY"], "1")
 
 
 class PipelineWorkerTests(unittest.TestCase):
@@ -219,6 +264,34 @@ class ExportTests(unittest.TestCase):
             }
             payload = (job_dir / "transcript.pdf").read_bytes()
             self.assertEqual(checksums["transcript.pdf"], hashlib.sha256(payload).hexdigest())
+
+
+class TailPatchTests(unittest.TestCase):
+    def test_tail_window_rechecks_last_ten_seconds_before_uncovered_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            job_dir = Path(temporary)
+            (job_dir / "merged-words.json").write_text(
+                json.dumps({"words": [{"word": "尾", "start_ms": 59_000, "end_ms": 60_000}]}),
+                encoding="utf-8",
+            )
+            original_job = patch_audible_tail.JOB
+            try:
+                patch_audible_tail.JOB = job_dir
+                with patch.object(patch_audible_tail, "audio_duration_ms", return_value=65_000):
+                    self.assertEqual(patch_audible_tail.tail_window(), (50_000, 65_000, 60_000))
+            finally:
+                patch_audible_tail.JOB = original_job
+
+    def test_non_extending_patch_keeps_existing_tail_words(self) -> None:
+        baseline = [{"word": "原", "start_ms": 60_000, "end_ms": 61_000}]
+        recheck = [{"word": "重", "start_ms": 60_000, "end_ms": 60_800}]
+        self.assertFalse(patch_extends_timeline(baseline, recheck))
+        self.assertTrue(
+            patch_extends_timeline(
+                baseline,
+                [{"word": "新", "start_ms": 60_500, "end_ms": 62_000}],
+            )
+        )
 
 
 if __name__ == "__main__":

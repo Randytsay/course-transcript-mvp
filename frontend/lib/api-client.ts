@@ -8,6 +8,7 @@ import type {
   PipelineStep,
   JobEvent,
   ReviewTerm,
+  OutputFormat,
   TranscriptJob,
   TranscriptSegment,
 } from "./types";
@@ -18,7 +19,7 @@ import type {
 // already-built absolute localhost URL.
 const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
-type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd" | "chirpMaxParallelChunks"> & {
+type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd" | "chirpMaxParallelChunks" | "outputFormats"> & {
   source_path: string;
   duration_seconds: number;
   created_at: string;
@@ -31,6 +32,7 @@ type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt"
   batch_id?: string | null;
   estimated_cost_usd?: string | null;
   chirp_max_parallel_chunks?: number;
+  output_formats?: OutputFormat[];
   pipeline: Array<{ id: string; label: string; detail: string; status: PipelineStep["status"] }>;
 };
 
@@ -62,6 +64,7 @@ function mapJob(job: ApiJob): TranscriptJob {
     batchId: job.batch_id ?? null,
     estimatedCostUsd: job.estimated_cost_usd ?? null,
     chirpMaxParallelChunks: job.chirp_max_parallel_chunks ?? 3,
+    outputFormats: job.output_formats ?? ["srt", "txt", "csv"],
   };
 }
 
@@ -87,6 +90,67 @@ function postJson<T>(path: string, body: unknown): Promise<T> {
 
 function patchJson<T>(path: string, body: unknown): Promise<T> {
   return fetchJson<T>(path, { method: "PATCH", body: JSON.stringify(body) });
+}
+
+export interface ChunkProgress {
+  chunkIndex: number;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  status: string;
+  wordCount: number;
+  hasTranscript: boolean;
+  updatedAt: string;
+  error: string | null;
+}
+
+export interface ChunkProgressResponse {
+  jobId: string;
+  jobStatus: string;
+  completedCount: number;
+  totalCount: number;
+  parallelism: number;
+  canaryCompleted: boolean;
+  updatedAt: string;
+  chunks: ChunkProgress[];
+}
+
+export interface ChunkTranscript {
+  chunkIndex: number;
+  startMs: number;
+  endMs: number;
+  status: string;
+  wordCount: number;
+  rawText: string;
+  isFinal: boolean;
+  warning: string;
+}
+
+export interface LiveCost {
+  estimatedTotalUsd: string;
+  estimatedAccruedUsd: string;
+  estimatedRemainingUsd: string;
+  chirpEstimatedUsd: string;
+  geminiEstimatedUsd: string;
+  submittedChunkCount: number;
+  completedChunkCount: number;
+  isEstimate: boolean;
+}
+
+export async function getJobChunks(jobId: string): Promise<ChunkProgressResponse> {
+  return fetchJson<ChunkProgressResponse>(`/jobs/${encodeURIComponent(jobId)}/chunks`);
+}
+
+export async function getJobChunkTranscript(jobId: string, chunkIndex: number): Promise<ChunkTranscript> {
+  return fetchJson<ChunkTranscript>(`/jobs/${encodeURIComponent(jobId)}/chunks/${chunkIndex}/transcript`);
+}
+
+export async function getBillingSummary(): Promise<BillingSummary> {
+  return fetchJson<BillingSummary>("/billing/summary");
+}
+
+export async function getJobLiveCost(jobId: string): Promise<LiveCost> {
+  return fetchJson<LiveCost>(`/jobs/${encodeURIComponent(jobId)}/live-cost`);
 }
 
 export async function getJobs(): Promise<TranscriptJob[]> {
@@ -248,7 +312,7 @@ export async function previewBatch(
   };
 }
 
-export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks: number = 3): Promise<CreatedBatch> {
+export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks: number = 3, outputFormats: OutputFormat[] = ["srt", "txt", "csv"]): Promise<CreatedBatch> {
   const result = await postJson<{
     batch_id: string;
     status: string;
@@ -265,6 +329,7 @@ export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks
     enable_subtitles: true,
     require_human_review: true,
     chirp_max_parallel_chunks: chirpMaxParallelChunks,
+    output_formats: outputFormats,
   });
   return {
     batchId: result.batch_id,

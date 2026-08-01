@@ -70,17 +70,38 @@ def segment_words(words: list[dict]) -> list[dict]:
         if segments:
             start = max(start, int(segments[-1]["end_ms"]))
         end = int(current[-1]["end_ms"])
-        # A fixed cue may never have zero or negative duration.  This should
-        # normally be impossible because the loop below keeps all lexical
-        # pieces that map to one provider word in the same cue.  Keep this
-        # guard as a durable diagnostic if an upstream ASR timeline is ever
-        # malformed instead of quietly producing an invalid subtitle file.
+        # Adjacent Chirp words can legitimately share a boundary after chunk
+        # merge (for example, an overlap duplicate or two lexical items with
+        # identical provider timing).  A new cue would then be clamped to the
+        # prior cue end and become zero-length.  Preserve every raw character
+        # by attaching that item to the preceding cue instead of emitting an
+        # invalid SRT cue or failing the whole job after ASR has succeeded.
         if end <= start:
-            raise ValueError(
-                "non-positive subtitle duration "
-                f"start_ms={start} end_ms={end} "
-                f"word_range={current[0]['word_start']}..{current[-1]['word_end']}"
-            )
+            if segments:
+                previous = segments[-1]
+                previous["raw_text"] += text
+                previous["text"] += text
+                previous["word_count"] += (
+                    current[-1]["word_end"] - current[0]["word_start"] + 1
+                )
+                previous["timing_collision_merged"] = True
+                previous.setdefault("timing_collision_word_ranges", []).append(
+                    {
+                        "word_start": current[0]["word_start"],
+                        "word_end": current[-1]["word_end"],
+                        "original_start_ms": int(current[0]["start_ms"]),
+                        "original_end_ms": end,
+                    }
+                )
+                current.clear()
+                return
+            # A first provider item with an invalid duration is an upstream
+            # anomaly, not a reason to discard the transcript.  Keep it as a
+            # minimal valid cue and surface it to QA through its metadata.
+            end = start + 1
+            timing_collision_merged = True
+        else:
+            timing_collision_merged = False
         segments.append({
             "segment_id": f"seg-{index:04d}",
             "start_ms": start,
@@ -88,6 +109,7 @@ def segment_words(words: list[dict]) -> list[dict]:
             "raw_text": text,
             "text": text,
             "word_count": current[-1]["word_end"] - current[0]["word_start"] + 1,
+            "timing_collision_merged": timing_collision_merged,
         })
         current.clear()
 

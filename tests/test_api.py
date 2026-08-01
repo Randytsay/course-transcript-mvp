@@ -102,12 +102,17 @@ class ApiTests(unittest.TestCase):
                 "enable_gemini_correction": True,
                 "enable_subtitles": True,
                 "require_human_review": True,
+                "output_formats": ["srt", "pdf"],
             },
         )
         self.assertEqual(created.status_code, 201)
         self.assertEqual(created.json()["status"], "preflight")
         self.assertFalse(created.json()["paid_operation_started"])
         job_id = created.json()["job_id"]
+        self.assertEqual(
+            self.client.get(f"/api/v1/jobs/{job_id}").json()["output_formats"],
+            ["srt", "pdf"],
+        )
 
         store = self.api._store()
         store.acquire_lease(job_id, "test-worker")
@@ -255,6 +260,7 @@ class ApiTests(unittest.TestCase):
         )
         self.assertEqual(batch.status_code, 200)
         self.assertEqual(len(batch.json()["jobs"]), 2)
+        self.assertEqual(batch.json()["jobs"][0]["output_formats"], ["srt", "txt", "csv"])
         store = self.api._store()
         for job_id in created.json()["job_ids"]:
             store.acquire_lease(job_id, "test-worker")

@@ -11,6 +11,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterator
 
+from .exports import normalize_output_formats
+
 
 ACTIVE_STATUSES = frozenset(
     {
@@ -156,6 +158,7 @@ class JobStore:
                     enable_subtitles INTEGER NOT NULL,
                     require_human_review INTEGER NOT NULL,
                     chirp_max_parallel_chunks INTEGER NOT NULL DEFAULT 3,
+                    output_formats_json TEXT NOT NULL DEFAULT '["srt","txt","csv"]',
                     status TEXT NOT NULL,
                     active_stage TEXT,
                     stage_detail TEXT,
@@ -225,6 +228,12 @@ class JobStore:
                 "jobs",
                 "chirp_max_parallel_chunks",
                 "INTEGER NOT NULL DEFAULT 3",
+            )
+            self._ensure_column(
+                connection,
+                "jobs",
+                "output_formats_json",
+                "TEXT NOT NULL DEFAULT '[\"srt\",\"txt\",\"csv\"]'",
             )
             self._ensure_column(
                 connection,
@@ -415,8 +424,10 @@ class JobStore:
         enable_subtitles: bool,
         require_human_review: bool,
         chirp_max_parallel_chunks: int = 3,
+        output_formats: list[str] | None = None,
         actor: str,
     ) -> dict[str, Any]:
+        selected_output_formats = normalize_output_formats(output_formats)
         now = _iso()
         with self.transaction() as connection:
             preview = connection.execute(
@@ -474,9 +485,9 @@ class JobStore:
                         id, preview_id, batch_id, queue_position, source_path,
                         source_name, source_size_bytes, language_code, profile,
                         enable_gemini_correction, enable_subtitles,
-                        require_human_review, chirp_max_parallel_chunks, status, active_stage, stage_detail,
+                        require_human_review, chirp_max_parallel_chunks, output_formats_json, status, active_stage, stage_detail,
                         created_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         'preflight', 'source', '等待安全下載與媒體檢查',
                         ?, ?, ?)
                     """,
@@ -494,6 +505,7 @@ class JobStore:
                         int(enable_subtitles),
                         int(require_human_review),
                         int(chirp_max_parallel_chunks),
+                        json.dumps(selected_output_formats),
                         actor,
                         now,
                         now,
@@ -504,7 +516,11 @@ class JobStore:
                     job_id,
                     "job_preflight_created",
                     actor,
-                    {"status": "preflight", "batch_id": batch_id},
+                    {
+                        "status": "preflight",
+                        "batch_id": batch_id,
+                        "output_formats": selected_output_formats,
+                    },
                 )
             connection.execute(
                 "UPDATE source_previews SET consumed_at = ? WHERE batch_preview_id = ?",
@@ -554,8 +570,10 @@ class JobStore:
         enable_subtitles: bool,
         require_human_review: bool,
         chirp_max_parallel_chunks: int = 3,
+        output_formats: list[str] | None = None,
         actor: str,
     ) -> dict[str, Any]:
+        selected_output_formats = normalize_output_formats(output_formats)
         now = _iso()
         with self.transaction() as connection:
             active = connection.execute(
@@ -580,9 +598,9 @@ class JobStore:
                 INSERT INTO jobs(
                     id, preview_id, source_path, source_name, source_size_bytes,
                     language_code, profile, enable_gemini_correction,
-                    enable_subtitles, require_human_review, chirp_max_parallel_chunks, status, active_stage,
+                    enable_subtitles, require_human_review, chirp_max_parallel_chunks, output_formats_json, status, active_stage,
                     stage_detail, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preflight',
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preflight',
                     'source', '等待安全下載與媒體檢查', ?, ?, ?)
                 """,
                 (
@@ -597,6 +615,7 @@ class JobStore:
                     int(enable_subtitles),
                     int(require_human_review),
                     int(chirp_max_parallel_chunks),
+                    json.dumps(selected_output_formats),
                     actor,
                     now,
                     now,
@@ -611,7 +630,7 @@ class JobStore:
                 job_id,
                 "job_preflight_created",
                 actor,
-                {"status": "preflight"},
+                {"status": "preflight", "output_formats": selected_output_formats},
             )
         return self.get_job(job_id)
 

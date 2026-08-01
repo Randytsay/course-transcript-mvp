@@ -32,9 +32,23 @@ import type {
   CreatedBatch,
   DriveDirectory,
   DriveEntry,
+  OutputFormat,
 } from "@/lib/types";
 
 type SelectionMode = "files" | "folder";
+
+const DEFAULT_OUTPUT_FORMATS: OutputFormat[] = ["srt", "txt", "csv"];
+const PRIMARY_OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string; detail: string }> = [
+  { value: "srt", label: ".srt", detail: "通用字幕" },
+  { value: "txt", label: ".txt", detail: "可讀逐字稿" },
+  { value: "csv", label: ".csv", detail: "校正與詞彙資料" },
+];
+const ADVANCED_OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string; detail: string }> = [
+  { value: "vtt", label: ".vtt", detail: "網頁字幕" },
+  { value: "ass", label: ".ass", detail: "樣式字幕" },
+  { value: "docx", label: ".docx", detail: "Word 文件" },
+  { value: "pdf", label: ".pdf", detail: "閱讀版文件" },
+];
 
 function formatBytes(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return "—";
@@ -58,6 +72,7 @@ export default function NewJobPage() {
   const [busy, setBusy] = useState<"browse" | "preview" | "create" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [chirpMaxParallelChunks, setChirpMaxParallelChunks] = useState(3);
+  const [outputFormats, setOutputFormats] = useState<OutputFormat[]>(DEFAULT_OUTPUT_FORMATS);
 
   const selectedEntries = useMemo(() => Array.from(selected.values()), [selected]);
   const selectedSize = selectedEntries.reduce((sum, item) => sum + item.sizeBytes, 0);
@@ -96,6 +111,15 @@ export default function NewJobPage() {
     });
   }
 
+  function toggleOutputFormat(format: OutputFormat) {
+    setOutputFormats((current) => {
+      if (current.includes(format)) {
+        return current.length === 1 ? current : current.filter((item) => item !== format);
+      }
+      return [...current, format];
+    });
+  }
+
   async function inspectSelection() {
     if (!directory || !canPreview) return;
     setBusy("preview");
@@ -119,7 +143,7 @@ export default function NewJobPage() {
     setBusy("create");
     setError(null);
     try {
-      setCreated(await createBatch(preview.batchPreviewId, chirpMaxParallelChunks));
+      setCreated(await createBatch(preview.batchPreviewId, chirpMaxParallelChunks, outputFormats));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法建立批次");
     } finally {
@@ -290,6 +314,26 @@ export default function NewJobPage() {
               </p>
             </div>
 
+            <div className="output-format-section">
+              <div className="section-heading">
+                <span className="step-number">4</span>
+                <div>
+                  <h2>選擇輸出附件</h2>
+                  <p>預設只選 SRT、TXT、CSV；設定會隨每個任務保存，未來發布時只取這些附件。</p>
+                </div>
+              </div>
+              <div className="output-format-grid" role="group" aria-label="輸出附件格式">
+                {[...PRIMARY_OUTPUT_FORMATS, ...ADVANCED_OUTPUT_FORMATS].map((format) => {
+                  const checked = outputFormats.includes(format.value);
+                  return <label className={`output-format-option ${checked ? "output-format-option--selected" : ""}`} key={format.value}>
+                    <input type="checkbox" checked={checked} onChange={() => toggleOutputFormat(format.value)} />
+                    <span><strong>{format.label}</strong><small>{format.detail}</small></span>
+                  </label>;
+                })}
+              </div>
+              <p className="output-format-note"><Info size={15} />JSON、原始模型回應、時間軸與 QA 證據會安全留在 VPS，不會因為未勾選而被刪除，也不會列為預設 Drive 附件。</p>
+            </div>
+
             {preview && (
               <div className="batch-preview">
                 <div className="batch-preview__heading">
@@ -339,6 +383,7 @@ export default function NewJobPage() {
             <div><span>選取模式</span><strong>{selectionMode === "files" ? "一個或多個檔案" : "整個資料夾"}</strong></div>
             <div><span>目前選取</span><strong>{preview?.itemCount ?? (selectionMode === "files" ? selected.size : folderReady ? "1 個資料夾" : "尚未選取")}</strong></div>
             <div><span>處理方式</span><strong>依序，一次一檔</strong></div>
+            <div><span>預設附件</span><strong>{outputFormats.map((format) => `.${format}`).join("、")}</strong></div>
             <div><span>預估成本上限</span><strong>US${costs?.projectLimitUsd ?? "200"}</strong></div>
             <div><span>剩餘預估額度</span><strong>US${costs?.remainingEstimatedBudgetUsd ?? "—"}</strong></div>
           </div>

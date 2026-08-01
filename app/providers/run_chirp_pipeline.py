@@ -20,6 +20,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -142,28 +143,50 @@ def _write_plan(plan: list[tuple[int, float, float]], total_seconds: float) -> N
     temporary.replace(target)
 
 
-def process_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
-    existing = check_chunk(index)
-    if existing in {"SUCCEEDED", "EMPTY_SILENCE"}:
-        return index, True, f"chunk-{index:03d}: already {existing}"
-    chunk_env = {
+def _chunk_env(index: int, start: float, end: float) -> dict[str, str]:
+    return {
         "CHUNK_INDEX": str(index),
         "CHUNK_START_SECONDS": str(start),
         "CHUNK_END_SECONDS": str(end),
         "CHUNK_ROLE": "base",
     }
+
+
+def submit_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
+    existing = check_chunk(index)
+    if existing in {"SUCCEEDED", "EMPTY_SILENCE"}:
+        return index, True, f"chunk-{index:03d}: already {existing}"
     if existing == "SUBMITTED":
-        result = run_subprocess(
-            "app.providers.recover_chunk", env_with(chunk_env), timeout=600
-        )
-    else:
-        result = run_subprocess(
-            "app.providers.chirp_chunk", env_with(chunk_env), timeout=7200
-        )
+        return index, True, f"chunk-{index:03d}: existing operation retained"
+    chunk_env = _chunk_env(index, start, end)
+    chunk_env["SUBMIT_ONLY"] = "1"
+    result = run_subprocess(
+        "app.providers.chirp_chunk", env_with(chunk_env), timeout=600
+    )
     message = (result.stdout or "").strip()
     if result.returncode != 0:
         message = f"{message}\n{(result.stderr or '')[:500]}".strip()
     return index, result.returncode == 0, message
+
+
+def recover_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
+    """Wait for the private GCS output without polling the LRO API."""
+    chunk_env = _chunk_env(index, start, end)
+    chunk_env["ALLOW_PENDING"] = "1"
+    deadline = time.monotonic() + 7200
+    while True:
+        result = run_subprocess(
+            "app.providers.recover_chunk", env_with(chunk_env), timeout=600
+        )
+        message = (result.stdout or "").strip()
+        if result.returncode == 0:
+            return index, True, message
+        if result.returncode == 75 and time.monotonic() < deadline:
+            time.sleep(20)
+            continue
+        if result.returncode != 0:
+            message = f"{message}\n{(result.stderr or '')[:500]}".strip()
+        return index, False, message
 
 
 def main() -> int:
@@ -189,17 +212,22 @@ def main() -> int:
         print(f"  chunk-{index:03d}: {start:.1f}s → {end:.1f}s ({end - start:.0f}s)")
 
     # Canary: chunk-000 must complete and validate before any parallel requests.
-    first_index, first_ok, first_message = process_chunk(*plan[0])
+    first_index, first_ok, first_message = submit_chunk(*plan[0])
     print(first_message)
     if not first_ok:
         print(f"PIPELINE=FAIL chunk-{first_index:03d} canary failed")
+        return 1
+    first_index, first_ok, first_message = recover_chunk(*plan[0])
+    print(first_message)
+    if not first_ok:
+        print(f"PIPELINE=FAIL chunk-{first_index:03d} canary recovery failed")
         return 1
 
     # Remaining chunks may proceed concurrently, bounded by quota-safe config.
     all_succeeded = True
     remaining = plan[1:]
     with ThreadPoolExecutor(max_workers=max(1, MAX_PARALLEL_CHUNKS)) as pool:
-        futures = {pool.submit(process_chunk, *item): item[0] for item in remaining}
+        futures = {pool.submit(submit_chunk, *item): item[0] for item in remaining}
         for future in as_completed(futures):
             index, succeeded, message = future.result()
             print(message)
@@ -208,8 +236,18 @@ def main() -> int:
                 all_succeeded = False
 
     if not all_succeeded:
-        print("\nPIPELINE=FAIL some chunks failed")
+        print("\nPIPELINE=FAIL some chunk submissions failed")
         return 1
+
+    # GCS result recovery is deliberately serial.  It avoids a burst of
+    # operation-polling calls while preserving the configured parallelism for
+    # the paid BatchRecognize submissions above.
+    for item in remaining:
+        index, succeeded, message = recover_chunk(*item)
+        print(message)
+        if not succeeded:
+            print(f"\nPIPELINE=FAIL chunk-{index:03d} recovery failed")
+            return 1
 
     # Phase 2: merge
     print("\n=== Merging chunk results ===")

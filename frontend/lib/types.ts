@@ -17,6 +17,7 @@ export type JobStatus =
   | "failed";
 
 export type PipelineStepStatus = "completed" | "running" | "pending" | "warning" | "failed";
+export type OutputFormat = "srt" | "txt" | "csv" | "vtt" | "ass" | "docx" | "pdf";
 
 export interface PipelineStep {
   id: string;
@@ -76,6 +77,7 @@ export interface TranscriptJob {
   batchId?: string | null;
   estimatedCostUsd?: string | null;
   chirpMaxParallelChunks?: number;
+  outputFormats: OutputFormat[];
 }
 
 export interface JobEvent {
@@ -139,6 +141,80 @@ export interface CostSummary {
   warningThresholdsUsd: string[];
   pricingVersion: string;
   accountingNote: string;
+}
+
+export interface ChunkProgress {
+  chunkIndex: number;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  status: string;
+  wordCount: number;
+  hasTranscript: boolean;
+  updatedAt?: string | null;
+  error?: string | null;
+}
+
+export interface ChunkProgressResponse {
+  jobId: string;
+  jobStatus: string;
+  completedCount: number;
+  totalCount: number;
+  parallelism: number;
+  canaryCompleted: boolean;
+  updatedAt?: string | null;
+  chunks: ChunkProgress[];
+}
+
+export interface ChunkTranscript {
+  chunkIndex: number;
+  startMs: number;
+  endMs: number;
+  status: string;
+  wordCount: number;
+  rawText: string;
+  completedAt?: string | null;
+  isFinal: boolean;
+  warning: string;
+}
+
+export interface LiveCost {
+  estimatedTotalUsd: string;
+  estimatedAccruedUsd: string;
+  estimatedRemainingUsd: string;
+  chirpEstimatedUsd: string;
+  geminiEstimatedUsd: string;
+  submittedChunkCount: number;
+  completedChunkCount: number;
+  isEstimate: boolean;
+  warning?: string;
+}
+
+export interface BillingSummary {
+  status: string;
+  source?: string;
+  targetProjectId?: string;
+  billingCurrency?: string | null;
+  currencyCount?: number;
+  projectGrossCost?: string | null;
+  projectCredits?: string | null;
+  projectNetCost?: string | null;
+  projectGrossCostUsd?: string | null;
+  projectCreditsUsd?: string | null;
+  projectNetCostUsd?: string | null;
+  accountPromotionCreditsUsed?: string | null;
+  accountPromotionCreditsUsedUsd?: string | null;
+  freeTrialPromotionCreditsUsedUsd?: string | null;
+  initialFreeTrialCreditUsd?: string;
+  estimatedRemainingFreeTrialCreditUsd?: string | null;
+  coverageStart?: string;
+  coverageEnd?: string | null;
+  lastBillingDataAt?: string | null;
+  snapshotGeneratedAt?: string | null;
+  dataAgeSeconds?: number | null;
+  isEstimatedRemainingCredit?: boolean;
+  conversionComplete?: boolean;
+  warning?: string;
 }
 
 export interface BatchDetail {

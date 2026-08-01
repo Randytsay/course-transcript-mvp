@@ -2,25 +2,37 @@
 
 import AppShell from "./app-shell";
 import Link from "next/link";
-import { Activity, ArrowRight, CheckCircle2, Clock3, FileAudio2, MoreHorizontal, Plus, ShieldCheck, Sparkles, TimerReset, TriangleAlert } from "lucide-react";
-import { getCosts, getJobs } from "@/lib/api-client";
-import type { CostSummary, TranscriptJob } from "@/lib/types";
+import { Activity, ArrowRight, CheckCircle2, Clock3, Coins, FileAudio2, MoreHorizontal, Plus, ShieldCheck, Sparkles, TimerReset, TriangleAlert } from "lucide-react";
+import { getCosts, getJobs, getBillingSummary } from "@/lib/api-client";
+import type { CostSummary, TranscriptJob, BillingSummary } from "@/lib/types";
 import ProgressRing from "./progress-ring";
 import StatusBadge from "./status-badge";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+function localMoney(summary: BillingSummary, amount: string | null | undefined) {
+  return summary.billingCurrency && amount != null
+    ? `${summary.billingCurrency} ${amount}`
+    : "暫無法顯示";
+}
+
 export default function DashboardPage() {
   const [jobs, setJobs] = useState<TranscriptJob[]>([]);
   const [costs, setCosts] = useState<CostSummary | null>(null);
+  const [billing, setBilling] = useState<BillingSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [nextJobs, nextCosts] = await Promise.all([getJobs(), getCosts()]);
+      const [nextJobs, nextCosts, nextBilling] = await Promise.all([
+        getJobs(),
+        getCosts(),
+        getBillingSummary().catch(() => null),
+      ]);
       setJobs(nextJobs);
       setCosts(nextCosts);
+      setBilling(nextBilling);
       setError(null);
     } catch (cause: unknown) {
       setError(cause instanceof Error ? cause.message : "無法讀取任務");
@@ -49,6 +61,7 @@ export default function DashboardPage() {
     { label: "已有輸出", value: String(completed), detail: "包含待審查與已完成任務", icon: CheckCircle2, tone: "green" },
     { label: "剩餘預估額度", value: costs ? `US$${costs.remainingEstimatedBudgetUsd}` : "—", detail: "上限 US$200；非實際帳務", icon: TimerReset, tone: "violet" },
   ];
+
   return (
     <AppShell title="轉錄儀表板" description="掌握長檔辨識進度、人工審查與輸出狀態。" actions={<Link href="/jobs/new" className="button button--primary"><Plus size={17} />新增轉錄任務</Link>}>
       {firstAwaitingJob && (
@@ -56,14 +69,14 @@ export default function DashboardPage() {
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <TriangleAlert size={26} className="text-warning" style={{ flexShrink: 0 }} />
             <div>
-              <strong style={{ fontSize: "16px", color: "#9a3412" }}>有 {awaitingConfirmation} 個任務正在等待費用確認授權</strong>
-              <p style={{ margin: "4px 0 0", fontSize: "14px", color: "#c2410c" }}>
-                例如：<strong>{firstAwaitingJob.filename}</strong> (預估費用 US$ {firstAwaitingJob.estimatedCostUsd ?? "2.68"})。確認後將自動開始轉錄。
+              <strong style={{ fontSize: "var(--font-md)", color: "#9a3412" }}>有 {awaitingConfirmation} 個任務正在等待費用確認授權</strong>
+              <p style={{ margin: "4px 0 0", fontSize: "var(--font-sm)", color: "#9a3412", lineHeight: 1.6 }}>
+                例如：<strong>{firstAwaitingJob.filename}</strong>（預估費用 {firstAwaitingJob.estimatedCostUsd ? `US$ ${firstAwaitingJob.estimatedCostUsd}` : "仍在計算"}）。確認後才會開始付費轉錄。
               </p>
             </div>
           </div>
           <Link href={firstAwaitingJob.batchId ? `/batches/${firstAwaitingJob.batchId}` : `/jobs/${firstAwaitingJob.id}`} className="button button--primary button--large">
-            <CheckCircle2 size={18} /> 立即確認費用並排入處理
+            <CheckCircle2 size={18} />前往確認費用
           </Link>
         </div>
       )}
@@ -76,30 +89,84 @@ export default function DashboardPage() {
       </section>
 
       <section className="dashboard-grid">
-        <div className="panel panel--jobs" id="jobs">
-          <div className="panel-header"><div><h2>最近任務</h2><p>{showAll ? `目前顯示全部 ${jobs.length} 筆工作。` : `目前顯示最近 ${Math.min(4, jobs.length)} 筆工作。`}</p></div>{jobs.length > 4 && <button type="button" className="button button--ghost" onClick={() => setShowAll((current) => !current)}>{showAll ? "收合" : "查看全部"} <ArrowRight size={16} /></button>}</div>
-          <div className="jobs-table" role="table" aria-label="最近轉錄任務">
-            <div className="jobs-table__header" role="row"><span>檔案與課程</span><span>處理進度</span><span>狀態</span><span>更新時間</span><span /></div>
-            {loading && <div className="empty-state">正在讀取後端任務資料…</div>}
-            {error && <div className="empty-state empty-state--error">後端目前無法連線：{error}</div>}
-            {!loading && !error && jobs.length === 0 && <div className="empty-state">尚無已登記的本機任務。</div>}
-            {visibleJobs.map((job) => (
-              <div className="jobs-table__row" role="row" key={job.id}>
-                <div className="job-file-cell"><div className="file-icon"><FileAudio2 size={20} /></div><div><Link href={`/jobs/${job.id}`} className="job-name">{job.filename}</Link><span>{job.course} · {job.duration}</span></div></div>
-                <div className="job-progress-cell"><ProgressRing value={job.progress} /><span>{job.progress === 100 ? "處理完成" : `${job.progress}%`}</span></div>
-                <div>
-                  {job.status === "awaiting_confirmation" ? (
-                    <Link href={job.batchId ? `/batches/${job.batchId}` : `/jobs/${job.id}`} className="button button--confirm button--small" style={{ fontSize: "12px", padding: "6px 12px" }}>
-                      <CheckCircle2 size={14} /> 確認費用 US${job.estimatedCostUsd ?? "2.68"}
-                    </Link>
-                  ) : (
-                    <StatusBadge status={job.status} />
-                  )}
+        <div style={{ display: "grid", gap: "18px" }}>
+          <div className="panel">
+            <div className="panel-header">
+              <div><h2>Google Cloud 費用</h2><p>GCP 帳務資料可能延遲；官方剩餘抵免額請以 Billing Overview 為準。</p></div>
+              {billing?.status === "stale" && <span className="status-badge status-badge--review">帳務資料已過期</span>}
+            </div>
+            {!billing || billing.status === "disabled" ? (
+              <div className="empty-state">尚未設定 Cloud Billing BigQuery 匯出</div>
+            ) : billing.status === "pending" ? (
+              <div className="empty-state">帳務同步已啟用，正在等待第一份 BigQuery 匯出資料。</div>
+            ) : billing.status === "error" && billing.projectGrossCost == null ? (
+              <div className="empty-state empty-state--error">帳務摘要目前無法載入。{billing.warning ? ` ${billing.warning}` : ""}</div>
+            ) : (
+              <>
+                <div className="metric-grid" style={{ marginBottom: 0, padding: "18px", borderTop: "none" }}>
+                  <article className="metric-card">
+                    <div className="metric-icon metric-icon--blue"><Coins size={20} /></div>
+                    <div className="metric-copy">
+                      <span>本專案 GCP 已回報使用費</span>
+                      <strong>{localMoney(billing, billing.projectGrossCost)}</strong>
+                      <small>{billing.projectGrossCostUsd != null ? `約 USD ${billing.projectGrossCostUsd}` : "USD 暫無法換算"}</small>
+                    </div>
+                  </article>
+                  <article className="metric-card">
+                    <div className="metric-icon metric-icon--violet"><Coins size={20} /></div>
+                    <div className="metric-copy">
+                      <span>帳單帳戶已使用促銷抵免</span>
+                      <strong>{localMoney(billing, billing.accountPromotionCreditsUsed)}</strong>
+                      <small>{billing.accountPromotionCreditsUsedUsd != null ? `約 USD ${billing.accountPromotionCreditsUsedUsd}` : "USD 暫無法換算"}</small>
+                    </div>
+                  </article>
+                  <article className="metric-card">
+                    <div className="metric-icon metric-icon--amber"><Coins size={20} /></div>
+                    <div className="metric-copy">
+                      <span>目前專案淨費用</span>
+                      <strong>{localMoney(billing, billing.projectNetCost)}</strong>
+                      <small>{billing.projectNetCostUsd != null ? `約 USD ${billing.projectNetCostUsd}` : "USD 暫無法換算"}</small>
+                    </div>
+                  </article>
+                  <article className="metric-card">
+                    <div className="metric-icon metric-icon--green"><Coins size={20} /></div>
+                    <div className="metric-copy">
+                      <span>預估剩餘免費抵免額</span>
+                      <strong>{billing.estimatedRemainingFreeTrialCreditUsd != null ? `USD ${billing.estimatedRemainingFreeTrialCreditUsd}` : "暫無法計算"}</strong>
+                      <small>最後帳務資料：{billing.lastBillingDataAt ? new Date(billing.lastBillingDataAt).toLocaleString("zh-TW") : "尚無資料"}</small>
+                    </div>
+                  </article>
                 </div>
-                <div className="updated-cell"><Clock3 size={15} />{job.updatedAt}</div>
-                <div className="row-action"><Link className="icon-button" href={`/jobs/${job.id}`} aria-label={`查看 ${job.filename}`}><MoreHorizontal size={19} /></Link></div>
-              </div>
-            ))}
+                {billing.warning && <div className="empty-state" style={{ borderTop: "1px solid var(--border)" }}>{billing.warning}</div>}
+              </>
+            )}
+          </div>
+
+          <div className="panel panel--jobs" id="jobs">
+            <div className="panel-header"><div><h2>最近任務</h2><p>{showAll ? `目前顯示全部 ${jobs.length} 筆工作。` : `目前顯示最近 ${Math.min(4, jobs.length)} 筆工作。`}</p></div>{jobs.length > 4 && <button type="button" className="button button--ghost" onClick={() => setShowAll((current) => !current)}>{showAll ? "收合" : "查看全部"} <ArrowRight size={16} /></button>}</div>
+            <div className="jobs-table" role="table" aria-label="最近轉錄任務">
+              <div className="jobs-table__header" role="row"><span>檔案與課程</span><span>處理進度</span><span>狀態</span><span>更新時間</span><span /></div>
+              {loading && <div className="empty-state">正在讀取後端任務資料…</div>}
+              {error && <div className="empty-state empty-state--error">後端目前無法連線：{error}</div>}
+              {!loading && !error && jobs.length === 0 && <div className="empty-state">尚無已登記的本機任務。</div>}
+              {visibleJobs.map((job) => (
+                <div className="jobs-table__row" role="row" key={job.id}>
+                  <div className="job-file-cell"><div className="file-icon"><FileAudio2 size={20} /></div><div><Link href={`/jobs/${job.id}`} className="job-name">{job.filename}</Link><span>{job.course} · {job.duration}</span></div></div>
+                  <div className="job-progress-cell"><ProgressRing value={job.progress} /><span>{job.progress === 100 ? "處理完成" : `${job.progress}%`}</span></div>
+                  <div>
+                    {job.status === "awaiting_confirmation" ? (
+                      <Link href={job.batchId ? `/batches/${job.batchId}` : `/jobs/${job.id}`} className="button button--confirm button--small">
+                        <CheckCircle2 size={14} />{job.estimatedCostUsd ? `確認費用 US$${job.estimatedCostUsd}` : "確認費用"}
+                      </Link>
+                    ) : (
+                      <StatusBadge status={job.status} />
+                    )}
+                  </div>
+                  <div className="updated-cell"><Clock3 size={15} />{job.updatedAt}</div>
+                  <div className="row-action"><Link className="icon-button" href={`/jobs/${job.id}`} aria-label={`查看 ${job.filename}`}><MoreHorizontal size={19} /></Link></div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 

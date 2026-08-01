@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.jobs import CostConfig, JobConflict, JobNotFound, JobStore
+from app.jobs import CostConfig, JobConflict, JobNotFound, JobStore, normalize_output_formats
 from app.jobs.source import (
     SourceInspectionError,
     inspect_rclone_selection,
@@ -114,6 +114,7 @@ class CreateJobRequest(BaseModel):
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = True
+    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
 
 class CreateBatchRequest(BaseModel):
@@ -124,6 +125,7 @@ class CreateBatchRequest(BaseModel):
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = True
+    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
 
 class ApproveJobRequest(BaseModel):
@@ -189,6 +191,14 @@ def _read_json(path: Path, default: Any = None) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return default
+
+
+def _output_formats(value: object) -> list[str]:
+    try:
+        parsed = json.loads(str(value)) if value else None
+        return normalize_output_formats(parsed if isinstance(parsed, list) else None)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return normalize_output_formats(None)
 
 
 def _atomic_json(path: Path, payload: object) -> None:
@@ -392,6 +402,7 @@ def _database_job_summary(record: dict[str, Any]) -> dict[str, Any]:
         "error": record["error"],
         "batch_id": record.get("batch_id"),
         "chirp_max_parallel_chunks": record.get("chirp_max_parallel_chunks", 3),
+        "output_formats": _output_formats(record.get("output_formats_json")),
         "estimated_cost_usd": record["estimated_cost_usd"],
         "reserved_cost_usd": record["reserved_cost_usd"],
         "actual_cost_usd": record["actual_cost_usd"],
@@ -423,6 +434,32 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.get("/api/v1/billing/summary")
+def get_billing_summary() -> dict[str, Any]:
+    snapshot = Path("/app/data/billing/billing_snapshot.json")
+    if not snapshot.exists():
+        return {
+            "status": "disabled",
+            "warning": "尚未設定Cloud Billing BigQuery匯出",
+            "lastBillingDataAt": None
+        }
+    data = _read_json(snapshot, {})
+    
+    # Check staleness
+    stale_seconds = int(os.environ.get("BILLING_SNAPSHOT_STALE_SECONDS", "3600"))
+    if "snapshotGeneratedAt" in data:
+        try:
+            gen_time = datetime.fromisoformat(data["snapshotGeneratedAt"])
+            age = (datetime.now(UTC) - gen_time).total_seconds()
+            data["dataAgeSeconds"] = age
+            if age > stale_seconds and data.get("status") == "ok":
+                data["status"] = "stale"
+                data["warning"] = "帳務資料已超過1小時未更新"
+        except Exception:
+            pass
+            
+    return data
+
 @app.get("/api/v1/jobs")
 def list_jobs() -> dict[str, list[dict[str, Any]]]:
     records = _store().list_jobs()
@@ -443,6 +480,169 @@ def get_job(job_id: str) -> dict[str, Any]:
     record = _database_job(job_id)
     return _database_job_summary(record) if record else _job_summary(_job_dir(job_id))
 
+
+@app.get("/api/v1/jobs/{job_id}/chunks")
+def get_job_chunks(job_id: str) -> dict[str, Any]:
+    job_dir = JOBS_DIR / job_id
+    if not job_dir.is_dir():
+        try:
+            record = _database_job(job_id)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {
+            "jobId": job_id,
+            "jobStatus": record["status"] if record else "queued",
+            "completedCount": 0,
+            "totalCount": 0,
+            "parallelism": record.get("chirp_max_parallel_chunks", 3) if record else 3,
+            "canaryCompleted": False,
+            "updatedAt": datetime.now(UTC).isoformat(),
+            "chunks": []
+        }
+
+    record = _database_job(job_id)
+    chunks_dir = job_dir / "chunks"
+    chunks = []
+    canary_completed = False
+    completed_count = 0
+    
+    if chunks_dir.is_dir():
+        for d in sorted(chunks_dir.iterdir()):
+            if d.is_dir() and d.name.startswith("chunk-"):
+                manifest_path = d / "manifest.json"
+                if manifest_path.exists():
+                    m = _read_json(manifest_path, {})
+                    st = m.get("status", "WAITING")
+                    has_ts = (d / "partial-transcript.json").exists()
+                    # Mapped status
+                    if st in ("PLANNED", "WAITING"): st = "等待中"
+                    elif st in ("SUBMITTED", "RUNNING"): st = "辨識中"
+                    elif st == "SUCCEEDED": st = "完成"
+                    elif st == "EMPTY_SILENCE": st = "完成（無語音）"
+                    elif st == "FAILED": st = "失敗"
+                    elif st == "RECOVERING": st = "恢復中"
+                    
+                    err_msg = None
+                    if st == "失敗" and m.get("error"):
+                        err_msg = m["error"].get("message") or "Unknown error"
+                    
+                    chunks.append({
+                        "chunkIndex": m.get("chunk_index"),
+                        "startMs": m.get("source_start_ms"),
+                        "endMs": m.get("source_end_ms"),
+                        "durationMs": m.get("source_end_ms", 0) - m.get("source_start_ms", 0),
+                        "status": st,
+                        "wordCount": m.get("word_count", 0),
+                        "hasTranscript": has_ts,
+                        "updatedAt": m.get("created_at"),
+                        "error": err_msg
+                    })
+                    if m.get("chunk_index") == 0 and st in ("完成", "完成（無語音）"):
+                        canary_completed = True
+                    if st in ("完成", "完成（無語音）"):
+                        completed_count += 1
+                        
+    return {
+        "jobId": job_id,
+        "jobStatus": record["status"] if record else "transcribing",
+        "completedCount": completed_count,
+        "totalCount": len(chunks),
+        "parallelism": record.get("chirp_max_parallel_chunks", 3) if record else 3,
+        "canaryCompleted": canary_completed,
+        "updatedAt": datetime.now(UTC).isoformat(),
+        "chunks": chunks
+    }
+
+@app.get("/api/v1/jobs/{job_id}/chunks/{chunk_index}/transcript")
+def get_job_chunk_transcript(job_id: str, chunk_index: int) -> dict[str, Any]:
+    job_dir = JOBS_DIR / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    ts_path = job_dir / "chunks" / f"chunk-{chunk_index:03d}" / "partial-transcript.json"
+    if not ts_path.exists():
+        raise HTTPException(status_code=404, detail="Transcript not available for this chunk yet")
+        
+    data = _read_json(ts_path, {})
+    return {
+        "chunkIndex": data.get("chunkIndex"),
+        "startMs": data.get("sourceStartMs"),
+        "endMs": data.get("sourceEndMs"),
+        "status": data.get("status"),
+        "wordCount": data.get("wordCount"),
+        "rawText": data.get("rawText", ""),
+        "isFinal": False,
+        "warning": "此為Chirp分段原始稿，尚未完成重疊接合、Gemini校正及最終QA。"
+    }
+
+
+@app.get("/api/v1/jobs/{job_id}/live-cost")
+def get_job_live_cost(job_id: str) -> dict[str, Any]:
+    record = _database_job(job_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    # We will compute the cost using the module
+    from app.jobs import costs
+    # Read the chunks
+    job_dir = JOBS_DIR / job_id
+    chunks_dir = job_dir / "chunks"
+    
+    total_estimated = Decimal(record.get("estimated_cost_usd", "0"))
+    
+    chirp_duration_s = 0.0
+    completed_chunks = 0
+    submitted_chunks = 0
+    
+    if chunks_dir.is_dir():
+        for d in chunks_dir.iterdir():
+            if d.is_dir() and d.name.startswith("chunk-"):
+                manifest_path = d / "manifest.json"
+                if manifest_path.exists():
+                    m = _read_json(manifest_path, {})
+                    st = m.get("status", "")
+                    submitted_chunks += 1
+                    if st in ("SUCCEEDED", "EMPTY_SILENCE", "SUBMITTED", "RUNNING", "RECOVERING"):
+                        dur_s = (m.get("source_end_ms", 0) - m.get("source_start_ms", 0)) / 1000.0
+                        chirp_duration_s += dur_s
+                    if st in ("SUCCEEDED", "EMPTY_SILENCE"):
+                        completed_chunks += 1
+                        
+    chirp_cost = costs.estimated_usd("speech", "chirp_3", int(chirp_duration_s))
+    gemini_cost = Decimal("0")
+    
+    qa = _read_json(job_dir / "qa-report.json")
+    if qa and isinstance(qa, dict):
+        gemini_stats = qa.get("gemini_correction", {})
+        if gemini_stats.get("applied") and "usage" in gemini_stats:
+            pass # TODO parse usage
+    # Look for correct-work/ window usage
+    correct_dir = job_dir / "correct-work"
+    if correct_dir.is_dir():
+        total_in = 0
+        total_out = 0
+        for w in correct_dir.glob("window-*.json"):
+            data = _read_json(w, {})
+            u = data.get("usage_metadata", {})
+            if u:
+                total_in += int(u.get("promptTokenCount", 0))
+                total_out += int(u.get("candidatesTokenCount", 0))
+        if total_in or total_out:
+            gemini_cost = costs.estimated_usd("vertex", record.get("profile", "highest_accuracy") + "_input", total_in) + costs.estimated_usd("vertex", record.get("profile", "highest_accuracy") + "_output", total_out)
+
+    accrued = chirp_cost + gemini_cost
+    remaining = max(Decimal("0"), total_estimated - accrued)
+    
+    return {
+        "estimatedTotalUsd": str(total_estimated.quantize(Decimal("0.01"))),
+        "estimatedAccruedUsd": str(accrued.quantize(Decimal("0.01"))),
+        "estimatedRemainingUsd": str(remaining.quantize(Decimal("0.01"))),
+        "chirpEstimatedUsd": str(chirp_cost.quantize(Decimal("0.01"))),
+        "geminiEstimatedUsd": str(gemini_cost.quantize(Decimal("0.01"))),
+        "submittedChunkCount": submitted_chunks,
+        "completedChunkCount": completed_chunks,
+        "isEstimate": True
+    }
 
 @app.get("/api/v1/jobs/{job_id}/events")
 def get_job_events(job_id: str) -> dict[str, Any]:
@@ -797,12 +997,15 @@ def create_batch(
             enable_gemini_correction=payload.enable_gemini_correction,
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
+            output_formats=payload.output_formats,
             actor=actor,
         )
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     batch = result["batch"]
     return {
         "batch_id": batch["id"],
@@ -883,12 +1086,15 @@ def create_job(payload: CreateJobRequest, request: Request) -> dict[str, Any]:
             enable_gemini_correction=payload.enable_gemini_correction,
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
+            output_formats=payload.output_formats,
             actor=actor,
         )
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "job_id": record["id"],
         "status": record["status"],

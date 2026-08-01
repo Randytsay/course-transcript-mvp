@@ -48,6 +48,12 @@ def main() -> None:
             prefix=f"jobs/{JOB_NAME}/chunks/{name}/chirp-output/"
         )
     )
+    if not blobs and os.environ.get("ALLOW_PENDING") == "1":
+        # The operation has already been submitted.  The caller must wait and
+        # retry this GCS-only check, rather than resubmitting audio or polling
+        # the Speech long-running-operation endpoint.
+        print(f"RECOVER_{name}=PENDING")
+        raise SystemExit(75)
     if len(blobs) != 1:
         raise RuntimeError(f"Expected one result object, found {len(blobs)}")
 
@@ -111,6 +117,22 @@ def main() -> None:
             (int(word["end_ms"]) for word in words), default=0
         ),
     }
+    if words:
+        import hashlib
+        from datetime import UTC, datetime
+        raw_text = "".join(w['word'] for w in words)
+        atomic(chunk / "partial-transcript.json", {
+            "chunkIndex": index,
+            "sourceStartMs": offset,
+            "sourceEndMs": round(end * 1000),
+            "status": status,
+            "wordCount": len(words),
+            "rawText": raw_text,
+            "firstWordMs": words[0]['start_ms'],
+            "lastWordMs": words[-1]['end_ms'],
+            "sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+            "completedAt": datetime.now(UTC).isoformat()
+        })
     atomic(chunk / "words.json", {"chunk_index": index, "words": words})
     atomic(chunk / "manifest.json", payload)
     audio.unlink(missing_ok=True)
