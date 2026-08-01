@@ -28,6 +28,7 @@ DIRECT_CANCEL_STATUSES = {
     "failed",
 }
 TERMINAL_STATUSES = {"awaiting_review", "review", "completed", "cancelled"}
+PROVIDER_TERMINAL_STATES = {"SUCCEEDED", "EMPTY_SILENCE", "FAILED", "CANCELLED"}
 CleanupMode = Literal["preserve", "temporary"]
 
 
@@ -82,6 +83,64 @@ def _accrued(database_path: Path, data_dir: Path, job_id: str) -> Decimal:
         return Decimal("0")
 
 
+def _has_pending_provider_operations(job_dir: Path) -> bool:
+    for manifest_path in sorted((job_dir / "chunks").glob("chunk-*/manifest.json")):
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        operation_name = str(payload.get("operation_name") or "")
+        status = str(payload.get("status") or "")
+        if operation_name and status not in PROVIDER_TERMINAL_STATES:
+            return True
+    return False
+
+
+def _refresh_batch_state(
+    connection: sqlite3.Connection,
+    batch_id: str | None,
+    now: str,
+) -> None:
+    if not batch_id:
+        return
+    rows = connection.execute(
+        "SELECT status FROM jobs WHERE batch_id = ? ORDER BY queue_position",
+        (batch_id,),
+    ).fetchall()
+    if not rows:
+        return
+    statuses = [str(row["status"]) for row in rows]
+    ready = sum(status in {"awaiting_review", "completed"} for status in statuses)
+    failed = sum(status == "failed" for status in statuses)
+    cancelled = sum(status == "cancelled" for status in statuses)
+    terminal = ready + failed + cancelled
+    if cancelled == len(statuses):
+        batch_status = "cancelled"
+    elif terminal == len(statuses):
+        batch_status = "partial_cancelled" if cancelled else (
+            "partial_failure" if failed and ready else "failed" if failed else "awaiting_review"
+        )
+    elif any(status == "cancelling" for status in statuses):
+        batch_status = "cancelling"
+    elif any(status in RUNNING_STATUSES | {"queued"} for status in statuses):
+        batch_status = "processing"
+    elif any(status == "paused" for status in statuses):
+        batch_status = "paused"
+    elif all(status == "awaiting_confirmation" for status in statuses):
+        batch_status = "awaiting_confirmation"
+    else:
+        batch_status = "preflight"
+    connection.execute(
+        """
+        UPDATE batches
+        SET status = ?, completed_count = ?, failed_count = ?,
+            updated_at = ?, revision = revision + 1
+        WHERE id = ?
+        """,
+        (batch_status, ready, failed, now, batch_id),
+    )
+
+
 def request_cancellation(
     database_path: Path,
     data_dir: Path,
@@ -97,6 +156,7 @@ def request_cancellation(
         raise CancellationConflict("Invalid cleanup mode")
     accrued = _accrued(database_path, data_dir, job_id)
     now = _now()
+    job_dir = data_dir / "jobs" / job_id
     connection = _connect(database_path)
     try:
         connection.execute("BEGIN IMMEDIATE")
@@ -106,10 +166,7 @@ def request_cancellation(
         if int(row["revision"]) != int(expected_revision):
             raise CancellationConflict("任務已更新，請重新載入後再操作")
         status = str(row["status"])
-        if status == "cancelled":
-            connection.commit()
-            return dict(row)
-        if status == "cancelling":
+        if status in {"cancelled", "cancelling"}:
             connection.commit()
             return dict(row)
         if status in TERMINAL_STATUSES:
@@ -117,7 +174,12 @@ def request_cancellation(
         if status not in RUNNING_STATUSES | DIRECT_CANCEL_STATUSES:
             raise CancellationConflict("此任務目前不可取消")
 
-        next_status = "cancelling" if status in RUNNING_STATUSES else "cancelled"
+        provider_pending = _has_pending_provider_operations(job_dir)
+        next_status = (
+            "cancelling"
+            if status in RUNNING_STATUSES or provider_pending
+            else "cancelled"
+        )
         detail = (
             "正在停止本機程序並嘗試取消已送出的雲端操作"
             if next_status == "cancelling"
@@ -165,8 +227,10 @@ def request_cancellation(
                     "reason": reason,
                     "cleanup_mode": cleanup_mode,
                     "provider_results": [],
+                    "estimated_accrued_cost_usd": str(accrued),
                 },
             )
+        _refresh_batch_state(connection, row["batch_id"], now)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -175,7 +239,7 @@ def request_cancellation(
         connection.close()
 
     if next_status == "cancelled" and cleanup_mode == "temporary":
-        cleanup_temporary_files(data_dir / "jobs" / job_id)
+        cleanup_temporary_files(job_dir)
     return get_job(database_path, job_id)
 
 
@@ -185,6 +249,19 @@ def get_job(database_path: Path, job_id: str) -> dict[str, Any]:
     if row is None:
         raise CancellationNotFound("Job not found")
     return dict(row)
+
+
+def next_cancelling_job(database_path: Path) -> dict[str, Any] | None:
+    with _connect(database_path) as connection:
+        row = connection.execute(
+            """
+            SELECT * FROM jobs
+            WHERE status = 'cancelling'
+            ORDER BY updated_at, created_at
+            LIMIT 1
+            """
+        ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def cancel_chirp_operations(job_dir: Path) -> list[dict[str, Any]]:
@@ -203,7 +280,7 @@ def cancel_chirp_operations(job_dir: Path) -> list[dict[str, Any]]:
             continue
         status = str(payload.get("status") or "")
         name = str(payload.get("operation_name") or "")
-        if name and status not in {"SUCCEEDED", "EMPTY_SILENCE", "FAILED", "CANCELLED"}:
+        if name and status not in PROVIDER_TERMINAL_STATES:
             operation_names.append((manifest_path, name))
     if not operation_names:
         return []
@@ -219,17 +296,14 @@ def cancel_chirp_operations(job_dir: Path) -> list[dict[str, Any]]:
         outcome = "requested"
         error: str | None = None
         try:
-            client.cancel_operation(
-                request={"name": operation_name},
-                timeout=15,
-            )
+            client.cancel_operation(request={"name": operation_name}, timeout=15)
         except google_exceptions.MethodNotImplemented:
             outcome = "unsupported"
             error = "Provider does not support cancellation for this operation"
         except google_exceptions.GoogleAPICallError as exc:
             outcome = "error"
             error = str(exc)[-300:]
-        except Exception as exc:  # Defensive: cancellation must not hide job state.
+        except Exception as exc:
             outcome = "error"
             error = str(exc)[-300:]
 
@@ -248,11 +322,7 @@ def cancel_chirp_operations(job_dir: Path) -> list[dict[str, Any]]:
         except (OSError, json.JSONDecodeError):
             pass
         results.append(
-            {
-                "chunk": manifest_path.parent.name,
-                "outcome": outcome,
-                "error": error,
-            }
+            {"chunk": manifest_path.parent.name, "outcome": outcome, "error": error}
         )
     return results
 
@@ -320,6 +390,7 @@ def finalize_cancellation(
                 "warning": "已送出的雲端操作可能在取消生效前完成並產生費用",
             },
         )
+        _refresh_batch_state(connection, row["batch_id"], now)
         connection.commit()
     except Exception:
         connection.rollback()
