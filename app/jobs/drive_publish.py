@@ -23,6 +23,7 @@ from .exports import normalize_output_formats
 
 
 RETRY_DELAYS_SECONDS = (30.0, 60.0, 120.0)
+MINIMUM_DRIVE_REQUEST_INTERVAL_SECONDS = 1.0
 
 
 class DrivePublishError(RuntimeError):
@@ -154,6 +155,7 @@ def publish_outputs(
     runner: Callable[[list[str]], subprocess.CompletedProcess[str]] = _run,
     sleeper: Callable[[float], None] = time.sleep,
     jitter: Callable[[], float] = random.random,
+    clock: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
     """Publish selected artifacts one at a time with bounded quota backoff.
 
@@ -182,6 +184,21 @@ def publish_outputs(
     state["authorized_at"] = _utcnow()
     state["status"] = "in_progress"
     _write_state(state_path, state)
+
+    # Each `rclone` command is a new process, so its own `--tpslimit` cannot
+    # coordinate with the next copy or read-back process.  Keep one limiter
+    # around the whole publication transaction instead.
+    last_request_at: float | None = None
+
+    def limited_runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+        nonlocal last_request_at
+        if last_request_at is not None:
+            delay = MINIMUM_DRIVE_REQUEST_INTERVAL_SECONDS - (clock() - last_request_at)
+            if delay > 0:
+                sleeper(delay)
+        result = runner(command)
+        last_request_at = clock()
+        return result
 
     for output_format in formats:
         artifact = _artifact_for(job_dir, output_format)
@@ -212,10 +229,10 @@ def publish_outputs(
                 "rclone", "copyto", "--checksum", "--retries", "1", "--low-level-retries", "1",
                 "--tpslimit", "1", "--tpslimit-burst", "1", str(local_path), remote_path,
             ]
-            result = runner(command)
+            result = limited_runner(command)
             if result.returncode == 0:
                 try:
-                    remote_bytes = _remote_size(remote_path, runner=runner)
+                    remote_bytes = _remote_size(remote_path, runner=limited_runner)
                 except DriveRateLimited:
                     result = subprocess.CompletedProcess(command, 1, "", "rateLimitExceeded during read-back")
                 else:

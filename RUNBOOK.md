@@ -140,7 +140,8 @@ to disable it for a deployment. It uploads only the job's selected formats and
 uses the same one-job rate-safe `app.jobs.drive_publish` implementation.
 
 The publisher uploads one selected attachment at a time with `rclone copyto
---checksum`, a one-request-per-second ceiling, bounded retries, and a
+--checksum`, a global one-request-per-second ceiling across both copy and
+read-back commands, bounded retries, and a
 30/60/120-second backoff (with small jitter) for `rateLimitExceeded`. It writes
 `drive-publish-state.json` beside the job artifacts after every attempt. A
 completed file is not sent again when the command is resumed; a successful
