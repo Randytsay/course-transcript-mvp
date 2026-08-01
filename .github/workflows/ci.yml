@@ -33,7 +33,7 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q app tests
       - name: Import production API entrypoint
-        run: python -c "from app.api_final import app; assert app.title"
+        run: python -c "from app.api_observed import app; assert app.title"
       - name: Run unit and integration tests
         run: python -m unittest discover -s tests -v
 
