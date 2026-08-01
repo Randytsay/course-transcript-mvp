@@ -1,4 +1,4 @@
-import JobDetailPage from "@/components/job-detail-page";
+import LiveJobPage from "@/components/live-job-page";
 
 type PageProps = {
   params: Promise<{ id: string }>;
@@ -6,5 +6,5 @@ type PageProps = {
 
 export default async function Page({ params }: PageProps) {
   const { id } = await params;
-  return <JobDetailPage jobId={id} />;
+  return <LiveJobPage jobId={id} />;
 }
