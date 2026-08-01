@@ -24,6 +24,9 @@ services:
     image: course-transcript-api:local
     restart: unless-stopped
     stop_grace_period: 20s
+    env_file:
+      - path: .env
+        required: false
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
       COURSE_TRANSCRIPT_CORS_ORIGINS: http://localhost:3000
@@ -36,12 +39,13 @@ services:
       COURSE_TRANSCRIPT_RCLONE_FAST_LIST: "false"
       COURSE_TRANSCRIPT_REQUIRE_ACCESS_HEADERS: "true"
       COURSE_TRANSCRIPT_PUBLIC_ORIGIN: "https://transcript.randy88.ccwu.cc"
+      BILLING_SNAPSHOT_STALE_SECONDS: ${BILLING_SNAPSHOT_STALE_SECONDS:-3600}
       RCLONE_CONFIG: /run/secrets/rclone.conf
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
-    command: ["uvicorn", "app.api:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.api_ext:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
         - CMD
@@ -94,7 +98,8 @@ services:
       GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
       GCS_BUCKET: ${GCS_BUCKET:-course-transcript-mvp}
       RCLONE_CONFIG: /run/secrets/rclone.conf
-      CHIRP_MAX_PARALLEL_CHUNKS: "3"
+      CHIRP_MAX_PARALLEL_CHUNKS: ${CHIRP_MAX_PARALLEL_CHUNKS:-3}
+      CHIRP_MAX_PARALLEL_CHUNKS_LIMIT: ${CHIRP_MAX_PARALLEL_CHUNKS_LIMIT:-5}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -104,7 +109,7 @@ services:
     command: ["python", "-m", "app.pipeline.worker"]
 
   billing-worker:
-    profiles: ["web"]
+    profiles: ["billing"]
     build:
       context: .
       dockerfile: Dockerfile
@@ -115,10 +120,12 @@ services:
       - path: .env
         required: false
     environment:
+      COURSE_TRANSCRIPT_DATA_DIR: /app/data
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/billing-sa.json
+      BILLING_GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/billing-sa.json
     volumes:
       - ./data:/app/data
-      - /opt/course-transcript/secrets/billing-sa.json:/run/secrets/billing-sa.json:ro
+      - ${BILLING_CREDENTIALS_HOST_PATH:-/opt/course-transcript/secrets/billing-sa.json}:/run/secrets/billing-sa.json:ro
     command: ["python", "-m", "app.billing.worker"]
 
   frontend:
