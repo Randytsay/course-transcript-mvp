@@ -11,6 +11,8 @@ export type JobStatus =
   | "exporting"
   | "quality_check"
   | "paused"
+  | "cancelling"
+  | "cancelled"
   | "awaiting_review"
   | "review"
   | "completed"
