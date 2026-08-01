@@ -89,6 +89,14 @@ function patchJson<T>(path: string, body: unknown): Promise<T> {
   return fetchJson<T>(path, { method: "PATCH", body: JSON.stringify(body) });
 }
 
+export async function getJobChunks(jobId: string): Promise<ChunkProgressResponse> {
+  return fetchJson<ChunkProgressResponse>(`/jobs/${encodeURIComponent(jobId)}/chunks`);
+}
+
+export async function getJobChunkTranscript(jobId: string, chunkIndex: number): Promise<ChunkTranscript> {
+  return fetchJson<ChunkTranscript>(`/jobs/${encodeURIComponent(jobId)}/chunks/${chunkIndex}/transcript`);
+}
+
 export async function getJobs(): Promise<TranscriptJob[]> {
   const result = await fetchJson<{ jobs: ApiJob[] }>("/jobs");
   return result.jobs.map(mapJob);

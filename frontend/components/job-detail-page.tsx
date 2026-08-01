@@ -1,11 +1,11 @@
 "use client";
 
 import AppShell from "./app-shell";
-import { approveBatch, decideReviewTerm, getArtifacts, getBatch, getJob, getJobEvents, getReviewTerms, getSegments, pauseJob, resumeJob, retryFailedStage } from "@/lib/api-client";
-import type { Artifact, JobEvent, ReviewTerm, TranscriptJob, TranscriptSegment } from "@/lib/types";
-import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, Clock3, ExternalLink, FileJson, FileText, FolderUp, Gauge, Headphones, LoaderCircle, Pause, Play, RotateCcw, TriangleAlert } from "lucide-react";
+import { approveBatch, decideReviewTerm, getArtifacts, getBatch, getJob, getJobEvents, getReviewTerms, getSegments, pauseJob, resumeJob, retryFailedStage, getJobChunks, getJobChunkTranscript } from "@/lib/api-client";
+import type { Artifact, JobEvent, ReviewTerm, TranscriptJob, TranscriptSegment, ChunkProgressResponse } from "@/lib/types";
+import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, Clock3, ExternalLink, FileJson, FileText, FolderUp, Gauge, Headphones, LoaderCircle, Pause, Play, RotateCcw, TriangleAlert, ChevronRight, ChevronDown, Activity } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import StatusBadge from "./status-badge";
 
 function formatTime(ms: number) {
@@ -30,14 +30,92 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
   const [confirmedCost, setConfirmedCost] = useState(false);
   const [approvingCost, setApprovingCost] = useState(false);
 
+  const [chunksRes, setChunksRes] = useState<ChunkProgressResponse | null>(null);
+  const [expandedChunks, setExpandedChunks] = useState<Record<number, string>>({});
+  const [loadingChunkText, setLoadingChunkText] = useState<number | null>(null);
+
+  const pollController = useRef<AbortController | null>(null);
+
+  const loadData = useCallback(async (isPolling = false) => {
+    if (pollController.current) {
+      pollController.current.abort();
+    }
+    pollController.current = new AbortController();
+    try {
+      const [nextJob, nextSegments, nextTerms, nextArtifacts, nextEvents, nextChunks] = await Promise.all([
+        getJob(jobId), getSegments(jobId), getReviewTerms(jobId), getArtifacts(jobId), getJobEvents(jobId),
+        getJobChunks(jobId).catch(() => null)
+      ]);
+      setJob(nextJob); setSegments(nextSegments); setReviewTerms(nextTerms); setArtifacts(nextArtifacts); setEvents(nextEvents); 
+      if (!isPolling && !activeSegmentId) setActiveSegmentId(nextSegments[0]?.id ?? null);
+      if (!isPolling) setTermDrafts(Object.fromEntries(nextTerms.map((term) => [term.id, { value: term.approvedValue ?? term.suggestion, scope: term.scope ?? "session" }])));
+      setChunksRes(nextChunks);
+      setError(null);
+    } catch (cause: unknown) {
+      if ((cause as Error).name !== 'AbortError') {
+        setError(cause instanceof Error ? cause.message : "無法讀取任務");
+      }
+    }
+  }, [jobId, activeSegmentId]);
+
   useEffect(() => {
-    Promise.all([getJob(jobId), getSegments(jobId), getReviewTerms(jobId), getArtifacts(jobId), getJobEvents(jobId)])
-      .then(([nextJob, nextSegments, nextTerms, nextArtifacts, nextEvents]) => {
-        setJob(nextJob); setSegments(nextSegments); setReviewTerms(nextTerms); setArtifacts(nextArtifacts); setEvents(nextEvents); setActiveSegmentId(nextSegments[0]?.id ?? null);
-        setTermDrafts(Object.fromEntries(nextTerms.map((term) => [term.id, { value: term.approvedValue ?? term.suggestion, scope: term.scope ?? "session" }])));
-      })
-      .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : "無法讀取任務"));
-  }, [jobId]);
+    void loadData(false);
+    let timer: number | null = null;
+    
+    function startPolling() {
+      timer = window.setInterval(() => {
+        if (document.visibilityState === "visible") {
+          setJob((currentJob) => {
+            if (currentJob && ["awaiting_review", "completed", "failed", "paused"].includes(currentJob.status)) {
+               // keep polling for now
+            }
+            void loadData(true);
+            return currentJob;
+          });
+        }
+      }, 3000);
+    }
+    
+    startPolling();
+    
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void loadData(true);
+        if (!timer) startPolling();
+      } else {
+        if (timer) {
+          window.clearInterval(timer);
+          timer = null;
+        }
+      }
+    };
+    
+    document.addEventListener("visibilitychange", handleVisibility);
+    
+    return () => {
+      if (timer) window.clearInterval(timer);
+      if (pollController.current) pollController.current.abort();
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [loadData]);
+
+  async function toggleChunkText(chunkIndex: number) {
+    if (expandedChunks[chunkIndex]) {
+      const next = { ...expandedChunks };
+      delete next[chunkIndex];
+      setExpandedChunks(next);
+      return;
+    }
+    setLoadingChunkText(chunkIndex);
+    try {
+      const transcript = await getJobChunkTranscript(jobId, chunkIndex);
+      setExpandedChunks(prev => ({ ...prev, [chunkIndex]: transcript.rawText }));
+    } catch (e) {
+      alert("無法載入此分段的原始稿");
+    } finally {
+      setLoadingChunkText(null);
+    }
+  }
 
   const pendingCount = useMemo(() => reviewTerms.filter((term) => term.status === "pending").length, [reviewTerms]);
 
@@ -131,8 +209,72 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
     </section>
     <section className="review-workspace"><div className="review-main">
       <div className="audio-console"><div className="audio-console__top"><div className="audio-title"><Headphones size={19} /><div><strong>音訊審查</strong><span>安全的音訊串流 API 尚未啟用</span></div></div></div><div className="empty-state">此階段不向瀏覽器暴露 Drive 或 GCS 音訊。完成安全 range streaming 後，才能在此播放與定位。</div></div>
-      <div className="workspace-panel"><div className="workspace-tabs"><button className={tab === "transcript" ? "workspace-tab workspace-tab--active" : "workspace-tab"} onClick={() => setTab("transcript")}>逐字稿</button><button className={tab === "qa" ? "workspace-tab workspace-tab--active" : "workspace-tab"} onClick={() => setTab("qa")}>QA 報告</button><button className={tab === "files" ? "workspace-tab workspace-tab--active" : "workspace-tab"} onClick={() => setTab("files")}>輸出檔案</button></div>
-        {tab === "transcript" && <div className="transcript-list">{segments.length === 0 ? <div className="empty-state">尚未產生固定字幕段。</div> : segments.map((segment) => <button className={`transcript-segment ${activeSegmentId === segment.id ? "transcript-segment--active" : ""}`} key={segment.id} onClick={() => setActiveSegmentId(segment.id)}><span className="segment-time">{formatTime(segment.startMs)}</span><span className="segment-copy"><span className="segment-corrected">{segment.correctedText}</span><span className="segment-raw">Chirp 原文：{segment.rawText}</span></span>{segment.uncertainTerms?.length ? <span className="segment-warning"><AlertTriangle size={15} />需確認</span> : <span className="segment-ok"><CheckCircle2 size={16} /></span>}</button>)}</div>}
+
+      {chunksRes && chunksRes.chunks.length > 0 && (
+        <div style={{ padding: "16px", border: "1px solid var(--border)", borderRadius: "12px", background: "var(--surface)", boxShadow: "var(--shadow-sm)" }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <Activity size={18} className="text-brand" />
+              <h3 style={{ fontSize: "15px", margin: 0 }}>Chirp 時間軸</h3>
+              <span className="status-badge status-badge--preflight" style={{ marginLeft: "8px" }}>
+                {chunksRes.completedCount} / {chunksRes.totalCount} 分段完成
+              </span>
+            </div>
+            <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
+              併發數: {chunksRes.parallelism} | 第一段 Canary: 啟用
+            </div>
+          </div>
+          
+          <div style={{ display: "grid", gap: "8px" }}>
+            {chunksRes.chunks.map(chunk => (
+              <div key={chunk.chunkIndex} style={{ border: "1px solid var(--border)", borderRadius: "8px", overflow: "hidden" }}>
+                <div style={{ display: "flex", alignItems: "center", padding: "10px 14px", background: "#f8fafc", gap: "12px" }}>
+                  <div style={{ width: "20px", display: "grid", placeItems: "center" }}>
+                    {chunk.status === "完成" || chunk.status === "完成（無語音）" ? <CheckCircle2 size={16} className="text-success" /> : 
+                     chunk.status === "辨識中" ? <LoaderCircle size={16} className="spin text-brand" /> :
+                     chunk.status === "失敗" ? <TriangleAlert size={16} className="text-danger" /> :
+                     <Circle size={16} className="text-muted" />}
+                  </div>
+                  <div>
+                    <strong style={{ fontSize: "14px", display: "block" }}>第 {chunk.chunkIndex + 1} 段</strong>
+                    <span style={{ fontSize: "12px", color: "var(--text-muted)" }}>{formatTime(chunk.startMs)} – {formatTime(chunk.endMs)}</span>
+                  </div>
+                  <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "12px" }}>
+                    <span style={{ fontSize: "13px", fontWeight: 600, color: chunk.status === "失敗" ? "var(--danger)" : "var(--text-soft)" }}>{chunk.status}</span>
+                    {chunk.error && <span style={{ fontSize: "12px", color: "var(--danger)", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{chunk.error}</span>}
+                    {chunk.hasTranscript && (
+                      <button className="button button--secondary button--small" onClick={() => void toggleChunkText(chunk.chunkIndex)} disabled={loadingChunkText === chunk.chunkIndex}>
+                        {loadingChunkText === chunk.chunkIndex ? <LoaderCircle size={14} className="spin" /> : expandedChunks[chunk.chunkIndex] ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        展開原始稿
+                      </button>
+                    )}
+                  </div>
+                </div>
+                {expandedChunks[chunk.chunkIndex] && (
+                  <div style={{ padding: "14px", background: "#fff", borderTop: "1px solid var(--border)" }}>
+                    <div style={{ marginBottom: "10px", padding: "8px", background: "#fff7ed", color: "#9a3412", border: "1px solid #fed7aa", borderRadius: "6px", fontSize: "12px", fontWeight: 600, display: "flex", alignItems: "center", gap: "6px" }}>
+                      <TriangleAlert size={14} /> 即時 Chirp 原始稿 (尚未完成跨段接合、術語校正與最終QA)
+                    </div>
+                    <p style={{ fontSize: "15px", lineHeight: 1.6, color: "var(--text)", margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                      {expandedChunks[chunk.chunkIndex]}
+                    </p>
+                    <div style={{ marginTop: "12px", fontSize: "12px", color: "var(--text-muted)" }}>字詞數: {chunk.wordCount}</div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="workspace-panel"><div className="workspace-tabs"><button className={tab === "transcript" ? "workspace-tab workspace-tab--active" : "workspace-tab"} onClick={() => setTab("transcript")}>正式逐字稿</button><button className={tab === "qa" ? "workspace-tab workspace-tab--active" : "workspace-tab"} onClick={() => setTab("qa")}>QA 報告</button><button className={tab === "files" ? "workspace-tab workspace-tab--active" : "workspace-tab"} onClick={() => setTab("files")}>輸出檔案</button></div>
+        {tab === "transcript" && <div className="transcript-list">
+          {segments.length === 0 ? (
+            <div className="empty-state">
+              <strong style={{ display: "block", fontSize: "16px", marginBottom: "8px" }}>正式逐字稿尚未完成</strong>
+              目前可先查看上方已完成分段的「Chirp 即時原始稿」。
+            </div>
+          ) : segments.map((segment) => <button className={`transcript-segment ${activeSegmentId === segment.id ? "transcript-segment--active" : ""}`} key={segment.id} onClick={() => setActiveSegmentId(segment.id)}><span className="segment-time">{formatTime(segment.startMs)}</span><span className="segment-copy"><span className="segment-corrected">{segment.correctedText}</span><span className="segment-raw">Chirp 原文：{segment.rawText}</span></span>{segment.uncertainTerms?.length ? <span className="segment-warning"><AlertTriangle size={15} />需確認</span> : <span className="segment-ok"><CheckCircle2 size={16} /></span>}</button>)}</div>}
         {tab === "qa" && <div className="qa-grid"><article className="qa-card"><Gauge size={20} /><div><span>目前 QA 狀態</span><strong className={qaStep?.status === "warning" ? "text-warning" : "text-success"}>{qaStep?.detail ?? "尚未產生"}</strong><small>以後端實際 QA 報告為準，不由前端推測。</small></div></article><div className="qa-notice"><TriangleAlert size={19} /><div><strong>Drive 發布仍鎖定</strong><p>需完成時間軸與人工詞彙審查，且由你明確確認後才會啟用。</p></div></div><article className="qa-card"><Clock3 size={20} /><div><span>階段與錯誤紀錄</span><strong>{events.length} 筆事件</strong><small>{events.slice(0, 8).map((event) => `${event.createdAt} · ${event.eventType}`).join("｜") || "尚無事件"}</small></div></article></div>}
         {tab === "files" && <div className="file-output-list">{artifacts.length === 0 ? <div className="empty-state">尚未產生可展示的產物。</div> : artifacts.map((artifact) => <div className="output-file" key={artifact.id}><span className="output-file__icon">{artifact.name.endsWith(".json") ? <FileJson size={19} /> : <FileText size={19} />}</span><div><strong>{artifact.name}</strong><span>{size(artifact.sizeBytes)} · {artifact.updatedAt}</span></div><a className="button button--ghost" href={`/api/v1/jobs/${encodeURIComponent(job.id)}/artifacts/${encodeURIComponent(artifact.id)}`} target="_blank" rel="noreferrer" aria-label={`開啟 ${artifact.name}`}><ExternalLink size={16} />開啟</a></div>)}</div>}
       </div></div>

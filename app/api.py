@@ -444,6 +444,101 @@ def get_job(job_id: str) -> dict[str, Any]:
     return _database_job_summary(record) if record else _job_summary(_job_dir(job_id))
 
 
+@app.get("/api/v1/jobs/{job_id}/chunks")
+def get_job_chunks(job_id: str) -> dict[str, Any]:
+    job_dir = JOBS_DIR / job_id
+    if not job_dir.is_dir():
+        try:
+            record = _database_job(job_id)
+        except Exception:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return {
+            "jobId": job_id,
+            "jobStatus": record["status"] if record else "queued",
+            "completedCount": 0,
+            "totalCount": 0,
+            "parallelism": record.get("chirp_max_parallel_chunks", 3) if record else 3,
+            "canaryCompleted": False,
+            "updatedAt": datetime.now(UTC).isoformat(),
+            "chunks": []
+        }
+
+    record = _database_job(job_id)
+    chunks_dir = job_dir / "chunks"
+    chunks = []
+    canary_completed = False
+    completed_count = 0
+    
+    if chunks_dir.is_dir():
+        for d in sorted(chunks_dir.iterdir()):
+            if d.is_dir() and d.name.startswith("chunk-"):
+                manifest_path = d / "manifest.json"
+                if manifest_path.exists():
+                    m = _read_json(manifest_path, {})
+                    st = m.get("status", "WAITING")
+                    has_ts = (d / "partial-transcript.json").exists()
+                    # Mapped status
+                    if st in ("PLANNED", "WAITING"): st = "等待中"
+                    elif st in ("SUBMITTED", "RUNNING"): st = "辨識中"
+                    elif st == "SUCCEEDED": st = "完成"
+                    elif st == "EMPTY_SILENCE": st = "完成（無語音）"
+                    elif st == "FAILED": st = "失敗"
+                    elif st == "RECOVERING": st = "恢復中"
+                    
+                    err_msg = None
+                    if st == "失敗" and m.get("error"):
+                        err_msg = m["error"].get("message") or "Unknown error"
+                    
+                    chunks.append({
+                        "chunkIndex": m.get("chunk_index"),
+                        "startMs": m.get("source_start_ms"),
+                        "endMs": m.get("source_end_ms"),
+                        "durationMs": m.get("source_end_ms", 0) - m.get("source_start_ms", 0),
+                        "status": st,
+                        "wordCount": m.get("word_count", 0),
+                        "hasTranscript": has_ts,
+                        "updatedAt": m.get("created_at"),
+                        "error": err_msg
+                    })
+                    if m.get("chunk_index") == 0 and st in ("完成", "完成（無語音）"):
+                        canary_completed = True
+                    if st in ("完成", "完成（無語音）"):
+                        completed_count += 1
+                        
+    return {
+        "jobId": job_id,
+        "jobStatus": record["status"] if record else "transcribing",
+        "completedCount": completed_count,
+        "totalCount": len(chunks),
+        "parallelism": record.get("chirp_max_parallel_chunks", 3) if record else 3,
+        "canaryCompleted": canary_completed,
+        "updatedAt": datetime.now(UTC).isoformat(),
+        "chunks": chunks
+    }
+
+@app.get("/api/v1/jobs/{job_id}/chunks/{chunk_index}/transcript")
+def get_job_chunk_transcript(job_id: str, chunk_index: int) -> dict[str, Any]:
+    job_dir = JOBS_DIR / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    ts_path = job_dir / "chunks" / f"chunk-{chunk_index:03d}" / "partial-transcript.json"
+    if not ts_path.exists():
+        raise HTTPException(status_code=404, detail="Transcript not available for this chunk yet")
+        
+    data = _read_json(ts_path, {})
+    return {
+        "chunkIndex": data.get("chunkIndex"),
+        "startMs": data.get("sourceStartMs"),
+        "endMs": data.get("sourceEndMs"),
+        "status": data.get("status"),
+        "wordCount": data.get("wordCount"),
+        "rawText": data.get("rawText", ""),
+        "isFinal": False,
+        "warning": "此為Chirp分段原始稿，尚未完成重疊接合、Gemini校正及最終QA。"
+    }
+
+
 @app.get("/api/v1/jobs/{job_id}/events")
 def get_job_events(job_id: str) -> dict[str, Any]:
     try:

@@ -141,6 +141,40 @@ export interface CostSummary {
   accountingNote: string;
 }
 
+export interface ChunkProgress {
+  chunkIndex: number;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  status: string;
+  wordCount: number;
+  hasTranscript: boolean;
+  updatedAt: string;
+  error: string | null;
+}
+
+export interface ChunkProgressResponse {
+  jobId: string;
+  jobStatus: string;
+  completedCount: number;
+  totalCount: number;
+  parallelism: number;
+  canaryCompleted: boolean;
+  updatedAt: string;
+  chunks: ChunkProgress[];
+}
+
+export interface ChunkTranscript {
+  chunkIndex: number;
+  startMs: number;
+  endMs: number;
+  status: string;
+  wordCount: number;
+  rawText: string;
+  isFinal: boolean;
+  warning: string;
+}
+
 export interface BatchDetail {
   id: string;
   name: string;
