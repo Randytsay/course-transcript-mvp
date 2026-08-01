@@ -1,18 +1,8 @@
-"""Submit all Chirp 3 chunks for the job, wait, then merge.
+"""Submit Chirp 3 chunks, recover private GCS results, then merge.
 
-Reads JOB_NAME env var (default voice_11386603-seg1) and computes the chunk
-plan from the actual audio duration. Each chunk is 15 minutes long with
-10 seconds of total overlap around each merge boundary.
-
-Boundaries (merge at midpoint < b):
-  boundary 1 =  895s (between chunk-000 and chunk-001)
-  boundary 2 = 1785s (between chunk-001 and chunk-002)
-  boundary 3 = 2675s (between chunk-002 and chunk-003)
-  boundary 4 = 3565s (between chunk-003 and chunk-004, if audio > 3575s)
-  ...
-
-Usage:
-  JOB_NAME=voice_11386603-seg2 python -m app.providers.run_chirp_pipeline
+The first chunk remains a full canary. Remaining submissions and GCS result
+recovery use bounded concurrency. Recovery never resubmits a retained Speech
+operation and does not poll the long-running-operation endpoint.
 """
 from __future__ import annotations
 
@@ -29,11 +19,26 @@ JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
 JOB = DATA_DIR / "jobs" / JOB_NAME
 CHUNKS = JOB / "chunks"
 
-CHUNK_DURATION_S = 900   # 15 minutes per chunk
-OVERLAP_S = 10           # total overlap between adjacent chunks
-MAX_PARALLEL_CHUNKS = int(os.environ.get("CHIRP_MAX_PARALLEL_CHUNKS", "3"))
+CHUNK_DURATION_S = 900
+OVERLAP_S = 10
+MAX_PARALLEL_CHUNKS = max(
+    1, int(os.environ.get("CHIRP_MAX_PARALLEL_CHUNKS", "3"))
+)
+MAX_PARALLEL_RECOVERY = max(
+    1,
+    min(
+        MAX_PARALLEL_CHUNKS,
+        int(
+            os.environ.get(
+                "CHIRP_MAX_PARALLEL_RECOVERY",
+                str(MAX_PARALLEL_CHUNKS),
+            )
+        ),
+    ),
+)
 
 KEEP_ENV = (
+    "COURSE_TRANSCRIPT_DATA_DIR",
     "GOOGLE_CLOUD_PROJECT",
     "GOOGLE_CLOUD_LOCATION",
     "GCS_BUCKET",
@@ -46,28 +51,45 @@ KEEP_ENV = (
 def audio_duration_seconds(path: Path) -> float:
     result = subprocess.run(
         [
-            "ffprobe", "-v", "error", "-show_entries", "format=duration",
-            "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+            "ffprobe",
+            "-v",
+            "error",
+            "-show_entries",
+            "format=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1",
+            str(path),
         ],
-        capture_output=True, text=True, check=True, timeout=30,
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=30,
     )
     return float(result.stdout.strip())
 
 
 def normalize_audio(source: Path, normalized: Path) -> None:
-    """Create a 16kHz mono flac of the source mp3 for consistent chunking."""
     subprocess.run(
-        ["ffmpeg", "-y", "-i", str(source), "-ac", "1", "-ar", "16000", "-c:a", "flac", str(normalized)],
-        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+        [
+            "ffmpeg",
+            "-y",
+            "-i",
+            str(source),
+            "-ac",
+            "1",
+            "-ar",
+            "16000",
+            "-c:a",
+            "flac",
+            str(normalized),
+        ],
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
     )
 
 
 def compute_chunk_plan(total_seconds: float) -> list[tuple[int, float, float]]:
-    """Compute (index, start_seconds, end_seconds) for each chunk.
-
-    Each chunk is at most 15 minutes and overlaps the next chunk by 10 seconds.
-    Ownership boundaries are therefore placed at 895, 1785, 2675, ...
-    """
     plan: list[tuple[int, float, float]] = []
     index = 0
     start = 0.0
@@ -85,11 +107,18 @@ def check_chunk(index: int) -> str | None:
     manifest = CHUNKS / f"chunk-{index:03d}" / "manifest.json"
     if not manifest.exists():
         return None
-    data = json.loads(manifest.read_text(encoding="utf-8"))
-    return data.get("status")
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return str(data.get("status") or "") or None
 
 
-def run_subprocess(module: str, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess:
+def run_subprocess(
+    module: str,
+    env: dict[str, str],
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", module],
         env=env,
@@ -100,7 +129,7 @@ def run_subprocess(module: str, env: dict[str, str], timeout: int) -> subprocess
 
 
 def env_with(chunk_env: dict[str, str]) -> dict[str, str]:
-    env = {k: v for k, v in os.environ.items() if k in KEEP_ENV}
+    env = {key: value for key, value in os.environ.items() if key in KEEP_ENV}
     env.update(chunk_env)
     return env
 
@@ -124,6 +153,8 @@ def _write_plan(plan: list[tuple[int, float, float]], total_seconds: float) -> N
         "duration_seconds": total_seconds,
         "chunk_duration_seconds": CHUNK_DURATION_S,
         "overlap_seconds": OVERLAP_S,
+        "submission_parallelism": MAX_PARALLEL_CHUNKS,
+        "recovery_parallelism": MAX_PARALLEL_RECOVERY,
         "chunks": [
             {
                 "chunk_index": index,
@@ -156,12 +187,14 @@ def submit_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
     existing = check_chunk(index)
     if existing in {"SUCCEEDED", "EMPTY_SILENCE"}:
         return index, True, f"chunk-{index:03d}: already {existing}"
-    if existing == "SUBMITTED":
+    if existing in {"SUBMITTED", "RECOVERING", "CANCEL_REQUESTED"}:
         return index, True, f"chunk-{index:03d}: existing operation retained"
     chunk_env = _chunk_env(index, start, end)
     chunk_env["SUBMIT_ONLY"] = "1"
     result = run_subprocess(
-        "app.providers.chirp_chunk", env_with(chunk_env), timeout=600
+        "app.providers.chirp_chunk",
+        env_with(chunk_env),
+        timeout=600,
     )
     message = (result.stdout or "").strip()
     if result.returncode != 0:
@@ -170,13 +203,14 @@ def submit_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
 
 
 def recover_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
-    """Wait for the private GCS output without polling the LRO API."""
     chunk_env = _chunk_env(index, start, end)
     chunk_env["ALLOW_PENDING"] = "1"
     deadline = time.monotonic() + 7200
     while True:
         result = run_subprocess(
-            "app.providers.recover_chunk", env_with(chunk_env), timeout=600
+            "app.providers.recover_chunk",
+            env_with(chunk_env),
+            timeout=600,
         )
         message = (result.stdout or "").strip()
         if result.returncode == 0:
@@ -189,10 +223,28 @@ def recover_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]
         return index, False, message
 
 
+def _parallel_phase(
+    label: str,
+    items: list[tuple[int, float, float]],
+    function: object,
+    max_workers: int,
+) -> bool:
+    if not items:
+        return True
+    succeeded_all = True
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(function, *item): item[0] for item in items}  # type: ignore[arg-type]
+        for future in as_completed(futures):
+            index, succeeded, message = future.result()
+            print(message)
+            if not succeeded:
+                print(f"  chunk-{index:03d}: {label} FAILED")
+                succeeded_all = False
+    return succeeded_all
+
+
 def main() -> int:
     print(f"=== Chirp Pipeline: {JOB_NAME} ===")
-
-    # Build a canonical normalized.flac if missing (one-time per job)
     normalized = JOB / "normalized.flac"
     if not normalized.exists():
         try:
@@ -207,11 +259,13 @@ def main() -> int:
 
     plan = compute_chunk_plan(total_seconds)
     _write_plan(plan, total_seconds)
-    print(f"Chunk plan ({len(plan)} chunks):")
+    print(
+        f"Chunk plan ({len(plan)} chunks, submit={MAX_PARALLEL_CHUNKS}, "
+        f"recover={MAX_PARALLEL_RECOVERY}):"
+    )
     for index, start, end in plan:
         print(f"  chunk-{index:03d}: {start:.1f}s → {end:.1f}s ({end - start:.0f}s)")
 
-    # Canary: chunk-000 must complete and validate before any parallel requests.
     first_index, first_ok, first_message = submit_chunk(*plan[0])
     print(first_message)
     if not first_ok:
@@ -223,33 +277,25 @@ def main() -> int:
         print(f"PIPELINE=FAIL chunk-{first_index:03d} canary recovery failed")
         return 1
 
-    # Remaining chunks may proceed concurrently, bounded by quota-safe config.
-    all_succeeded = True
     remaining = plan[1:]
-    with ThreadPoolExecutor(max_workers=max(1, MAX_PARALLEL_CHUNKS)) as pool:
-        futures = {pool.submit(submit_chunk, *item): item[0] for item in remaining}
-        for future in as_completed(futures):
-            index, succeeded, message = future.result()
-            print(message)
-            if not succeeded:
-                print(f"  chunk-{index:03d}: FAILED")
-                all_succeeded = False
-
-    if not all_succeeded:
+    if not _parallel_phase(
+        "submission",
+        remaining,
+        submit_chunk,
+        MAX_PARALLEL_CHUNKS,
+    ):
         print("\nPIPELINE=FAIL some chunk submissions failed")
         return 1
 
-    # GCS result recovery is deliberately serial.  It avoids a burst of
-    # operation-polling calls while preserving the configured parallelism for
-    # the paid BatchRecognize submissions above.
-    for item in remaining:
-        index, succeeded, message = recover_chunk(*item)
-        print(message)
-        if not succeeded:
-            print(f"\nPIPELINE=FAIL chunk-{index:03d} recovery failed")
-            return 1
+    if not _parallel_phase(
+        "recovery",
+        remaining,
+        recover_chunk,
+        MAX_PARALLEL_RECOVERY,
+    ):
+        print("\nPIPELINE=FAIL some chunk recoveries failed")
+        return 1
 
-    # Phase 2: merge
     print("\n=== Merging chunk results ===")
     result = run_subprocess("app.providers.merge_chunks", env_with({}), timeout=60)
     print(result.stdout)
