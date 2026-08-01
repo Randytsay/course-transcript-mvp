@@ -15,6 +15,7 @@ from app.providers import run_chirp_pipeline
 from app.providers.run_chirp_pipeline import compute_chunk_plan
 from app.providers import export_formats
 from app.providers import patch_audible_tail
+from app.providers.merge_chunks import patch_extends_timeline
 
 
 class ChunkPlanTests(unittest.TestCase):
@@ -280,6 +281,17 @@ class TailPatchTests(unittest.TestCase):
                     self.assertEqual(patch_audible_tail.tail_window(), (50_000, 65_000, 60_000))
             finally:
                 patch_audible_tail.JOB = original_job
+
+    def test_non_extending_patch_keeps_existing_tail_words(self) -> None:
+        baseline = [{"word": "原", "start_ms": 60_000, "end_ms": 61_000}]
+        recheck = [{"word": "重", "start_ms": 60_000, "end_ms": 60_800}]
+        self.assertFalse(patch_extends_timeline(baseline, recheck))
+        self.assertTrue(
+            patch_extends_timeline(
+                baseline,
+                [{"word": "新", "start_ms": 60_500, "end_ms": 62_000}],
+            )
+        )
 
 
 if __name__ == "__main__":

@@ -26,6 +26,20 @@ def midpoint(word: dict) -> int:
     return (int(word["start_ms"]) + int(word["end_ms"])) // 2
 
 
+def patch_extends_timeline(merged: list[dict], patch_words: list[dict]) -> bool:
+    """Only replace an existing tail range when a patch adds timeline coverage.
+
+    A volume-based QA alert can be caused by music or room noise.  If Chirp
+    rechecks that tail but returns no word beyond the already merged timeline,
+    replacing the baseline range would lose valid text without repairing the
+    gap.  Keep the original words and retain the successful patch as QA
+    evidence in that case.
+    """
+    baseline_end = max((int(word["end_ms"]) for word in merged), default=0)
+    patch_end = max((int(word["end_ms"]) for word in patch_words), default=0)
+    return patch_end > baseline_end
+
+
 def load_chunks() -> list[tuple[dict, list[dict]]]:
     result: list[tuple[dict, list[dict]]] = []
     for directory in sorted(CHUNKS.glob("chunk-*")):
@@ -118,11 +132,22 @@ def main() -> int:
     for manifest, patch_words in sorted(patches, key=lambda pair: int(pair[0]["source_start_ms"])):
         valid_patch = [word for word in patch_words if int(word["end_ms"]) > int(word["start_ms"])]
         start, end = int(manifest["source_start_ms"]), int(manifest["source_end_ms"])
+        if not patch_extends_timeline(merged, valid_patch):
+            patch_decisions.append({
+                "chunk_index": manifest["chunk_index"],
+                "source_start_ms": start,
+                "source_end_ms": end,
+                "baseline_words_replaced": 0,
+                "patch_words_inserted": 0,
+                "applied": False,
+                "reason": "patch_does_not_extend_timeline",
+            })
+            continue
         before = len(merged)
         merged = [word for word in merged if not (start <= midpoint(word) < end)]
         removed = before - len(merged)
         merged.extend(valid_patch)
-        patch_decisions.append({"chunk_index": manifest["chunk_index"], "source_start_ms": start, "source_end_ms": end, "baseline_words_replaced": removed, "patch_words_inserted": len(valid_patch)})
+        patch_decisions.append({"chunk_index": manifest["chunk_index"], "source_start_ms": start, "source_end_ms": end, "baseline_words_replaced": removed, "patch_words_inserted": len(valid_patch), "applied": True})
     merged.sort(key=lambda word: (int(word["start_ms"]), int(word["end_ms"])))
     if any(int(after["start_ms"]) < int(before["start_ms"]) for before, after in zip(merged, merged[1:])):
         print("MERGE=FAIL non-monotonic merged word starts")
