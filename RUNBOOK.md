@@ -43,7 +43,9 @@ Never map the hostname directly to `api:8000`.
 
 ## Chirp result parsing
 
-Use GCS output only. Check `file_result.error`, inspect
+Use GCS output only. The first Chirp request is a 120-second serial canary;
+only after its GCS result validates may the normal 15-minute chunks run in
+parallel. Check `file_result.error`, inspect
 `file_result._pb.WhichOneof("result")`, require `cloud_storage_result`, and
 read `native_format_uri` with `uri` compatibility fallback. Do not use
 deprecated top-level `uri` or `transcript` fields.

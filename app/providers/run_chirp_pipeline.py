@@ -1,6 +1,6 @@
 """Submit Chirp 3 chunks, recover private GCS results, then merge.
 
-The first chunk remains a full canary. Remaining submissions and GCS result
+The first chunk is a short canary. Remaining submissions and GCS result
 recovery use bounded concurrency. Recovery never resubmits a retained Speech
 operation and does not poll the long-running-operation endpoint.
 """
@@ -20,6 +20,13 @@ JOB = DATA_DIR / "jobs" / JOB_NAME
 CHUNKS = JOB / "chunks"
 
 CHUNK_DURATION_S = 900
+CANARY_DURATION_S = max(
+    1,
+    min(
+        CHUNK_DURATION_S,
+        int(os.environ.get("CHIRP_CANARY_DURATION_SECONDS", "120")),
+    ),
+)
 OVERLAP_S = 10
 MAX_PARALLEL_CHUNKS = max(
     1, int(os.environ.get("CHIRP_MAX_PARALLEL_CHUNKS", "3"))
@@ -90,9 +97,17 @@ def normalize_audio(source: Path, normalized: Path) -> None:
 
 
 def compute_chunk_plan(total_seconds: float) -> list[tuple[int, float, float]]:
+    """Build a short first canary, then normal overlapping Chirp chunks."""
     plan: list[tuple[int, float, float]] = []
-    index = 0
-    start = 0.0
+    first_end = min(total_seconds, float(CANARY_DURATION_S))
+    if first_end <= 0:
+        return plan
+    plan.append((0, 0.0, round(first_end, 1)))
+    if first_end >= total_seconds:
+        return plan
+
+    index = 1
+    start = max(0.0, first_end - OVERLAP_S)
     while start < total_seconds:
         end = min(total_seconds, start + CHUNK_DURATION_S)
         plan.append((index, round(start, 1), round(end, 1)))
@@ -152,6 +167,7 @@ def _write_plan(plan: list[tuple[int, float, float]], total_seconds: float) -> N
         "job": JOB_NAME,
         "duration_seconds": total_seconds,
         "chunk_duration_seconds": CHUNK_DURATION_S,
+        "canary_duration_seconds": CANARY_DURATION_S,
         "overlap_seconds": OVERLAP_S,
         "submission_parallelism": MAX_PARALLEL_CHUNKS,
         "recovery_parallelism": MAX_PARALLEL_RECOVERY,

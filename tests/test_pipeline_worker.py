@@ -19,22 +19,23 @@ from app.providers.merge_chunks import patch_extends_timeline
 
 
 class ChunkPlanTests(unittest.TestCase):
-    def test_uses_ten_second_total_overlap_and_expected_boundaries(self) -> None:
+    def test_uses_120_second_canary_then_ten_second_overlapped_chunks(self) -> None:
         plan = compute_chunk_plan(3_350)
         self.assertEqual(
             plan,
             [
-                (0, 0.0, 900.0),
-                (1, 890.0, 1790.0),
-                (2, 1780.0, 2680.0),
-                (3, 2670.0, 3350),
+                (0, 0.0, 120.0),
+                (1, 110.0, 1010.0),
+                (2, 1000.0, 1900.0),
+                (3, 1890.0, 2790.0),
+                (4, 2780.0, 3350),
             ],
         )
         boundaries = [
             round((before[2] + after[1]) / 2)
             for before, after in zip(plan, plan[1:])
         ]
-        self.assertEqual(boundaries, [895, 1785, 2675])
+        self.assertEqual(boundaries, [115, 1005, 1895, 2785])
 
 
 class ChirpRecoveryTests(unittest.TestCase):
