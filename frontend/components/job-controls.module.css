@@ -1,0 +1,212 @@
+.wrapper {
+  position: fixed;
+  left: max(18px, calc((100vw - 1440px) / 2 + 18px));
+  right: 18px;
+  bottom: 18px;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border: 1px solid #cfd8e6;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.97);
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.18);
+  backdrop-filter: blur(12px);
+}
+
+.statusCopy {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.statusCopy strong {
+  font-size: var(--font-md);
+  color: #172033;
+}
+
+.statusCopy span {
+  overflow-wrap: anywhere;
+  color: #526176;
+  font-size: var(--font-sm);
+}
+
+.statusCopy .error {
+  color: #a32323;
+  font-weight: 700;
+}
+
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cancelButton,
+.confirmCancel {
+  min-height: var(--ui-height, 48px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 16px;
+  border: 2px solid #b42318;
+  border-radius: 10px;
+  background: #fff;
+  color: #9f1f16;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.confirmCancel {
+  background: #b42318;
+  color: #fff;
+}
+
+.cancelButton:disabled,
+.confirmCancel:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.cancelling,
+.cancelled {
+  min-height: var(--ui-height, 48px);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  border-radius: 10px;
+  font-weight: 800;
+}
+
+.cancelling {
+  color: #7c3e00;
+  background: #fff4dc;
+}
+
+.cancelled {
+  color: #7d1d16;
+  background: #fee4e2;
+}
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.62);
+}
+
+.dialog {
+  position: relative;
+  width: min(620px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 28px;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.32);
+}
+
+.dialog h2,
+.dialog p {
+  margin: 0;
+}
+
+.dialog h2 {
+  color: #7d1d16;
+  font-size: var(--font-xl);
+}
+
+.dialog p {
+  color: #39475c;
+  font-size: var(--font-md);
+  line-height: 1.7;
+}
+
+.close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #d6deea;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.field {
+  display: grid;
+  gap: 8px;
+  color: #172033;
+  font-weight: 750;
+}
+
+.field textarea {
+  min-height: 110px;
+  resize: vertical;
+  padding: 12px;
+  border: 2px solid #aeb9c8;
+  border-radius: 10px;
+  color: #172033;
+  background: #fff;
+  font: inherit;
+  line-height: 1.6;
+}
+
+.checkbox {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  color: #39475c;
+  line-height: 1.6;
+}
+
+.checkbox input {
+  width: 24px;
+  height: 24px;
+  margin-top: 2px;
+}
+
+.dialogActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 760px) {
+  .wrapper {
+    left: 10px;
+    right: 10px;
+    bottom: 10px;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .actions,
+  .actions > * {
+    width: 100%;
+  }
+
+  .dialog {
+    padding: 24px 18px 18px;
+  }
+
+  .dialogActions,
+  .dialogActions > * {
+    width: 100%;
+  }
+}
