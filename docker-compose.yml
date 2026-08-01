@@ -45,7 +45,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
-    command: ["uvicorn", "app.api_final:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.api_observed:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
         - CMD
@@ -100,13 +100,15 @@ services:
       RCLONE_CONFIG: /run/secrets/rclone.conf
       CHIRP_MAX_PARALLEL_CHUNKS: ${CHIRP_MAX_PARALLEL_CHUNKS:-3}
       CHIRP_MAX_PARALLEL_CHUNKS_LIMIT: ${CHIRP_MAX_PARALLEL_CHUNKS_LIMIT:-5}
+      CHIRP_MAX_PARALLEL_RECOVERY: ${CHIRP_MAX_PARALLEL_RECOVERY:-3}
+      GEMINI_MAX_PARALLEL_WINDOWS: ${GEMINI_MAX_PARALLEL_WINDOWS:-2}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./tmp:/app/tmp
       - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
-    command: ["python", "-m", "app.pipeline.worker"]
+    command: ["python", "-m", "app.pipeline.worker_observed"]
 
   billing-worker:
     profiles: ["billing"]
