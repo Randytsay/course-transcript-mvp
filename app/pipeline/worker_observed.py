@@ -13,7 +13,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from app.jobs.cancellation import cancel_chirp_operations, finalize_cancellation
+from app.jobs.cancellation import (
+    cancel_chirp_operations,
+    finalize_cancellation,
+    next_cancelling_job,
+)
 from app.jobs.performance import (
     build_performance_summary,
     ensure_schema,
@@ -22,11 +26,13 @@ from app.jobs.performance import (
     record_stage_stopped,
     write_performance_reports,
 )
+from app.jobs.store import JobConflict
 from app.pipeline import worker as base
 
 _ORIGINAL_BEGIN = base._begin
 _ORIGINAL_COMPLETE = base._complete
 _ORIGINAL_RUN_PAID_JOB = base.run_paid_job
+_ORIGINAL_RUN_ONCE = base.run_once
 _CURRENT_STAGE: dict[str, str] = {}
 
 
@@ -164,6 +170,26 @@ def _write_report_safely(data_dir: Path, job_id: str) -> None:
         return
 
 
+def _finalize_cancelling_job(
+    store: Any,
+    record: dict[str, Any],
+    *,
+    data_dir: Path,
+    worker_id: str,
+) -> dict[str, Any]:
+    store.acquire_lease(record["id"], worker_id, lease_seconds=300)
+    provider_results = cancel_chirp_operations(data_dir / "jobs" / record["id"])
+    result = finalize_cancellation(
+        _database_path(data_dir),
+        data_dir,
+        job_id=record["id"],
+        worker_id=worker_id,
+        provider_results=provider_results,
+    )
+    _write_report_safely(data_dir, record["id"])
+    return result
+
+
 def run_paid_job(
     store: Any,
     record: dict[str, Any],
@@ -226,11 +252,30 @@ def run_paid_job(
         raise
 
 
+def run_once(store: Any, *, data_dir: Path, worker_id: str) -> bool:
+    cancellation = next_cancelling_job(_database_path(data_dir))
+    if cancellation is not None:
+        try:
+            _finalize_cancelling_job(
+                store,
+                cancellation,
+                data_dir=data_dir,
+                worker_id=worker_id,
+            )
+        except JobConflict:
+            # An active worker still owns the lease and will observe cancellation
+            # cooperatively. Do not select another paid job in this iteration.
+            return True
+        return True
+    return _ORIGINAL_RUN_ONCE(store, data_dir=data_dir, worker_id=worker_id)
+
+
 # Patch only the extension points used by the reviewed base worker.
 base._run_with_heartbeat = _run_with_heartbeat
 base._begin = _begin
 base._complete = _complete
 base.run_paid_job = run_paid_job
+base.run_once = run_once
 
 
 def main() -> int:
