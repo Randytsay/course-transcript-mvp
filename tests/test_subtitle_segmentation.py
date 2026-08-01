@@ -57,6 +57,24 @@ class SubtitleSegmentationTests(unittest.TestCase):
         self.assertTrue(any("專有名詞" in segment["raw_text"] for segment in segments))
         self.assertTrue(all(segment["end_ms"] > segment["start_ms"] for segment in segments))
 
+    def test_merges_adjacent_cue_when_chirp_timing_collides(self) -> None:
+        """A shared Chirp boundary must not create an invalid zero-length cue."""
+        words = [
+            {"word": "甲。", "start_ms": 0, "end_ms": 1_000},
+            {"word": "乙", "start_ms": 500, "end_ms": 1_000},
+        ]
+        with (
+            patch.object(build_srt.jieba, "lcut", return_value=["甲", "。", "乙"]),
+            patch.object(build_srt, "TARGET_MIN_MS", 0),
+        ):
+            segments = segment_words(words)
+
+        self.assertEqual("".join(segment["raw_text"] for segment in segments), "甲。乙")
+        self.assertEqual(len(segments), 1)
+        self.assertEqual((segments[0]["start_ms"], segments[0]["end_ms"]), (0, 1_000))
+        self.assertTrue(segments[0]["timing_collision_merged"])
+        self.assertEqual(segments[0]["timing_collision_word_ranges"][0]["word_start"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

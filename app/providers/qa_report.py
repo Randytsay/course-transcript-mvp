@@ -99,6 +99,16 @@ def main() -> int:
     if len(ids) != len(set(ids)) or any(not value for value in ids): errors.append("segment IDs are not unique")
     invalid = [item["segment_id"] for item in segments if int(item["end_ms"]) <= int(item["start_ms"])]
     if invalid: errors.append(f"non-positive subtitle durations: {invalid[:10]}")
+    timing_collisions = [
+        item["segment_id"]
+        for item in segments
+        if item.get("timing_collision_merged")
+    ]
+    if timing_collisions:
+        warnings.append(
+            "subtitle timing collisions merged into prior cues: "
+            f"{len(timing_collisions)}"
+        )
     overlaps = [{"before": a["segment_id"], "after": b["segment_id"], "ms": int(a["end_ms"]) - int(b["start_ms"])} for a, b in zip(segments, segments[1:]) if int(b["start_ms"]) < int(a["end_ms"])]
     if overlaps: errors.append(f"subtitle overlaps: {len(overlaps)}")
     long_gaps = [{"before": a["segment_id"], "after": b["segment_id"], "gap_ms": int(b["start_ms"]) - int(a["end_ms"])} for a, b in zip(segments, segments[1:]) if int(b["start_ms"]) - int(a["end_ms"]) > 5000]
@@ -120,7 +130,7 @@ def main() -> int:
     if corrected:
         correction_invariant = len(corrected["segments"]) == len(segments) and all((a["segment_id"], a["start_ms"], a["end_ms"]) == (b["segment_id"], b["start_ms"], b["end_ms"]) for a, b in zip(segments, corrected["segments"]))
         if not correction_invariant: warnings.append("existing correction is stale and requires a new segment-level correction pass")
-    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": "PASS" if not errors else "FAIL", "errors": errors, "warnings": warnings, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}}
+    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": "PASS" if not errors else "FAIL", "errors": errors, "warnings": warnings, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "timing_collision_segments": timing_collisions}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}}
     atomic(JOB / "qa-report.json", report)
     md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
     temporary = JOB / "qa-report.md.tmp"; temporary.write_text("\n".join(md) + "\n", encoding="utf-8"); temporary.replace(JOB / "qa-report.md")
