@@ -39,7 +39,7 @@ Cloudflare Access
         ├─ chunk-000 canary, then ≤3 parallel Chirp chunks
         ├─ midpoint merge + immutable subtitle segments
         ├─ Gemini 3.6 Flash text-only correction
-        └─ local exports/QA/checksums → awaiting_review
+        └─ local exports/QA/checksums → selected sidecars in source folder → awaiting_review
 ```
 
 ## Long-file contract

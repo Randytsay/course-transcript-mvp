@@ -80,6 +80,7 @@ export interface TranscriptJob {
   estimatedCostUsd?: string | null;
   chirpMaxParallelChunks?: number;
   outputFormats: OutputFormat[];
+  drivePublished?: boolean;
 }
 
 export interface JobEvent {

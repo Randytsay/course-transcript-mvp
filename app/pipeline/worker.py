@@ -1,8 +1,8 @@
 """Sequential approved-job worker for the paid transcription pipeline.
 
 The worker never selects an unapproved job. It preserves raw provider evidence,
-uses one global source lease, resumes from durable artifacts, and stops at
-local human review. It does not upload anything to Google Drive.
+uses one global source lease, resumes from durable artifacts, and keeps review
+state after optionally publishing selected QA-passed outputs beside the source.
 """
 from __future__ import annotations
 
@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.costs import CostConfig, estimate_job_cost
+from app.jobs.drive_publish import publish_outputs, source_parent_destination
 from app.jobs.store import JobConflict, JobStore
 
 
@@ -529,6 +530,62 @@ def _record_usage_evidence(
     )
 
 
+def _auto_publish_to_source(
+    store: JobStore,
+    record: dict[str, Any],
+    data_dir: Path,
+    worker_id: str,
+) -> dict[str, Any] | None:
+    """Publish only derived, user-selected files after all local QA succeeds."""
+    if os.environ.get("COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE", "").lower() not in {
+        "1", "true", "yes"
+    }:
+        return None
+    _begin(
+        store,
+        record,
+        worker_id,
+        stage="drive_publish",
+        status="exporting",
+        detail="將選定輸出寫回原始 Drive 資料夾",
+        progress=99,
+    )
+    job_dir = data_dir / "jobs" / record["id"]
+    last_heartbeat = 0.0
+
+    def keep_lease_alive(seconds: float) -> None:
+        nonlocal last_heartbeat
+        remaining = seconds
+        while remaining > 0:
+            now = time.monotonic()
+            if now - last_heartbeat >= 10:
+                heartbeat = store.heartbeat(record["id"], worker_id, lease_seconds=300)
+                if heartbeat["status"] == "paused":
+                    raise PipelinePaused("任務已由使用者暫停")
+                last_heartbeat = now
+            interval = min(1.0, remaining)
+            time.sleep(interval)
+            remaining -= interval
+
+    state = publish_outputs(
+        job_dir,
+        source_name=record["source_name"],
+        destination=source_parent_destination(record["source_path"]),
+        output_formats=json.loads(record["output_formats_json"]),
+        authorized=True,
+        sleeper=keep_lease_alive,
+    )
+    _complete(
+        store,
+        record["id"],
+        worker_id,
+        stage="drive_publish",
+        detail="已驗證輸出至原始 Drive 資料夾",
+        progress=100,
+    )
+    return state
+
+
 def run_paid_job(
     store: JobStore,
     record: dict[str, Any],
@@ -647,6 +704,7 @@ def run_paid_job(
             evidence=("qa-report.json", "export-manifest.json"),
         )
         _record_usage_evidence(store, leased, data_dir, worker_id)
+        publication = _auto_publish_to_source(store, leased, data_dir, worker_id)
         processing_manifest = {
                 "job_id": leased["id"],
                 "status": "AWAITING_HUMAN_REVIEW",
@@ -656,14 +714,19 @@ def run_paid_job(
                     if leased["enable_gemini_correction"]
                     else None
                 ),
-                "drive_upload_started": False,
+                "drive_upload_started": publication is not None,
+                "drive_publication_status": publication.get("status") if publication else "not_requested",
                 "source_media_preserved_in_drive": True,
                 "fake_provider": fake_provider,
                 "artifacts": _artifact_evidence(job_dir),
             }
         _atomic_json(job_dir / "pipeline-manifest.json", processing_manifest)
         _atomic_json(job_dir / "processing_manifest.json", processing_manifest)
-        return store.finish_for_review(job_id=leased["id"], worker_id=worker_id)
+        return store.finish_for_review(
+            job_id=leased["id"],
+            worker_id=worker_id,
+            drive_published=publication is not None,
+        )
     except PipelinePaused:
         store.release_lease(leased["id"], worker_id)
         return store.get_job(leased["id"])

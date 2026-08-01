@@ -140,7 +140,7 @@ class PipelineWorkerTests(unittest.TestCase):
             "awaiting_confirmation",
         )
 
-    def test_approved_job_stops_at_local_human_review(self) -> None:
+    def test_approved_job_stops_at_local_human_review_by_default(self) -> None:
         record = self._job(approved=True)
         job_dir = self.data / "jobs" / record["id"]
         job_dir.mkdir(parents=True)
@@ -191,6 +191,50 @@ class PipelineWorkerTests(unittest.TestCase):
         manifest = job_dir / "pipeline-manifest.json"
         self.assertTrue(manifest.exists())
         self.assertIn('"drive_upload_started": false', manifest.read_text())
+
+    def test_approved_job_publishes_selected_outputs_after_qa_when_enabled(self) -> None:
+        record = self._job(approved=True)
+        job_dir = self.data / "jobs" / record["id"]
+        job_dir.mkdir(parents=True)
+        source = job_dir / "source-original.mp3"
+        source.write_bytes(b"test")
+        publication = {"status": "completed", "files": {"srt": {}}}
+
+        def fake_module_stage(
+            store: JobStore,
+            item: dict,
+            data_dir: Path,
+            worker_id: str,
+            **kwargs: object,
+        ) -> None:
+            stage = str(kwargs["stage"])
+            store.begin_stage(
+                job_id=item["id"], stage=stage, status=str(kwargs["status"]),
+                detail=str(kwargs["detail"]), progress=int(kwargs["progress_start"]),
+                input_checksum=item["source_checksum"], worker_id=worker_id,
+            )
+            store.complete_stage(
+                job_id=item["id"], stage=stage, detail=f"{stage} done",
+                progress=int(kwargs["progress_end"]), worker_id=worker_id,
+            )
+
+        with (
+            patch.dict("os.environ", {"COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE": "true"}),
+            patch.object(worker, "_download_source", return_value=source),
+            patch.object(worker, "_normalize"),
+            patch.object(worker, "_run_module_stage", side_effect=fake_module_stage),
+            patch.object(worker, "_record_usage_evidence"),
+            patch.object(worker, "_artifact_evidence", return_value=[]),
+            patch.object(worker, "publish_outputs", return_value=publication) as publish,
+        ):
+            finished = worker.run_paid_job(
+                self.store, record, data_dir=self.data, worker_id="pipeline-test"
+            )
+        self.assertEqual(finished["status"], "awaiting_review")
+        self.assertIn("已輸出至原始 Drive 資料夾", finished["stage_detail"])
+        publish.assert_called_once()
+        manifest = json.loads((job_dir / "pipeline-manifest.json").read_text())
+        self.assertTrue(manifest["drive_upload_started"])
 
 
 class ExportTests(unittest.TestCase):

@@ -1,8 +1,8 @@
-"""Explicit, rate-limit-safe publication of reviewed artifacts to Google Drive.
+"""Rate-limit-safe publication of selected derived artifacts to Google Drive.
 
-This module is deliberately not wired into the transcription pipeline or web
-API.  Publishing remains an operator-approved action after QA.  It uses the
-existing rclone credential mount without ever reading or writing that secret.
+The pipeline can opt in only after a paid job has completed its local QA.  It
+uses the existing rclone credential mount without ever reading or writing that
+secret, and never targets the source media file itself.
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from pathlib import PurePosixPath
 from typing import Any
 
 from .exports import normalize_output_formats
@@ -85,9 +86,27 @@ def _safe_destination(destination: str) -> str:
     if not destination.startswith("gdrive:"):
         raise DrivePublishError("Drive publication destination must use the gdrive: remote")
     relative = destination.removeprefix("gdrive:").strip("/")
-    if not relative or any(part in {"", ".", ".."} for part in relative.split("/")):
+    if not relative:
+        # A Drive source file may live directly beneath My Drive.  This is a
+        # valid source folder; the generated file still has a different suffix.
+        return "gdrive:"
+    if any(part in {"", ".", ".."} for part in relative.split("/")):
         raise DrivePublishError("Drive publication destination is not a safe folder path")
     return f"gdrive:{relative}"
+
+
+def source_parent_destination(source_path: str) -> str:
+    """Return the exact Drive folder containing a validated ``gdrive:`` file."""
+    if not source_path.startswith("gdrive:"):
+        raise DrivePublishError("Drive source path must use the gdrive: remote")
+    relative = source_path.removeprefix("gdrive:").strip("/")
+    source = PurePosixPath(relative)
+    if not relative or source.name in {"", ".", ".."}:
+        raise DrivePublishError("Drive source path must name a file")
+    if any(part in {"", ".", ".."} for part in source.parts):
+        raise DrivePublishError("Drive source path is not safe")
+    parent = source.parent.as_posix()
+    return _safe_destination("gdrive:" if parent == "." else f"gdrive:{parent}")
 
 
 def _artifact_for(job_dir: Path, output_format: str) -> PublishArtifact:
@@ -232,13 +251,16 @@ def publish_outputs(
 
 
 def main() -> int:
-    """Operator-only entrypoint; deliberately opt-in rather than automatic."""
+    """Explicit operator entrypoint for one reviewed job."""
     if os.environ.get("PUBLISH_TO_DRIVE") != "1":
         raise SystemExit("Refusing Drive publication: set PUBLISH_TO_DRIVE=1 after explicit approval")
     data_dir = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
     job_name = os.environ.get("JOB_NAME", "")
     destination = os.environ.get("DRIVE_OUTPUT_DIRECTORY", "")
     source_name = os.environ.get("SOURCE_NAME", "")
+    source_path = os.environ.get("SOURCE_PATH", "")
+    if not destination:
+        destination = source_parent_destination(source_path)
     formats = json.loads(os.environ.get("OUTPUT_FORMATS_JSON", '["srt", "txt", "csv"]'))
     state = publish_outputs(
         data_dir / "jobs" / job_name,

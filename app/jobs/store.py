@@ -1006,6 +1006,7 @@ class JobStore:
         *,
         job_id: str,
         worker_id: str,
+        drive_published: bool = False,
     ) -> dict[str, Any]:
         now = _iso()
         with self.transaction() as connection:
@@ -1015,23 +1016,28 @@ class JobStore:
             ).fetchone()
             if row is None:
                 raise JobNotFound("Job not found")
+            detail = (
+                "本機輸出與 QA 已完成，已輸出至原始 Drive 資料夾；仍可審查詞彙"
+                if drive_published
+                else "本機輸出與 QA 已完成，等待人工審查"
+            )
             connection.execute(
                 """
                 UPDATE jobs
                 SET status = 'awaiting_review', active_stage = 'review',
-                    stage_detail = '本機輸出與 QA 已完成，等待人工審查',
+                    stage_detail = ?,
                     progress = 100, updated_at = ?, revision = revision + 1
                 WHERE id = ?
                 """,
-                (now, job_id),
+                (detail, now, job_id),
             )
             self._clear_lease(connection, job_id, worker_id)
             self._event(
                 connection,
                 job_id,
-                "local_outputs_ready_for_review",
+                "drive_outputs_published" if drive_published else "local_outputs_ready_for_review",
                 worker_id,
-                {"drive_upload_started": False},
+                {"drive_upload_started": drive_published},
             )
             if row["batch_id"]:
                 self._refresh_batch_state(connection, row["batch_id"], now)

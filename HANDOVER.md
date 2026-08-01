@@ -53,7 +53,8 @@ approval before Drive upload.
   paid-operation authorization.
 - `app/pipeline/worker.py`: approved-job-only paid runner with global lease,
   heartbeat, evidence-based resume, idempotent usage, complete local exports,
-  and a hard stop at `awaiting_review`.
+  and post-QA publication of selected sidecars to the source Drive folder. It
+  retains `awaiting_review` for vocabulary review.
 - `app/providers/fake_timeline.py` and `fake_correction.py`: non-paid provider
   substitutes for Docker/VPS integration tests.
 

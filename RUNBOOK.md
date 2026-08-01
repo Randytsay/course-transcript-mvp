@@ -6,7 +6,10 @@
 - Keep `/opt/course-transcript/secrets/gcp-sa.json` outside Git and mount read-only.
 - Never overwrite Drive source media.
 - Do not send whole long media to Chirp when word timestamps are enabled.
-- Do not auto-upload final files to Drive; obtain user approval after QA.
+- After user authorization for this policy, the production pipeline may upload
+  only the selected derived formats after local QA passes, beside the source
+  file. It never overwrites source media; it keeps `awaiting_review` for
+  vocabulary review.
 - Do not print, commit, or copy a Cloudflare Tunnel token. Its VPS file must
   remain `/opt/course-transcript/secrets/cloudflare-tunnel.env`, owned by root
   with mode `600`.
@@ -129,10 +132,10 @@ selection and must not be deleted merely because they are not selected.
 
 ## Explicit Drive publication recovery
 
-Drive publication is intentionally not a pipeline or web-API action. After
-the user has approved a reviewed job for publication, use
-`app.jobs.drive_publish` as a separate, one-job operator action. It refuses to
-run unless `PUBLISH_TO_DRIVE=1` is set for that one invocation.
+The current production policy is automatic post-QA publication to the source
+file's own Drive folder. Set `COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE=false`
+to disable it for a deployment. It uploads only the job's selected formats and
+uses the same one-job rate-safe `app.jobs.drive_publish` implementation.
 
 The publisher uploads one selected attachment at a time with `rclone copyto
 --checksum`, a one-request-per-second ceiling, bounded retries, and a
@@ -146,9 +149,9 @@ other secrets.
 Use the read-only rclone config mount. A message that rclone could not save a
 refreshed token is not proof of either success or failure: rely on the command
 exit status and the recorded remote-size read-back. If the publisher ends in
-`rate_limited`, stop rather than repeatedly listing the Drive folder, wait for
-the recorded window, then rerun the same explicitly approved command. Do not
-turn this into an automatic upload trigger.
+`rate_limited`, it stops after the bounded retry window and records resumable
+state. Do not repeatedly list the Drive folder or re-run any paid
+transcription stage; resume only the publication step later.
 
 Before deployment, run:
 

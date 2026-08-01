@@ -6,7 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.jobs.drive_publish import DrivePublishError, publish_outputs
+from app.jobs.drive_publish import (
+    DrivePublishError,
+    publish_outputs,
+    source_parent_destination,
+)
 
 
 class DrivePublishTests(unittest.TestCase):
@@ -92,3 +96,12 @@ class DrivePublishTests(unittest.TestCase):
                 runner=forbidden,
             )
             self.assertEqual(result["status"], "completed")
+
+    def test_source_parent_destination_keeps_generated_files_beside_source(self) -> None:
+        self.assertEqual(
+            source_parent_destination("gdrive:課程/女性保健/lesson.m4a"),
+            "gdrive:課程/女性保健",
+        )
+        self.assertEqual(source_parent_destination("gdrive:lesson.m4a"), "gdrive:")
+        with self.assertRaises(DrivePublishError):
+            source_parent_destination("gdrive:課程/../lesson.m4a")
