@@ -155,6 +155,7 @@ class JobStore:
                     enable_gemini_correction INTEGER NOT NULL,
                     enable_subtitles INTEGER NOT NULL,
                     require_human_review INTEGER NOT NULL,
+                    chirp_max_parallel_chunks INTEGER NOT NULL DEFAULT 3,
                     status TEXT NOT NULL,
                     active_stage TEXT,
                     stage_detail TEXT,
@@ -218,6 +219,12 @@ class JobStore:
                 CREATE INDEX IF NOT EXISTS events_job_idx ON job_events(job_id, id);
                 CREATE INDEX IF NOT EXISTS usage_job_idx ON usage_records(job_id, id);
                 """
+            )
+            self._ensure_column(
+                connection,
+                "jobs",
+                "chirp_max_parallel_chunks",
+                "INTEGER NOT NULL DEFAULT 3",
             )
             self._ensure_column(
                 connection,
@@ -407,6 +414,7 @@ class JobStore:
         enable_gemini_correction: bool,
         enable_subtitles: bool,
         require_human_review: bool,
+        chirp_max_parallel_chunks: int = 3,
         actor: str,
     ) -> dict[str, Any]:
         now = _iso()
@@ -466,9 +474,9 @@ class JobStore:
                         id, preview_id, batch_id, queue_position, source_path,
                         source_name, source_size_bytes, language_code, profile,
                         enable_gemini_correction, enable_subtitles,
-                        require_human_review, status, active_stage, stage_detail,
+                        require_human_review, chirp_max_parallel_chunks, status, active_stage, stage_detail,
                         created_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         'preflight', 'source', '等待安全下載與媒體檢查',
                         ?, ?, ?)
                     """,
@@ -485,6 +493,7 @@ class JobStore:
                         int(enable_gemini_correction),
                         int(enable_subtitles),
                         int(require_human_review),
+                        int(chirp_max_parallel_chunks),
                         actor,
                         now,
                         now,
@@ -544,6 +553,7 @@ class JobStore:
         enable_gemini_correction: bool,
         enable_subtitles: bool,
         require_human_review: bool,
+        chirp_max_parallel_chunks: int = 3,
         actor: str,
     ) -> dict[str, Any]:
         now = _iso()
@@ -570,9 +580,9 @@ class JobStore:
                 INSERT INTO jobs(
                     id, preview_id, source_path, source_name, source_size_bytes,
                     language_code, profile, enable_gemini_correction,
-                    enable_subtitles, require_human_review, status, active_stage,
+                    enable_subtitles, require_human_review, chirp_max_parallel_chunks, status, active_stage,
                     stage_detail, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preflight',
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preflight',
                     'source', '等待安全下載與媒體檢查', ?, ?, ?)
                 """,
                 (
@@ -586,6 +596,7 @@ class JobStore:
                     int(enable_gemini_correction),
                     int(enable_subtitles),
                     int(require_human_review),
+                    int(chirp_max_parallel_chunks),
                     actor,
                     now,
                     now,

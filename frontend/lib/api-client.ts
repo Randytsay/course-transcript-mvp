@@ -18,7 +18,7 @@ import type {
 // already-built absolute localhost URL.
 const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
-type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd"> & {
+type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd" | "chirpMaxParallelChunks"> & {
   source_path: string;
   duration_seconds: number;
   created_at: string;
@@ -30,6 +30,7 @@ type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt"
   revision: number;
   batch_id?: string | null;
   estimated_cost_usd?: string | null;
+  chirp_max_parallel_chunks?: number;
   pipeline: Array<{ id: string; label: string; detail: string; status: PipelineStep["status"] }>;
 };
 
@@ -60,6 +61,7 @@ function mapJob(job: ApiJob): TranscriptJob {
     revision: job.revision,
     batchId: job.batch_id ?? null,
     estimatedCostUsd: job.estimated_cost_usd ?? null,
+    chirpMaxParallelChunks: job.chirp_max_parallel_chunks ?? 3,
   };
 }
 
@@ -246,7 +248,7 @@ export async function previewBatch(
   };
 }
 
-export async function createBatch(batchPreviewId: string): Promise<CreatedBatch> {
+export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks: number = 3): Promise<CreatedBatch> {
   const result = await postJson<{
     batch_id: string;
     status: string;
@@ -262,6 +264,7 @@ export async function createBatch(batchPreviewId: string): Promise<CreatedBatch>
     enable_gemini_correction: true,
     enable_subtitles: true,
     require_human_review: true,
+    chirp_max_parallel_chunks: chirpMaxParallelChunks,
   });
   return {
     batchId: result.batch_id,

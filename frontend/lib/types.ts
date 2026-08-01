@@ -75,6 +75,7 @@ export interface TranscriptJob {
   revision: number;
   batchId?: string | null;
   estimatedCostUsd?: string | null;
+  chirpMaxParallelChunks?: number;
 }
 
 export interface JobEvent {

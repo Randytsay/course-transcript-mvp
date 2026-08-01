@@ -57,6 +57,7 @@ export default function NewJobPage() {
   const [costs, setCosts] = useState<CostSummary | null>(null);
   const [busy, setBusy] = useState<"browse" | "preview" | "create" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [chirpMaxParallelChunks, setChirpMaxParallelChunks] = useState(3);
 
   const selectedEntries = useMemo(() => Array.from(selected.values()), [selected]);
   const selectedSize = selectedEntries.reduce((sum, item) => sum + item.sizeBytes, 0);
@@ -118,7 +119,7 @@ export default function NewJobPage() {
     setBusy("create");
     setError(null);
     try {
-      setCreated(await createBatch(preview.batchPreviewId));
+      setCreated(await createBatch(preview.batchPreviewId, chirpMaxParallelChunks));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法建立批次");
     } finally {
@@ -266,6 +267,27 @@ export default function NewJobPage() {
                 <span>輸出原始稿、校正版、字幕與 QA；Gemini 不改動字幕時間。</span>
               </div>
               <span className="recommended-tag">固定模式</span>
+            </div>
+
+            <div style={{ marginTop: "16px", padding: "16px", border: "1px solid var(--border)", borderRadius: "10px", background: "#f8fafc" }}>
+              <label style={{ display: "block", marginBottom: "8px", fontWeight: 700, fontSize: "14px", color: "#334155" }}>
+                Chirp 同時辨識分段數
+              </label>
+              <select 
+                value={chirpMaxParallelChunks} 
+                onChange={(e) => setChirpMaxParallelChunks(parseInt(e.target.value, 10))}
+                style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid var(--border-strong)", fontSize: "15px", background: "#fff" }}
+              >
+                <option value={1}>1</option>
+                <option value={2}>2</option>
+                <option value={3}>3（建議）</option>
+                <option value={4}>4</option>
+                <option value={5}>5</option>
+              </select>
+              <p style={{ marginTop: "8px", fontSize: "13px", color: "#64748b", lineHeight: 1.5 }}>
+                第一段會先單獨驗證。第一段成功後，其餘音訊分段最多同時執行此數量。提高數量可能縮短等待時間，但會增加 API 併發與配額壓力。<br/>
+                <strong style={{ color: "#475569" }}>註：這是「同一支音檔內的分段併發數」，不同來源音檔仍然一次只處理一支。</strong>
+              </p>
             </div>
 
             {preview && (

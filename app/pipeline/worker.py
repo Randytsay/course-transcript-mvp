@@ -356,6 +356,8 @@ def _normalize(
 
 def _module_env(record: dict[str, Any], job_dir: Path) -> dict[str, str]:
     env = dict(os.environ)
+    limit = int(env.get("CHIRP_MAX_PARALLEL_CHUNKS_LIMIT", "5"))
+    effective_parallelism = min(record.get("chirp_max_parallel_chunks", 3), limit)
     env.update(
         {
             "JOB_NAME": record["id"],
@@ -364,6 +366,7 @@ def _module_env(record: dict[str, Any], job_dir: Path) -> dict[str, str]:
             "REQUIRE_CORRECTION": (
                 "1" if record["enable_gemini_correction"] else "0"
             ),
+            "CHIRP_MAX_PARALLEL_CHUNKS": str(effective_parallelism),
         }
     )
     return env
