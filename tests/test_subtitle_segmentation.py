@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
+from app.providers import build_srt
 from app.providers.build_srt import segment_words
 
 
@@ -32,6 +34,28 @@ class SubtitleSegmentationTests(unittest.TestCase):
         words[5]["end_ms"] += 2_000
         segments = segment_words(words)
         self.assertGreaterEqual(len(segments), 2)
+
+    def test_never_cuts_between_lexical_pieces_of_one_asr_word(self) -> None:
+        """A multi-character ASR word may be split by jieba but has one timing."""
+        words = [
+            {"word": "甲", "start_ms": 0, "end_ms": 1_000},
+            {"word": "專有名詞", "start_ms": 1_000, "end_ms": 2_000},
+            {"word": "乙", "start_ms": 4_000, "end_ms": 4_500},
+        ]
+        with (
+            patch.object(
+                build_srt.jieba,
+                "lcut",
+                return_value=["甲", "專有", "名詞", "乙"],
+            ),
+            patch.object(build_srt, "MAX_CHARS", 2),
+            patch.object(build_srt, "TARGET_MIN_MS", 0),
+        ):
+            segments = segment_words(words)
+
+        self.assertEqual("".join(segment["raw_text"] for segment in segments), "甲專有名詞乙")
+        self.assertTrue(any("專有名詞" in segment["raw_text"] for segment in segments))
+        self.assertTrue(all(segment["end_ms"] > segment["start_ms"] for segment in segments))
 
 
 if __name__ == "__main__":

@@ -48,6 +48,25 @@ def _safe_error(value: str) -> str:
     return value[-1200:]
 
 
+def _command_failure_message(
+    returncode: int,
+    stdout: str,
+    stderr: str,
+) -> str:
+    """Keep the actual command failure while retaining useful diagnostics.
+
+    Python libraries such as jieba emit normal startup information on stderr.
+    Selecting only stderr previously hid a provider's real stdout failure
+    marker (for example ``BUILD=FAIL invalid fixed segments``).
+    """
+    details = [f"command exited {returncode}"]
+    if stdout.strip():
+        details.append(f"stdout:\n{stdout.strip()}")
+    if stderr.strip():
+        details.append(f"stderr:\n{stderr.strip()}")
+    return _safe_error("\n".join(details))
+
+
 def _check_disk(data_dir: Path, source_size_bytes: int) -> None:
     minimum_free_gb = float(
         os.environ.get("COURSE_TRANSCRIPT_MINIMUM_FREE_SPACE_GB", "3")
@@ -100,9 +119,7 @@ def _run_with_heartbeat(
         time.sleep(1)
     stdout, stderr = process.communicate()
     if process.returncode != 0:
-        raise PipelineError(
-            _safe_error(stderr or stdout or f"command exited {process.returncode}")
-        )
+        raise PipelineError(_command_failure_message(process.returncode, stdout, stderr))
     return stdout.strip()
 
 

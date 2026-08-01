@@ -69,10 +69,22 @@ def segment_words(words: list[dict]) -> list[dict]:
         start = int(current[0]["start_ms"])
         if segments:
             start = max(start, int(segments[-1]["end_ms"]))
+        end = int(current[-1]["end_ms"])
+        # A fixed cue may never have zero or negative duration.  This should
+        # normally be impossible because the loop below keeps all lexical
+        # pieces that map to one provider word in the same cue.  Keep this
+        # guard as a durable diagnostic if an upstream ASR timeline is ever
+        # malformed instead of quietly producing an invalid subtitle file.
+        if end <= start:
+            raise ValueError(
+                "non-positive subtitle duration "
+                f"start_ms={start} end_ms={end} "
+                f"word_range={current[0]['word_start']}..{current[-1]['word_end']}"
+            )
         segments.append({
             "segment_id": f"seg-{index:04d}",
             "start_ms": start,
-            "end_ms": int(current[-1]["end_ms"]),
+            "end_ms": end,
             "raw_text": text,
             "text": text,
             "word_count": current[-1]["word_end"] - current[0]["word_start"] + 1,
@@ -87,7 +99,20 @@ def segment_words(words: list[dict]) -> list[dict]:
         gap = int(unit["start_ms"]) - int(previous["end_ms"])
         prospective_duration = int(unit["end_ms"]) - int(current[0]["start_ms"])
         prospective_chars = sum(len(str(item["text"])) for item in current) + len(str(unit["text"]))
-        if gap >= HARD_GAP_MS or (prospective_duration > TARGET_MAX_MS and current) or (prospective_chars > MAX_CHARS and prospective_duration >= TARGET_MIN_MS):
+        # jieba can split one provider "word" into several lexical units.  All
+        # of those units inherit the same Chirp timing.  Never cut between
+        # them: doing so can clamp the next cue's start to the prior cue end
+        # and create a zero-duration subtitle segment.
+        same_provider_word = unit["word_start"] <= previous["word_end"]
+        should_flush = (
+            gap >= HARD_GAP_MS
+            or (prospective_duration > TARGET_MAX_MS and current)
+            or (
+                prospective_chars > MAX_CHARS
+                and prospective_duration >= TARGET_MIN_MS
+            )
+        )
+        if should_flush and not same_provider_word:
             flush()
         current.append(unit)
         duration = int(current[-1]["end_ms"]) - int(current[0]["start_ms"])
