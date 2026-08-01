@@ -5,6 +5,7 @@ import os
 import time
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 from app.billing.config import BillingConfig, BillingConfigError
@@ -41,25 +42,26 @@ def _timestamp(value: object) -> str | None:
     return str(value)
 
 
+def _fallback_snapshot_path() -> Path:
+    return (
+        Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+        / "billing"
+        / "billing_snapshot.json"
+    )
+
+
 def sync_billing(config: BillingConfig | None = None) -> dict[str, Any]:
     try:
         config = config or BillingConfig.from_env()
     except BillingConfigError as exc:
-        fallback = BillingConfig.from_env.__func__  # type: ignore[attr-defined]
-        del fallback
-        data_dir = os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data")
-        from pathlib import Path
-
-        return preserve_previous_failure(
-            Path(data_dir) / "billing" / "billing_snapshot.json", exc
-        )
+        return preserve_previous_failure(_fallback_snapshot_path(), exc)
 
     if not config.enabled:
         return write_disabled(config.snapshot_path)
 
     try:
-        # Lazy import keeps the transcription web profile functional when billing
-        # is disabled and makes the optional dependency boundary explicit.
+        # Lazy import keeps the normal web profile independent from the optional
+        # billing worker unless the billing profile is explicitly enabled.
         from google.cloud import bigquery
 
         client = bigquery.Client(project=config.bigquery_project)
@@ -203,12 +205,7 @@ def main() -> int:
     try:
         config = BillingConfig.from_env()
     except BillingConfigError as exc:
-        data_dir = os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data")
-        from pathlib import Path
-
-        preserve_previous_failure(
-            Path(data_dir) / "billing" / "billing_snapshot.json", exc
-        )
+        preserve_previous_failure(_fallback_snapshot_path(), exc)
         return 2
 
     while True:
