@@ -77,7 +77,7 @@ services:
       - ./logs:/app/logs
       - ./tmp:/app/tmp
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
-    command: ["python", "-m", "app.jobs.preflight"]
+    command: ["python", "-m", "app.jobs.preflight_observed"]
 
   pipeline-worker:
     profiles: ["web"]
