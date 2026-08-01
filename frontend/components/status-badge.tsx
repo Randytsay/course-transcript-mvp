@@ -13,6 +13,8 @@ const statusLabels: Record<JobStatus, string> = {
   exporting: "產生輸出",
   quality_check: "品質檢查",
   paused: "已暫停",
+  cancelling: "取消中",
+  cancelled: "已取消",
   awaiting_review: "待內容審查",
   review: "待審查",
   completed: "已完成",
