@@ -14,6 +14,7 @@ from app.pipeline import worker
 from app.providers import run_chirp_pipeline
 from app.providers.run_chirp_pipeline import compute_chunk_plan
 from app.providers import export_formats
+from app.providers import patch_audible_tail
 
 
 class ChunkPlanTests(unittest.TestCase):
@@ -262,6 +263,23 @@ class ExportTests(unittest.TestCase):
             }
             payload = (job_dir / "transcript.pdf").read_bytes()
             self.assertEqual(checksums["transcript.pdf"], hashlib.sha256(payload).hexdigest())
+
+
+class TailPatchTests(unittest.TestCase):
+    def test_tail_window_rechecks_last_ten_seconds_before_uncovered_audio(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            job_dir = Path(temporary)
+            (job_dir / "merged-words.json").write_text(
+                json.dumps({"words": [{"word": "尾", "start_ms": 59_000, "end_ms": 60_000}]}),
+                encoding="utf-8",
+            )
+            original_job = patch_audible_tail.JOB
+            try:
+                patch_audible_tail.JOB = job_dir
+                with patch.object(patch_audible_tail, "audio_duration_ms", return_value=65_000):
+                    self.assertEqual(patch_audible_tail.tail_window(), (50_000, 65_000, 60_000))
+            finally:
+                patch_audible_tail.JOB = original_job
 
 
 if __name__ == "__main__":

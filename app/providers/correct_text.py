@@ -57,13 +57,18 @@ def generate_terms(raw_segments: list[dict]) -> list[dict]:
     output = JOB / "glossary"
     output.mkdir(parents=True, exist_ok=True)
     cache = output / "global-terms.json"
-    if cache.exists():
-        return json.loads(cache.read_text(encoding="utf-8")).get("terms", [])
     source = [{"segment_id": item["segment_id"], "text": item["raw_text"]} for item in raw_segments]
+    source_sha256 = hashlib.sha256(
+        json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    if cache.exists():
+        cached = json.loads(cache.read_text(encoding="utf-8"))
+        if cached.get("source_sha256") == source_sha256:
+            return cached.get("terms", [])
     prompt = """Extract only repeated or domain-specific terminology from this Traditional Chinese ASR transcript. Do not rewrite the transcript. For each term return a canonical spelling, observed variants, and confidence high/medium/low. Unknown terms must remain low confidence. JSON only.\n\n""" + json.dumps(source, ensure_ascii=False)
     response = generate_json(prompt, TERMS_SCHEMA)
     payload = json.loads(response.text)
-    record = {"model": MODEL, "usage_metadata": response.usage_metadata.model_dump(mode="json") if response.usage_metadata else None, "terms": payload.get("terms", []), "raw_response": response.text}
+    record = {"model": MODEL, "source_sha256": source_sha256, "usage_metadata": response.usage_metadata.model_dump(mode="json") if response.usage_metadata else None, "terms": payload.get("terms", []), "raw_response": response.text}
     atomic_text(cache, json.dumps(record, ensure_ascii=False, indent=2) + "\n")
     with (output / "global-terms.csv").open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=["canonical", "variants", "confidence"]); writer.writeheader()
