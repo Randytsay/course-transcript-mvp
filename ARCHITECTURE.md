@@ -65,8 +65,10 @@ prevents text-similarity merging from deleting words.
 
 The final reading subtitle layer groups Chirp's character-level timing into
 Traditional-Chinese lexical units before selecting sentence and pause
-boundaries. It never splits a lexical unit such as `時間`; it preserves the
-underlying Chirp timings and has no Gemini timing input. Gemini correction is
+boundaries. It never splits a lexical unit such as `時間`, and it also never
+splits multiple lexical pieces that share one original Chirp word timestamp;
+otherwise a later cue can become zero-duration. It preserves the underlying
+Chirp timings and has no Gemini timing input. Gemini correction is
 complete using `gemini-3.6-flash` only: 120 raw per-window responses, one
 global terminology record, and 654 corrected segments across 1,103 readable
 subtitle cues. Do not upload to Drive until QA and explicit user approval.

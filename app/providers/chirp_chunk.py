@@ -54,7 +54,23 @@ def main():
       if has_speech(audio):
        record.update(status='FAILED',error={'code':'EMPTY_WITH_SPEECH','message':'Chirp returned no words for audible speech'},word_count=0,max_end_ms=0); atomic(CHUNK/'manifest.json',record); raise RuntimeError('Chirp returned no words for audible chunk')
       status='EMPTY_SILENCE'
-    record.update(status=status,word_count=len(words),max_end_ms=max((w['end_ms'] for w in words),default=0)); atomic(CHUNK/'words.json',{'chunk_index':index,'words':words}); atomic(CHUNK/'manifest.json',record)
+    record.update(status=status,word_count=len(words),max_end_ms=max((w['end_ms'] for w in words),default=0))
+    if words:
+        import hashlib
+        raw_text = "".join(w['word'] for w in words)
+        atomic(CHUNK/'partial-transcript.json', {
+            "chunkIndex": index,
+            "sourceStartMs": round(start*1000),
+            "sourceEndMs": round(end*1000),
+            "status": status,
+            "wordCount": len(words),
+            "rawText": raw_text,
+            "firstWordMs": words[0]['start_ms'],
+            "lastWordMs": words[-1]['end_ms'],
+            "sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+            "completedAt": datetime.now(UTC).isoformat()
+        })
+    atomic(CHUNK/'words.json',{'chunk_index':index,'words':words}); atomic(CHUNK/'manifest.json',record)
     audio.unlink(missing_ok=True)
     print(f'CHIRP_{name}=PASS status={status} words={len(words)}')
 if __name__=='__main__': main()

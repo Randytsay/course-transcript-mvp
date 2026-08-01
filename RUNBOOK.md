@@ -81,8 +81,10 @@ Run `build_srt` only after merging the Chirp word timeline. The builder uses
 `jieba` locally to map character-level ASR timings to Chinese lexical units,
 then chooses boundaries at real speech gaps, punctuation (including ASR ASCII
 punctuation), and safe cue lengths. Do not reintroduce a fixed-duration split
-that can cut `時` from `間`. Gemini receives the resulting fixed cues for
-text-only correction and must not change their timing.
+that can cut `時` from `間`, or split separate jieba tokens that map to the
+same Chirp word timing; the latter can create a zero-duration cue. Gemini
+receives the resulting fixed cues for text-only correction and must not change
+their timing.
 
 ## Web batch preflight
 

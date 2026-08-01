@@ -111,6 +111,22 @@ def main() -> None:
             (int(word["end_ms"]) for word in words), default=0
         ),
     }
+    if words:
+        import hashlib
+        from datetime import UTC, datetime
+        raw_text = "".join(w['word'] for w in words)
+        atomic(chunk / "partial-transcript.json", {
+            "chunkIndex": index,
+            "sourceStartMs": offset,
+            "sourceEndMs": round(end * 1000),
+            "status": status,
+            "wordCount": len(words),
+            "rawText": raw_text,
+            "firstWordMs": words[0]['start_ms'],
+            "lastWordMs": words[-1]['end_ms'],
+            "sha256": hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+            "completedAt": datetime.now(UTC).isoformat()
+        })
     atomic(chunk / "words.json", {"chunk_index": index, "words": words})
     atomic(chunk / "manifest.json", payload)
     audio.unlink(missing_ok=True)
