@@ -2,19 +2,20 @@
 from __future__ import annotations
 
 import os
-from decimal import Decimal
 from typing import Literal
 
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api import (
-    _mutation_actor,
-    _store,
-    app,
-)
+from app.api import _mutation_actor, _store, app
 from app.jobs import JobConflict, JobNotFound
-from app.live_features import router as live_router
+from app.live_error import safe_chunk_error
+import app.live_features as live_features
+
+
+# Keep all live endpoints and their helper functions on the same sanitizer.
+live_features.safe_chunk_error = safe_chunk_error
+live_router = live_features.router
 
 
 class CreateJobWithParallelismRequest(BaseModel):
@@ -57,8 +58,6 @@ def _validate_parallelism(value: int) -> int:
     return value
 
 
-# The feature branch originally placed prototype handlers directly in app.api.
-# Remove only reviewed replacements. GET /jobs and other stable endpoints remain.
 _REPLACED_READ_PATHS = {
     "/api/v1/jobs/{job_id}/chunks",
     "/api/v1/jobs/{job_id}/chunks/{chunk_index}/transcript",
