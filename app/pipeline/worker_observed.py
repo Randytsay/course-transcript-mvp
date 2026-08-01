@@ -27,6 +27,7 @@ from app.pipeline import worker as base
 _ORIGINAL_BEGIN = base._begin
 _ORIGINAL_COMPLETE = base._complete
 _ORIGINAL_RUN_PAID_JOB = base.run_paid_job
+_CURRENT_STAGE: dict[str, str] = {}
 
 
 def _database_path(data_dir: Path) -> Path:
@@ -122,6 +123,7 @@ def _begin(
         detail=detail,
         progress=progress,
     )
+    _CURRENT_STAGE[record["id"]] = stage
     data_dir = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
     record_stage_started(_database_path(data_dir), record["id"], stage)
 
@@ -145,6 +147,8 @@ def _complete(
     )
     data_dir = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
     record_stage_completed(_database_path(data_dir), job_id, stage)
+    if _CURRENT_STAGE.get(job_id) == stage:
+        _CURRENT_STAGE.pop(job_id, None)
 
 
 def _write_report_safely(data_dir: Path, job_id: str) -> None:
@@ -177,11 +181,12 @@ def run_paid_job(
             worker_id=worker_id,
         )
         current = store.get_job(record["id"])
+        active_stage = _CURRENT_STAGE.get(record["id"]) or current.get("active_stage")
         if current["status"] == "cancelling":
             record_stage_stopped(
                 database_path,
                 record["id"],
-                current.get("active_stage"),
+                active_stage,
                 status="cancelled",
             )
             provider_results = cancel_chirp_operations(
@@ -198,22 +203,25 @@ def run_paid_job(
             record_stage_stopped(
                 database_path,
                 record["id"],
-                current.get("active_stage"),
+                active_stage,
                 status="paused",
             )
+        _CURRENT_STAGE.pop(record["id"], None)
         _write_report_safely(data_dir, record["id"])
         return result
     except Exception as exc:
         try:
             current = store.get_job(record["id"])
+            active_stage = _CURRENT_STAGE.get(record["id"]) or current.get("active_stage")
             record_stage_stopped(
                 database_path,
                 record["id"],
-                current.get("active_stage"),
+                active_stage,
                 status="failed",
                 error=str(exc),
             )
         finally:
+            _CURRENT_STAGE.pop(record["id"], None)
             _write_report_safely(data_dir, record["id"])
         raise
 
