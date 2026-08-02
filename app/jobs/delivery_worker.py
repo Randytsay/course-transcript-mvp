@@ -68,13 +68,14 @@ def _candidate() -> dict[str, Any] | None:
     connection = sqlite3.connect(DATABASE, timeout=30)
     connection.row_factory = sqlite3.Row
     try:
+        # Do not cap this scan: a pending delivery must not starve merely
+        # because more than 500 older completed jobs have no pending manifest.
         rows = connection.execute(
             """
             SELECT * FROM jobs
             WHERE status = 'completed'
               AND source_path LIKE 'gdrive:%'
             ORDER BY updated_at, created_at
-            LIMIT 500
             """
         ).fetchall()
     finally:
@@ -139,7 +140,7 @@ def run_once() -> bool:
             record.get("output_formats_json") or '["srt","txt"]'
         )
         with drive_publish_lock(DATA_DIR, str(record["source_path"])):
-            # The editor writes this marker before releasing the same source
+            # The editor writes this marker before releasing the same global
             # lock. Rechecking here prevents a candidate selected earlier from
             # overwriting a newer manually edited publication.
             if _superseded(job_dir):
