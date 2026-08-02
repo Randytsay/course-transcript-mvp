@@ -1,6 +1,8 @@
 """Fully hardened production entrypoint for the paid transcription worker."""
 from __future__ import annotations
 
+import json
+import os
 import sys
 from decimal import Decimal
 from pathlib import Path
@@ -12,6 +14,20 @@ from app.jobs.store import JobConflict, JobStore
 from app.pipeline import dynamic_worker_hardened as worker
 
 _ORIGINAL_AUTO_PUBLISH = worker.base._auto_publish_to_source
+_ORIGINAL_FINISH_AFTER_CHIRP = worker._finish_after_chirp
+
+
+def _processing_strategy(job_dir: Path) -> str:
+    try:
+        payload = json.loads((job_dir / "chunk-plan.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return "DYNAMIC_BATCHING"
+    strategy = str(payload.get("processing_strategy") or "")
+    return (
+        strategy
+        if strategy in {"DYNAMIC_BATCHING", "PROCESSING_STRATEGY_UNSPECIFIED"}
+        else "DYNAMIC_BATCHING"
+    )
 
 
 def _locked_auto_publish(
@@ -33,6 +49,45 @@ def _locked_auto_publish(
         raise DrivePublishError(
             f"Unable to acquire or use the global Drive publication lock: {exc}"
         ) from exc
+
+
+def _finish_with_actual_strategy(
+    store: JobStore,
+    leased: dict[str, Any],
+    *,
+    data_dir: Path,
+    worker_id: str,
+) -> dict[str, Any]:
+    """Use the retained plan's real strategy for usage accounting and evidence."""
+    job_dir = data_dir / "jobs" / leased["id"]
+    strategy = _processing_strategy(job_dir)
+    previous = os.environ.get("CHIRP_DYNAMIC_BATCHING")
+    os.environ["CHIRP_DYNAMIC_BATCHING"] = (
+        "true" if strategy == "DYNAMIC_BATCHING" else "false"
+    )
+    try:
+        result = _ORIGINAL_FINISH_AFTER_CHIRP(
+            store,
+            leased,
+            data_dir=data_dir,
+            worker_id=worker_id,
+        )
+    finally:
+        if previous is None:
+            os.environ.pop("CHIRP_DYNAMIC_BATCHING", None)
+        else:
+            os.environ["CHIRP_DYNAMIC_BATCHING"] = previous
+
+    for name in ("pipeline-manifest.json", "processing_manifest.json"):
+        path = job_dir / name
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            payload["chirp_processing_strategy"] = strategy
+            worker.base._atomic_json(path, payload)
+    return result
 
 
 def _submit_or_resume_chirp(
@@ -162,6 +217,7 @@ def _submit_or_resume_chirp(
 
 
 worker.base._auto_publish_to_source = _locked_auto_publish
+worker._finish_after_chirp = _finish_with_actual_strategy
 worker._submit_job = _submit_or_resume_chirp
 
 
