@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 
 from app.providers import run_chirp_pipeline as base
@@ -33,7 +32,9 @@ def _retained_manifest_exists() -> bool:
     return False
 
 
-def _stored_plan(total_seconds: float) -> tuple[list[tuple[int, float, float]], bool] | None:
+def _stored_plan(
+    total_seconds: float,
+) -> tuple[list[tuple[int, float, float]], bool] | None:
     path = base.JOB / "chunk-plan.json"
     payload = _load_json(path)
     if not payload or not _retained_manifest_exists():
@@ -60,7 +61,10 @@ def _stored_plan(total_seconds: float) -> tuple[list[tuple[int, float, float]], 
         )
     strategy = str(payload.get("processing_strategy") or "")
     dynamic = strategy == "DYNAMIC_BATCHING"
-    if strategy not in {"DYNAMIC_BATCHING", "PROCESSING_STRATEGY_UNSPECIFIED"}:
+    if strategy not in {
+        "DYNAMIC_BATCHING",
+        "PROCESSING_STRATEGY_UNSPECIFIED",
+    }:
         raise RuntimeError("retained chunk plan has unknown processing strategy")
     return plan, dynamic
 
@@ -92,12 +96,17 @@ def _prepare_plan() -> list[tuple[int, float, float]]:
         f"recover={base.MAX_PARALLEL_RECOVERY}, dynamic={base.DYNAMIC_BATCHING}):"
     )
     for index, start, end in plan:
-        print(f"  chunk-{index:03d}: {start:.1f}s → {end:.1f}s ({end - start:.0f}s)")
+        print(
+            f"  chunk-{index:03d}: {start:.1f}s → {end:.1f}s "
+            f"({end - start:.0f}s)"
+        )
     return plan
 
 
 def _manifest(index: int) -> dict[str, object]:
-    return _load_json(base.CHUNKS / f"chunk-{index:03d}" / "manifest.json")
+    return _load_json(
+        base.CHUNKS / f"chunk-{index:03d}" / "manifest.json"
+    )
 
 
 def _compatible(index: int, start: float, end: float) -> bool:
@@ -122,7 +131,11 @@ def _env(index: int, start: float, end: float) -> dict[str, str]:
 
 def submit_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
     if not _compatible(index, start, end):
-        return index, False, f"chunk-{index:03d}: incompatible retained operation"
+        return (
+            index,
+            False,
+            f"chunk-{index:03d}: incompatible retained operation",
+        )
     status = str(_manifest(index).get("status") or "")
     if status in _ACTIVE_STATUSES:
         return index, True, f"chunk-{index:03d}: retained {status}"
@@ -135,18 +148,34 @@ def submit_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
     )
     message = (result.stdout or "").strip()
     if result.returncode != 0:
-        return index, False, f"{message}\n{(result.stderr or '')[:500]}".strip()
+        return (
+            index,
+            False,
+            f"{message}\n{(result.stderr or '')[:500]}".strip(),
+        )
     return index, True, message
 
 
-def recover_chunk_once(index: int, start: float, end: float) -> tuple[int, str, str]:
+def recover_chunk_once(
+    index: int,
+    start: float,
+    end: float,
+) -> tuple[int, str, str]:
     if not _compatible(index, start, end):
-        return index, "failed", f"chunk-{index:03d}: incompatible retained operation"
+        return (
+            index,
+            "failed",
+            f"chunk-{index:03d}: incompatible retained operation",
+        )
     status = str(_manifest(index).get("status") or "")
     if status in {"SUCCEEDED", "EMPTY_SILENCE"}:
         return index, "done", f"chunk-{index:03d}: already {status}"
     if status in {"", "FAILED", "CANCELLED"}:
-        return index, "failed", f"chunk-{index:03d}: no recoverable operation ({status})"
+        return (
+            index,
+            "failed",
+            f"chunk-{index:03d}: no recoverable operation ({status})",
+        )
     env = _env(index, start, end)
     env["ALLOW_PENDING"] = "1"
     result = base.run_subprocess(
@@ -157,15 +186,68 @@ def recover_chunk_once(index: int, start: float, end: float) -> tuple[int, str, 
     message = (result.stdout or "").strip()
     if result.returncode == 0:
         return index, "done", message
-    if result.returncode in {75, 76}:
+    if result.returncode == 75:
         return index, "pending", message or f"chunk-{index:03d}: pending"
-    return index, "failed", f"{message}\n{(result.stderr or '')[:500]}".strip()
+    if result.returncode == 76:
+        return (
+            index,
+            "retryable",
+            message or f"chunk-{index:03d}: transient provider error",
+        )
+    return (
+        index,
+        "failed",
+        f"{message}\n{(result.stderr or '')[:500]}".strip(),
+    )
+
+
+def _recover_pass(plan: list[tuple[int, float, float]]) -> int:
+    counts = base._parallel_phase(
+        "recovery",
+        plan,
+        recover_chunk_once,
+        base.MAX_PARALLEL_RECOVERY,
+    )
+    if counts.get("failed", 0):
+        print("PIPELINE=FAIL some chunk recoveries failed")
+        return 1
+    outcome = 0
+    if counts.get("retryable", 0):
+        outcome = 76
+    elif counts.get("pending", 0):
+        outcome = 75
+    if outcome:
+        base._atomic_json(
+            base.JOB / "chirp-waiting.json",
+            {
+                "job": base.JOB_NAME,
+                "checked_at": base._iso(),
+                "pending_chunks": counts.get("pending", 0),
+                "retryable_chunks": counts.get("retryable", 0),
+                "completed_chunks": counts.get("done", 0),
+                "processing_strategy": (
+                    "DYNAMIC_BATCHING"
+                    if base.DYNAMIC_BATCHING
+                    else "PROCESSING_STRATEGY_UNSPECIFIED"
+                ),
+            },
+        )
+        label = "RETRYABLE" if outcome == 76 else "PENDING"
+        print(
+            f"PIPELINE={label} completed={counts.get('done', 0)} "
+            f"pending={counts.get('pending', 0)} "
+            f"retryable={counts.get('retryable', 0)}"
+        )
+        return outcome
+    (base.JOB / "chirp-waiting.json").unlink(missing_ok=True)
+    return base._merge()
 
 
 def main() -> int:
     base._prepare_plan = _prepare_plan
     base.submit_chunk = submit_chunk
     base.recover_chunk_once = recover_chunk_once
+    base._recover_pass = _recover_pass
     return base.main()
 
 
