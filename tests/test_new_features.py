@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -36,6 +37,39 @@ class NewFeatureTests(unittest.TestCase):
         plan = module.compute_chunk_plan(2_000)
         self.assertEqual(plan[0], (0, 0.0, 900.0))
         self.assertEqual(plan[1][1], 890.0)
+
+    def test_dynamic_queue_recovers_expired_lease(self) -> None:
+        from app.pipeline.dynamic_state import next_waiting_dynamic
+
+        connection = sqlite3.connect(":memory:")
+        connection.row_factory = sqlite3.Row
+        connection.execute(
+            """
+            CREATE TABLE jobs(
+                id TEXT, status TEXT, active_stage TEXT, approved_at TEXT,
+                locked_by TEXT, lease_expires_at TEXT, updated_at TEXT,
+                created_at TEXT, batch_id TEXT, queue_position INTEGER
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO jobs VALUES(
+                'expired-job', 'transcribing', 'chirp', '2026-08-01T00:00:00+00:00',
+                'dead-worker', '2020-01-01T00:00:00+00:00',
+                '2026-08-01T00:00:00+00:00', '2026-08-01T00:00:00+00:00', NULL, 0
+            )
+            """
+        )
+
+        class Store:
+            def connect(self):
+                return connection
+
+        selected = next_waiting_dynamic(Store())
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected["id"], "expired-job")
+        connection.close()
 
     def test_safe_drive_publish_backs_up_existing_file(self) -> None:
         from app.jobs.drive_publish import publish_outputs
