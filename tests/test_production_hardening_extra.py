@@ -53,7 +53,7 @@ class ProductionHardeningExtraTests(unittest.TestCase):
             self.assertTrue(path.is_file())
             self.assertGreater(float(path.read_text(encoding="utf-8")), 0)
 
-    def test_delivery_success_updates_job_and_deduplicates_event(self) -> None:
+    def test_delivery_success_updates_job_and_deduplicates_events(self) -> None:
         from app.jobs.delivery_state import record_delivery_success
         from app.jobs.store import JobStore
 
@@ -132,18 +132,57 @@ class ProductionHardeningExtraTests(unittest.TestCase):
             )
             self.assertIn("重試成功", first["stage_detail"])
             self.assertEqual(first["revision"], second["revision"])
+
+            editor_one = record_delivery_success(
+                database,
+                job_id="job-1",
+                actor="editor-user",
+                source="editor",
+                backup_count=2,
+                published_revision=1,
+            )
+            editor_two = record_delivery_success(
+                database,
+                job_id="job-1",
+                actor="editor-user",
+                source="editor",
+                backup_count=2,
+                published_revision=2,
+            )
+            editor_two_repeat = record_delivery_success(
+                database,
+                job_id="job-1",
+                actor="editor-user",
+                source="editor",
+                backup_count=2,
+                published_revision=2,
+            )
+            self.assertGreater(editor_two["revision"], editor_one["revision"])
+            self.assertEqual(
+                editor_two["revision"],
+                editor_two_repeat["revision"],
+            )
+
             connection = sqlite3.connect(database)
             try:
-                count = connection.execute(
+                delivery_count = connection.execute(
                     """
                     SELECT COUNT(*) FROM job_events
                     WHERE job_id='job-1'
                       AND event_type='job_drive_delivery_completed'
                     """
                 ).fetchone()[0]
+                editor_count = connection.execute(
+                    """
+                    SELECT COUNT(*) FROM job_events
+                    WHERE job_id='job-1'
+                      AND event_type='job_drive_editor_published'
+                    """
+                ).fetchone()[0]
             finally:
                 connection.close()
-            self.assertEqual(count, 1)
+            self.assertEqual(delivery_count, 1)
+            self.assertEqual(editor_count, 2)
 
 
 if __name__ == "__main__":
