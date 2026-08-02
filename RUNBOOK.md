@@ -2,176 +2,185 @@
 
 ## Safety rules
 
-- Never print, copy, or commit the service-account JSON.
-- Keep `/opt/course-transcript/secrets/gcp-sa.json` outside Git and mount read-only.
-- Never overwrite Drive source media.
-- Do not send whole long media to Chirp when word timestamps are enabled.
-- After user authorization for this policy, the production pipeline may upload
-  only the selected derived formats after local QA passes, beside the source
-  file. It never overwrites source media; it keeps `awaiting_review` for
-  vocabulary review.
-- Do not print, commit, or copy a Cloudflare Tunnel token. Its VPS file must
-  remain `/opt/course-transcript/secrets/cloudflare-tunnel.env`, owned by root
-  with mode `600`.
-- Do not publish a Cloudflare hostname or change DNS until Cloudflare Access
-  has an explicit Allow policy approved by the user.
+- Never print, copy, or commit service-account JSON, rclone configuration, OAuth tokens, Cloudflare tunnel tokens, or secret environment values.
+- Keep `/opt/course-transcript/secrets/gcp-sa.json` outside Git and mount it read-only.
+- Keep `/opt/course-transcript/secrets/cloudflare-tunnel.env` owned by root with mode `600`.
+- Never overwrite or rename the Drive source media.
+- Derived Drive sidecars may be published only after local QA passes and only through the resumable safe-publish implementation.
+- Do not start a real Chirp, Gemini, or Drive mutation test without explicit approval for the exact source and estimated cost.
+- Do not delete provider manifests, raw responses, operation names, usage evidence, or Drive transaction state during recovery or rollback.
+
+## Production entry points
+
+- API: `app.api_hardened:app`
+- preflight worker: `app.jobs.preflight_observed`
+- paid pipeline worker: `app.pipeline.dynamic_worker_production`
+- delayed Drive delivery worker: `app.jobs.delivery_worker`
+- billing worker: `app.billing.worker`
+
+Successful hardened jobs finish as `completed`. The legacy `awaiting_review` status remains readable only so older jobs can be delivered or edited safely.
+
+## Shared-data and locking requirement
+
+`app.jobs.drive_lock` uses Linux `fcntl.flock` on a file below `/app/data`. Cross-container locking is valid only when every process uses the same underlying host directory.
+
+The production Compose file bind-mounts the repository's same `./data` directory to `/app/data` for `api`, `pipeline-worker`, and `delivery-worker`. Before every deployment, verify the rendered Compose configuration preserves that exact shared source path. Do not substitute a different named volume or container-local directory for any of those services.
 
 ## Cloudflare Tunnel connector
 
-The connector is defined separately in `docker-compose.cloudflare.yml` so it
-does not alter the existing web services. It has no host port, no GCP
-credential mount, and reaches the frontend only through the Docker network.
+The connector is defined in `docker-compose.cloudflare.yml`. It has no host port, no GCP credential mount, and reaches only `http://frontend:3000` through the Docker network. Never route the public hostname directly to `api:8000`.
 
-Start or inspect it on the VPS without printing the token:
+Inspect it without printing the token:
 
 ```bash
 sudo docker compose --env-file /opt/course-transcript/secrets/cloudflare-tunnel.env \
   -f docker-compose.yml -f docker-compose.cloudflare.yml \
-  --profile tunnel up -d cloudflared
-sudo docker compose --env-file /opt/course-transcript/secrets/cloudflare-tunnel.env \
-  -f docker-compose.yml -f docker-compose.cloudflare.yml \
-  ps cloudflared
+  --profile tunnel ps cloudflared
+
 sudo docker compose --env-file /opt/course-transcript/secrets/cloudflare-tunnel.env \
   -f docker-compose.yml -f docker-compose.cloudflare.yml \
   logs --tail=50 cloudflared
 ```
 
-Expected first result: the tunnel reports healthy connections in Cloudflare;
-no public route exists yet. After the user creates a Cloudflare Access
-application, a published hostname may map only to `http://frontend:3000`.
-Never map the hostname directly to `api:8000`.
+## Chirp dynamic-batch operation
 
-## Chirp result parsing
+The production path uses Speech-to-Text V2 Chirp 3 with dynamic batching by default.
 
-Use GCS output only. The first Chirp request is a 120-second serial canary;
-only after its GCS result validates may the normal 15-minute chunks run in
-parallel. Check `file_result.error`, inspect
-`file_result._pb.WhichOneof("result")`, require `cloud_storage_result`, and
-read `native_format_uri` with `uri` compatibility fallback. Do not use
-deprecated top-level `uri` or `transcript` fields.
+Important defaults:
+
+```dotenv
+CHIRP_DYNAMIC_BATCHING=true
+CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS=5
+CHIRP_RECOVERY_POLL_SECONDS=120
+CHIRP_PROVIDER_DEADLINE_SECONDS=90000
+CHIRP_OUTPUT_PROPAGATION_GRACE_SECONDS=300
+CHIRP_GCS_CLEANUP_AFTER_RECOVERY=true
+CHIRP_MAX_PARALLEL_CHUNKS=3
+CHIRP_MAX_PARALLEL_RECOVERY=3
+```
+
+`CHIRP_PROVIDER_DEADLINE_SECONDS` is the implemented 25-hour deadline. The obsolete name `CHIRP_RECOVERY_DEADLINE_SECONDS` is not read by the application.
+
+The current planner derives chunk windows from the audio and can retain an older compatible standard-batch plan. Do not assume all chunks are always 15 minutes. Each retained chunk must match its saved source offsets and processing strategy before reuse.
+
+Each new provider attempt uses an isolated GCS prefix. A submitted operation is durable evidence and must not be re-submitted merely because output is not yet visible.
+
+Recovery outcomes:
+
+- exit `75`: provider work is still pending;
+- exit `76`: transient provider/GCS error; schedule exponential backoff in one-pass dynamic recovery;
+- exit `78`: terminal condition requiring job failure or operator intervention.
+
+The recovery worker checks the saved long-running operation, waits only the bounded output-propagation grace after completion, and terminates work that exceeds the configured provider deadline.
 
 ## Merge rule
 
-Use word midpoint ownership, not text similarity. For this job, boundaries are
-derived from actual adjacent Chirp coverage. Earlier chunk keeps midpoint
-`< boundary`; later chunk keeps midpoint `>= boundary`. Do not treat silence
-as a transcription failure. A zero-word chunk is only retryable after a
-separate speech/VAD check confirms it contains speech.
+Use word midpoint ownership, not text similarity. Boundaries are derived from actual adjacent Chirp coverage. Earlier chunk keeps midpoint `< boundary`; later chunk keeps midpoint `>= boundary`.
 
-## Operation recovery
+Do not treat silence as transcription failure. A zero-word chunk is terminal only after a separate speech/VAD check confirms audible speech.
 
-When `BatchRecognize` operation polling returns 429, do not resubmit the
-audio. Persist the operation name, wait, and run `app.providers.recover_chunk`
-to recover the single GCS result object. Set `CHUNK_ROLE=patch` explicitly for
-a targeted repair; the recovery script preserves that role. `SUBMIT_ONLY=1`
-can create the operation without consuming polling quota.
+## Gemini correction
 
-The production Chirp pipeline now uses this behaviour by default: it submits
-each operation once, then polls the private GCS output prefix serially until
-the result object appears. It does not call the Speech long-running-operation
-endpoint while waiting. A `SUBMITTED` chunk is therefore recoverable evidence,
-not a reason to submit the same audio again.
+Gemini is text-only and must not change segment IDs or timestamps.
 
-## Current validated local exports
-
-Run `python -m app.providers.validate_outputs` in the worker container after
-the following generators complete:
-
-- `merge_chunks`, `build_srt`, `qa_report`
-- `correct_text` (Gemini 3.6 Flash, text-only)
-- `export_formats`
-
-Validated artifacts include raw and corrected SRT/VTT/ASS, structured JSON,
-TXT, Markdown, CSV, DOCX, PDF, terminology evidence, merge decisions, join QA,
-raw provider responses, JSON/HTML QA, usage, and checksummed processing
-manifest. Google Docs and Drive upload remain intentionally disabled.
-
-## Chinese subtitle segmentation
-
-Run `build_srt` only after merging the Chirp word timeline. The builder uses
-`jieba` locally to map character-level ASR timings to Chinese lexical units,
-then chooses boundaries at real speech gaps, punctuation (including ASR ASCII
-punctuation), and safe cue lengths. Do not reintroduce a fixed-duration split
-that can cut `時` from `間`, or split separate jieba tokens that map to the
-same Chirp word timing; the latter can create a zero-duration cue. Gemini
-receives the resulting fixed cues for text-only correction and must not change
-their timing.
-
-## Web batch preflight
-
-Set these non-secret production values in `/opt/course-transcript/.env`:
+Production defaults:
 
 ```dotenv
-COURSE_TRANSCRIPT_REQUIRE_ACCESS_HEADERS=true
-COURSE_TRANSCRIPT_PUBLIC_ORIGIN=https://transcript.randy88.ccwu.cc
-COURSE_TRANSCRIPT_COST_LIMIT_USD=200
-COURSE_TRANSCRIPT_COST_WARNING_THRESHOLDS_USD=50,100,160,190
-RCLONE_CONFIG_HOST_PATH=/home/ubuntu/.config/rclone/rclone.conf
+GEMINI_CORRECTION_WINDOW_MS=60000
+GEMINI_MAX_PARALLEL_WINDOWS=2
 ```
 
-The rclone config remains a host secret and is mounted read-only at
-`/run/secrets/rclone.conf`. Do not print its contents. Start the private web
-stack with:
+The model remains `gemini-3.6-flash`. Every paid response is stored under a prompt-version, source-digest, and attempt-unique audit filename. If a structured response is malformed, the parent response must be persisted before the window is split.
 
-```bash
-sudo docker compose --env-file .env \
-  -f docker-compose.yml -f docker-compose.cloudflare.yml \
-  --profile web --profile tunnel up -d --build
+Severe deletion, addition, repetition, or likely semantic rewrite triggers fallback to immutable Chirp text. The fallback reason must remain visible in corrected subtitle evidence and `content-qa.json`.
+
+## Subtitle segmentation and imports
+
+Run `build_srt` only after merging the Chirp word timeline. It uses local lexical segmentation and immutable timings.
+
+External SRT import is all-or-nothing. Reject the complete import when any cue is malformed, empty, non-positive, overlapping, out of order, or has minute/second components outside `00..59`. Never silently drop invalid cues.
+
+## Drive publication
+
+Automatic post-QA publication is controlled by:
+
+```dotenv
+COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE=true
+DRIVE_GLOBAL_MIN_INTERVAL_SECONDS=1.0
 ```
 
-Creating a batch performs only read-only listing and local preflight.
-`awaiting_confirmation` means no paid API call has started. The operator must
-open `/batches/{id}`, review the exact estimate, check the authorization box,
-and confirm. Exceeding the application US$200 estimate cap is rejected inside
-the same SQLite transaction.
+The publisher performs a resumable transaction for each selected sidecar:
 
-At batch creation, the web UI stores the requested user-facing attachments in
-each job's `output_formats_json`. The default is `srt`, `txt`, and `csv`; VTT,
-ASS, DOCX, and PDF are optional. This selection controls future download/
-Drive-publication choices only. JSON, raw provider responses, word timelines,
-manifests, and QA evidence remain private VPS artifacts regardless of that
-selection and must not be deleted merely because they are not selected.
+1. upload a pending file;
+2. verify the pending size;
+3. rename the existing final file to a timestamped backup;
+4. promote the pending file;
+5. verify the final size;
+6. persist every phase in `drive-publish-state.json`.
 
-## Explicit Drive publication recovery
+A completed file is request-free on resume. Drive failure must not repeat Chirp or Gemini.
 
-The current production policy is automatic post-QA publication to the source
-file's own Drive folder. Set `COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE=false`
-to disable it for a deployment. It uploads only the job's selected formats and
-uses the same one-job rate-safe `app.jobs.drive_publish` implementation.
+`delivery-worker` retries only existing local artifacts for both `completed` jobs and compatible legacy `awaiting_review` jobs. It must recheck editor ownership while holding the same global Drive lock before publishing or writing a failure state.
 
-The publisher uploads one selected attachment at a time with `rclone copyto
---checksum`, a global one-request-per-second ceiling across both copy and
-read-back commands, bounded retries, and a
-30/60/120-second backoff (with small jitter) for `rateLimitExceeded`. It writes
-`drive-publish-state.json` beside the job artifacts after every attempt. A
-completed file is not sent again when the command is resumed; a successful
-copy must also pass a precise remote-size read-back before it is recorded as
-completed. The state file never records an rclone response, OAuth material, or
-other secrets.
+## Subtitle editor publication
 
-Use the read-only rclone config mount. A message that rclone could not save a
-refreshed token is not proof of either success or failure: rely on the command
-exit status and the recorded remote-size read-back. If the publisher ends in
-`rate_limited`, it stops after the bounded retry window and records resumable
-state. Do not repeatedly list the Drive folder or re-run any paid
-transcription stage; resume only the publication step later.
+The editor stores overlay state separately from provider artifacts. A publish request must:
 
-Before deployment, run:
+1. snapshot the requested revision;
+2. acquire the global Drive lock;
+3. revalidate the current revision and prior editor marker;
+4. persist `editor_publish_in_progress` before any remote mutation;
+5. publish the isolated revision directory;
+6. mark the pipeline delivery as superseded;
+7. record the successful revision in job state and history.
+
+A delayed pipeline retry or an older editor request must never overwrite a newer manual revision.
+
+## Local validation
+
+Before deployment or merge:
 
 ```bash
+python -m compileall -q app tests
 python -m unittest discover -s tests -v
+python -c "from app.api_hardened import app; assert app.title"
+python -c "import app.pipeline.dynamic_worker_production"
+python -c "import app.jobs.delivery_worker"
+npm --prefix frontend ci
 npm --prefix frontend run build
-npm --prefix frontend audit --omit=dev
+npm --prefix frontend audit --omit=dev --audit-level=high
+docker compose --profile web config --quiet
+docker compose --profile billing config --quiet
 ```
 
-The production `pipeline-worker` stays idle until a revision-checked cost
-approval changes a job to `queued`. To exercise the same deterministic stages
-without cloud cost, set `COURSE_TRANSCRIPT_FAKE_PROVIDER=1` only on a dedicated
-test worker/job, then remove it before production. Never use health alone as
-proof; verify state transitions, artifacts, read-back hashes, restart
-persistence, and logs.
+No paid provider call is required for these checks.
 
-Pause/resume and failed-stage retry are available on the job page. Pause is
-observed at the next worker heartbeat; completed evidence remains intact.
-Retry resumes only the recorded failed stage and downstream stages—output
-failure never invalidates completed ASR evidence.
+## VPS deployment and acceptance
+
+Follow `docs/VPS_DEPLOY_GATE.md`. The required order is:
+
+1. confirm no active paid job or non-expired relevant lease;
+2. create verified backups of `data/course-transcript.db` and `data/jobs/`;
+3. pull the exact approved `main` commit;
+4. verify shared `/app/data` bind mounts;
+5. build ARM64 images;
+6. run non-paid tests and import checks;
+7. restart services and verify health/restart persistence;
+8. stop and request approval before real provider or Drive mutation tests.
+
+Do not treat container health alone as acceptance. Verify database state, artifacts, manifest hashes, event history, and logs.
+
+## Pause, retry, and rollback
+
+Pause is observed at worker heartbeat boundaries. Completed evidence remains intact. Retry resumes only the failed stage and downstream stages; output failure never invalidates completed ASR or Gemini evidence.
+
+Rollback:
+
+1. stop `pipeline-worker` and `delivery-worker`;
+2. confirm no active paid operation is being newly submitted;
+3. preserve all manifests and Drive transaction state;
+4. restore the pre-deployment source archive and database backup when necessary;
+5. set `CHIRP_DYNAMIC_BATCHING=false` only as an explicit rollback decision;
+6. rebuild and restart the prior worker entry point after verifying the database lease state.
+
+Already submitted dynamic operations remain billable and may complete after rollback. Recover them from saved operation/GCS evidence rather than re-submitting audio.
