@@ -45,6 +45,35 @@ def _content_validation(job: Path) -> tuple[list[str], list[dict[str, Any]]]:
     return errors, fallback_segments
 
 
+def _add_report_to_export_manifest(job: Path, report_path: Path) -> None:
+    manifest_path = job / "export-manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return
+    if not isinstance(manifest, dict):
+        return
+    artifacts = manifest.get("artifacts")
+    if not isinstance(artifacts, list):
+        return
+    artifacts[:] = [
+        item
+        for item in artifacts
+        if not isinstance(item, dict) or item.get("name") != report_path.name
+    ]
+    artifacts.append(
+        {
+            "name": report_path.name,
+            "size_bytes": report_path.stat().st_size,
+            "sha256": base.sha256(report_path),
+            "source": "post-correction severe content-drift validation",
+            "public": False,
+            "output_format": None,
+        }
+    )
+    atomic_json(manifest_path, manifest)
+
+
 def main() -> int:
     structural = base.main()
     errors, fallbacks = _content_validation(base.JOB)
@@ -59,7 +88,9 @@ def main() -> int:
             "timestamps_immutable": True,
         },
     }
-    atomic_json(base.JOB / "content-qa.json", report)
+    report_path = base.JOB / "content-qa.json"
+    atomic_json(report_path, report)
+    _add_report_to_export_manifest(base.JOB, report_path)
     print(
         f"CONTENT_QA={report['status']} errors={len(errors)} "
         f"fallbacks={len(fallbacks)}"
