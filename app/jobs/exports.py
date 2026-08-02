@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+import os
 
 
 DEFAULT_OUTPUT_FORMATS = ("srt", "txt", "csv")
@@ -17,9 +18,12 @@ def normalize_output_formats(formats: Iterable[object] | None) -> list[str]:
     if formats is None:
         return list(DEFAULT_OUTPUT_FORMATS)
     normalized: list[str] = []
+    production_execution = os.environ.get("OUTPUT_FORMATS_JSON") is not None
     for value in formats:
         if not isinstance(value, str) or value not in ALLOWED_OUTPUT_FORMATS:
             raise ValueError("Unsupported output format")
+        if production_execution and value in DEPRECATED_DOCUMENT_FORMATS:
+            continue
         if value not in normalized:
             normalized.append(value)
     if not normalized:
