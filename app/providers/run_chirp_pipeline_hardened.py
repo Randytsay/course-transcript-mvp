@@ -211,11 +211,18 @@ def _recover_pass(plan: list[tuple[int, float, float]]) -> int:
     if counts.get("failed", 0):
         print("PIPELINE=FAIL some chunk recoveries failed")
         return 1
+
+    retryable = counts.get("retryable", 0) > 0
+    pending = counts.get("pending", 0) > 0
     outcome = 0
-    if counts.get("retryable", 0):
-        outcome = 76
-    elif counts.get("pending", 0):
+    if retryable:
+        # Exit 76 is an orchestration signal only for one-pass dynamic recovery.
+        # Standard mode and direct polling must continue their bounded wait loop
+        # exactly as they do for an ordinary pending provider operation.
+        outcome = 76 if base.DYNAMIC_BATCHING and base.RECOVER_ONCE else 75
+    elif pending:
         outcome = 75
+
     if outcome:
         base._atomic_json(
             base.JOB / "chirp-waiting.json",
@@ -232,7 +239,7 @@ def _recover_pass(plan: list[tuple[int, float, float]]) -> int:
                 ),
             },
         )
-        label = "RETRYABLE" if outcome == 76 else "PENDING"
+        label = "RETRYABLE" if retryable else "PENDING"
         print(
             f"PIPELINE={label} completed={counts.get('done', 0)} "
             f"pending={counts.get('pending', 0)} "
