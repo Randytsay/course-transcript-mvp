@@ -80,9 +80,11 @@ def content_guard(raw: str, corrected: str) -> list[str]:
         elif ratio > 2.50:
             reasons.append("excessive_addition")
         similarity = SequenceMatcher(None, raw_text, corrected_text).ratio()
-        if similarity < 0.15 and abs(len(corrected_text) - len(raw_text)) > max(
-            12, round(len(raw_text) * 0.8)
-        ):
+        if len(raw_text) >= 20 and similarity < 0.20:
+            reasons.append("semantic_rewrite_risk")
+        elif similarity < 0.15 and abs(
+            len(corrected_text) - len(raw_text)
+        ) > max(12, round(len(raw_text) * 0.8)):
             reasons.append("semantic_rewrite_risk")
     return reasons
 
@@ -94,9 +96,11 @@ def _record_path(items: list[dict[str, Any]]) -> tuple[Any, str]:
         for item in items
     ]
     digest = hashlib.sha256(
-        json.dumps(source_segments, ensure_ascii=False, separators=(",", ":")).encode(
-            "utf-8"
-        )
+        json.dumps(
+            source_segments,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
     ).hexdigest()
     return base.WORK / f"{first}.json", digest
 
@@ -248,11 +252,54 @@ def correct_window(
     return {str(entry["segment_id"]): entry for entry in final}
 
 
+def _audit_details() -> dict[str, dict[str, Any]]:
+    details: dict[str, dict[str, Any]] = {}
+    for path in base.WORK.glob("*.json"):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for entry in record.get("segments", []):
+            if not isinstance(entry, dict) or not entry.get("segment_id"):
+                continue
+            details[str(entry["segment_id"])] = {
+                "fallback_reason": entry.get("fallback_reason"),
+                "content_qa_reasons": entry.get("content_qa_reasons", []),
+            }
+    return details
+
+
+def _enrich_published_json() -> None:
+    path = base.JOB / "subtitles-corrected.json"
+    if not path.is_file():
+        return
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    details = _audit_details()
+    fallback_count = 0
+    for item in payload.get("segments", []):
+        if not isinstance(item, dict):
+            continue
+        detail = details.get(str(item.get("segment_id") or ""), {})
+        item["fallback_reason"] = detail.get("fallback_reason")
+        item["content_qa_reasons"] = detail.get("content_qa_reasons", [])
+        if item.get("correction_fallback"):
+            fallback_count += 1
+    payload["prompt_version"] = PROMPT_VERSION
+    payload["content_guard_fallback_count"] = fallback_count
+    base.atomic_text(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+    )
+
+
 def main() -> int:
     base.PROMPT_VERSION = PROMPT_VERSION
     base.generate_json = generate_json
     base.correct_window = correct_window
-    return base.main()
+    result = base.main()
+    if result == 0:
+        _enrich_published_json()
+    return result
 
 
 if __name__ == "__main__":
