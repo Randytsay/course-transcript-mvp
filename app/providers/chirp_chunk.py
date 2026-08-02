@@ -20,6 +20,16 @@ JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
 JOB = DATA_DIR / "jobs" / JOB_NAME
 
 
+def _env_true(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+DYNAMIC_BATCHING = _env_true("CHIRP_DYNAMIC_BATCHING", default=False)
+
+
 def iso() -> str:
     return datetime.now(UTC).isoformat()
 
@@ -99,8 +109,6 @@ def main() -> None:
     attempt_count = int(prior.get("attempt_count") or 0) + 1
     chunk_started_at = iso()
 
-    # Never expose an older successful-looking partial transcript while a new
-    # provider attempt is in progress.
     (chunk / "partial-transcript.json").unlink(missing_ok=True)
     audio = chunk / "audio.flac"
     subprocess.run(
@@ -140,17 +148,21 @@ def main() -> None:
     )
     uri = f"gs://{bucket_name}/{object_name}"
     output_uri = f"gs://{bucket_name}/jobs/{JOB_NAME}/chunks/{name}/chirp-output/"
-    request_started_at = iso()
-    operation = client.batch_recognize(
-        request=cloud_speech.BatchRecognizeRequest(
-            recognizer=f"projects/{project}/locations/us/recognizers/_",
-            config=config,
-            files=[cloud_speech.BatchRecognizeFileMetadata(uri=uri)],
-            recognition_output_config=cloud_speech.RecognitionOutputConfig(
-                gcs_output_config=cloud_speech.GcsOutputConfig(uri=output_uri)
-            ),
-        )
+    request = cloud_speech.BatchRecognizeRequest(
+        recognizer=f"projects/{project}/locations/us/recognizers/_",
+        config=config,
+        files=[cloud_speech.BatchRecognizeFileMetadata(uri=uri)],
+        recognition_output_config=cloud_speech.RecognitionOutputConfig(
+            gcs_output_config=cloud_speech.GcsOutputConfig(uri=output_uri)
+        ),
+        processing_strategy=(
+            cloud_speech.BatchRecognizeRequest.ProcessingStrategy.DYNAMIC_BATCHING
+            if DYNAMIC_BATCHING
+            else cloud_speech.BatchRecognizeRequest.ProcessingStrategy.PROCESSING_STRATEGY_UNSPECIFIED
+        ),
     )
+    request_started_at = iso()
+    operation = client.batch_recognize(request=request)
     submitted_at = iso()
     role = os.getenv("CHUNK_ROLE", "base")
     record: dict[str, object] = {
@@ -168,16 +180,21 @@ def main() -> None:
         "submitted_at": submitted_at,
         "submit_latency_ms": elapsed_ms(request_started_at, submitted_at),
         "created_at": submitted_at,
+        "processing_strategy": (
+            "DYNAMIC_BATCHING" if DYNAMIC_BATCHING else "PROCESSING_STRATEGY_UNSPECIFIED"
+        ),
+        "dynamic_batching": DYNAMIC_BATCHING,
     }
     atomic(manifest_path, record)
 
-    # The main pipeline normally uses GCS output as the completion signal and
-    # lets recover_chunk read it later, avoiding aggressive LRO polling.
     if os.getenv("SUBMIT_ONLY") == "1":
-        print(f"CHIRP_{name}=SUBMITTED operation={operation.operation.name}")
+        print(
+            f"CHIRP_{name}=SUBMITTED operation={operation.operation.name} "
+            f"strategy={record['processing_strategy']}"
+        )
         return
 
-    response = operation.result(timeout=3600)
+    response = operation.result(timeout=90_000 if DYNAMIC_BATCHING else 3_600)
     provider_completed_at = iso()
     file_result = response.results[uri]
     result_kind = file_result._pb.WhichOneof("result")

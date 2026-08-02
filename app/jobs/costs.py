@@ -15,6 +15,13 @@ def _money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.0001"), rounding=ROUND_UP)
 
 
+def _env_true(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 @dataclass(frozen=True)
 class CostConfig:
     project_limit_usd: Decimal = Decimal("200")
@@ -44,13 +51,23 @@ class CostConfig:
             ).split(",")
             if item.strip()
         )
+        dynamic_batching = _env_true("CHIRP_DYNAMIC_BATCHING", default=False)
+        default_chirp_price = "0.003" if dynamic_batching else "0.016"
+        default_pricing_version = (
+            "google-cloud-speech-v2-dynamic-batching-2026-08"
+            if dynamic_batching
+            else "google-cloud-public-pricing-2026-07-31"
+        )
         return cls(
             project_limit_usd=Decimal(
                 os.environ.get("COURSE_TRANSCRIPT_COST_LIMIT_USD", "200")
             ),
             warning_thresholds_usd=thresholds,
             chirp_usd_per_minute=Decimal(
-                os.environ.get("COURSE_TRANSCRIPT_CHIRP_USD_PER_MINUTE", "0.016")
+                os.environ.get(
+                    "COURSE_TRANSCRIPT_CHIRP_USD_PER_MINUTE",
+                    default_chirp_price,
+                )
             ),
             gemini_input_usd_per_million_tokens=Decimal(
                 os.environ.get("COURSE_TRANSCRIPT_GEMINI_INPUT_USD_PER_MILLION", "1.50")
@@ -75,7 +92,7 @@ class CostConfig:
             ),
             pricing_version=os.environ.get(
                 "COURSE_TRANSCRIPT_PRICING_VERSION",
-                "google-cloud-public-pricing-2026-07-31",
+                default_pricing_version,
             ),
         )
 

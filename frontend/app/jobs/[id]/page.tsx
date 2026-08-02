@@ -2,9 +2,22 @@ import LiveJobPage from "@/components/live-job-page";
 import JobControls from "@/components/job-controls";
 import Link from "next/link";
 
-type PageProps = {
-  params: Promise<{ id: string }>;
-};
+type PageProps = { params: Promise<{ id: string }> };
+
+const linkStyle = {
+  minHeight: "48px",
+  padding: "0 18px",
+  borderRadius: "12px",
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  color: "#27324a",
+  background: "#fff",
+  border: "2px solid #aeb9c8",
+  boxShadow: "0 10px 28px rgba(15,23,42,.16)",
+  fontSize: "1rem",
+  fontWeight: 750,
+} as const;
 
 export default async function Page({ params }: PageProps) {
   const { id } = await params;
@@ -24,43 +37,9 @@ export default async function Page({ params }: PageProps) {
           justifyContent: "flex-end",
         }}
       >
-        <Link
-          href={`/jobs/${id}/performance`}
-          style={{
-            minHeight: "48px",
-            padding: "0 18px",
-            borderRadius: "12px",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#27324a",
-            background: "#fff",
-            border: "2px solid #aeb9c8",
-            boxShadow: "0 10px 28px rgba(15,23,42,.16)",
-            fontSize: "1rem",
-            fontWeight: 750,
-          }}
-        >
-          效能與費用分析
-        </Link>
-        <Link
-          href={`/jobs/${id}/review`}
-          style={{
-            minHeight: "48px",
-            padding: "0 18px",
-            borderRadius: "12px",
-            display: "inline-flex",
-            alignItems: "center",
-            justifyContent: "center",
-            color: "#fff",
-            background: "#3730a3",
-            boxShadow: "0 10px 28px rgba(55,48,163,.28)",
-            fontSize: "1rem",
-            fontWeight: 750,
-          }}
-        >
-          完整審查與輸出
-        </Link>
+        <Link href={`/jobs/${id}/performance`} style={linkStyle}>效能與費用分析</Link>
+        <Link href={`/subtitles/${id}`} style={{ ...linkStyle, color: "#fff", background: "#047857", borderColor: "#047857" }}>字幕校訂中心</Link>
+        <Link href={`/jobs/${id}/review`} style={{ ...linkStyle, color: "#fff", background: "#3730a3", borderColor: "#3730a3" }}>完整審查與輸出</Link>
       </nav>
       <JobControls jobId={id} />
     </>
