@@ -10,6 +10,7 @@ from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
+from app.jobs.delivery_state import record_delivery_success
 from app.jobs.drive_lock import drive_publish_lock
 from app.jobs.drive_publish import (
     DrivePublishError,
@@ -113,7 +114,25 @@ def _schedule_failure(job_dir: Path, error: str) -> dict[str, Any]:
     return state
 
 
-def _mark_completed(job_dir: Path, result: dict[str, Any]) -> None:
+def _mark_completed(
+    record: dict[str, Any],
+    job_dir: Path,
+    result: dict[str, Any],
+) -> None:
+    # Update the visible job detail and event log before changing the retry
+    # manifest. If the database transaction fails, the completed rclone state
+    # remains idempotent and this delivery is selected again for a metadata-only
+    # retry without another remote upload.
+    record_delivery_success(
+        DATABASE,
+        job_id=str(record["id"]),
+        actor=os.environ.get(
+            "COURSE_TRANSCRIPT_DELIVERY_WORKER_ID",
+            "drive-delivery-worker-1",
+        ),
+        source="delivery_worker",
+        backup_count=int(result.get("backup_count", 0)),
+    )
     atomic_json(
         job_dir / "drive-delivery-state.json",
         {
@@ -155,9 +174,17 @@ def run_once() -> bool:
                 output_formats=output_formats,
                 authorized=True,
             )
-            _mark_completed(job_dir, result)
+            _mark_completed(record, job_dir, result)
         print(f"DRIVE_DELIVERY=PASS job={record['id']}")
-    except (DrivePublishError, OSError, ValueError, json.JSONDecodeError) as exc:
+    except (
+        DrivePublishError,
+        OSError,
+        ValueError,
+        LookupError,
+        RuntimeError,
+        sqlite3.Error,
+        json.JSONDecodeError,
+    ) as exc:
         # A concurrent successful editor publication may have superseded this
         # retry while the exception was raised. Never turn that into pending.
         if _superseded(job_dir):
