@@ -23,9 +23,14 @@ for route in base.router.routes:
 
 def parse_srt_strict(text: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
     normalized = text.replace("\r\n", "\n").replace("\r", "\n").strip()
-    blocks = [block for block in base.re.split(r"\n\s*\n", normalized) if block.strip()]
+    blocks = [
+        block
+        for block in base.re.split(r"\n\s*\n", normalized)
+        if block.strip()
+    ]
     segments: list[dict[str, Any]] = []
     invalid_blocks: list[int] = []
+    previous_end = -1
     for block_number, block in enumerate(blocks, 1):
         lines = [line.strip("\ufeff") for line in block.splitlines()]
         if len(lines) < 2:
@@ -43,9 +48,10 @@ def parse_srt_strict(text: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
         values = [int(value) for value in match.groups()]
         start = ((values[0] * 60 + values[1]) * 60 + values[2]) * 1000 + values[3]
         end = ((values[4] * 60 + values[5]) * 60 + values[6]) * 1000 + values[7]
-        if end <= start:
+        if end <= start or start < previous_end:
             invalid_blocks.append(block_number)
             continue
+        previous_end = end
         segment_id = str(len(segments) + 1)
         segments.append(
             {
@@ -62,7 +68,10 @@ def parse_srt_strict(text: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
         raise HTTPException(
             status_code=422,
             detail={
-                "message": "SRT contains invalid cues; no partial import was performed",
+                "message": (
+                    "SRT contains invalid or overlapping cues; "
+                    "no partial import was performed"
+                ),
                 "total_blocks": len(blocks),
                 "valid_blocks": len(segments),
                 "invalid_blocks": invalid_blocks[:100],
@@ -76,6 +85,34 @@ def parse_srt_strict(text: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
         "valid_blocks": len(segments),
         "invalid_count": 0,
     }
+
+
+def _mark_pipeline_delivery_superseded(
+    directory: Path,
+    *,
+    revision: int,
+    actor: str,
+) -> None:
+    base._atomic_json(
+        directory / "drive-delivery-state.json",
+        {
+            "status": "superseded_by_editor",
+            "superseded_at": base._iso(),
+            "editor_revision": revision,
+            "actor": actor,
+            "next_attempt_at": None,
+        },
+    )
+    for name in ("pipeline-manifest.json", "processing_manifest.json"):
+        path = directory / name
+        payload = base._read_json(path, {})
+        if not isinstance(payload, dict) or not payload:
+            continue
+        payload["drive_publication_status"] = "superseded_by_editor"
+        payload["drive_publication_error"] = None
+        payload["editor_published_revision"] = revision
+        payload["drive_delivery_updated_at"] = base._iso()
+        base._atomic_json(path, payload)
 
 
 @router.post("/api/v1/subtitles/import", status_code=201)
@@ -99,7 +136,10 @@ def import_srt(payload: base.ImportSrtRequest, request: Request) -> dict[str, An
         },
     )
     base._save_state(directory, base._edit_state(directory))
-    return {**base._summary(subtitle_id, directory, "imported"), "parse_stats": stats}
+    return {
+        **base._summary(subtitle_id, directory, "imported"),
+        "parse_stats": stats,
+    }
 
 
 @router.post("/api/v1/subtitles/{subtitle_id}/publish")
@@ -117,7 +157,15 @@ def publish_edited(
         )
     record = base._job_record(subtitle_id)
     if not record or not str(record.get("source_path", "")).startswith("gdrive:"):
-        raise HTTPException(status_code=409, detail="Original Drive source is unavailable")
+        raise HTTPException(
+            status_code=409,
+            detail="Original Drive source is unavailable",
+        )
+    if str(record.get("status") or "") not in {"completed", "awaiting_review"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Transcription must complete before edited subtitles can be published",
+        )
 
     with base._LOCK:
         segments, state = base._current_segments(directory)
@@ -142,6 +190,14 @@ def publish_edited(
             output_formats=payload.output_formats,
             authorized=True,
         )
+        # This is written before releasing the source lock. A delivery worker
+        # that selected the old pipeline retry earlier must recheck it after
+        # acquiring the same lock and will not overwrite this edited revision.
+        _mark_pipeline_delivery_superseded(
+            directory,
+            revision=snapshot_revision,
+            actor=actor,
+        )
 
     with base._LOCK:
         latest = base._edit_state(directory)
@@ -155,7 +211,9 @@ def publish_edited(
                 "created_at": base._iso(),
                 "output_formats": payload.output_formats,
                 "backup_count": result.get("backup_count", 0),
-                "revision_changed_during_publish": current_revision != snapshot_revision,
+                "revision_changed_during_publish": (
+                    current_revision != snapshot_revision
+                ),
             }
         )
         base._save_state(directory, latest)
