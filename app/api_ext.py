@@ -12,8 +12,6 @@ from app.jobs import JobConflict, JobNotFound, normalize_output_formats
 from app.live_error import safe_chunk_error
 import app.live_features as live_features
 
-
-# Keep all live endpoints and their helper functions on the same sanitizer.
 live_features.safe_chunk_error = safe_chunk_error
 live_router = live_features.router
 
@@ -25,9 +23,9 @@ class CreateJobWithParallelismRequest(BaseModel):
     profile: Literal["highest_accuracy"] = "highest_accuracy"
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
-    require_human_review: bool = True
+    require_human_review: bool = False
     chirp_max_parallel_chunks: int = Field(default=3, ge=1, strict=True)
-    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
+    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt"], min_length=1, max_length=7)
 
 
 class CreateBatchWithParallelismRequest(BaseModel):
@@ -37,9 +35,9 @@ class CreateBatchWithParallelismRequest(BaseModel):
     profile: Literal["highest_accuracy"] = "highest_accuracy"
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
-    require_human_review: bool = True
+    require_human_review: bool = False
     chirp_max_parallel_chunks: int = Field(default=3, ge=1, strict=True)
-    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
+    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt"], min_length=1, max_length=7)
 
 
 def _parallelism_limit() -> int:

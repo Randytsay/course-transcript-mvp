@@ -9,6 +9,7 @@ services:
         required: false
     environment:
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
+      CHIRP_DYNAMIC_BATCHING: ${CHIRP_DYNAMIC_BATCHING:-true}
     volumes:
       - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
       - ./logs:/app/logs
@@ -39,6 +40,7 @@ services:
       COURSE_TRANSCRIPT_RCLONE_FAST_LIST: "false"
       COURSE_TRANSCRIPT_REQUIRE_ACCESS_HEADERS: "true"
       COURSE_TRANSCRIPT_PUBLIC_ORIGIN: "https://transcript.randy88.ccwu.cc"
+      CHIRP_DYNAMIC_BATCHING: ${CHIRP_DYNAMIC_BATCHING:-true}
       BILLING_SNAPSHOT_STALE_SECONDS: ${BILLING_SNAPSHOT_STALE_SECONDS:-3600}
       RCLONE_CONFIG: /run/secrets/rclone.conf
     volumes:
@@ -71,6 +73,7 @@ services:
       COURSE_TRANSCRIPT_COST_WARNING_THRESHOLDS_USD: "50,100,160,190"
       COURSE_TRANSCRIPT_MINIMUM_FREE_SPACE_GB: "3"
       COURSE_TRANSCRIPT_WORKER_ID: "preflight-worker-1"
+      CHIRP_DYNAMIC_BATCHING: ${CHIRP_DYNAMIC_BATCHING:-true}
       RCLONE_CONFIG: /run/secrets/rclone.conf
     volumes:
       - ./data:/app/data
@@ -98,10 +101,15 @@ services:
       GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
       GCS_BUCKET: ${GCS_BUCKET:-course-transcript-mvp}
       RCLONE_CONFIG: /run/secrets/rclone.conf
+      CHIRP_DYNAMIC_BATCHING: ${CHIRP_DYNAMIC_BATCHING:-true}
+      CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS: ${CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS:-5}
+      CHIRP_RECOVERY_POLL_SECONDS: ${CHIRP_RECOVERY_POLL_SECONDS:-120}
+      CHIRP_RECOVERY_DEADLINE_SECONDS: ${CHIRP_RECOVERY_DEADLINE_SECONDS:-90000}
       CHIRP_MAX_PARALLEL_CHUNKS: ${CHIRP_MAX_PARALLEL_CHUNKS:-3}
       CHIRP_CANARY_DURATION_SECONDS: ${CHIRP_CANARY_DURATION_SECONDS:-120}
       CHIRP_MAX_PARALLEL_CHUNKS_LIMIT: ${CHIRP_MAX_PARALLEL_CHUNKS_LIMIT:-5}
       CHIRP_MAX_PARALLEL_RECOVERY: ${CHIRP_MAX_PARALLEL_RECOVERY:-3}
+      GEMINI_CORRECTION_WINDOW_MS: ${GEMINI_CORRECTION_WINDOW_MS:-60000}
       GEMINI_MAX_PARALLEL_WINDOWS: ${GEMINI_MAX_PARALLEL_WINDOWS:-2}
       COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE: ${COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE:-true}
     volumes:
@@ -110,7 +118,7 @@ services:
       - ./tmp:/app/tmp
       - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
-    command: ["python", "-m", "app.pipeline.worker_observed"]
+    command: ["python", "-m", "app.pipeline.dynamic_worker_observed"]
 
   billing-worker:
     profiles: ["billing"]

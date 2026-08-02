@@ -1,4 +1,10 @@
-"""Gemini 3.6 Flash text-only correction for immutable subtitle segments."""
+"""Gemini 3.6 Flash text-only correction for immutable subtitle segments.
+
+The default correction window is deliberately larger than the original
+30-second setting to reduce API round trips. Every response is checked against
+its exact input segment IDs; malformed or incomplete larger windows are split
+and retried without changing timestamps or segment boundaries.
+"""
 from __future__ import annotations
 
 import concurrent.futures
@@ -19,9 +25,9 @@ DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 WORK = JOB / "correction-v2"
 MODEL = "gemini-3.6-flash"
-WINDOW_MS = int(os.environ.get("GEMINI_CORRECTION_WINDOW_MS", "30000"))
+WINDOW_MS = max(15_000, int(os.environ.get("GEMINI_CORRECTION_WINDOW_MS", "60000")))
 MAX_WORKERS = max(1, int(os.environ.get("GEMINI_MAX_PARALLEL_WINDOWS", "2")))
-PROMPT_VERSION = "fixed-segments-v2-observed"
+PROMPT_VERSION = "fixed-segments-v3-adaptive-window"
 _CLIENTS = threading.local()
 
 TERMS_SCHEMA = {
@@ -226,6 +232,19 @@ def windows(segments: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return result
 
 
+def _fallback(items: list[dict[str, Any]], reason: str) -> dict[str, dict[str, Any]]:
+    return {
+        str(item["segment_id"]): {
+            "segment_id": str(item["segment_id"]),
+            "corrected_text": item["raw_text"],
+            "uncertain_terms": [],
+            "fallback_to_raw": True,
+            "fallback_reason": reason,
+        }
+        for item in items
+    }
+
+
 def correct_window(
     items: list[dict[str, Any]],
     terms: list[dict[str, Any]],
@@ -243,10 +262,14 @@ def correct_window(
             and record.get("source_segments") == source_segments
             and record.get("prompt_version") == PROMPT_VERSION
         ):
-            return {
-                entry["segment_id"]: entry
+            cached = {
+                str(entry["segment_id"]): entry
                 for entry in record.get("segments", [])
+                if isinstance(entry, dict) and entry.get("segment_id")
             }
+            if set(cached) == {str(item["segment_id"]) for item in items}:
+                return cached
+
     prompt = (
         "Correct Traditional-Chinese ASR text only. Preserve meaning; do not "
         "summarize, add information, split, merge, reorder, or alter segment IDs/"
@@ -264,27 +287,53 @@ def correct_window(
         )
     )
     response, metrics = generate_json(prompt, CORRECTION_SCHEMA)
-    received = json.loads(response.text).get("segments", [])  # type: ignore[attr-defined]
-    by_id = {entry.get("segment_id"): entry for entry in received}
-    final: list[dict[str, Any]] = []
-    for item in items:
-        answer = by_id.get(item["segment_id"], {})
-        text = (
-            answer.get("corrected_text")
-            if isinstance(answer.get("corrected_text"), str)
-            else item["raw_text"]
-        )
-        final.append(
-            {
-                "segment_id": item["segment_id"],
-                "corrected_text": text,
-                "uncertain_terms": answer.get("uncertain_terms", []),
-                "fallback_to_raw": item["segment_id"] not in by_id,
-            }
-        )
+    try:
+        received = json.loads(response.text).get("segments", [])  # type: ignore[attr-defined]
+    except (json.JSONDecodeError, AttributeError, TypeError):
+        received = []
+    by_id = {
+        str(entry.get("segment_id")): entry
+        for entry in received
+        if isinstance(entry, dict) and entry.get("segment_id") is not None
+    }
+    expected_ids = [str(item["segment_id"]) for item in items]
+    response_valid = set(by_id) == set(expected_ids) and len(received) == len(items)
+
+    if not response_valid and len(items) > 1:
+        midpoint = len(items) // 2
+        left = correct_window(items[:midpoint], terms)
+        right = correct_window(items[midpoint:], terms)
+        return {**left, **right}
+
+    if not response_valid:
+        final_map = _fallback(items, "model_response_missing_or_mismatched_segment_ids")
+        final = list(final_map.values())
+    else:
+        final = []
+        for item in items:
+            segment_id = str(item["segment_id"])
+            answer = by_id[segment_id]
+            text = (
+                answer.get("corrected_text")
+                if isinstance(answer.get("corrected_text"), str)
+                else item["raw_text"]
+            )
+            uncertain_terms = answer.get("uncertain_terms", [])
+            if not isinstance(uncertain_terms, list):
+                uncertain_terms = []
+            final.append(
+                {
+                    "segment_id": segment_id,
+                    "corrected_text": text,
+                    "uncertain_terms": [str(value) for value in uncertain_terms],
+                    "fallback_to_raw": False,
+                }
+            )
+
     record = {
         "model": MODEL,
         "prompt_version": PROMPT_VERSION,
+        "configured_window_ms": WINDOW_MS,
         "source_start_ms": items[0]["start_ms"],
         "source_end_ms": items[-1]["end_ms"],
         "source_segments": source_segments,
@@ -297,12 +346,15 @@ def correct_window(
         ).hexdigest(),
         "usage_metadata": _usage(response),
         "raw_response": response.text,  # type: ignore[attr-defined]
+        "response_segment_count": len(received),
+        "expected_segment_count": len(items),
+        "response_valid": response_valid,
         "segments": final,
         "cache_hit": False,
         **metrics,
     }
     atomic_text(path, json.dumps(record, ensure_ascii=False, indent=2) + "\n")
-    return {entry["segment_id"]: entry for entry in final}
+    return {str(entry["segment_id"]): entry for entry in final}
 
 
 def timestamp(value: int, separator: str = ",") -> str:
@@ -385,9 +437,14 @@ def main() -> int:
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
         results = list(pool.map(lambda group: correct_window(group, terms), groups))
     corrected = {key: value for result in results for key, value in result.items()}
+    expected_ids = {str(item["segment_id"]) for item in raw}
+    if set(corrected) != expected_ids:
+        print("CORRECT=FAIL corrected segment set does not match source")
+        return 1
+
     final: list[dict[str, Any]] = []
     for item in raw:
-        answer = corrected[item["segment_id"]]
+        answer = corrected[str(item["segment_id"])]
         final.append(
             {
                 **item,
@@ -395,16 +452,19 @@ def main() -> int:
                 "text": answer["corrected_text"],
                 "uncertain_terms": answer["uncertain_terms"],
                 "corrected": answer["corrected_text"] != item["raw_text"],
+                "correction_fallback": bool(answer.get("fallback_to_raw")),
             }
         )
     payload = {
         "source": "chirp_3_merged + gemini-3.6-flash segment correction",
         "model": MODEL,
         "prompt_version": PROMPT_VERSION,
+        "configured_window_ms": WINDOW_MS,
         "window_count": len(groups),
         "parallelism": MAX_WORKERS,
         "segment_count": len(final),
         "corrected_count": sum(item["corrected"] for item in final),
+        "fallback_count": sum(item["correction_fallback"] for item in final),
         "total_duration_ms": final[-1]["end_ms"],
         "segments": final,
     }
@@ -447,7 +507,8 @@ def main() -> int:
     write_review_terms(final, terms)
     print(
         f"CORRECT=PASS segments={len(final)} changed={payload['corrected_count']} "
-        f"terms={len(terms)} windows={len(groups)} workers={MAX_WORKERS}"
+        f"fallback={payload['fallback_count']} terms={len(terms)} "
+        f"windows={len(groups)} workers={MAX_WORKERS} window_ms={WINDOW_MS}"
     )
     return 0
 

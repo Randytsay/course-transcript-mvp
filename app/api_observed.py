@@ -1,4 +1,4 @@
-"""Production API entry point with cancellation and performance observability."""
+"""Production API entry point with cancellation, performance and subtitle tools."""
 from __future__ import annotations
 
 import os
@@ -16,7 +16,8 @@ from app.jobs.cancellation import (
     CancellationNotFound,
     request_cancellation,
 )
-from app.jobs.performance import build_performance_summary, write_performance_reports
+from app.jobs.performance_enhanced import build_performance_summary, write_performance_reports
+from app.subtitles.editor import router as subtitle_router
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 DATABASE_PATH = DATA_DIR / "course-transcript.db"
@@ -99,3 +100,4 @@ def get_job_performance_report(job_id: str, report_format: str) -> FileResponse:
 
 
 app.include_router(router)
+app.include_router(subtitle_router)

@@ -1,0 +1,96 @@
+# Dynamic Batch, Safe Drive Publish, and Subtitle Editor Handoff
+
+## Scope
+
+This change keeps `gemini-3.6-flash` and changes the operating model:
+
+1. Chirp 3 uses Speech-to-Text V2 dynamic batching by default.
+2. Up to five source jobs may wait in Google simultaneously without holding the global worker lease.
+3. The worker periodically recovers completed GCS results and resumes from durable manifests after restart.
+4. Gemini correction uses 60-second windows (parallelism remains 2) and recursively splits a window if the response loses or changes segment IDs.
+5. Successful QA no longer blocks on human review. Jobs finish as `completed`; review terms remain optional signals for the subtitle editor.
+6. Default user-facing output is SRT + TXT. DOCX/PDF are no longer generated.
+7. Drive publication never overwrites a same-name sidecar. It uploads a pending file, verifies it, renames the old final file to `.backup-YYYYMMDD-HHMMSS`, promotes the new file, and verifies it again.
+8. `/subtitles` provides optional post-editing, suspected-problem filters, exact batch replacement, external SRT import, version history, and safe edited SRT/TXT republishing.
+
+## Durable dynamic-batch states
+
+- `chirp-submitted.json`: all chunk operations were retained.
+- `chirp-waiting.json`: last non-blocking recovery pass still found pending chunks.
+- `chirp-complete.json`: all chunk results were recovered and merged.
+- Each chunk retains `operation_name`, processing strategy, timestamps, retries and raw evidence.
+
+The database keeps the job in `status=transcribing`, `active_stage=chirp` while the lease is released. This allows other source files to be prepared and submitted.
+
+## Environment defaults
+
+```env
+CHIRP_DYNAMIC_BATCHING=true
+CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS=5
+CHIRP_RECOVERY_POLL_SECONDS=120
+CHIRP_RECOVERY_DEADLINE_SECONDS=90000
+GEMINI_CORRECTION_WINDOW_MS=60000
+GEMINI_MAX_PARALLEL_WINDOWS=2
+COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE=true
+```
+
+Dynamic-batch estimates use `US$0.003/min` unless `COURSE_TRANSCRIPT_CHIRP_USD_PER_MINUTE` overrides it. Cloud Billing remains authoritative.
+
+## Safe Drive publication
+
+For `lesson.mp3` and an existing `lesson.srt`:
+
+1. Upload `.lesson.<job-id>.pending.srt`.
+2. Verify pending size.
+3. Rename existing `lesson.srt` to `lesson.backup-<UTC timestamp>.srt`.
+4. Rename pending to `lesson.srt`.
+5. Verify final size.
+6. Persist every phase in `drive-publish-state.json`.
+
+A restart resumes the recorded phase. It must not rerun Chirp or Gemini.
+
+## Subtitle editor storage
+
+Manual edits do not mutate `subtitles.json` or `subtitles-corrected.json`.
+
+- `subtitle-editor.json`: overlay edits, monotonically increasing revision and history.
+- `subtitle-editor/current.json`: materialized current cues.
+- `subtitle-editor/current.srt`: current edited subtitle.
+- `subtitle-editor/current.txt`: current edited transcript.
+- `editor-publish/revision-N/`: isolated safe-publish transaction for one revision.
+
+Batch replace requires a preview and the exact revision of every selected subtitle, preventing stale mass changes.
+
+## Pre-deployment validation
+
+No paid provider request is required for CI.
+
+```bash
+python -m compileall app
+pytest -q
+npm --prefix frontend ci
+npm --prefix frontend run build
+docker compose --profile web config
+```
+
+Before the first production deployment:
+
+1. Confirm there is no active paid job.
+2. Back up `data/course-transcript.db` and the `data/jobs` directory.
+3. Build the ARM64 images on the Oracle host.
+4. Start the web profile and verify API/frontend health checks.
+5. Run one small explicitly approved dynamic-batch job.
+6. Confirm its chunk manifests show `DYNAMIC_BATCHING`.
+7. Test same-name SRT handling in a disposable Drive folder and verify the old file was renamed, not overwritten.
+8. Compare one completed subtitle against the previous 30-second Gemini baseline before increasing the window beyond 60 seconds.
+
+## Rollback
+
+1. Stop `pipeline-worker`.
+2. Set `CHIRP_DYNAMIC_BATCHING=false`.
+3. Restore the previous worker command:
+   `python -m app.pipeline.worker_observed`.
+4. Rebuild/restart after confirming no lease is active.
+5. Retain operation manifests and Drive publication state; do not delete provider evidence.
+
+Already submitted dynamic operations remain billable and may complete after rollback. Recovery can be performed from their saved operation/GCS evidence.

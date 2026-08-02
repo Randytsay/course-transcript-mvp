@@ -1,8 +1,13 @@
 """Submit Chirp 3 chunks, recover private GCS results, then merge.
 
-The first chunk is a short canary. Remaining submissions and GCS result
-recovery use bounded concurrency. Recovery never resubmits a retained Speech
-operation and does not poll the long-running-operation endpoint.
+Dynamic batching supports two durable orchestration modes:
+
+* ``CHIRP_SUBMIT_ONLY=1`` submits every retained chunk operation and exits.
+* ``CHIRP_RECOVER_ONCE=1`` performs one non-blocking recovery pass, returning
+  exit code 75 while provider results are still pending.
+
+The dynamic pipeline worker uses those modes to release its source lease while
+Google schedules work, allowing several source files to be in flight at once.
 """
 from __future__ import annotations
 
@@ -12,12 +17,26 @@ import subprocess
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import UTC, datetime
 from pathlib import Path
+from typing import Callable
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
 JOB = DATA_DIR / "jobs" / JOB_NAME
 CHUNKS = JOB / "chunks"
+
+
+def _env_true(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _iso() -> str:
+    return datetime.now(UTC).isoformat()
+
 
 CHUNK_DURATION_S = 900
 CANARY_DURATION_S = max(
@@ -43,6 +62,22 @@ MAX_PARALLEL_RECOVERY = max(
         ),
     ),
 )
+DYNAMIC_BATCHING = _env_true("CHIRP_DYNAMIC_BATCHING", default=False)
+SUBMIT_ONLY = _env_true("CHIRP_SUBMIT_ONLY", default=False)
+RECOVER_ONCE = _env_true("CHIRP_RECOVER_ONCE", default=False)
+RECOVERY_POLL_SECONDS = max(
+    10,
+    int(os.environ.get("CHIRP_RECOVERY_POLL_SECONDS", "120" if DYNAMIC_BATCHING else "20")),
+)
+RECOVERY_DEADLINE_SECONDS = max(
+    3_600,
+    int(
+        os.environ.get(
+            "CHIRP_RECOVERY_DEADLINE_SECONDS",
+            "90000" if DYNAMIC_BATCHING else "7200",
+        )
+    ),
+)
 
 KEEP_ENV = (
     "COURSE_TRANSCRIPT_DATA_DIR",
@@ -52,6 +87,8 @@ KEEP_ENV = (
     "GOOGLE_APPLICATION_CREDENTIALS",
     "JOB_NAME",
     "LANGUAGE_CODE",
+    "CHIRP_DYNAMIC_BATCHING",
+    "CHIRP_SPEECH_MEAN_VOLUME_DB",
 )
 
 
@@ -97,9 +134,10 @@ def normalize_audio(source: Path, normalized: Path) -> None:
 
 
 def compute_chunk_plan(total_seconds: float) -> list[tuple[int, float, float]]:
-    """Build a short first canary, then normal overlapping Chirp chunks."""
+    """Build standard canary chunks or uniform dynamic-batch chunks."""
     plan: list[tuple[int, float, float]] = []
-    first_end = min(total_seconds, float(CANARY_DURATION_S))
+    first_window = CHUNK_DURATION_S if DYNAMIC_BATCHING else CANARY_DURATION_S
+    first_end = min(total_seconds, float(first_window))
     if first_end <= 0:
         return plan
     plan.append((0, 0.0, round(first_end, 1)))
@@ -162,6 +200,16 @@ def _source_path() -> Path:
     return candidates[0]
 
 
+def _atomic_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
 def _write_plan(plan: list[tuple[int, float, float]], total_seconds: float) -> None:
     payload = {
         "job": JOB_NAME,
@@ -171,6 +219,10 @@ def _write_plan(plan: list[tuple[int, float, float]], total_seconds: float) -> N
         "overlap_seconds": OVERLAP_S,
         "submission_parallelism": MAX_PARALLEL_CHUNKS,
         "recovery_parallelism": MAX_PARALLEL_RECOVERY,
+        "processing_strategy": (
+            "DYNAMIC_BATCHING" if DYNAMIC_BATCHING else "PROCESSING_STRATEGY_UNSPECIFIED"
+        ),
+        "dynamic_batching": DYNAMIC_BATCHING,
         "chunks": [
             {
                 "chunk_index": index,
@@ -181,13 +233,7 @@ def _write_plan(plan: list[tuple[int, float, float]], total_seconds: float) -> N
             for index, start, end in plan
         ],
     }
-    target = JOB / "chunk-plan.json"
-    temporary = target.with_suffix(".json.tmp")
-    temporary.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    temporary.replace(target)
+    _atomic_json(JOB / "chunk-plan.json", payload)
 
 
 def _chunk_env(index: int, start: float, end: float) -> dict[str, str]:
@@ -203,126 +249,219 @@ def submit_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
     existing = check_chunk(index)
     if existing in {"SUCCEEDED", "EMPTY_SILENCE"}:
         return index, True, f"chunk-{index:03d}: already {existing}"
-    if existing in {"SUBMITTED", "RECOVERING", "CANCEL_REQUESTED"}:
+    if existing in {"SUBMITTED", "RUNNING", "RECOVERING", "CANCEL_REQUESTED"}:
         return index, True, f"chunk-{index:03d}: existing operation retained"
     chunk_env = _chunk_env(index, start, end)
     chunk_env["SUBMIT_ONLY"] = "1"
     result = run_subprocess(
         "app.providers.chirp_chunk",
         env_with(chunk_env),
-        timeout=600,
+        timeout=900,
     )
     message = (result.stdout or "").strip()
     if result.returncode != 0:
         message = f"{message}\n{(result.stderr or '')[:500]}".strip()
-    return index, result.returncode == 0, message
+        return index, False, message
+    return index, True, message
 
 
-def recover_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
+def recover_chunk_once(index: int, start: float, end: float) -> tuple[int, str, str]:
+    existing = check_chunk(index)
+    if existing in {"SUCCEEDED", "EMPTY_SILENCE"}:
+        return index, "done", f"chunk-{index:03d}: already {existing}"
+    if existing in {None, "FAILED", "CANCELLED"}:
+        return index, "failed", f"chunk-{index:03d}: no recoverable retained operation ({existing})"
     chunk_env = _chunk_env(index, start, end)
     chunk_env["ALLOW_PENDING"] = "1"
-    deadline = time.monotonic() + 7200
-    while True:
-        result = run_subprocess(
-            "app.providers.recover_chunk",
-            env_with(chunk_env),
-            timeout=600,
-        )
-        message = (result.stdout or "").strip()
-        if result.returncode == 0:
-            return index, True, message
-        if result.returncode == 75 and time.monotonic() < deadline:
-            time.sleep(20)
-            continue
-        if result.returncode != 0:
-            message = f"{message}\n{(result.stderr or '')[:500]}".strip()
-        return index, False, message
+    result = run_subprocess(
+        "app.providers.recover_chunk",
+        env_with(chunk_env),
+        timeout=900,
+    )
+    message = (result.stdout or "").strip()
+    if result.returncode == 0:
+        return index, "done", message
+    if result.returncode == 75:
+        return index, "pending", message or f"chunk-{index:03d}: pending"
+    message = f"{message}\n{(result.stderr or '')[:500]}".strip()
+    return index, "failed", message
 
 
 def _parallel_phase(
     label: str,
     items: list[tuple[int, float, float]],
-    function: object,
+    function: Callable[[int, float, float], tuple[int, str, str]],
     max_workers: int,
-) -> bool:
+) -> dict[str, int]:
+    counts = {"done": 0, "submitted": 0, "pending": 0, "failed": 0}
     if not items:
-        return True
-    succeeded_all = True
+        return counts
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(function, *item): item[0] for item in items}  # type: ignore[arg-type]
+        futures = {pool.submit(function, *item): item[0] for item in items}
         for future in as_completed(futures):
-            index, succeeded, message = future.result()
+            index, raw_status, message = future.result()
+            status = ("submitted" if raw_status else "failed") if isinstance(raw_status, bool) else raw_status
             print(message)
-            if not succeeded:
+            counts[status] = counts.get(status, 0) + 1
+            if status == "failed":
                 print(f"  chunk-{index:03d}: {label} FAILED")
-                succeeded_all = False
-    return succeeded_all
+    return counts
 
 
-def main() -> int:
-    print(f"=== Chirp Pipeline: {JOB_NAME} ===")
-    normalized = JOB / "normalized.flac"
-    if not normalized.exists():
-        try:
-            source = _source_path()
-        except RuntimeError as exc:
-            print(f"PIPELINE=FAIL {exc}")
-            return 1
-        print("Building normalized.flac (16kHz mono) ...")
-        normalize_audio(source, normalized)
-    total_seconds = audio_duration_seconds(normalized)
-    print(f"Audio duration: {total_seconds:.1f}s ({total_seconds / 60:.2f} min)")
-
-    plan = compute_chunk_plan(total_seconds)
-    _write_plan(plan, total_seconds)
-    print(
-        f"Chunk plan ({len(plan)} chunks, submit={MAX_PARALLEL_CHUNKS}, "
-        f"recover={MAX_PARALLEL_RECOVERY}):"
-    )
-    for index, start, end in plan:
-        print(f"  chunk-{index:03d}: {start:.1f}s → {end:.1f}s ({end - start:.0f}s)")
-
-    first_index, first_ok, first_message = submit_chunk(*plan[0])
-    print(first_message)
-    if not first_ok:
-        print(f"PIPELINE=FAIL chunk-{first_index:03d} canary failed")
-        return 1
-    first_index, first_ok, first_message = recover_chunk(*plan[0])
-    print(first_message)
-    if not first_ok:
-        print(f"PIPELINE=FAIL chunk-{first_index:03d} canary recovery failed")
-        return 1
-
-    remaining = plan[1:]
-    if not _parallel_phase(
-        "submission",
-        remaining,
-        submit_chunk,
-        MAX_PARALLEL_CHUNKS,
-    ):
-        print("\nPIPELINE=FAIL some chunk submissions failed")
-        return 1
-
-    if not _parallel_phase(
-        "recovery",
-        remaining,
-        recover_chunk,
-        MAX_PARALLEL_RECOVERY,
-    ):
-        print("\nPIPELINE=FAIL some chunk recoveries failed")
-        return 1
-
+def _merge() -> int:
     print("\n=== Merging chunk results ===")
-    result = run_subprocess("app.providers.merge_chunks", env_with({}), timeout=60)
+    result = run_subprocess("app.providers.merge_chunks", env_with({}), timeout=120)
     print(result.stdout)
     if result.stderr:
         print(f"STDERR: {result.stderr[:500]}")
     if result.returncode != 0:
         print("\nPIPELINE=FAIL merge failed")
         return 1
-
+    _atomic_json(
+        JOB / "chirp-complete.json",
+        {
+            "job": JOB_NAME,
+            "completed_at": _iso(),
+            "processing_strategy": (
+                "DYNAMIC_BATCHING" if DYNAMIC_BATCHING else "PROCESSING_STRATEGY_UNSPECIFIED"
+            ),
+        },
+    )
     print("\nPIPELINE=PASS all chunks merged successfully")
     return 0
+
+
+def _recover_pass(plan: list[tuple[int, float, float]]) -> int:
+    counts = _parallel_phase(
+        "recovery",
+        plan,
+        recover_chunk_once,
+        MAX_PARALLEL_RECOVERY,
+    )
+    if counts["failed"]:
+        print("PIPELINE=FAIL some chunk recoveries failed")
+        return 1
+    if counts["pending"]:
+        _atomic_json(
+            JOB / "chirp-waiting.json",
+            {
+                "job": JOB_NAME,
+                "checked_at": _iso(),
+                "pending_chunks": counts["pending"],
+                "completed_chunks": counts["done"],
+                "processing_strategy": (
+                    "DYNAMIC_BATCHING" if DYNAMIC_BATCHING else "PROCESSING_STRATEGY_UNSPECIFIED"
+                ),
+            },
+        )
+        print(
+            f"PIPELINE=PENDING completed={counts['done']} pending={counts['pending']}"
+        )
+        return 75
+    (JOB / "chirp-waiting.json").unlink(missing_ok=True)
+    return _merge()
+
+
+def _prepare_plan() -> list[tuple[int, float, float]]:
+    normalized = JOB / "normalized.flac"
+    if not normalized.exists():
+        try:
+            source = _source_path()
+        except RuntimeError as exc:
+            print(f"PIPELINE=FAIL {exc}")
+            return []
+        print("Building normalized.flac (16kHz mono) ...")
+        normalize_audio(source, normalized)
+    total_seconds = audio_duration_seconds(normalized)
+    print(f"Audio duration: {total_seconds:.1f}s ({total_seconds / 60:.2f} min)")
+    plan = compute_chunk_plan(total_seconds)
+    _write_plan(plan, total_seconds)
+    print(
+        f"Chunk plan ({len(plan)} chunks, submit={MAX_PARALLEL_CHUNKS}, "
+        f"recover={MAX_PARALLEL_RECOVERY}, dynamic={DYNAMIC_BATCHING}):"
+    )
+    for index, start, end in plan:
+        print(f"  chunk-{index:03d}: {start:.1f}s → {end:.1f}s ({end - start:.0f}s)")
+    return plan
+
+
+def main() -> int:
+    print(f"=== Chirp Pipeline: {JOB_NAME} ===")
+    plan = _prepare_plan()
+    if not plan:
+        return 1
+
+    if RECOVER_ONCE:
+        return _recover_pass(plan)
+
+    if DYNAMIC_BATCHING:
+        submissions = _parallel_phase(
+            "submission",
+            plan,
+            submit_chunk,
+            MAX_PARALLEL_CHUNKS,
+        )
+        if submissions["failed"]:
+            print("PIPELINE=FAIL some dynamic chunk submissions failed")
+            return 1
+        _atomic_json(
+            JOB / "chirp-submitted.json",
+            {
+                "job": JOB_NAME,
+                "submitted_at": _iso(),
+                "chunk_count": len(plan),
+                "processing_strategy": "DYNAMIC_BATCHING",
+            },
+        )
+        if SUBMIT_ONLY:
+            print(f"PIPELINE=SUBMITTED chunks={len(plan)} strategy=DYNAMIC_BATCHING")
+            return 0
+        deadline = time.monotonic() + RECOVERY_DEADLINE_SECONDS
+        while True:
+            outcome = _recover_pass(plan)
+            if outcome != 75:
+                return outcome
+            if time.monotonic() >= deadline:
+                print("PIPELINE=FAIL dynamic batch recovery exceeded deadline")
+                return 1
+            time.sleep(RECOVERY_POLL_SECONDS)
+
+    # Standard mode retains the short canary gate.
+    first_index, first_status, first_message = submit_chunk(*plan[0])
+    print(first_message)
+    if not first_status:
+        print(f"PIPELINE=FAIL chunk-{first_index:03d} canary failed")
+        return 1
+    deadline = time.monotonic() + RECOVERY_DEADLINE_SECONDS
+    while True:
+        first_index, first_status, first_message = recover_chunk_once(*plan[0])
+        print(first_message)
+        if first_status == "done":
+            break
+        if first_status == "failed" or time.monotonic() >= deadline:
+            print(f"PIPELINE=FAIL chunk-{first_index:03d} canary recovery failed")
+            return 1
+        time.sleep(RECOVERY_POLL_SECONDS)
+
+    remaining = plan[1:]
+    submissions = _parallel_phase(
+        "submission",
+        remaining,
+        submit_chunk,
+        MAX_PARALLEL_CHUNKS,
+    )
+    if submissions["failed"]:
+        print("\nPIPELINE=FAIL some chunk submissions failed")
+        return 1
+
+    while True:
+        outcome = _recover_pass(plan)
+        if outcome != 75:
+            return outcome
+        if time.monotonic() >= deadline:
+            print("PIPELINE=FAIL chunk recovery exceeded deadline")
+            return 1
+        time.sleep(RECOVERY_POLL_SECONDS)
 
 
 if __name__ == "__main__":
