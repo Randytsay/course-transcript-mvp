@@ -245,6 +245,7 @@ def correct_window(
             **correct_window(items[midpoint:], terms),
         }
 
+    final: list[dict[str, Any]]
     if not response_valid:
         final = list(
             base._fallback(
@@ -255,7 +256,7 @@ def correct_window(
         for entry in final:
             entry["content_qa_reasons"] = ["invalid_structured_response"]
     else:
-        final: list[dict[str, Any]] = []
+        final = []
         for item in items:
             segment_id = str(item["segment_id"])
             answer = by_id[segment_id]
