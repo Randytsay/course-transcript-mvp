@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request
 
+from app.jobs.delivery_state import record_delivery_success
 from app.jobs.drive_lock import drive_publish_lock
 from app.jobs.drive_publish import publish_outputs, source_parent_destination
 from app.subtitles import editor as base
@@ -190,9 +191,17 @@ def publish_edited(
             output_formats=payload.output_formats,
             authorized=True,
         )
-        # This is written before releasing the source lock. A delivery worker
-        # that selected the old pipeline retry earlier must recheck it after
-        # acquiring the same lock and will not overwrite this edited revision.
+        record_delivery_success(
+            base.DATA_DIR / "course-transcript.db",
+            job_id=subtitle_id,
+            actor=actor,
+            source="editor",
+            backup_count=int(result.get("backup_count", 0)),
+            published_revision=snapshot_revision,
+        )
+        # These markers are written before releasing the same global lock. A
+        # delivery worker that selected the old pipeline retry earlier must
+        # recheck them after acquiring the lock and cannot overwrite this edit.
         _mark_pipeline_delivery_superseded(
             directory,
             revision=snapshot_revision,
