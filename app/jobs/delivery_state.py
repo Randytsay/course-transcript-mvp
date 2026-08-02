@@ -50,15 +50,16 @@ def record_delivery_success(
             """,
             (job_id, event_type),
         ).fetchone()
-        connection.execute(
-            """
-            UPDATE jobs
-            SET stage_detail = ?, error = NULL, updated_at = ?,
-                revision = revision + 1
-            WHERE id = ?
-            """,
-            (detail, now, job_id),
-        )
+        if str(row["stage_detail"] or "") != detail:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET stage_detail = ?, error = NULL, updated_at = ?,
+                    revision = revision + 1
+                WHERE id = ?
+                """,
+                (detail, now, job_id),
+            )
         if duplicate is None:
             store._event(
                 connection,
