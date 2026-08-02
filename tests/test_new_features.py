@@ -38,6 +38,13 @@ class NewFeatureTests(unittest.TestCase):
         self.assertEqual(plan[0], (0, 0.0, 900.0))
         self.assertEqual(plan[1][1], 890.0)
 
+    def test_speech_dependency_exposes_dynamic_batching_strategy(self) -> None:
+        from google.cloud.speech_v2.types import cloud_speech
+
+        strategy = cloud_speech.BatchRecognizeRequest.ProcessingStrategy.DYNAMIC_BATCHING
+        request = cloud_speech.BatchRecognizeRequest(processing_strategy=strategy)
+        self.assertEqual(request.processing_strategy, strategy)
+
     def test_dynamic_queue_recovers_expired_lease(self) -> None:
         from app.pipeline.dynamic_state import next_waiting_dynamic
 
