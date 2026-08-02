@@ -1,4 +1,4 @@
-"""Recover one Chirp operation with provider-state checks and GCS cleanup."""
+"""Recover one Chirp operation with provider-state checks and safe GCS cleanup."""
 from __future__ import annotations
 
 import hashlib
@@ -66,11 +66,7 @@ def _operation_state(name: str) -> tuple[bool, int, str]:
     client = speech_v2.SpeechClient(
         client_options={"api_endpoint": "us-speech.googleapis.com"}
     )
-    operations = client.transport.operations_client
-    try:
-        operation = operations.get_operation(name=name)
-    except TypeError:
-        operation = operations.get_operation({"name": name})
+    operation = client.transport.operations_client.get_operation(name)
     error = getattr(operation, "error", None)
     code = int(getattr(error, "code", 0) or 0)
     message = str(getattr(error, "message", "") or "")
@@ -78,33 +74,46 @@ def _operation_state(name: str) -> tuple[bool, int, str]:
 
 
 def _pending_or_terminal(prior: dict[str, Any], manifest_path: Path) -> int:
+    now = utcnow()
     submitted = parse_time(prior.get("submitted_at") or prior.get("created_at"))
-    age = utcnow() - submitted if submitted else None
+    age = now - submitted if submitted else None
     operation_name = str(prior.get("operation_name") or "")
     if operation_name:
         done, code, message = _operation_state(operation_name)
-        prior["operation_status_checked_at"] = iso()
+        prior["operation_status_checked_at"] = iso(now)
         prior["operation_done"] = done
         if code:
             prior.update(
                 status="FAILED",
                 error={"code": code, "message": message or "Speech operation failed"},
-                terminal_at=iso(),
+                terminal_at=iso(now),
             )
             atomic_json(manifest_path, prior)
-            print(f"RECOVER=TERMINAL operation_error code={code} message={message[:300]}")
+            print(
+                f"RECOVER=TERMINAL operation_error code={code} "
+                f"message={message[:300]}"
+            )
             return TERMINAL_EXIT
         if done:
-            completed = parse_time(prior.get("provider_completed_at")) or utcnow()
-            if utcnow() - completed <= propagation_grace():
-                prior.update(status="RECOVERING", last_recovery_check_at=iso())
+            done_at = parse_time(prior.get("operation_done_at"))
+            if done_at is None:
+                done_at = now
+                prior["operation_done_at"] = iso(done_at)
+            if now - done_at <= propagation_grace():
+                prior.update(status="RECOVERING", last_recovery_check_at=iso(now))
                 atomic_json(manifest_path, prior)
-                print("RECOVER=RETRYABLE operation done; waiting for GCS output propagation")
+                print(
+                    "RECOVER=RETRYABLE operation done; "
+                    "waiting for GCS output propagation"
+                )
                 return RETRYABLE_EXIT
             prior.update(
                 status="FAILED",
-                error={"code": "OUTPUT_MISSING", "message": "Operation completed without a GCS result"},
-                terminal_at=iso(),
+                error={
+                    "code": "OUTPUT_MISSING",
+                    "message": "Operation completed without a GCS result",
+                },
+                terminal_at=iso(now),
             )
             atomic_json(manifest_path, prior)
             print("RECOVER=TERMINAL operation completed without GCS output")
@@ -114,14 +123,16 @@ def _pending_or_terminal(prior: dict[str, Any], manifest_path: Path) -> int:
             status="FAILED",
             error={
                 "code": "PROVIDER_DEADLINE_EXCEEDED",
-                "message": "Chirp dynamic batch exceeded the configured provider deadline",
+                "message": (
+                    "Chirp dynamic batch exceeded the configured provider deadline"
+                ),
             },
-            terminal_at=iso(),
+            terminal_at=iso(now),
         )
         atomic_json(manifest_path, prior)
         print("RECOVER=TERMINAL provider deadline exceeded")
         return TERMINAL_EXIT
-    prior.update(status="RECOVERING", last_recovery_check_at=iso())
+    prior.update(status="RECOVERING", last_recovery_check_at=iso(now))
     atomic_json(manifest_path, prior)
     print("RECOVER=PENDING provider operation is still running")
     return PENDING_EXIT
@@ -147,7 +158,7 @@ def _cleanup(
             deleted.append(str(blob.name))
         except google_exceptions.NotFound:
             continue
-        except Exception as exc:  # cleanup is best effort after local evidence exists
+        except Exception as exc:  # best effort after durable local evidence
             errors.append(type(exc).__name__)
     return {
         "status": "completed" if not errors else "pending",
@@ -178,7 +189,10 @@ def main() -> int:
             status="FAILED",
             error={
                 "code": "INCOMPATIBLE_RETAINED_WINDOW",
-                "message": "Retained operation does not match the current chunk window or strategy",
+                "message": (
+                    "Retained operation does not match the current chunk "
+                    "window or strategy"
+                ),
             },
             terminal_at=iso(),
         )
@@ -214,7 +228,10 @@ def main() -> int:
             prior.update(
                 status="RECOVERING",
                 last_recovery_check_at=iso(),
-                last_recovery_error={"type": type(exc).__name__, "retryable": True},
+                last_recovery_error={
+                    "type": type(exc).__name__,
+                    "retryable": True,
+                },
             )
             atomic_json(manifest_path, prior)
             print(f"RECOVER_{name}=RETRYABLE {type(exc).__name__}")
@@ -229,7 +246,9 @@ def main() -> int:
             terminal_at=iso(),
         )
         atomic_json(manifest_path, prior)
-        print(f"RECOVER_{name}=TERMINAL ambiguous GCS output count={len(blobs)}")
+        print(
+            f"RECOVER_{name}=TERMINAL ambiguous GCS output count={len(blobs)}"
+        )
         return TERMINAL_EXIT
 
     blob = blobs[0]
@@ -289,7 +308,10 @@ def main() -> int:
         if has_speech(audio):
             prior.update(
                 status="FAILED",
-                error={"code": "EMPTY_WITH_SPEECH", "message": "No words for audible audio"},
+                error={
+                    "code": "EMPTY_WITH_SPEECH",
+                    "message": "No words for audible audio",
+                },
                 terminal_at=iso(),
             )
             atomic_json(manifest_path, prior)
@@ -314,7 +336,8 @@ def main() -> int:
         },
     )
     atomic_json(chunk / "words.json", {"chunk_index": index, "words": words})
-    cleanup = _cleanup(bucket, prior=prior, result_blobs=blobs)
+
+    # Persist a terminal local-success manifest before deleting any cloud object.
     prior.update(
         status=status,
         result_oneof="cloud_storage_result",
@@ -323,15 +346,26 @@ def main() -> int:
         word_count=len(words),
         max_end_ms=max((int(word["end_ms"]) for word in words), default=0),
         provider_completed_at=provider_completed_at,
+        operation_done_at=prior.get("operation_done_at") or provider_completed_at,
         recovery_started_at=recovery_started_at,
         recovered_at=recovered_at,
-        provider_processing_ms=_elapsed_ms(prior.get("submitted_at"), provider_completed_at),
-        recovery_delay_ms=_elapsed_ms(provider_completed_at, recovery_started_at),
-        recovery_download_ms=_elapsed_ms(recovery_started_at, recovered_at),
+        provider_processing_ms=_elapsed_ms(
+            prior.get("submitted_at"), provider_completed_at
+        ),
+        recovery_delay_ms=_elapsed_ms(
+            provider_completed_at, recovery_started_at
+        ),
+        recovery_download_ms=_elapsed_ms(
+            recovery_started_at, recovered_at
+        ),
         total_wall_ms=_elapsed_ms(prior.get("submitted_at"), recovered_at),
-        gcs_cleanup=cleanup,
+        gcs_cleanup={"status": "pending", "deleted": []},
         last_recovery_error=None,
     )
+    atomic_json(manifest_path, prior)
+
+    cleanup = _cleanup(bucket, prior=prior, result_blobs=blobs)
+    prior["gcs_cleanup"] = cleanup
     atomic_json(manifest_path, prior)
     audio.unlink(missing_ok=True)
     print(
