@@ -88,6 +88,86 @@ def parse_srt_strict(text: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
     }
 
 
+def _update_pipeline_manifests(
+    directory: Path,
+    *,
+    status: str,
+    revision: int,
+    error: str | None = None,
+) -> None:
+    for name in ("pipeline-manifest.json", "processing_manifest.json"):
+        path = directory / name
+        payload = base._read_json(path, {})
+        if not isinstance(payload, dict) or not payload:
+            continue
+        payload["drive_publication_status"] = status
+        payload["drive_publication_error"] = error
+        payload["editor_published_revision"] = revision
+        payload["drive_delivery_updated_at"] = base._iso()
+        base._atomic_json(path, payload)
+
+
+def _delivery_marker(directory: Path) -> dict[str, Any]:
+    payload = base._read_json(directory / "drive-delivery-state.json", {})
+    return payload if isinstance(payload, dict) else {}
+
+
+def _marker_revision(marker: dict[str, Any]) -> int:
+    try:
+        return int(marker.get("editor_revision", -1))
+    except (TypeError, ValueError):
+        return -1
+
+
+def _mark_editor_intent(
+    directory: Path,
+    *,
+    revision: int,
+    actor: str,
+) -> None:
+    base._atomic_json(
+        directory / "drive-delivery-state.json",
+        {
+            "status": "editor_publish_in_progress",
+            "intent_created_at": base._iso(),
+            "editor_revision": revision,
+            "actor": actor,
+            "next_attempt_at": None,
+        },
+    )
+    _update_pipeline_manifests(
+        directory,
+        status="editor_publish_in_progress",
+        revision=revision,
+    )
+
+
+def _mark_editor_failed(
+    directory: Path,
+    *,
+    revision: int,
+    actor: str,
+    error_type: str,
+) -> None:
+    base._atomic_json(
+        directory / "drive-delivery-state.json",
+        {
+            "status": "editor_publish_failed",
+            "failed_at": base._iso(),
+            "editor_revision": revision,
+            "actor": actor,
+            "error_type": error_type,
+            "next_attempt_at": None,
+        },
+    )
+    _update_pipeline_manifests(
+        directory,
+        status="editor_publish_failed",
+        revision=revision,
+        error=error_type,
+    )
+
+
 def _mark_pipeline_delivery_superseded(
     directory: Path,
     *,
@@ -104,16 +184,11 @@ def _mark_pipeline_delivery_superseded(
             "next_attempt_at": None,
         },
     )
-    for name in ("pipeline-manifest.json", "processing_manifest.json"):
-        path = directory / name
-        payload = base._read_json(path, {})
-        if not isinstance(payload, dict) or not payload:
-            continue
-        payload["drive_publication_status"] = "superseded_by_editor"
-        payload["drive_publication_error"] = None
-        payload["editor_published_revision"] = revision
-        payload["drive_delivery_updated_at"] = base._iso()
-        base._atomic_json(path, payload)
+    _update_pipeline_manifests(
+        directory,
+        status="superseded_by_editor",
+        revision=revision,
+    )
 
 
 @router.post("/api/v1/subtitles/import", status_code=201)
@@ -184,16 +259,44 @@ def publish_edited(
 
     source_path = str(record["source_path"])
     with drive_publish_lock(base.DATA_DIR, source_path):
-        result = publish_outputs(
-            publish_dir,
-            source_name=str(record["source_name"]),
-            destination=source_parent_destination(source_path),
-            output_formats=payload.output_formats,
-            authorized=True,
+        # Revalidate after acquiring the cross-process Drive lock. A newer edit
+        # or already-published editor revision must never be overwritten by an
+        # older request that waited longer for this lock.
+        with base._LOCK:
+            latest_revision = int(base._edit_state(directory)["revision"])
+        marker = _delivery_marker(directory)
+        prior_editor_revision = _marker_revision(marker)
+        if latest_revision != snapshot_revision or prior_editor_revision > snapshot_revision:
+            raise HTTPException(
+                status_code=409,
+                detail="A newer subtitle revision exists; reload before publishing",
+            )
+
+        # Persist user intent before any remote mutation. If the API process
+        # terminates after Drive replacement, the delivery worker sees this
+        # marker and cannot restore older pipeline artifacts.
+        _mark_editor_intent(
+            directory,
+            revision=snapshot_revision,
+            actor=actor,
         )
-        # Persist the supersession marker before any secondary metadata update.
-        # Once the edited files are remote, this marker is the safety boundary
-        # that prevents an older pipeline retry from overwriting them.
+        try:
+            result = publish_outputs(
+                publish_dir,
+                source_name=str(record["source_name"]),
+                destination=source_parent_destination(source_path),
+                output_formats=payload.output_formats,
+                authorized=True,
+            )
+        except Exception as exc:
+            _mark_editor_failed(
+                directory,
+                revision=snapshot_revision,
+                actor=actor,
+                error_type=type(exc).__name__,
+            )
+            raise
+
         _mark_pipeline_delivery_superseded(
             directory,
             revision=snapshot_revision,
@@ -211,21 +314,27 @@ def publish_edited(
     with base._LOCK:
         latest = base._edit_state(directory)
         current_revision = int(latest["revision"])
-        latest["history"].append(
-            {
-                "revision": current_revision,
-                "published_snapshot_revision": snapshot_revision,
-                "type": "drive_publish",
-                "actor": actor,
-                "created_at": base._iso(),
-                "output_formats": payload.output_formats,
-                "backup_count": result.get("backup_count", 0),
-                "revision_changed_during_publish": (
-                    current_revision != snapshot_revision
-                ),
-            }
-        )
-        base._save_state(directory, latest)
+        if not any(
+            item.get("type") == "drive_publish"
+            and item.get("published_snapshot_revision") == snapshot_revision
+            for item in latest["history"]
+            if isinstance(item, dict)
+        ):
+            latest["history"].append(
+                {
+                    "revision": current_revision,
+                    "published_snapshot_revision": snapshot_revision,
+                    "type": "drive_publish",
+                    "actor": actor,
+                    "created_at": base._iso(),
+                    "output_formats": payload.output_formats,
+                    "backup_count": result.get("backup_count", 0),
+                    "revision_changed_during_publish": (
+                        current_revision != snapshot_revision
+                    ),
+                }
+            )
+            base._save_state(directory, latest)
 
     return {
         "status": result.get("status"),
