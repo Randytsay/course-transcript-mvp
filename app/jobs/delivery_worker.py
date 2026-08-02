@@ -32,6 +32,14 @@ _EDITOR_OWNED_DELIVERY_STATES = {
     "editor_publish_failed",
     "superseded_by_editor",
 }
+_DELIVERY_ERRORS = (
+    DrivePublishError,
+    ValueError,
+    LookupError,
+    RuntimeError,
+    sqlite3.Error,
+    json.JSONDecodeError,
+)
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -156,51 +164,59 @@ def _mark_completed(
     _write_manifest_status(job_dir, "completed", None)
 
 
+def _record_failure_while_locked(
+    record: dict[str, Any],
+    job_dir: Path,
+    exc: Exception,
+) -> None:
+    # The caller holds the global Drive lock. The editor cannot change delivery
+    # ownership between this recheck and the state write.
+    if _superseded(job_dir):
+        print(f"DRIVE_DELIVERY=SKIP_EDITOR_OWNED job={record['id']}")
+        return
+    state = _schedule_failure(job_dir, f"{type(exc).__name__}: {exc}")
+    _write_manifest_status(job_dir, "pending_retry", state["last_error"])
+    print(
+        f"DRIVE_DELIVERY=RETRY job={record['id']} "
+        f"attempts={state['attempts']} next={state['next_attempt_at']}"
+    )
+
+
 def run_once() -> bool:
     record = _candidate()
     if record is None:
         return False
     job_dir = DATA_DIR / "jobs" / record["id"]
+    source_path = str(record["source_path"])
     try:
-        output_formats = json.loads(
-            record.get("output_formats_json") or '["srt","txt"]'
-        )
-        with drive_publish_lock(DATA_DIR, str(record["source_path"])):
+        with drive_publish_lock(DATA_DIR, source_path):
             # Recheck after taking the global lock. Editor intent is persisted
             # before remote mutation, so stale pipeline output cannot be applied.
             if _superseded(job_dir):
                 print(f"DRIVE_DELIVERY=SKIP_EDITOR_OWNED job={record['id']}")
                 return True
-            result = publish_outputs(
-                job_dir,
-                source_name=str(record["source_name"]),
-                destination=source_parent_destination(
-                    str(record["source_path"])
-                ),
-                output_formats=output_formats,
-                authorized=True,
-            )
-            _mark_completed(record, job_dir, result)
+            try:
+                output_formats = json.loads(
+                    record.get("output_formats_json") or '["srt","txt"]'
+                )
+                result = publish_outputs(
+                    job_dir,
+                    source_name=str(record["source_name"]),
+                    destination=source_parent_destination(source_path),
+                    output_formats=output_formats,
+                    authorized=True,
+                )
+                _mark_completed(record, job_dir, result)
+            except _DELIVERY_ERRORS as exc:
+                _record_failure_while_locked(record, job_dir, exc)
+                return True
         print(f"DRIVE_DELIVERY=PASS job={record['id']}")
-    except (
-        DrivePublishError,
-        OSError,
-        ValueError,
-        LookupError,
-        RuntimeError,
-        sqlite3.Error,
-        json.JSONDecodeError,
-    ) as exc:
-        # A concurrent editor intent may have taken ownership while the error
-        # was raised. Never convert that state back into a pipeline retry.
-        if _superseded(job_dir):
-            print(f"DRIVE_DELIVERY=SKIP_EDITOR_OWNED job={record['id']}")
-            return True
-        state = _schedule_failure(job_dir, f"{type(exc).__name__}: {exc}")
-        _write_manifest_status(job_dir, "pending_retry", state["last_error"])
+    except OSError as exc:
+        # Lock acquisition/use failed. Do not mutate delivery ownership without
+        # the lock; leave the existing retry state untouched for a later pass.
         print(
-            f"DRIVE_DELIVERY=RETRY job={record['id']} "
-            f"attempts={state['attempts']} next={state['next_attempt_at']}"
+            f"DRIVE_DELIVERY=LOCK_RETRY job={record['id']} "
+            f"error={type(exc).__name__}"
         )
     return True
 
