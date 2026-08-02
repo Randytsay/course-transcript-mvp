@@ -1,11 +1,30 @@
 """Transactional database observability for successful Drive delivery."""
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from app.jobs.store import JobStore
+
+
+def _event_is_duplicate(
+    rows: list[Any],
+    *,
+    source: str,
+    published_revision: int | None,
+) -> bool:
+    if source != "editor":
+        return bool(rows)
+    for row in rows:
+        try:
+            payload = json.loads(str(row["payload_json"] or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if payload.get("published_revision") == published_revision:
+            return True
+    return False
 
 
 def record_delivery_success(
@@ -17,10 +36,12 @@ def record_delivery_success(
     backup_count: int,
     published_revision: int | None = None,
 ) -> dict[str, Any]:
-    """Update the visible job detail and append one deduplicated success event."""
+    """Update the visible job detail and append one idempotent success event."""
     store = JobStore(database_path)
     now = datetime.now(UTC).isoformat()
     if source == "editor":
+        if published_revision is None:
+            raise ValueError("Editor delivery success requires a published revision")
         detail = (
             "辨識、校正與 QA 已完成；人工校訂字幕已安全輸出至原始 Drive 資料夾"
         )
@@ -41,16 +62,21 @@ def record_delivery_success(
         if str(row["status"]) not in {"completed", "awaiting_review"}:
             raise RuntimeError("Drive delivery success can update only a completed job")
 
-        duplicate = connection.execute(
+        prior_events = connection.execute(
             """
-            SELECT 1
+            SELECT payload_json
             FROM job_events
             WHERE job_id = ? AND event_type = ?
-            LIMIT 1
+            ORDER BY id
             """,
             (job_id, event_type),
-        ).fetchone()
-        if str(row["stage_detail"] or "") != detail:
+        ).fetchall()
+        duplicate = _event_is_duplicate(
+            list(prior_events),
+            source=source,
+            published_revision=published_revision,
+        )
+        if str(row["stage_detail"] or "") != detail or not duplicate:
             connection.execute(
                 """
                 UPDATE jobs
@@ -60,7 +86,7 @@ def record_delivery_success(
                 """,
                 (detail, now, job_id),
             )
-        if duplicate is None:
+        if not duplicate:
             store._event(
                 connection,
                 job_id,
