@@ -27,6 +27,11 @@ from app.providers.hardening_common import (
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 DATABASE = DATA_DIR / "course-transcript.db"
+_EDITOR_OWNED_DELIVERY_STATES = {
+    "editor_publish_in_progress",
+    "editor_publish_failed",
+    "superseded_by_editor",
+}
 
 
 def _read(path: Path) -> dict[str, Any]:
@@ -54,7 +59,9 @@ def _delivery_state(job_dir: Path) -> dict[str, Any]:
 
 
 def _superseded(job_dir: Path) -> bool:
-    return _delivery_state(job_dir).get("status") == "superseded_by_editor"
+    return str(_delivery_state(job_dir).get("status") or "") in (
+        _EDITOR_OWNED_DELIVERY_STATES
+    )
 
 
 def _due(job_dir: Path) -> bool:
@@ -69,12 +76,12 @@ def _candidate() -> dict[str, Any] | None:
     connection = sqlite3.connect(DATABASE, timeout=30)
     connection.row_factory = sqlite3.Row
     try:
-        # Do not cap this scan: a pending delivery must not starve merely
-        # because more than 500 older completed jobs have no pending manifest.
+        # Include retained pre-hardening jobs that completed into the old
+        # awaiting_review terminal state. They may still have pending delivery.
         rows = connection.execute(
             """
             SELECT * FROM jobs
-            WHERE status = 'completed'
+            WHERE status IN ('completed', 'awaiting_review')
               AND source_path LIKE 'gdrive:%'
             ORDER BY updated_at, created_at
             """
@@ -159,11 +166,10 @@ def run_once() -> bool:
             record.get("output_formats_json") or '["srt","txt"]'
         )
         with drive_publish_lock(DATA_DIR, str(record["source_path"])):
-            # The editor writes this marker before releasing the same global
-            # lock. Rechecking here prevents a candidate selected earlier from
-            # overwriting a newer manually edited publication.
+            # Recheck after taking the global lock. Editor intent is persisted
+            # before remote mutation, so stale pipeline output cannot be applied.
             if _superseded(job_dir):
-                print(f"DRIVE_DELIVERY=SKIP_SUPERSEDED job={record['id']}")
+                print(f"DRIVE_DELIVERY=SKIP_EDITOR_OWNED job={record['id']}")
                 return True
             result = publish_outputs(
                 job_dir,
@@ -185,10 +191,10 @@ def run_once() -> bool:
         sqlite3.Error,
         json.JSONDecodeError,
     ) as exc:
-        # A concurrent successful editor publication may have superseded this
-        # retry while the exception was raised. Never turn that into pending.
+        # A concurrent editor intent may have taken ownership while the error
+        # was raised. Never convert that state back into a pipeline retry.
         if _superseded(job_dir):
-            print(f"DRIVE_DELIVERY=SKIP_SUPERSEDED job={record['id']}")
+            print(f"DRIVE_DELIVERY=SKIP_EDITOR_OWNED job={record['id']}")
             return True
         state = _schedule_failure(job_dir, f"{type(exc).__name__}: {exc}")
         _write_manifest_status(job_dir, "pending_retry", state["last_error"])
