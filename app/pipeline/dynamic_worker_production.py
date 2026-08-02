@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.drive_lock import drive_publish_lock
+from app.jobs.drive_publish import DrivePublishError
 from app.jobs.store import JobConflict, JobStore
 from app.pipeline import dynamic_worker_hardened as worker
 
@@ -20,13 +21,18 @@ def _locked_auto_publish(
     worker_id: str,
 ) -> dict[str, Any] | None:
     source_path = str(record.get("source_path") or "")
-    with drive_publish_lock(data_dir, source_path):
-        return _ORIGINAL_AUTO_PUBLISH(
-            store,
-            record,
-            data_dir,
-            worker_id,
-        )
+    try:
+        with drive_publish_lock(data_dir, source_path):
+            return _ORIGINAL_AUTO_PUBLISH(
+                store,
+                record,
+                data_dir,
+                worker_id,
+            )
+    except OSError as exc:
+        raise DrivePublishError(
+            f"Unable to acquire or use the global Drive publication lock: {exc}"
+        ) from exc
 
 
 def _submit_or_resume_chirp(
