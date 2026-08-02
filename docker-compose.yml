@@ -47,7 +47,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
-    command: ["uvicorn", "app.api_observed:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.api_hardened:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
         - CMD
@@ -104,7 +104,9 @@ services:
       CHIRP_DYNAMIC_BATCHING: ${CHIRP_DYNAMIC_BATCHING:-true}
       CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS: ${CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS:-5}
       CHIRP_RECOVERY_POLL_SECONDS: ${CHIRP_RECOVERY_POLL_SECONDS:-120}
-      CHIRP_RECOVERY_DEADLINE_SECONDS: ${CHIRP_RECOVERY_DEADLINE_SECONDS:-90000}
+      CHIRP_PROVIDER_DEADLINE_SECONDS: ${CHIRP_PROVIDER_DEADLINE_SECONDS:-90000}
+      CHIRP_OUTPUT_PROPAGATION_GRACE_SECONDS: ${CHIRP_OUTPUT_PROPAGATION_GRACE_SECONDS:-300}
+      CHIRP_GCS_CLEANUP_AFTER_RECOVERY: ${CHIRP_GCS_CLEANUP_AFTER_RECOVERY:-true}
       CHIRP_MAX_PARALLEL_CHUNKS: ${CHIRP_MAX_PARALLEL_CHUNKS:-3}
       CHIRP_CANARY_DURATION_SECONDS: ${CHIRP_CANARY_DURATION_SECONDS:-120}
       CHIRP_MAX_PARALLEL_CHUNKS_LIMIT: ${CHIRP_MAX_PARALLEL_CHUNKS_LIMIT:-5}
@@ -118,7 +120,24 @@ services:
       - ./tmp:/app/tmp
       - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
-    command: ["python", "-m", "app.pipeline.dynamic_worker_observed"]
+    command: ["python", "-m", "app.pipeline.dynamic_worker_hardened"]
+
+  delivery-worker:
+    profiles: ["web"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-delivery-worker:local
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      COURSE_TRANSCRIPT_DATA_DIR: /app/data
+      RCLONE_CONFIG: /run/secrets/rclone.conf
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
+    command: ["python", "-m", "app.jobs.delivery_worker", "--poll-seconds", "60"]
 
   billing-worker:
     profiles: ["billing"]
@@ -156,6 +175,8 @@ services:
       worker:
         condition: service_started
       pipeline-worker:
+        condition: service_started
+      delivery-worker:
         condition: service_started
     ports:
       - "127.0.0.1:3300:3000"
