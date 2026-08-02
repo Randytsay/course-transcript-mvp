@@ -6,13 +6,23 @@ import json
 import os
 import sqlite3
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
 from app.jobs.drive_lock import drive_publish_lock
-from app.jobs.drive_publish import DrivePublishError, publish_outputs, source_parent_destination
-from app.providers.hardening_common import atomic_json, iso, parse_time, retry_delay_seconds, utcnow
+from app.jobs.drive_publish import (
+    DrivePublishError,
+    publish_outputs,
+    source_parent_destination,
+)
+from app.providers.hardening_common import (
+    atomic_json,
+    iso,
+    parse_time,
+    retry_delay_seconds,
+    utcnow,
+)
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 DATABASE = DATA_DIR / "course-transcript.db"
@@ -38,8 +48,16 @@ def _write_manifest_status(job_dir: Path, status: str, error: str | None) -> Non
         atomic_json(path, payload)
 
 
+def _delivery_state(job_dir: Path) -> dict[str, Any]:
+    return _read(job_dir / "drive-delivery-state.json")
+
+
+def _superseded(job_dir: Path) -> bool:
+    return _delivery_state(job_dir).get("status") == "superseded_by_editor"
+
+
 def _due(job_dir: Path) -> bool:
-    state = _read(job_dir / "drive-delivery-state.json")
+    state = _delivery_state(job_dir)
     next_at = parse_time(state.get("next_attempt_at"))
     return next_at is None or next_at <= utcnow()
 
@@ -64,10 +82,15 @@ def _candidate() -> dict[str, Any] | None:
     for row in rows:
         record = dict(row)
         job_dir = DATA_DIR / "jobs" / record["id"]
+        if _superseded(job_dir):
+            continue
         manifest = _read(job_dir / "pipeline-manifest.json")
         publish_state = _read(job_dir / "drive-publish-state.json")
         pending = manifest.get("drive_publication_status") == "pending_retry"
-        incomplete = bool(publish_state) and publish_state.get("status") != "completed"
+        incomplete = (
+            bool(publish_state)
+            and publish_state.get("status") != "completed"
+        )
         if (pending or incomplete) and _due(job_dir):
             return record
     return None
@@ -94,7 +117,10 @@ def _mark_completed(job_dir: Path, result: dict[str, Any]) -> None:
         job_dir / "drive-delivery-state.json",
         {
             "status": "completed",
-            "attempts": int(_read(job_dir / "drive-delivery-state.json").get("attempts", 0)) + 1,
+            "attempts": int(
+                _read(job_dir / "drive-delivery-state.json").get("attempts", 0)
+            )
+            + 1,
             "completed_at": iso(),
             "next_attempt_at": None,
             "backup_count": result.get("backup_count", 0),
@@ -109,23 +135,38 @@ def run_once() -> bool:
         return False
     job_dir = DATA_DIR / "jobs" / record["id"]
     try:
-        output_formats = json.loads(record.get("output_formats_json") or '["srt","txt"]')
+        output_formats = json.loads(
+            record.get("output_formats_json") or '["srt","txt"]'
+        )
         with drive_publish_lock(DATA_DIR, str(record["source_path"])):
+            # The editor writes this marker before releasing the same source
+            # lock. Rechecking here prevents a candidate selected earlier from
+            # overwriting a newer manually edited publication.
+            if _superseded(job_dir):
+                print(f"DRIVE_DELIVERY=SKIP_SUPERSEDED job={record['id']}")
+                return True
             result = publish_outputs(
                 job_dir,
                 source_name=str(record["source_name"]),
-                destination=source_parent_destination(str(record["source_path"])),
+                destination=source_parent_destination(
+                    str(record["source_path"])
+                ),
                 output_formats=output_formats,
                 authorized=True,
             )
-        _mark_completed(job_dir, result)
+            _mark_completed(job_dir, result)
         print(f"DRIVE_DELIVERY=PASS job={record['id']}")
     except (DrivePublishError, OSError, ValueError, json.JSONDecodeError) as exc:
+        # A concurrent successful editor publication may have superseded this
+        # retry while the exception was raised. Never turn that into pending.
+        if _superseded(job_dir):
+            print(f"DRIVE_DELIVERY=SKIP_SUPERSEDED job={record['id']}")
+            return True
         state = _schedule_failure(job_dir, f"{type(exc).__name__}: {exc}")
         _write_manifest_status(job_dir, "pending_retry", state["last_error"])
         print(
-            f"DRIVE_DELIVERY=RETRY job={record['id']} attempts={state['attempts']} "
-            f"next={state['next_attempt_at']}"
+            f"DRIVE_DELIVERY=RETRY job={record['id']} "
+            f"attempts={state['attempts']} next={state['next_attempt_at']}"
         )
     return True
 
