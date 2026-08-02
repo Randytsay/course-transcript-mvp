@@ -24,6 +24,7 @@ def count_waiting_dynamic(store: Any) -> int:
 
 
 def next_waiting_dynamic(store: Any) -> dict[str, Any] | None:
+    now = _iso()
     with store.connect() as connection:
         row = connection.execute(
             """
@@ -31,15 +32,21 @@ def next_waiting_dynamic(store: Any) -> dict[str, Any] | None:
             WHERE status = 'transcribing'
               AND active_stage = 'chirp'
               AND approved_at IS NOT NULL
-              AND locked_by IS NULL
+              AND (
+                    locked_by IS NULL
+                    OR lease_expires_at IS NULL
+                    OR lease_expires_at < ?
+              )
             ORDER BY updated_at, created_at, batch_id, queue_position
             LIMIT 1
-            """
+            """,
+            (now,),
         ).fetchone()
     return dict(row) if row is not None else None
 
 
 def next_fresh_queued(store: Any) -> dict[str, Any] | None:
+    now = _iso()
     with store.connect() as connection:
         row = connection.execute(
             """
@@ -47,10 +54,15 @@ def next_fresh_queued(store: Any) -> dict[str, Any] | None:
             WHERE status = 'queued'
               AND approved_at IS NOT NULL
               AND CAST(reserved_cost_usd AS REAL) > 0
-              AND locked_by IS NULL
+              AND (
+                    locked_by IS NULL
+                    OR lease_expires_at IS NULL
+                    OR lease_expires_at < ?
+              )
             ORDER BY created_at, batch_id, queue_position
             LIMIT 1
-            """
+            """,
+            (now,),
         ).fetchone()
     return dict(row) if row is not None else None
 
