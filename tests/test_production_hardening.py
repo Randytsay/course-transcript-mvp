@@ -257,7 +257,7 @@ class ProductionHardeningTests(unittest.TestCase):
         ):
             result = hardened.correct_window(items, [])
             self.assertEqual(set(result), {"a", "b"})
-            audits = list(Path(temp).glob("a.split-b-*.json"))
+            audits = list(Path(temp).glob("a.split-b.*.json"))
             self.assertEqual(len(audits), 1)
             audit = json.loads(audits[0].read_text(encoding="utf-8"))
             self.assertTrue(audit["split_triggered"])
