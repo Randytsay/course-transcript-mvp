@@ -25,7 +25,7 @@ class CreateJobWithParallelismRequest(BaseModel):
     enable_subtitles: bool = True
     require_human_review: bool = False
     chirp_max_parallel_chunks: int = Field(default=3, ge=1, strict=True)
-    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt"], min_length=1, max_length=7)
+    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
 
 class CreateBatchWithParallelismRequest(BaseModel):
@@ -37,7 +37,7 @@ class CreateBatchWithParallelismRequest(BaseModel):
     enable_subtitles: bool = True
     require_human_review: bool = False
     chirp_max_parallel_chunks: int = Field(default=3, ge=1, strict=True)
-    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt"], min_length=1, max_length=7)
+    output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
 
 def _parallelism_limit() -> int:
