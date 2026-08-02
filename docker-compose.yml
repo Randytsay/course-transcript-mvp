@@ -120,7 +120,7 @@ services:
       - ./tmp:/app/tmp
       - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
-    command: ["python", "-m", "app.pipeline.dynamic_worker_hardened"]
+    command: ["python", "-m", "app.pipeline.dynamic_worker_production"]
 
   delivery-worker:
     profiles: ["web"]
