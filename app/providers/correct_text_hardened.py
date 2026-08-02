@@ -5,7 +5,9 @@ import hashlib
 import json
 import re
 import time
+import uuid
 from difflib import SequenceMatcher
+from pathlib import Path
 from typing import Any
 
 from google.genai import types
@@ -13,6 +15,7 @@ from google.genai import types
 from app.providers import correct_text as base
 
 PROMPT_VERSION = "fixed-segments-v4-production-hardening"
+SAFE_PROMPT_VERSION = re.sub(r"[^A-Za-z0-9._-]+", "-", PROMPT_VERSION).strip("-")
 
 
 def generate_json(prompt: str, schema: dict[str, Any]) -> tuple[object, dict[str, Any]]:
@@ -89,45 +92,88 @@ def content_guard(raw: str, corrected: str) -> list[str]:
     return reasons
 
 
-def _record_path(items: list[dict[str, Any]]) -> tuple[Any, str]:
-    first = str(items[0]["segment_id"])
-    source_segments = [
+def _source_segments(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
         {"segment_id": item["segment_id"], "raw_text": item["raw_text"]}
         for item in items
     ]
-    digest = hashlib.sha256(
+
+
+def _source_digest(source_segments: list[dict[str, Any]]) -> str:
+    return hashlib.sha256(
         json.dumps(
             source_segments,
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
     ).hexdigest()
-    return base.WORK / f"{first}.json", digest
+
+
+def _record_prefix(items: list[dict[str, Any]], source_sha256: str) -> str:
+    first = str(items[0]["segment_id"])
+    return f"{first}.{SAFE_PROMPT_VERSION}.{source_sha256[:16]}"
+
+
+def _new_record_path(
+    items: list[dict[str, Any]],
+    source_sha256: str,
+    *,
+    split: bool = False,
+) -> Path:
+    first = str(items[0]["segment_id"])
+    token = uuid.uuid4().hex[:12]
+    if split:
+        last = str(items[-1]["segment_id"])
+        return base.WORK / (
+            f"{first}.split-{last}.{SAFE_PROMPT_VERSION}."
+            f"{source_sha256[:16]}.{token}.json"
+        )
+    return base.WORK / f"{_record_prefix(items, source_sha256)}.{token}.json"
+
+
+def _cached_window(
+    items: list[dict[str, Any]],
+    source_segments: list[dict[str, Any]],
+    source_sha256: str,
+) -> dict[str, dict[str, Any]] | None:
+    expected = {str(item["segment_id"]) for item in items}
+    pattern = f"{_record_prefix(items, source_sha256)}.*.json"
+    for path in sorted(
+        base.WORK.glob(pattern),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    ):
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            record.get("model") != base.MODEL
+            or record.get("source_segments") != source_segments
+            or record.get("source_sha256") != source_sha256
+            or record.get("prompt_version") != PROMPT_VERSION
+            or not record.get("response_valid")
+        ):
+            continue
+        cached = {
+            str(entry["segment_id"]): entry
+            for entry in record.get("segments", [])
+            if isinstance(entry, dict) and entry.get("segment_id")
+        }
+        if set(cached) == expected:
+            return cached
+    return None
 
 
 def correct_window(
     items: list[dict[str, Any]],
     terms: list[dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
-    path, source_sha256 = _record_path(items)
-    source_segments = [
-        {"segment_id": item["segment_id"], "raw_text": item["raw_text"]}
-        for item in items
-    ]
-    if path.exists():
-        record = json.loads(path.read_text(encoding="utf-8"))
-        if (
-            record.get("model") == base.MODEL
-            and record.get("source_segments") == source_segments
-            and record.get("prompt_version") == PROMPT_VERSION
-        ):
-            cached = {
-                str(entry["segment_id"]): entry
-                for entry in record.get("segments", [])
-                if isinstance(entry, dict) and entry.get("segment_id")
-            }
-            if set(cached) == {str(item["segment_id"]) for item in items}:
-                return cached
+    source_segments = _source_segments(items)
+    source_sha256 = _source_digest(source_segments)
+    cached = _cached_window(items, source_segments, source_sha256)
+    if cached is not None:
+        return cached
 
     prompt = (
         "Correct Traditional-Chinese ASR text only. Preserve meaning; do not "
@@ -177,10 +223,9 @@ def correct_window(
     }
 
     if not response_valid and len(items) > 1:
-        audit_path = base.WORK / (
-            f"{items[0]['segment_id']}.split-{items[-1]['segment_id']}-"
-            f"{source_sha256[:10]}.json"
-        )
+        # Persist the paid parent response under a versioned, attempt-unique path
+        # before splitting. No prior raw response or usage evidence is replaced.
+        audit_path = _new_record_path(items, source_sha256, split=True)
         base.atomic_text(
             audit_path,
             json.dumps(
@@ -236,8 +281,11 @@ def correct_window(
                 }
             )
 
+    # Every paid attempt receives its own immutable audit file. A later retry,
+    # prompt revision, or changed window cannot erase earlier provider evidence.
+    record_path = _new_record_path(items, source_sha256)
     base.atomic_text(
-        path,
+        record_path,
         json.dumps(
             {
                 **common_record,
@@ -252,12 +300,53 @@ def correct_window(
     return {str(entry["segment_id"]): entry for entry in final}
 
 
+def _current_raw_by_id() -> dict[str, str]:
+    try:
+        payload = json.loads((base.JOB / "subtitles.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return {}
+    segments = payload.get("segments", []) if isinstance(payload, dict) else []
+    return {
+        str(item.get("segment_id")): str(item.get("raw_text", ""))
+        for item in segments
+        if isinstance(item, dict) and item.get("segment_id") is not None
+    }
+
+
+def _record_matches_current_source(
+    record: dict[str, Any],
+    raw_by_id: dict[str, str],
+) -> bool:
+    if record.get("prompt_version") != PROMPT_VERSION:
+        return False
+    source_segments = record.get("source_segments")
+    if not isinstance(source_segments, list) or not source_segments:
+        return False
+    for item in source_segments:
+        if not isinstance(item, dict):
+            return False
+        segment_id = str(item.get("segment_id"))
+        if raw_by_id.get(segment_id) != str(item.get("raw_text", "")):
+            return False
+    return True
+
+
 def _audit_details() -> dict[str, dict[str, Any]]:
     details: dict[str, dict[str, Any]] = {}
-    for path in base.WORK.glob("*.json"):
+    raw_by_id = _current_raw_by_id()
+    paths = sorted(
+        base.WORK.glob("*.json"),
+        key=lambda item: item.stat().st_mtime,
+    )
+    for path in paths:
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(record, dict) or not _record_matches_current_source(
+            record,
+            raw_by_id,
+        ):
             continue
         for entry in record.get("segments", []):
             if not isinstance(entry, dict) or not entry.get("segment_id"):
