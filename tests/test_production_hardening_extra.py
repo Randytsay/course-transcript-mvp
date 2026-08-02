@@ -30,6 +30,14 @@ class ProductionHardeningExtraTests(unittest.TestCase):
             "job-test",
         ), patch.object(
             hardened.base,
+            "DYNAMIC_BATCHING",
+            True,
+        ), patch.object(
+            hardened.base,
+            "RECOVER_ONCE",
+            True,
+        ), patch.object(
+            hardened.base,
             "_parallel_phase",
             return_value=counts,
         ), patch.object(
