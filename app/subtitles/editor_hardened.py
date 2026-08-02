@@ -191,6 +191,14 @@ def publish_edited(
             output_formats=payload.output_formats,
             authorized=True,
         )
+        # Persist the supersession marker before any secondary metadata update.
+        # Once the edited files are remote, this marker is the safety boundary
+        # that prevents an older pipeline retry from overwriting them.
+        _mark_pipeline_delivery_superseded(
+            directory,
+            revision=snapshot_revision,
+            actor=actor,
+        )
         record_delivery_success(
             base.DATA_DIR / "course-transcript.db",
             job_id=subtitle_id,
@@ -198,14 +206,6 @@ def publish_edited(
             source="editor",
             backup_count=int(result.get("backup_count", 0)),
             published_revision=snapshot_revision,
-        )
-        # These markers are written before releasing the same global lock. A
-        # delivery worker that selected the old pipeline retry earlier must
-        # recheck them after acquiring the lock and cannot overwrite this edit.
-        _mark_pipeline_delivery_superseded(
-            directory,
-            revision=snapshot_revision,
-            actor=actor,
         )
 
     with base._LOCK:
