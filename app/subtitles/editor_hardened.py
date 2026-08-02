@@ -47,6 +47,9 @@ def parse_srt_strict(text: str) -> tuple[list[dict[str, Any]], dict[str, int]]:
             invalid_blocks.append(block_number)
             continue
         values = [int(value) for value in match.groups()]
+        if any(values[index] >= 60 for index in (1, 2, 5, 6)):
+            invalid_blocks.append(block_number)
+            continue
         start = ((values[0] * 60 + values[1]) * 60 + values[2]) * 1000 + values[3]
         end = ((values[4] * 60 + values[5]) * 60 + values[6]) * 1000 + values[7]
         if end <= start or start < previous_end:
