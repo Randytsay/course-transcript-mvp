@@ -66,9 +66,10 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     if (!response.ok) {
       throw new Error(payload?.detail ?? `Drive API 回應 ${response.status}`);
     }
+    if (payload === null) throw new Error("Drive API 回傳空白內容");
     return payload as T;
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
+    if (error instanceof Error && error.name === "AbortError") {
       throw new Error("Google Drive 連線超過 15 秒，請稍後重試");
     }
     throw error;
@@ -92,6 +93,7 @@ export async function browseDrivePage(
   sourcePath: string,
   pageToken: string | null = null,
   pageSize = 200,
+  refresh = false,
 ): Promise<DriveDirectoryPage> {
   const page = await requestJson<RawDrivePage>("/drive/browse", {
     method: "POST",
@@ -99,6 +101,7 @@ export async function browseDrivePage(
       source_path: sourcePath,
       page_token: pageToken,
       page_size: pageSize,
+      refresh,
     }),
   });
   return mapPage(page);
