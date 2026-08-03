@@ -255,8 +255,8 @@ export default function NewJobPageDriveApi() {
                   return (
                     <div className={`drive-entry ${checked ? "drive-entry--selected" : ""}`} key={`${entry.sourcePath}-${entry.modifiedAt ?? ""}`}>
                       <span>{entry.isDir ? <Folder size={17} /> : selectionMode === "files" && entry.supportedMedia ? <button type="button" className="file-check" onClick={() => toggleFile(entry)} aria-label={`選取 ${entry.name}`}>{checked ? <SquareCheckBig size={18} /> : <Square size={18} />}</button> : <FileAudio size={17} />}</span>
-                      <button type="button" className="drive-entry__name" disabled={!entry.isDir || Boolean(activeSearch)} onClick={() => entry.isDir && !activeSearch && void openDirectory(entry.sourcePath)}>
-                        {entry.name}{entry.isDir && !activeSearch && <ChevronRight size={14} />}
+                      <button type="button" className="drive-entry__name" disabled={!entry.isDir} onClick={() => entry.isDir && void openDirectory(entry.sourcePath)}>
+                        {entry.name}{entry.isDir && <ChevronRight size={14} />}
                       </button>
                       <span>{entry.isDir ? "資料夾" : formatBytes(entry.sizeBytes)}</span>
                       <span>{entry.modifiedAt ? new Date(entry.modifiedAt).toLocaleDateString("zh-TW") : "—"}</span>
