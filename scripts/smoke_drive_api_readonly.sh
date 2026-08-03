@@ -11,7 +11,7 @@ run_request() {
   local method="$2"
   local body="${3:-}"
 
-  sudo docker exec \
+  sudo docker exec -i \
     -e SMOKE_ENDPOINT="$endpoint" \
     -e SMOKE_METHOD="$method" \
     -e SMOKE_BODY="$body" \
@@ -83,4 +83,5 @@ run_request "/api/v1/drive/browse" "POST" '{"source_path":"gdrive:","page_size":
 
 echo "paid_provider_calls_made=NO"
 echo "drive_mutations_made=NO"
+echo "secrets_read=NO"
 echo "secrets_printed=NO"
