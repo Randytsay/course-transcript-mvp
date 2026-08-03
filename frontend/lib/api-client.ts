@@ -242,6 +242,17 @@ export async function retryFailedStage(
   return mapJob(result.job);
 }
 
+export async function rechunkChunk(
+  jobId: string,
+  chunkIndex: number,
+  expectedRevision: number,
+): Promise<{ status: string; job_id: string; chunk_index: number; message: string }> {
+  return postJson(
+    `/jobs/${encodeURIComponent(jobId)}/rechunk/${chunkIndex}`,
+    { expected_revision: expectedRevision },
+  );
+}
+
 export async function browseDrive(sourcePath: string): Promise<DriveDirectory> {
   const result = await postJson<{
     current_path: string;

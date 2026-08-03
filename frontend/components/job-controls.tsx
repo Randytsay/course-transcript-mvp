@@ -1,6 +1,6 @@
 "use client";
 
-import { Ban, LoaderCircle, Pause, Play, X } from "lucide-react";
+import { Ban, LoaderCircle, Pause, Play, RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import styles from "./job-controls.module.css";
 
@@ -35,6 +35,7 @@ const cancellable = new Set([
 type JobState = {
   status: string;
   revision: number;
+  activeStage?: string | null;
   stageDetail?: string | null;
 };
 
@@ -47,6 +48,11 @@ function mapJob(value: unknown): JobState | null {
   return {
     status: String(nested.status ?? payload.status ?? ""),
     revision: Number(nested.revision ?? payload.revision ?? 0),
+    activeStage: nested.active_stage
+      ? String(nested.active_stage)
+      : nested.activeStage
+        ? String(nested.activeStage)
+        : null,
     stageDetail: nested.stage_detail
       ? String(nested.stage_detail)
       : nested.stageDetail
@@ -73,7 +79,7 @@ async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
 
 export default function JobControls({ jobId }: { jobId: string }) {
   const [job, setJob] = useState<JobState | null>(null);
-  const [busy, setBusy] = useState<"pause" | "resume" | "cancel" | null>(null);
+  const [busy, setBusy] = useState<"pause" | "resume" | "cancel" | "retry" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [reason, setReason] = useState("來源檔或設定需要重新確認");
@@ -111,6 +117,28 @@ export default function JobControls({ jobId }: { jobId: string }) {
       setJob(mapJob(payload));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "任務操作失敗");
+      await refresh();
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function retryJob() {
+    if (!job || job.revision < 1) return;
+    setBusy("retry");
+    setError(null);
+    try {
+      const stage = job.activeStage ?? "chirp";
+      const payload = await requestJson(
+        `/jobs/${encodeURIComponent(jobId)}/retry-stage`,
+        {
+          method: "POST",
+          body: JSON.stringify({ expected_revision: job.revision, stage }),
+        },
+      );
+      setJob(mapJob(payload));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "重試失敗");
       await refresh();
     } finally {
       setBusy(null);
@@ -173,6 +201,18 @@ export default function JobControls({ jobId }: { jobId: string }) {
           >
             {busy === "resume" ? <LoaderCircle className="spin" size={18} /> : <Play size={18} />}
             繼續
+          </button>
+        )}
+        {job.status === "failed" && (
+          <button
+            type="button"
+            className="button button--primary"
+            disabled={busy !== null}
+            onClick={() => void retryJob()}
+            title={`重試失敗的 ${job.activeStage ?? "chirp"} 階段`}
+          >
+            {busy === "retry" ? <LoaderCircle className="spin" size={18} /> : <RotateCcw size={18} />}
+            重試失敗階段
           </button>
         )}
         {cancellable.has(job.status) && (

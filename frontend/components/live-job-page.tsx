@@ -14,8 +14,10 @@ import {
   Copy,
   LoaderCircle,
   RefreshCw,
+  RotateCcw,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { rechunkChunk } from "@/lib/api-client";
 
 const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 const terminalJobStatuses = new Set([
@@ -36,6 +38,7 @@ type JobSummary = {
   batchId?: string | null;
   parallelism: number;
   geminiEnabled: boolean;
+  revision: number;
 };
 
 type ChunkItem = {
@@ -115,6 +118,7 @@ function mapJob(raw: Record<string, unknown>): JobSummary {
     batchId: raw.batch_id ? String(raw.batch_id) : null,
     parallelism: Number(raw.chirp_max_parallel_chunks ?? 3),
     geminiEnabled: raw.enable_gemini_correction !== false,
+    revision: Number(raw.revision ?? 1),
   };
 }
 
@@ -185,6 +189,8 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
   const [transcripts, setTranscripts] = useState<Record<number, ChunkTranscript>>({});
   const [loadingTranscript, setLoadingTranscript] = useState<number | null>(null);
+  const [rechunkingChunk, setRechunkingChunk] = useState<number | null>(null);
+  const [rechunkResult, setRechunkResult] = useState<Record<number, "ok" | "error">>({});
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [manualRefresh, setManualRefresh] = useState(0);
@@ -308,9 +314,30 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
     try {
       await navigator.clipboard.writeText(text);
     } catch {
+
       setError("瀏覽器未允許複製文字");
     }
   }
+
+  const rechunkAllowed = job?.status === "completed" || job?.status === "awaiting_review";
+
+  async function handleRechunk(chunkIndex: number) {
+    if (!job || rechunkingChunk !== null) return;
+    const revision = job.revision ?? 1;
+    setRechunkingChunk(chunkIndex);
+    setRechunkResult((prev) => ({ ...prev, [chunkIndex]: undefined as unknown as "ok" }));
+    try {
+      await rechunkChunk(jobId, chunkIndex, revision);
+      setRechunkResult((prev) => ({ ...prev, [chunkIndex]: "ok" }));
+      setManualRefresh((n) => n + 1);
+    } catch (cause) {
+      setRechunkResult((prev) => ({ ...prev, [chunkIndex]: "error" }));
+      setError(cause instanceof Error ? cause.message : "無法啟動重辨識");
+    } finally {
+      setRechunkingChunk(null);
+    }
+  }
+
 
   return (
     <AppShell
@@ -385,6 +412,25 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
                     {loadingTranscript === chunk.chunkIndex ? <LoaderCircle size={17} /> : expanded.has(chunk.chunkIndex) ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
                     {expanded.has(chunk.chunkIndex) ? "收合原始稿" : "展開原始稿"}
                   </button>
+                  {rechunkAllowed && (
+                    <button
+                      type="button"
+                      className={styles.actionButton}
+                      disabled={rechunkingChunk !== null}
+                      onClick={() => void handleRechunk(chunk.chunkIndex)}
+                      title={`重新送出第 ${chunk.chunkIndex + 1} 段給 Chirp 辨識，完成後字詞統計與字幕自動更新`}
+                      aria-label={`重新辨識第 ${chunk.chunkIndex + 1} 段`}
+                    >
+                      {rechunkingChunk === chunk.chunkIndex
+                        ? <LoaderCircle size={17} className="spin" />
+                        : <RotateCcw size={17} />}
+                      {rechunkResult[chunk.chunkIndex] === "ok"
+                        ? "已送出"
+                        : rechunkResult[chunk.chunkIndex] === "error"
+                          ? "送出失敗"
+                          : "重新辨識"}
+                    </button>
+                  )}
                 </div>
                 {chunk.error && <div className={styles.error}>{chunk.error}</div>}
                 {expanded.has(chunk.chunkIndex) && transcripts[chunk.chunkIndex] && (
