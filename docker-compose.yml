@@ -56,6 +56,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
+      - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
     command: ["uvicorn", "app.api_hardened:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
