@@ -78,6 +78,27 @@ with deterministic evidence for non-paid integration testing.
 Read [ARCHITECTURE.md](ARCHITECTURE.md), [RUNBOOK.md](RUNBOOK.md), and
 [HANDOVER.md](HANDOVER.md) before changing or running the pipeline.
 
+## Dynamic Batch and production health
+
+The production paid worker supports Chirp 3 `DYNAMIC_BATCHING` for economical,
+non-urgent transcription. Submission is durable and non-blocking: the worker
+releases its lease while Google processes the saved operation. This is not a
+local night-time scheduler, and no job may be automatically re-submitted merely
+because processing is delayed.
+
+Run the local read-only health report with:
+
+```bash
+python -m app.operations.production_health
+python -m app.operations.production_health --json
+```
+
+It reports failed jobs, pending Drive delivery retries, and Dynamic Batch waits
+beyond the configured 18/23/24-hour thresholds. It never calls a paid provider
+or mutates Drive. See
+[`docs/PRODUCTION_OPTIMIZATION.md`](docs/PRODUCTION_OPTIMIZATION.md) for cost
+reconciliation, alert policy, deployment gates, and paid acceptance tests.
+
 ## Private web access through Cloudflare Tunnel
 
 The review frontend remains loopback-only. `docker-compose.cloudflare.yml`
