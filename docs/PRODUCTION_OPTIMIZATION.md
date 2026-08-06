@@ -52,16 +52,22 @@ The JSON form is suitable for an authenticated dashboard, systemd timer, cron,
 Uptime Kuma push wrapper, Telegram notification worker, or another monitoring
 system.
 
+Use `--output` when a persistent JSON report is required. The command writes
+the file atomically before returning its health exit code, so warning and
+critical results replace the previous report instead of leaving stale healthy
+data.
+
 Suggested schedule:
 
 ```cron
 */15 * * * * cd /opt/course-transcript && docker compose exec -T pipeline-worker \
-  python -m app.operations.production_health --json > data/production-health.json.tmp \
-  && mv data/production-health.json.tmp data/production-health.json
+  python -m app.operations.production_health --json \
+  --output /app/data/production-health.json >/dev/null
 ```
 
-Use a wrapper if non-zero exit codes should create alerts. Do not let the health
-command itself perform automatic retries.
+The non-zero exit code can still create an alert. Do not wrap the write in
+`command && mv`, because warning and critical statuses intentionally return
+`1` and `2`. Do not let the health command perform automatic retries.
 
 ## 3. Cost reporting contract
 
