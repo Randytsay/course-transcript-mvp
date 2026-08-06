@@ -1,5 +1,5 @@
-import NewJobPage from "@/components/new-job-page";
+import NewJobPageDriveApi from "@/components/new-job-page-drive-api";
 
 export default function Page() {
-  return <NewJobPage />;
+  return <NewJobPageDriveApi />;
 }

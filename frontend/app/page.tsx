@@ -1,5 +1,5 @@
-import DashboardPage from "@/components/dashboard-page";
+import DashboardPageDriveHealth from "@/components/dashboard-page-drive-health";
 
 export default function Home() {
-  return <DashboardPage />;
+  return <DashboardPageDriveHealth />;
 }
