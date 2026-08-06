@@ -12,17 +12,16 @@ EXPECTED_FALLBACK_AVAILABLE="${SMOKE_EXPECTED_FALLBACK_AVAILABLE:-false}"
 EXPECTED_COMPOSE_PROJECT="${SMOKE_EXPECTED_COMPOSE_PROJECT:-course-transcript-pr10-smoke}"
 
 validate_container() {
-  sudo docker inspect "$API_CONTAINER" >/dev/null
+  local inspect_json
+  inspect_json="$(sudo docker inspect "$API_CONTAINER")"
 
-  sudo docker inspect "$API_CONTAINER" \
-    -e EXPECTED_COMPOSE_PROJECT="$EXPECTED_COMPOSE_PROJECT" \
-    >/dev/null 2>&1 || true
-
-  sudo docker inspect "$API_CONTAINER" | python - "$EXPECTED_COMPOSE_PROJECT" <<'PY'
+  SMOKE_CONTAINER_INSPECT="$inspect_json" \
+  python - "$EXPECTED_COMPOSE_PROJECT" <<'PY'
 import json
+import os
 import sys
 
-containers = json.load(sys.stdin)
+containers = json.loads(os.environ["SMOKE_CONTAINER_INSPECT"])
 if len(containers) != 1:
     raise SystemExit("SMOKE_PREFLIGHT=FAIL expected exactly one container")
 container = containers[0]
