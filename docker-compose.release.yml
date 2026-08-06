@@ -1,6 +1,9 @@
 services:
   infrastructure-test:
     image: course-transcript-infrastructure-test:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    env_file:
+      - path: ${COURSE_TRANSCRIPT_ENV_FILE:?Set COURSE_TRANSCRIPT_ENV_FILE to the protected production env file}
+        required: true
     volumes:
       - ${GCP_CREDENTIALS_HOST_PATH:?Set GCP_CREDENTIALS_HOST_PATH}:/run/secrets/gcp-sa.json:ro
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs
@@ -9,6 +12,9 @@ services:
 
   api:
     image: course-transcript-api:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    env_file:
+      - path: ${COURSE_TRANSCRIPT_ENV_FILE:?Set COURSE_TRANSCRIPT_ENV_FILE to the protected production env file}
+        required: true
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs:ro
@@ -41,6 +47,9 @@ services:
 
   billing-worker:
     image: course-transcript-billing-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    env_file:
+      - path: ${COURSE_TRANSCRIPT_ENV_FILE:?Set COURSE_TRANSCRIPT_ENV_FILE to the protected production env file}
+        required: true
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
       - ${BILLING_CREDENTIALS_HOST_PATH:?Set BILLING_CREDENTIALS_HOST_PATH}:/run/secrets/billing-sa.json:ro

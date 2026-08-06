@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@v6
       - name: Create placeholder secret files for model validation
         run: |
-          touch /tmp/rclone.conf /tmp/gcp-sa.json /tmp/billing-sa.json
+          touch /tmp/live.env /tmp/rclone.conf /tmp/gcp-sa.json /tmp/billing-sa.json
           mkdir -p /tmp/pr10-smoke-data
           mkdir -p /tmp/release-state/data /tmp/release-state/logs /tmp/release-state/tmp
       - name: Validate web profile
@@ -111,6 +111,7 @@ jobs:
       - name: Validate immutable release override
         env:
           COURSE_TRANSCRIPT_RELEASE_TAG: ci-release
+          COURSE_TRANSCRIPT_ENV_FILE: /tmp/live.env
           COURSE_TRANSCRIPT_DATA_HOST_PATH: /tmp/release-state/data
           COURSE_TRANSCRIPT_LOGS_HOST_PATH: /tmp/release-state/logs
           COURSE_TRANSCRIPT_TMP_HOST_PATH: /tmp/release-state/tmp
