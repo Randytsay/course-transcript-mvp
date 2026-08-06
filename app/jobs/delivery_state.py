@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.jobs.completion import refresh_batch_state
 from app.jobs.store import JobStore
 
 
@@ -36,14 +37,19 @@ def record_delivery_success(
     backup_count: int,
     published_revision: int | None = None,
 ) -> dict[str, Any]:
-    """Update the visible job detail and append one idempotent success event."""
+    """Update visible state and append one idempotent delivery event.
+
+    An explicit editor publication is the human decision that releases a
+    review-blocked job. It therefore transitions ``awaiting_review`` to
+    ``completed`` and refreshes the parent batch in the same transaction.
+    """
     store = JobStore(database_path)
     now = datetime.now(UTC).isoformat()
     if source == "editor":
         if published_revision is None:
             raise ValueError("Editor delivery success requires a published revision")
         detail = (
-            "辨識、校正與 QA 已完成；人工校訂字幕已安全輸出至原始 Drive 資料夾"
+            "辨識、校正與 QA 已完成；人工確認的字幕已安全輸出至原始 Drive 資料夾"
         )
         event_type = "job_drive_editor_published"
     else:
@@ -54,13 +60,17 @@ def record_delivery_success(
 
     with store.transaction() as connection:
         row = connection.execute(
-            "SELECT status, stage_detail FROM jobs WHERE id = ?",
+            "SELECT status, stage_detail, batch_id FROM jobs WHERE id = ?",
             (job_id,),
         ).fetchone()
         if row is None:
             raise LookupError("Job not found")
         if str(row["status"]) not in {"completed", "awaiting_review"}:
             raise RuntimeError("Drive delivery success can update only a completed job")
+        if source != "editor" and str(row["status"]) == "awaiting_review":
+            raise RuntimeError(
+                "Background delivery cannot complete a human-review-blocked job"
+            )
 
         prior_events = connection.execute(
             """
@@ -76,7 +86,24 @@ def record_delivery_success(
             source=source,
             published_revision=published_revision,
         )
-        if str(row["stage_detail"] or "") != detail or not duplicate:
+
+        if source == "editor":
+            if (
+                not duplicate
+                or str(row["status"]) != "completed"
+                or str(row["stage_detail"] or "") != detail
+            ):
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'completed', active_stage = 'completed',
+                        stage_detail = ?, progress = 100, error = NULL,
+                        updated_at = ?, revision = revision + 1
+                    WHERE id = ?
+                    """,
+                    (detail, now, job_id),
+                )
+        elif str(row["stage_detail"] or "") != detail or not duplicate:
             connection.execute(
                 """
                 UPDATE jobs
@@ -86,6 +113,7 @@ def record_delivery_success(
                 """,
                 (detail, now, job_id),
             )
+
         if not duplicate:
             store._event(
                 connection,
@@ -97,6 +125,9 @@ def record_delivery_success(
                     "backup_count": int(backup_count),
                     "published_revision": published_revision,
                     "paid_provider_repeated": False,
+                    "human_review_released": source == "editor",
                 },
             )
+        if row["batch_id"]:
+            refresh_batch_state(connection, str(row["batch_id"]), now)
     return store.get_job(job_id)
