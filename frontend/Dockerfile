@@ -1,3 +1,5 @@
+ARG VCS_REF=unknown
+
 FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
@@ -10,6 +12,9 @@ COPY . .
 RUN mkdir -p public && npm run build
 
 FROM node:24-alpine AS runner
+ARG VCS_REF
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+
 WORKDIR /app
 ENV NODE_ENV=production
 ENV PORT=3000
