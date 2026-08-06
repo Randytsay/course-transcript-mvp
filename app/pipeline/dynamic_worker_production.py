@@ -17,6 +17,12 @@ _ORIGINAL_AUTO_PUBLISH = worker.base._auto_publish_to_source
 _ORIGINAL_FINISH_AFTER_CHIRP = worker._finish_after_chirp
 
 
+def _review_required(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "0", "false", "no", "off"}
+    return bool(value)
+
+
 def _processing_strategy(job_dir: Path) -> str:
     try:
         payload = json.loads((job_dir / "chunk-plan.json").read_text(encoding="utf-8"))
@@ -36,6 +42,10 @@ def _locked_auto_publish(
     data_dir: Path,
     worker_id: str,
 ) -> dict[str, Any] | None:
+    """Publish only jobs that explicitly opt out of human review."""
+    if _review_required(record.get("require_human_review")):
+        return None
+
     source_path = str(record.get("source_path") or "")
     try:
         with drive_publish_lock(data_dir, source_path):
@@ -58,7 +68,7 @@ def _finish_with_actual_strategy(
     data_dir: Path,
     worker_id: str,
 ) -> dict[str, Any]:
-    """Use the retained plan's real strategy for usage accounting and evidence."""
+    """Use the retained strategy and enforce the persisted review gate."""
     job_dir = data_dir / "jobs" / leased["id"]
     strategy = _processing_strategy(job_dir)
     previous = os.environ.get("CHIRP_DYNAMIC_BATCHING")
@@ -78,6 +88,7 @@ def _finish_with_actual_strategy(
         else:
             os.environ["CHIRP_DYNAMIC_BATCHING"] = previous
 
+    awaiting_review = str(result.get("status") or "") == "awaiting_review"
     for name in ("pipeline-manifest.json", "processing_manifest.json"):
         path = job_dir / name
         try:
@@ -86,7 +97,25 @@ def _finish_with_actual_strategy(
             continue
         if isinstance(payload, dict):
             payload["chirp_processing_strategy"] = strategy
+            if awaiting_review:
+                payload.update(
+                    {
+                        "status": "AWAITING_REVIEW",
+                        "drive_upload_started": False,
+                        "drive_publication_status": "awaiting_human_review",
+                        "drive_publication_error": None,
+                        "human_review_blocking": True,
+                        "subtitle_review_status": "pending",
+                    }
+                )
             worker.base._atomic_json(path, payload)
+
+    if awaiting_review:
+        worker.schedule(
+            job_dir,
+            "awaiting_review",
+            detail="human_review_required",
+        )
     return result
 
 
