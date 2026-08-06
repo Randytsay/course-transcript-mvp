@@ -1,8 +1,9 @@
 "use client";
 
 import AppShell from "./app-shell";
+import PublishControl from "./publish-control";
 import Link from "next/link";
-import { AlertTriangle, ArrowLeft, Check, CloudUpload, LoaderCircle, RotateCcw, Search } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, LoaderCircle, RotateCcw, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
@@ -104,7 +105,6 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
   const [replacement, setReplacement] = useState("");
   const [preview, setPreview] = useState<ReplacePreview | null>(null);
   const [replaceBusy, setReplaceBusy] = useState(false);
-  const [publishing, setPublishing] = useState(false);
 
   async function load() {
     try {
@@ -190,27 +190,6 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
     }
   }
 
-  async function publishEdited() {
-    if (!detail) return;
-    if (
-      detail.revision === 0
-      && !window.confirm("已確認目前字幕內容無需修改，並要將 SRT 與 TXT 發布回原始 Drive 資料夾嗎？")
-    ) return;
-    setPublishing(true);
-    try {
-      const result = await fetchJson<{ backup_count: number }>(`/subtitles/${encodeURIComponent(subtitleId)}/publish`, {
-        method: "POST",
-        body: JSON.stringify({ expected_revision: detail.revision, output_formats: ["srt", "txt"] }),
-      });
-      window.alert(`回寫完成；原資料夾中同名舊檔已安全備份 ${result.backup_count} 個。`);
-      await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Drive 回寫失敗");
-    } finally {
-      setPublishing(false);
-    }
-  }
-
   return (
     <AppShell
       title={detail?.name ?? "字幕編輯"}
@@ -230,12 +209,13 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
                   {value === "suspected" ? `疑似問題 (${detail.suspected_count})` : value === "edited" ? `已修改 (${detail.edited_count})` : "全部"}
                 </button>
               ))}
-              {detail.can_publish_to_source && (
-                <button type="button" className="button button--primary" disabled={publishing} onClick={() => void publishEdited()}>
-                  {publishing ? <LoaderCircle className="spin" size={18} /> : <CloudUpload size={18} />}
-                  {detail.revision === 0 ? "確認無需修改並回寫" : "安全回寫 SRT＋TXT"}
-                </button>
-              )}
+              <PublishControl
+                subtitleId={subtitleId}
+                revision={detail.revision}
+                canPublishToSource={detail.can_publish_to_source}
+                onPublished={load}
+                onError={setError}
+              />
             </div>
           </section>
 
