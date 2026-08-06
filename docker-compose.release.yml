@@ -1,5 +1,12 @@
 services:
   infrastructure-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGETARCH: ${COURSE_TRANSCRIPT_TARGETARCH:-arm64}
+        RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
+        VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-infrastructure-test:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     env_file:
       - path: ${COURSE_TRANSCRIPT_ENV_FILE:?Set COURSE_TRANSCRIPT_ENV_FILE to the protected production env file}
@@ -11,6 +18,13 @@ services:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
 
   api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGETARCH: ${COURSE_TRANSCRIPT_TARGETARCH:-arm64}
+        RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
+        VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-api:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     env_file:
       - path: ${COURSE_TRANSCRIPT_ENV_FILE:?Set COURSE_TRANSCRIPT_ENV_FILE to the protected production env file}
@@ -22,6 +36,13 @@ services:
       - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
 
   worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGETARCH: ${COURSE_TRANSCRIPT_TARGETARCH:-arm64}
+        RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
+        VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
@@ -30,6 +51,13 @@ services:
       - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
 
   pipeline-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGETARCH: ${COURSE_TRANSCRIPT_TARGETARCH:-arm64}
+        RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
+        VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-pipeline-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
@@ -39,6 +67,13 @@ services:
       - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
 
   delivery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGETARCH: ${COURSE_TRANSCRIPT_TARGETARCH:-arm64}
+        RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
+        VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-delivery-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
@@ -46,6 +81,13 @@ services:
       - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
 
   billing-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGETARCH: ${COURSE_TRANSCRIPT_TARGETARCH:-arm64}
+        RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
+        VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-billing-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     env_file:
       - path: ${COURSE_TRANSCRIPT_ENV_FILE:?Set COURSE_TRANSCRIPT_ENV_FILE to the protected production env file}
@@ -55,4 +97,9 @@ services:
       - ${BILLING_CREDENTIALS_HOST_PATH:?Set BILLING_CREDENTIALS_HOST_PATH}:/run/secrets/billing-sa.json:ro
 
   frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-frontend:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
