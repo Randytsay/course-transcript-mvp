@@ -1,0 +1,55 @@
+services:
+  api:
+    platform: linux/arm64
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
+        VCS_REF: ${PR10_SMOKE_GIT_SHA:?Set PR10_SMOKE_GIT_SHA to the exact PR commit}
+    image: ${PR10_SMOKE_IMAGE:-course-transcript-pr10-smoke:local}
+    restart: "no"
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      DEPLOYED_GIT_SHA: ${PR10_SMOKE_GIT_SHA:?Set PR10_SMOKE_GIT_SHA to the exact PR commit}
+      COURSE_TRANSCRIPT_DATA_DIR: /app/data
+      COURSE_TRANSCRIPT_CORS_ORIGINS: http://localhost
+      COURSE_TRANSCRIPT_ALLOWED_SOURCE_PREFIX: "gdrive:"
+      COURSE_TRANSCRIPT_DRIVE_BROWSER_PROVIDER: google_api
+      COURSE_TRANSCRIPT_DRIVE_BROWSER_FALLBACK: "false"
+      COURSE_TRANSCRIPT_DRIVE_REMOTE: gdrive
+      GOOGLE_DRIVE_PAGE_SIZE: "20"
+      GOOGLE_DRIVE_ROOT_FOLDER_ID: ${GOOGLE_DRIVE_ROOT_FOLDER_ID:-}
+      GOOGLE_DRIVE_CLIENT_ID: ""
+      GOOGLE_DRIVE_CLIENT_SECRET: ""
+      GOOGLE_DRIVE_REFRESH_TOKEN: ""
+      GOOGLE_DRIVE_REFRESH_TOKEN_FILE: ""
+      COURSE_TRANSCRIPT_REQUIRE_ACCESS_HEADERS: "true"
+      COURSE_TRANSCRIPT_PUBLIC_ORIGIN: https://transcript.randy88.ccwu.cc
+      RCLONE_CONFIG: /run/secrets/rclone.conf
+    volumes:
+      - type: bind
+        source: ${PR10_SMOKE_DATA_DIR:?Set PR10_SMOKE_DATA_DIR to a new isolated directory}
+        target: /app/data
+      - type: bind
+        source: ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH to the existing rclone.conf file}
+        target: /run/secrets/rclone.conf
+        read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+    command: ["uvicorn", "app.api_hardened:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).read()"
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
