@@ -2,6 +2,9 @@ FROM python:3.12-slim
 
 ARG TARGETARCH
 ARG RCLONE_VERSION=1.74.0
+ARG VCS_REF=unknown
+
+LABEL org.opencontainers.image.revision="${VCS_REF}"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
