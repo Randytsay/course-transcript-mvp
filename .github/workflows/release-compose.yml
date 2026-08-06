@@ -1,0 +1,72 @@
+name: Release Compose
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  release-compose:
+    name: Release env and state validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+      - name: Create safe placeholders
+        run: |
+          touch /tmp/live.env /tmp/rclone.conf /tmp/gcp-sa.json /tmp/billing-sa.json
+          mkdir -p /tmp/release-state/data /tmp/release-state/logs /tmp/release-state/tmp
+      - name: Render release model
+        env:
+          COURSE_TRANSCRIPT_RELEASE_TAG: ci-release
+          COURSE_TRANSCRIPT_ENV_FILE: /tmp/live.env
+          COURSE_TRANSCRIPT_DATA_HOST_PATH: /tmp/release-state/data
+          COURSE_TRANSCRIPT_LOGS_HOST_PATH: /tmp/release-state/logs
+          COURSE_TRANSCRIPT_TMP_HOST_PATH: /tmp/release-state/tmp
+          GCP_CREDENTIALS_HOST_PATH: /tmp/gcp-sa.json
+          RCLONE_CONFIG_HOST_PATH: /tmp/rclone.conf
+          GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH: /dev/null
+          BILLING_CREDENTIALS_HOST_PATH: /tmp/billing-sa.json
+        run: |
+          docker compose \
+            -p course-transcript-source \
+            -f docker-compose.yml \
+            -f docker-compose.release.yml \
+            --profile web \
+            --profile billing \
+            config --format json > /tmp/release-compose.json
+      - name: Verify protected env file and mounts
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          model = json.loads(Path('/tmp/release-compose.json').read_text())
+          services = model['services']
+
+          for name in ('infrastructure-test', 'api', 'billing-worker'):
+              env_files = services[name].get('env_file') or []
+              paths = {
+                  item if isinstance(item, str) else item.get('path')
+                  for item in env_files
+              }
+              assert '/tmp/live.env' in paths, (name, env_files)
+
+          data_sources = {}
+          for name in ('api', 'worker', 'pipeline-worker', 'delivery-worker', 'billing-worker'):
+              data = next(
+                  item for item in services[name]['volumes']
+                  if item.get('target') == '/app/data'
+              )
+              data_sources[name] = data.get('source')
+              assert str(services[name]['image']).endswith(':ci-release')
+          assert set(data_sources.values()) == {'/tmp/release-state/data'}, data_sources
+
+          assert all(
+              'gcp-sa.json' not in str(item)
+              for item in services['api'].get('volumes', [])
+          )
+          PY
