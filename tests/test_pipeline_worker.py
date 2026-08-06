@@ -88,7 +88,12 @@ class PipelineWorkerTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _job(self, *, approved: bool) -> dict:
+    def _job(
+        self,
+        *,
+        approved: bool,
+        require_human_review: bool = True,
+    ) -> dict:
         preview = self.store.create_preview(
             source_path="gdrive:課程/測試.mp3",
             source_name="測試.mp3",
@@ -103,7 +108,7 @@ class PipelineWorkerTests(unittest.TestCase):
             profile="highest_accuracy",
             enable_gemini_correction=True,
             enable_subtitles=True,
-            require_human_review=True,
+            require_human_review=require_human_review,
             actor="test@example.test",
         )
         self.store.acquire_lease(record["id"], "preflight-test")
@@ -193,8 +198,8 @@ class PipelineWorkerTests(unittest.TestCase):
         self.assertTrue(manifest.exists())
         self.assertIn('"drive_upload_started": false', manifest.read_text())
 
-    def test_approved_job_publishes_selected_outputs_after_qa_when_enabled(self) -> None:
-        record = self._job(approved=True)
+    def test_review_required_job_never_auto_publishes_after_qa(self) -> None:
+        record = self._job(approved=True, require_human_review=True)
         job_dir = self.data / "jobs" / record["id"]
         job_dir.mkdir(parents=True)
         source = job_dir / "source-original.mp3"
@@ -232,13 +237,13 @@ class PipelineWorkerTests(unittest.TestCase):
                 self.store, record, data_dir=self.data, worker_id="pipeline-test"
             )
         self.assertEqual(finished["status"], "awaiting_review")
-        self.assertIn("已輸出至原始 Drive 資料夾", finished["stage_detail"])
-        publish.assert_called_once()
+        self.assertIn("等待人工審查", finished["stage_detail"])
+        publish.assert_not_called()
         manifest = json.loads((job_dir / "pipeline-manifest.json").read_text())
-        self.assertTrue(manifest["drive_upload_started"])
+        self.assertFalse(manifest["drive_upload_started"])
 
-    def test_drive_publication_error_keeps_paid_results_awaiting_review(self) -> None:
-        record = self._job(approved=True)
+    def test_non_review_drive_error_keeps_results_completed_with_retry(self) -> None:
+        record = self._job(approved=True, require_human_review=False)
         job_dir = self.data / "jobs" / record["id"]
         job_dir.mkdir(parents=True)
         source = job_dir / "source-original.mp3"
@@ -259,7 +264,7 @@ class PipelineWorkerTests(unittest.TestCase):
             patch.object(worker, "publish_outputs", side_effect=worker.DrivePublishError("rate limited")),
         ):
             finished = worker.run_paid_job(self.store, record, data_dir=self.data, worker_id="pipeline-test")
-        self.assertEqual(finished["status"], "awaiting_review")
+        self.assertEqual(finished["status"], "completed")
         self.assertIn("Drive 回寫待重試", finished["stage_detail"])
         manifest = json.loads((job_dir / "pipeline-manifest.json").read_text())
         self.assertEqual(manifest["drive_publication_status"], "pending_retry")
