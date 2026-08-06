@@ -1,4 +1,4 @@
-"""Retry only Drive delivery for completed jobs; never repeat paid providers."""
+"""Retry Drive delivery without bypassing a required human-review gate."""
 from __future__ import annotations
 
 import argparse
@@ -50,6 +50,12 @@ def _read(path: Path) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def _review_required(value: object) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() not in {"", "0", "false", "no", "off"}
+    return bool(value)
+
+
 def _write_manifest_status(job_dir: Path, status: str, error: str | None) -> None:
     for name in ("pipeline-manifest.json", "processing_manifest.json"):
         path = job_dir / name
@@ -84,13 +90,17 @@ def _candidate() -> dict[str, Any] | None:
     connection = sqlite3.connect(DATABASE, timeout=30)
     connection.row_factory = sqlite3.Row
     try:
-        # Include retained pre-hardening jobs that completed into the old
-        # awaiting_review terminal state. They may still have pending delivery.
         rows = connection.execute(
             """
             SELECT * FROM jobs
-            WHERE status IN ('completed', 'awaiting_review')
-              AND source_path LIKE 'gdrive:%'
+            WHERE source_path LIKE 'gdrive:%'
+              AND (
+                    status = 'completed'
+                    OR (
+                        status = 'awaiting_review'
+                        AND require_human_review = 0
+                    )
+              )
             ORDER BY updated_at, created_at
             """
         ).fetchall()
@@ -98,6 +108,11 @@ def _candidate() -> dict[str, Any] | None:
         connection.close()
     for row in rows:
         record = dict(row)
+        if (
+            str(record.get("status") or "") == "awaiting_review"
+            and _review_required(record.get("require_human_review"))
+        ):
+            continue
         job_dir = DATA_DIR / "jobs" / record["id"]
         if _superseded(job_dir):
             continue
@@ -188,6 +203,16 @@ def run_once() -> bool:
         return False
     job_dir = DATA_DIR / "jobs" / record["id"]
     source_path = str(record["source_path"])
+
+    # Fail closed even if a future query change accidentally returns a blocked
+    # review job. No remote mutation may occur before an explicit editor publish.
+    if (
+        str(record.get("status") or "") == "awaiting_review"
+        and _review_required(record.get("require_human_review"))
+    ):
+        print(f"DRIVE_DELIVERY=SKIP_HUMAN_REVIEW job={record['id']}")
+        return True
+
     try:
         with drive_publish_lock(DATA_DIR, source_path):
             # Recheck after taking the global lock. Editor intent is persisted
