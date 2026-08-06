@@ -1,0 +1,58 @@
+name: Production cutover scripts
+
+on:
+  pull_request:
+    paths:
+      - "scripts/deploy_release.sh"
+      - "scripts/deploy_release_lib.sh"
+      - "docs/PRODUCTION_CUTOVER.md"
+      - ".github/workflows/deploy-script.yml"
+  push:
+    branches: [main]
+    paths:
+      - "scripts/deploy_release.sh"
+      - "scripts/deploy_release_lib.sh"
+      - "docs/PRODUCTION_CUTOVER.md"
+      - ".github/workflows/deploy-script.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse shell scripts
+        run: |
+          bash -n scripts/deploy_release.sh
+          bash -n scripts/deploy_release_lib.sh
+
+      - name: Run self-test and help
+        run: |
+          bash scripts/deploy_release.sh --self-test
+          bash scripts/deploy_release.sh --help >/dev/null
+
+      - name: Reject unsafe invocation
+        run: |
+          if bash scripts/deploy_release.sh --release-sha bad --dry-run; then
+            echo "invalid SHA was accepted"
+            exit 1
+          fi
+          if bash scripts/deploy_release.sh \
+            --release-sha a4e4409d8a7ea14d03fb55fd820b003de78c0ad5 \
+            --execute; then
+            echo "execute mode did not require explicit SHA confirmation"
+            exit 1
+          fi
+
+      - name: Enforce deployment guardrails
+        run: |
+          ! grep -En 'docker compose (down|restart|build)' scripts/deploy_release*.sh
+          ! grep -En 'docker system prune|--remove-orphans' scripts/deploy_release*.sh
+          grep -Fq -- '--confirm-sha' scripts/deploy_release.sh
+          grep -Fq 'ROLLBACK_ARMED' scripts/deploy_release.sh
+          grep -Fq 'mode=ro' scripts/deploy_release_lib.sh
+          grep -Fq 'PRESERVE_AS_AUDIT_EVIDENCE' docs/PRODUCTION_CUTOVER.md || \
+            grep -Fq 'does not modify' docs/PRODUCTION_CUTOVER.md
