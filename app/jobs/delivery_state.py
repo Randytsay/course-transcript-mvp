@@ -88,16 +88,21 @@ def record_delivery_success(
         )
 
         if source == "editor":
-            connection.execute(
-                """
-                UPDATE jobs
-                SET status = 'completed', active_stage = 'completed',
-                    stage_detail = ?, progress = 100, error = NULL,
-                    updated_at = ?, revision = revision + 1
-                WHERE id = ?
-                """,
-                (detail, now, job_id),
-            )
+            if (
+                not duplicate
+                or str(row["status"]) != "completed"
+                or str(row["stage_detail"] or "") != detail
+            ):
+                connection.execute(
+                    """
+                    UPDATE jobs
+                    SET status = 'completed', active_stage = 'completed',
+                        stage_detail = ?, progress = 100, error = NULL,
+                        updated_at = ?, revision = revision + 1
+                    WHERE id = ?
+                    """,
+                    (detail, now, job_id),
+                )
         elif str(row["stage_detail"] or "") != detail or not duplicate:
             connection.execute(
                 """
