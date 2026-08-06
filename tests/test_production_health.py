@@ -6,8 +6,9 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
-from app.operations.production_health import build_report
+from app.operations.production_health import build_report, write_report_atomic
 
 
 class ProductionHealthTests(unittest.TestCase):
@@ -60,6 +61,14 @@ class ProductionHealthTests(unittest.TestCase):
         connection.commit()
         connection.close()
 
+    def write_strategy(self, job_id: str, strategy: str) -> None:
+        job_dir = self.data_dir / "jobs" / job_id
+        job_dir.mkdir(parents=True, exist_ok=True)
+        (job_dir / "chunk-plan.json").write_text(
+            json.dumps({"processing_strategy": strategy}),
+            encoding="utf-8",
+        )
+
     def test_healthy_database_is_ok(self) -> None:
         self.insert_job("done", status="completed")
         report = build_report(self.data_dir, now=self.now)
@@ -88,6 +97,69 @@ class ProductionHealthTests(unittest.TestCase):
         report = build_report(self.data_dir, now=self.now)
         self.assertEqual(report["status"], "critical")
         self.assertEqual(report["findings"][0]["code"], "dynamic_batch_sla_breach")
+
+    def test_machine_strategy_works_without_chinese_stage_detail(self) -> None:
+        self.insert_job(
+            "english",
+            status="transcribing",
+            active_stage="chirp",
+            detail="Submitted; waiting for provider capacity",
+            age_hours=19,
+        )
+        self.write_strategy("english", "DYNAMIC_BATCHING")
+        report = build_report(self.data_dir, now=self.now)
+        self.assertEqual(report["status"], "warning")
+        self.assertEqual(report["counts"]["dynamic_waiting"], 1)
+        self.assertEqual(report["findings"][0]["job_id"], "english")
+
+    def test_machine_strategy_overrides_legacy_text(self) -> None:
+        self.insert_job(
+            "standard",
+            status="transcribing",
+            active_stage="chirp",
+            detail="Chirp 動態批次舊文案",
+            age_hours=30,
+        )
+        self.write_strategy("standard", "PROCESSING_STRATEGY_UNSPECIFIED")
+        report = build_report(self.data_dir, now=self.now)
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["counts"]["dynamic_waiting"], 0)
+
+    def test_custom_sla_appears_in_message(self) -> None:
+        self.insert_job(
+            "custom",
+            status="transcribing",
+            active_stage="chirp",
+            detail="Submitted",
+            age_hours=21,
+        )
+        self.write_strategy("custom", "DYNAMIC_BATCHING")
+        with patch.dict(
+            "os.environ",
+            {
+                "DYNAMIC_BATCH_WARNING_HOURS": "10",
+                "DYNAMIC_BATCH_CRITICAL_HOURS": "18",
+                "DYNAMIC_BATCH_SLA_HOURS": "20",
+            },
+        ):
+            report = build_report(self.data_dir, now=self.now)
+        self.assertEqual(report["status"], "critical")
+        self.assertIn("20 小時", report["findings"][0]["message"])
+
+    def test_atomic_output_updates_for_warning_and_critical(self) -> None:
+        output = self.data_dir / "production-health.json"
+        for status in ("warning", "critical"):
+            report = {
+                "status": status,
+                "generated_at": self.now.isoformat(),
+                "data_dir": str(self.data_dir),
+                "counts": {},
+                "findings": [],
+            }
+            write_report_atomic(report, output)
+            saved = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(saved["status"], status)
+            self.assertFalse(any(output.parent.glob(f".{output.name}.*.tmp")))
 
     def test_drive_retry_is_reported_without_provider_retry(self) -> None:
         self.insert_job("drive", status="completed")
