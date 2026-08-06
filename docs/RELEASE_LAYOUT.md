@@ -13,7 +13,7 @@ It is intended for the current Oracle ARM64 host, where the running Compose proj
 - Persistent tmp: `/opt/course-transcript-source/tmp`
 - GCP service account: `/opt/course-transcript/secrets/gcp-sa.json`
 - rclone config: `/home/ubuntu/.config/rclone/rclone.conf`
-- Live environment file: `/home/ubuntu/.env`
+- Protected service environment file: `/home/ubuntu/.env`
 - Compose project: `course-transcript-source`
 
 The release directory must be created from an exact approved commit with `git archive`.
@@ -26,6 +26,7 @@ Before rendering or building the release Compose model, export:
 
 ```bash
 export COURSE_TRANSCRIPT_RELEASE_TAG='<exact-approved-git-sha>'
+export COURSE_TRANSCRIPT_ENV_FILE='/home/ubuntu/.env'
 export COURSE_TRANSCRIPT_DATA_HOST_PATH='/opt/course-transcript-source/data'
 export COURSE_TRANSCRIPT_LOGS_HOST_PATH='/opt/course-transcript-source/logs'
 export COURSE_TRANSCRIPT_TMP_HOST_PATH='/opt/course-transcript-source/tmp'
@@ -38,13 +39,17 @@ export BILLING_CREDENTIALS_HOST_PATH='/opt/course-transcript/secrets/billing-sa.
 Use the base Compose file together with `docker-compose.release.yml`:
 
 ```bash
-docker compose \
+sudo -E docker compose \
   --project-name course-transcript-source \
   --env-file /home/ubuntu/.env \
   -f docker-compose.yml \
   -f docker-compose.release.yml \
   config
 ```
+
+`--env-file` supplies Compose interpolation values. `COURSE_TRANSCRIPT_ENV_FILE` separately
+ensures services that use Compose `env_file` load the protected production file rather
+than looking for a relative `.env` inside the immutable release directory.
 
 The release override gives every built image an exact-SHA tag and replaces every
 `/app/data`, `/app/logs`, and `/app/tmp` bind source with an explicit persistent host
@@ -60,9 +65,11 @@ Before any build or restart, verify the rendered model:
 2. No `/app/data` mount points into the release source directory.
 3. GCP, rclone, refresh-token, and billing credential mounts are read-only.
 4. The API does not mount the GCP service account.
-5. Every application image tag ends with the exact approved Git SHA.
-6. The frontend host binding remains `127.0.0.1:3300:3000`.
-7. Cloudflared is not rebuilt and continues to route only to `frontend:3000`.
+5. `infrastructure-test`, `api`, and `billing-worker` include the protected absolute
+   service env file; no service relies on a release-local `.env`.
+6. Every application image tag ends with the exact approved Git SHA.
+7. The frontend host binding remains `127.0.0.1:3300:3000`.
+8. Cloudflared is not rebuilt and continues to route only to `frontend:3000`.
 
 ## Pending Drive delivery
 
