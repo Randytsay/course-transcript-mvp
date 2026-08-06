@@ -6,7 +6,7 @@ from typing import Any
 
 from app.api_observed import app
 from app.drive_api_routes import router as drive_api_router
-from app.subtitles.editor_hardened import import_srt
+from app.subtitles.editor_hardened import import_srt, get_publish_status
 from app.subtitles.review_publish import publish_reviewed
 
 _PUBLISH_PATH = "/api/v1/subtitles/{subtitle_id}/publish"
@@ -110,6 +110,9 @@ def _assert_publish_route() -> None:
 app.router.routes = _remove_replaced_routes(list(app.router.routes))
 app.post("/api/v1/subtitles/import", status_code=201)(import_srt)
 app.post(_PUBLISH_PATH)(publish_reviewed)
+app.get("/api/v1/subtitles/{subtitle_id}/publish-status")(get_publish_status)
+
+# 3. Include the new Google Drive API + health + search endpoints router
 app.include_router(drive_api_router)
 app.openapi_schema = None
 _assert_publish_route()

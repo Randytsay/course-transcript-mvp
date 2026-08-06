@@ -81,7 +81,12 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   const payload = await response.json().catch(() => null) as unknown;
-  if (!response.ok) throw new Error(apiErrorMessage(payload, response.status));
+  if (!response.ok) {
+    const message = apiErrorMessage(payload, response.status);
+    const error = new Error(message);
+    (error as any).status = response.status;
+    throw error;
+  }
   return payload as T;
 }
 
@@ -92,6 +97,18 @@ function time(ms: number) {
   const seconds = total % 60;
   return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
+
+type PublishStatus = {
+  status: "idle" | "publishing" | "completed" | "failed" | "ambiguous";
+  job_status?: string | null;
+  batch_status?: string | null;
+  published_revision?: number | null;
+  current_revision?: number;
+  zero_edit_review?: boolean;
+  drive_publish_status?: string | null;
+  editor_publish_event_count?: number;
+  can_retry?: boolean;
+};
 
 export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
   const [detail, setDetail] = useState<SubtitleDetail | null>(null);
@@ -105,6 +122,8 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
   const [preview, setPreview] = useState<ReplacePreview | null>(null);
   const [replaceBusy, setReplaceBusy] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null);
+  const [publishMessage, setPublishMessage] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -112,12 +131,93 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
       setDetail(result);
       setDrafts(Object.fromEntries(result.segments.map((item) => [item.segment_id, item.current_text])));
       setError(null);
+
+      if (result.can_publish_to_source) {
+        const statusResult = await fetchJson<PublishStatus>(`/subtitles/${encodeURIComponent(subtitleId)}/publish-status`);
+        setPublishStatus(statusResult);
+      } else {
+        setPublishStatus(null);
+      }
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法載入字幕");
     }
   }
 
   useEffect(() => { void load(); }, [subtitleId]);
+
+  // Polling verification loop
+  useEffect(() => {
+    if (!publishStatus || publishStatus.status !== "publishing") {
+      if (publishStatus?.status !== "completed") {
+        setPublishMessage(null);
+      }
+      return;
+    }
+
+    setPublishing(true);
+    setPublishMessage("正在發布至 Google Drive，請勿重複操作");
+
+    let attempts = 0;
+    const maxAttempts = 120; // 10 minutes (5 seconds interval)
+    let active = true;
+
+    const interval = setInterval(async () => {
+      if (!active) return;
+      attempts++;
+      try {
+        const res = await fetchJson<PublishStatus>(`/subtitles/${encodeURIComponent(subtitleId)}/publish-status`);
+        if (!active) return;
+
+        if (res.status === "completed") {
+          clearInterval(interval);
+          setPublishing(false);
+          setPublishMessage(null);
+          setPublishStatus(res);
+          window.alert("字幕已成功發布至 Google Drive");
+          await load();
+        } else if (res.status === "failed") {
+          clearInterval(interval);
+          setPublishing(false);
+          setPublishMessage(null);
+          setPublishStatus(res);
+          setError("發布失敗，請重試");
+          await load();
+        } else if (attempts >= maxAttempts) {
+          clearInterval(interval);
+          setPublishing(false);
+          setPublishMessage(null);
+          setPublishStatus(res);
+          setError("發布仍可能在背景處理，請稍後重新開啟此頁確認，請勿再次送出");
+        } else if (res.status === "ambiguous") {
+          // Keep polling until 10 minutes timeout
+        }
+      } catch (err) {
+        if (attempts >= maxAttempts) {
+          clearInterval(interval);
+          setPublishing(false);
+          setPublishMessage(null);
+          setError("發布仍可能在背景處理，請稍後重新開啟此頁確認，請勿再次送出");
+        }
+      }
+    }, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [publishStatus?.status, subtitleId]);
+
+  // Page unload warning
+  useEffect(() => {
+    if (!publishing) return;
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "字幕發布正在背景處理中，關閉頁面不影響發布，但您將無法在頁面上即時確認結果。確定要離開嗎？";
+      return e.returnValue;
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
+  }, [publishing]);
 
   const visible = useMemo(() => {
     if (!detail) return [];
@@ -190,6 +290,17 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
     }
   }
 
+  function isMaybeTimeoutOrNetworkError(error: unknown, status?: number): boolean {
+    if (status && status >= 500) return true;
+    const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+    return msg.includes("timeout") ||
+           msg.includes("abort") ||
+           msg.includes("hang up") ||
+           msg.includes("econnreset") ||
+           msg.includes("failed to fetch") ||
+           msg.includes("network");
+  }
+
   async function publishEdited() {
     if (!detail) return;
     if (
@@ -197,17 +308,30 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
       && !window.confirm("已確認目前字幕內容無需修改，並要將 SRT 與 TXT 發布回原始 Drive 資料夾嗎？")
     ) return;
     setPublishing(true);
+    setPublishMessage("正在發布至 Google Drive，請勿重複操作");
     try {
       const result = await fetchJson<{ backup_count: number }>(`/subtitles/${encodeURIComponent(subtitleId)}/publish`, {
         method: "POST",
         body: JSON.stringify({ expected_revision: detail.revision, output_formats: ["srt", "txt"] }),
       });
       window.alert(`回寫完成；原資料夾中同名舊檔已安全備份 ${result.backup_count} 個。`);
+      setPublishing(false);
+      setPublishMessage(null);
       await load();
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Drive 回寫失敗");
-    } finally {
-      setPublishing(false);
+      const isTimeoutOrNetwork = isMaybeTimeoutOrNetworkError(cause, (cause as any).status);
+      if (isTimeoutOrNetwork) {
+        try {
+          const res = await fetchJson<PublishStatus>(`/subtitles/${encodeURIComponent(subtitleId)}/publish-status`);
+          setPublishStatus(res);
+        } catch (e) {
+          setPublishStatus({ status: "publishing" });
+        }
+      } else {
+        setError(cause instanceof Error ? cause.message : "Drive 回寫失敗");
+        setPublishing(false);
+        setPublishMessage(null);
+      }
     }
   }
 
@@ -217,6 +341,11 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
       description={detail ? `${detail.segment_count.toLocaleString()} 段 · 疑似問題 ${detail.suspected_count} · 人工修改 ${detail.edited_count} · 版本 ${detail.revision}` : "載入字幕中"}
       actions={<Link href="/subtitles" className="button button--secondary"><ArrowLeft size={18} />返回字幕中心</Link>}
     >
+      {publishMessage && (
+        <div style={{ padding: "12px", borderRadius: "10px", background: "#eff6ff", border: "1px solid #bfdbfe", color: "#1e40af", marginBottom: "14px", fontWeight: 600 }}>
+          {publishMessage}
+        </div>
+      )}
       {error && <div className="empty-state empty-state--error" style={{ marginBottom: "14px" }}>{error}</div>}
       {!detail ? (
         <div className="empty-state"><LoaderCircle className="spin" size={22} />正在載入…</div>
@@ -231,10 +360,16 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
                 </button>
               ))}
               {detail.can_publish_to_source && (
-                <button type="button" className="button button--primary" disabled={publishing} onClick={() => void publishEdited()}>
-                  {publishing ? <LoaderCircle className="spin" size={18} /> : <CloudUpload size={18} />}
-                  {detail.revision === 0 ? "確認無需修改並回寫" : "安全回寫 SRT＋TXT"}
-                </button>
+                publishStatus?.status === "completed" ? (
+                  <span className="status-badge status-badge--completed" style={{ padding: "8px 12px", fontSize: "0.95rem" }}>
+                    字幕已成功發布至 Google Drive (版本 {publishStatus.published_revision ?? 0})
+                  </span>
+                ) : (
+                  <button type="button" className="button button--primary" disabled={publishing} onClick={() => void publishEdited()}>
+                    {publishing ? <LoaderCircle className="spin" size={18} /> : <CloudUpload size={18} />}
+                    {publishing ? "正在發布…" : detail.revision === 0 ? "確認無需修改並回寫" : "安全回寫 SRT＋TXT"}
+                  </button>
+                )
               )}
             </div>
           </section>
