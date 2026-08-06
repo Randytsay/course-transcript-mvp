@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import tempfile
+import unittest
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-
-import pytest
+from unittest.mock import patch
 
 from app.jobs import delivery_worker
 from app.jobs.completion import finish_with_policy
@@ -97,152 +98,170 @@ def _seed_job(
     return store
 
 
-def test_review_required_stops_before_delivery(tmp_path: Path) -> None:
-    store = _seed_job(
-        tmp_path / "jobs.db",
-        job_id="review-job",
-        require_human_review=True,
-        status="quality_check",
-        locked_by="worker-1",
-    )
+class HumanReviewGateTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
 
-    result = finish_with_policy(
-        store,
-        job_id="review-job",
-        worker_id="worker-1",
-        drive_published=False,
-    )
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
 
-    assert result["status"] == "awaiting_review"
-    assert result["active_stage"] == "review"
-    assert result["locked_by"] is None
-    assert store.get_batch("batch-review-job")["status"] == "awaiting_review"
-    events = store.list_job_events("review-job")
-    assert events[-1]["event_type"] == "local_outputs_ready_for_review"
-    assert json.loads(events[-1]["payload_json"])["human_review_blocking"] is True
+    def test_review_required_stops_before_delivery(self) -> None:
+        store = _seed_job(
+            self.root / "jobs.db",
+            job_id="review-job",
+            require_human_review=True,
+            status="quality_check",
+            locked_by="worker-1",
+        )
 
+        result = finish_with_policy(
+            store,
+            job_id="review-job",
+            worker_id="worker-1",
+            drive_published=False,
+        )
 
-def test_non_review_job_can_complete(tmp_path: Path) -> None:
-    store = _seed_job(
-        tmp_path / "jobs.db",
-        job_id="automatic-job",
-        require_human_review=False,
-        status="quality_check",
-        locked_by="worker-1",
-    )
+        self.assertEqual(result["status"], "awaiting_review")
+        self.assertEqual(result["active_stage"], "review")
+        self.assertIsNone(result["locked_by"])
+        self.assertEqual(
+            store.get_batch("batch-review-job")["status"],
+            "awaiting_review",
+        )
+        events = store.list_job_events("review-job")
+        self.assertEqual(events[0]["event_type"], "local_outputs_ready_for_review")
+        self.assertTrue(events[0]["payload"]["human_review_blocking"])
 
-    result = finish_with_policy(
-        store,
-        job_id="automatic-job",
-        worker_id="worker-1",
-        drive_published=True,
-    )
+    def test_non_review_job_can_complete(self) -> None:
+        store = _seed_job(
+            self.root / "jobs.db",
+            job_id="automatic-job",
+            require_human_review=False,
+            status="quality_check",
+            locked_by="worker-1",
+        )
 
-    assert result["status"] == "completed"
-    assert store.get_batch("batch-automatic-job")["status"] == "completed"
+        result = finish_with_policy(
+            store,
+            job_id="automatic-job",
+            worker_id="worker-1",
+            drive_published=True,
+        )
 
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(
+            store.get_batch("batch-automatic-job")["status"],
+            "completed",
+        )
 
-def test_production_auto_publish_gate_is_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    called: list[str] = []
+    def test_production_auto_publish_gate_is_fail_closed(self) -> None:
+        called: list[str] = []
 
-    def publish(*args: object, **kwargs: object) -> dict[str, str]:
-        called.append("published")
-        return {"status": "completed"}
+        def publish(*args: object, **kwargs: object) -> dict[str, str]:
+            called.append("published")
+            return {"status": "completed"}
 
-    @contextmanager
-    def unlocked(*args: object, **kwargs: object):
-        yield
+        @contextmanager
+        def unlocked(*args: object, **kwargs: object):
+            yield
 
-    monkeypatch.setattr(dynamic_worker_production, "_ORIGINAL_AUTO_PUBLISH", publish)
-    monkeypatch.setattr(dynamic_worker_production, "drive_publish_lock", unlocked)
+        with (
+            patch.object(dynamic_worker_production, "_ORIGINAL_AUTO_PUBLISH", publish),
+            patch.object(dynamic_worker_production, "drive_publish_lock", unlocked),
+        ):
+            blocked = dynamic_worker_production._locked_auto_publish(
+                object(),
+                {"require_human_review": 1, "source_path": "gdrive:test/sample.mp4"},
+                self.root,
+                "worker",
+            )
+            self.assertIsNone(blocked)
+            self.assertEqual(called, [])
 
-    blocked = dynamic_worker_production._locked_auto_publish(
-        object(),
-        {"require_human_review": 1, "source_path": "gdrive:test/sample.mp4"},
-        tmp_path,
-        "worker",
-    )
-    assert blocked is None
-    assert called == []
+            allowed = dynamic_worker_production._locked_auto_publish(
+                object(),
+                {"require_human_review": 0, "source_path": "gdrive:test/sample.mp4"},
+                self.root,
+                "worker",
+            )
+            self.assertEqual(allowed, {"status": "completed"})
+            self.assertEqual(called, ["published"])
 
-    allowed = dynamic_worker_production._locked_auto_publish(
-        object(),
-        {"require_human_review": 0, "source_path": "gdrive:test/sample.mp4"},
-        tmp_path,
-        "worker",
-    )
-    assert allowed == {"status": "completed"}
-    assert called == ["published"]
+    def test_delivery_worker_does_not_select_review_blocked_job(self) -> None:
+        data_dir = self.root / "data"
+        database = data_dir / "course-transcript.db"
+        _seed_job(
+            database,
+            job_id="blocked-delivery",
+            require_human_review=True,
+            status="awaiting_review",
+        )
+        job_dir = data_dir / "jobs" / "blocked-delivery"
+        job_dir.mkdir(parents=True)
+        (job_dir / "pipeline-manifest.json").write_text(
+            json.dumps({"drive_publication_status": "pending_retry"}),
+            encoding="utf-8",
+        )
+        (job_dir / "drive-publish-state.json").write_text(
+            json.dumps({"status": "prepared"}),
+            encoding="utf-8",
+        )
 
+        with (
+            patch.object(delivery_worker, "DATA_DIR", data_dir),
+            patch.object(delivery_worker, "DATABASE", database),
+        ):
+            self.assertIsNone(delivery_worker._candidate())
 
-def test_delivery_worker_does_not_select_review_blocked_job(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    data_dir = tmp_path / "data"
-    database = data_dir / "course-transcript.db"
-    _seed_job(
-        database,
-        job_id="blocked-delivery",
-        require_human_review=True,
-        status="awaiting_review",
-    )
-    job_dir = data_dir / "jobs" / "blocked-delivery"
-    job_dir.mkdir(parents=True)
-    (job_dir / "pipeline-manifest.json").write_text(
-        json.dumps({"drive_publication_status": "pending_retry"}),
-        encoding="utf-8",
-    )
-    (job_dir / "drive-publish-state.json").write_text(
-        json.dumps({"status": "prepared"}),
-        encoding="utf-8",
-    )
+    def test_zero_edit_review_request_and_editor_publish_complete_job(self) -> None:
+        payload = PublishReviewedRequest(
+            expected_revision=0,
+            output_formats=["srt", "txt"],
+        )
+        self.assertEqual(payload.expected_revision, 0)
 
-    monkeypatch.setattr(delivery_worker, "DATA_DIR", data_dir)
-    monkeypatch.setattr(delivery_worker, "DATABASE", database)
+        database = self.root / "jobs.db"
+        store = _seed_job(
+            database,
+            job_id="reviewed-job",
+            require_human_review=True,
+            status="awaiting_review",
+        )
+        result = record_delivery_success(
+            database,
+            job_id="reviewed-job",
+            actor="reviewer@example.com",
+            source="editor",
+            backup_count=0,
+            published_revision=0,
+        )
 
-    assert delivery_worker._candidate() is None
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["active_stage"], "completed")
+        self.assertEqual(
+            store.get_batch("batch-reviewed-job")["status"],
+            "completed",
+        )
 
-
-def test_zero_edit_review_request_and_editor_publish_complete_job(tmp_path: Path) -> None:
-    payload = PublishReviewedRequest(expected_revision=0, output_formats=["srt", "txt"])
-    assert payload.expected_revision == 0
-
-    database = tmp_path / "jobs.db"
-    store = _seed_job(
-        database,
-        job_id="reviewed-job",
-        require_human_review=True,
-        status="awaiting_review",
-    )
-    result = record_delivery_success(
-        database,
-        job_id="reviewed-job",
-        actor="reviewer@example.com",
-        source="editor",
-        backup_count=0,
-        published_revision=0,
-    )
-
-    assert result["status"] == "completed"
-    assert result["active_stage"] == "completed"
-    assert store.get_batch("batch-reviewed-job")["status"] == "completed"
-
-
-def test_background_delivery_cannot_release_review_gate(tmp_path: Path) -> None:
-    database = tmp_path / "jobs.db"
-    _seed_job(
-        database,
-        job_id="blocked-background",
-        require_human_review=True,
-        status="awaiting_review",
-    )
-
-    with pytest.raises(RuntimeError, match="human-review-blocked"):
-        record_delivery_success(
+    def test_background_delivery_cannot_release_review_gate(self) -> None:
+        database = self.root / "jobs.db"
+        _seed_job(
             database,
             job_id="blocked-background",
-            actor="delivery-worker",
-            source="delivery_worker",
-            backup_count=0,
+            require_human_review=True,
+            status="awaiting_review",
         )
+
+        with self.assertRaisesRegex(RuntimeError, "human-review-blocked"):
+            record_delivery_success(
+                database,
+                job_id="blocked-background",
+                actor="delivery-worker",
+                source="delivery_worker",
+                backup_count=0,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
