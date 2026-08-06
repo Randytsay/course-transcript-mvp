@@ -31,7 +31,9 @@ jobs:
       - name: Install Python dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
       - name: Compile Python sources
-        run: python -m compileall -q app tests
+        run: |
+          python -m compileall -q app tests
+          python -m py_compile scripts/diagnose_delivery_candidate.py
       - name: Validate shell scripts
         run: bash -n scripts/smoke_drive_api_readonly.sh
       - name: Import production API and worker entrypoints
@@ -95,6 +97,7 @@ jobs:
         run: |
           touch /tmp/rclone.conf /tmp/gcp-sa.json /tmp/billing-sa.json
           mkdir -p /tmp/pr10-smoke-data
+          mkdir -p /tmp/release-state/data /tmp/release-state/logs /tmp/release-state/tmp
       - name: Validate web profile
         env:
           RCLONE_CONFIG_HOST_PATH: /tmp/rclone.conf
@@ -105,6 +108,68 @@ jobs:
           RCLONE_CONFIG_HOST_PATH: /tmp/rclone.conf
           BILLING_CREDENTIALS_HOST_PATH: /tmp/billing-sa.json
         run: docker compose --profile billing config --quiet
+      - name: Validate immutable release override
+        env:
+          COURSE_TRANSCRIPT_RELEASE_TAG: ci-release
+          COURSE_TRANSCRIPT_DATA_HOST_PATH: /tmp/release-state/data
+          COURSE_TRANSCRIPT_LOGS_HOST_PATH: /tmp/release-state/logs
+          COURSE_TRANSCRIPT_TMP_HOST_PATH: /tmp/release-state/tmp
+          GCP_CREDENTIALS_HOST_PATH: /tmp/gcp-sa.json
+          RCLONE_CONFIG_HOST_PATH: /tmp/rclone.conf
+          GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH: /dev/null
+          BILLING_CREDENTIALS_HOST_PATH: /tmp/billing-sa.json
+        run: |
+          docker compose \
+            -p course-transcript-source \
+            -f docker-compose.yml \
+            -f docker-compose.release.yml \
+            --profile web \
+            --profile billing \
+            config --format json > /tmp/release-compose.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path('/tmp/release-compose.json').read_text())
+          services = payload.get('services') or {}
+          required = {
+              'api', 'worker', 'pipeline-worker', 'delivery-worker',
+              'billing-worker', 'frontend',
+          }
+          assert required.issubset(services), services.keys()
+
+          data_sources = {}
+          for name in ('api', 'worker', 'pipeline-worker', 'delivery-worker', 'billing-worker'):
+              service = services[name]
+              assert str(service.get('image', '')).endswith(':ci-release'), (name, service.get('image'))
+              volume = next(item for item in service.get('volumes', []) if item.get('target') == '/app/data')
+              data_sources[name] = volume.get('source')
+          assert set(data_sources.values()) == {'/tmp/release-state/data'}, data_sources
+
+          api_volumes = services['api'].get('volumes', [])
+          assert all('gcp-sa.json' not in str(item) for item in api_volumes)
+          pipeline_gcp = next(
+              item for item in services['pipeline-worker'].get('volumes', [])
+              if item.get('target') == '/run/secrets/gcp-sa.json'
+          )
+          assert pipeline_gcp.get('read_only') is True
+
+          for name in ('api', 'worker', 'pipeline-worker', 'delivery-worker'):
+              rclone = next(
+                  item for item in services[name].get('volumes', [])
+                  if item.get('target') == '/run/secrets/rclone.conf'
+              )
+              assert rclone.get('source') == '/tmp/rclone.conf'
+              assert rclone.get('read_only') is True
+
+          frontend = services['frontend']
+          assert str(frontend.get('image', '')).endswith(':ci-release')
+          ports = frontend.get('ports') or []
+          assert len(ports) == 1
+          assert ports[0].get('host_ip') == '127.0.0.1'
+          assert ports[0].get('published') == '3300'
+          assert ports[0].get('target') == 3000
+          PY
       - name: Validate isolated Drive API smoke definition
         env:
           PR10_SMOKE_GIT_SHA: ci-validation

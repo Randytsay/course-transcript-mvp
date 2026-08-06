@@ -1,0 +1,49 @@
+services:
+  infrastructure-test:
+    image: course-transcript-infrastructure-test:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    volumes:
+      - ${GCP_CREDENTIALS_HOST_PATH:?Set GCP_CREDENTIALS_HOST_PATH}:/run/secrets/gcp-sa.json:ro
+      - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs
+      - ${COURSE_TRANSCRIPT_TMP_HOST_PATH:?Set COURSE_TRANSCRIPT_TMP_HOST_PATH}:/app/tmp
+      - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
+
+  api:
+    image: course-transcript-api:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    volumes:
+      - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
+      - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs:ro
+      - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
+      - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
+
+  worker:
+    image: course-transcript-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    volumes:
+      - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
+      - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs
+      - ${COURSE_TRANSCRIPT_TMP_HOST_PATH:?Set COURSE_TRANSCRIPT_TMP_HOST_PATH}:/app/tmp
+      - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
+
+  pipeline-worker:
+    image: course-transcript-pipeline-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    volumes:
+      - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
+      - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs
+      - ${COURSE_TRANSCRIPT_TMP_HOST_PATH:?Set COURSE_TRANSCRIPT_TMP_HOST_PATH}:/app/tmp
+      - ${GCP_CREDENTIALS_HOST_PATH:?Set GCP_CREDENTIALS_HOST_PATH}:/run/secrets/gcp-sa.json:ro
+      - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
+
+  delivery-worker:
+    image: course-transcript-delivery-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    volumes:
+      - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
+      - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs
+      - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
+
+  billing-worker:
+    image: course-transcript-billing-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    volumes:
+      - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
+      - ${BILLING_CREDENTIALS_HOST_PATH:?Set BILLING_CREDENTIALS_HOST_PATH}:/run/secrets/billing-sa.json:ro
+
+  frontend:
+    image: course-transcript-frontend:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
