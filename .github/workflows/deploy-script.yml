@@ -5,14 +5,22 @@ on:
     paths:
       - "scripts/deploy_release.sh"
       - "scripts/deploy_release_lib.sh"
+      - "scripts/deploy_release_safe.sh"
+      - "scripts/scan_evidence_credentials.py"
+      - "tests/test_deploy_release_safe.sh"
       - "docs/PRODUCTION_CUTOVER.md"
+      - "docs/PHASE2D_CREDENTIAL_SCAN_INCIDENT.md"
       - ".github/workflows/deploy-script.yml"
   push:
     branches: [main]
     paths:
       - "scripts/deploy_release.sh"
       - "scripts/deploy_release_lib.sh"
+      - "scripts/deploy_release_safe.sh"
+      - "scripts/scan_evidence_credentials.py"
+      - "tests/test_deploy_release_safe.sh"
       - "docs/PRODUCTION_CUTOVER.md"
+      - "docs/PHASE2D_CREDENTIAL_SCAN_INCIDENT.md"
       - ".github/workflows/deploy-script.yml"
 
 permissions:
@@ -24,15 +32,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Parse shell scripts
+      - name: Parse deployment tools
         run: |
           bash -n scripts/deploy_release.sh
           bash -n scripts/deploy_release_lib.sh
+          bash -n scripts/deploy_release_safe.sh
+          bash -n tests/test_deploy_release_safe.sh
+          python3 -m py_compile scripts/scan_evidence_credentials.py
 
-      - name: Run self-test and help
+      - name: Run self-tests and regression coverage
         run: |
           bash scripts/deploy_release.sh --self-test
+          bash scripts/deploy_release_safe.sh --self-test
           bash scripts/deploy_release.sh --help >/dev/null
+          bash tests/test_deploy_release_safe.sh
 
       - name: Reject unsafe invocation
         run: |
@@ -55,6 +68,7 @@ jobs:
           grep -Fq 'ROLLBACK_ARMED' scripts/deploy_release.sh
           grep -Fq 'mode=ro' scripts/deploy_release_lib.sh
           grep -Fq 'merge-base --is-ancestor' scripts/deploy_release.sh
-          grep -Fq '.github/workflows/deploy-script.yml|docs/PRODUCTION_CUTOVER.md|scripts/deploy_release.sh|scripts/deploy_release_lib.sh' scripts/deploy_release.sh
+          grep -Fq 'scan_evidence_credentials.py' scripts/deploy_release_safe.sh
+          grep -Fq 'docs/PHASE2D_CREDENTIAL_SCAN_INCIDENT.md' scripts/deploy_release_safe.sh
           grep -Fq 'origin/main contains non-deployment changes' scripts/deploy_release.sh
           grep -Fq 'does not modify' docs/PRODUCTION_CUTOVER.md
