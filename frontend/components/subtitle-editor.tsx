@@ -104,9 +104,11 @@ type PublishStatus = {
   batch_status?: string | null;
   published_revision?: number | null;
   current_revision?: number;
+  revision_changed_during_publish?: boolean;
   zero_edit_review?: boolean;
   drive_publish_status?: string | null;
   editor_publish_event_count?: number;
+  can_publish?: boolean;
   can_retry?: boolean;
 };
 
@@ -364,7 +366,7 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
                 </button>
               ))}
               {detail.can_publish_to_source && (
-                publishStatus?.status === "completed" ? (
+                publishStatus?.status === "completed" && publishStatus.published_revision === detail.revision ? (
                   <span className="status-badge status-badge--completed" style={{ padding: "8px 12px", fontSize: "0.95rem" }}>
                     字幕已成功發布至 Google Drive (版本 {publishStatus.published_revision ?? 0})
                   </span>
@@ -376,7 +378,7 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
                       publishing
                       || publishStatus?.status === "publishing"
                       || publishStatus?.status === "ambiguous"
-                      || (publishStatus?.status === "failed" && !publishStatus.can_retry)
+                      || (publishStatus ? !publishStatus.can_publish : false)
                     }
                     onClick={() => void publishEdited()}
                   >

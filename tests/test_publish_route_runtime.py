@@ -20,11 +20,13 @@ class ProductionPublishRouteTests(unittest.TestCase):
 
             from app.api_hardened import (
                 _PUBLISH_PATH,
+                _PUBLISH_STATUS_PATH,
                 _callable_identity,
                 _effective_routes,
                 _route_methods,
                 app,
             )
+            from app.subtitles.publish_status import get_publish_status
             from app.subtitles.review_publish import publish_reviewed
 
             routes = [
@@ -35,6 +37,15 @@ class ProductionPublishRouteTests(unittest.TestCase):
             ]
             assert len(routes) == 1, len(routes)
             assert _callable_identity(getattr(routes[0], "endpoint", None)) == _callable_identity(publish_reviewed)
+
+            status_routes = [
+                route
+                for route in _effective_routes(app.router.routes)
+                if str(getattr(route, "path", "")) == _PUBLISH_STATUS_PATH
+                and "GET" in _route_methods(route)
+            ]
+            assert len(status_routes) == 1, len(status_routes)
+            assert _callable_identity(getattr(status_routes[0], "endpoint", None)) == _callable_identity(get_publish_status)
 
             schema = app.openapi()
             operation = schema["paths"][_PUBLISH_PATH]["post"]
@@ -62,7 +73,9 @@ class ProductionPublishRouteTests(unittest.TestCase):
 
             print(json.dumps({
                 "publish_route_count": len(routes),
+                "publish_status_route_count": len(status_routes),
                 "endpoint": ".".join(part for part in _callable_identity(getattr(routes[0], "endpoint", None)) if part),
+                "status_endpoint": ".".join(part for part in _callable_identity(getattr(status_routes[0], "endpoint", None)) if part),
                 "request_model": model_name,
                 "expected_revision_minimum": minimum,
                 "revision_zero_status": zero.status_code,
@@ -92,7 +105,9 @@ class ProductionPublishRouteTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
         result = json.loads(completed.stdout.strip().splitlines()[-1])
         self.assertEqual(result["publish_route_count"], 1)
+        self.assertEqual(result["publish_status_route_count"], 1)
         self.assertEqual(result["endpoint"], "app.subtitles.review_publish.publish_reviewed")
+        self.assertEqual(result["status_endpoint"], "app.subtitles.publish_status.get_publish_status")
         self.assertEqual(result["request_model"], "PublishReviewedRequest")
         self.assertEqual(result["expected_revision_minimum"], 0)
         self.assertEqual(result["revision_zero_status"], 404)

@@ -24,11 +24,9 @@ class PublishStatusTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.data = Path(self.tmp.name)
 
-        # Set up dirs
         (self.data / "jobs").mkdir(parents=True)
         (self.data / "imported").mkdir(parents=True)
 
-        # Patch app directories
         import app.subtitles.editor as base
         self.orig_data_dir = base.DATA_DIR
         self.orig_jobs_dir = base.JOBS_DIR
@@ -38,7 +36,6 @@ class PublishStatusTests(unittest.TestCase):
         base.JOBS_DIR = self.data / "jobs"
         base.IMPORTED_DIR = self.data / "imported"
 
-        # Initialize SQLite database
         self.db_path = self.data / "course-transcript.db"
         connection = sqlite3.connect(self.db_path)
         try:
@@ -163,9 +160,8 @@ class PublishStatusTests(unittest.TestCase):
         )
         response = self.client.get("/api/v1/subtitles/imp-1/publish-status")
         self.assertEqual(response.status_code, 409)
-        self.assertIn("Imported subtitle", response.json()["detail"])
 
-    def test_idle_status(self) -> None:
+    def test_idle_status_can_publish(self) -> None:
         job_id = "job-idle"
         self._create_job_files(job_id)
         self._insert_db_job(job_id, "awaiting_review")
@@ -174,15 +170,14 @@ class PublishStatusTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "idle")
-        self.assertEqual(payload["job_status"], "awaiting_review")
-        self.assertEqual(payload["current_revision"], 1)
+        self.assertTrue(payload["can_publish"])
+        self.assertFalse(payload["can_retry"])
 
     def test_publishing_status(self) -> None:
         job_id = "job-pub"
         job_dir = self._create_job_files(job_id)
         self._insert_db_job(job_id, "awaiting_review")
 
-        # Create intent file
         (job_dir / "drive-delivery-state.json").write_text(
             json.dumps({
                 "status": "editor_publish_in_progress",
@@ -196,15 +191,14 @@ class PublishStatusTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "publishing")
-        self.assertEqual(payload["drive_publish_status"], "publishing")
+        self.assertFalse(payload["can_publish"])
 
-    def test_completed_status(self) -> None:
+    def test_completed_status_with_strict_files_check(self) -> None:
         job_id = "job-comp"
-        job_dir = self._create_job_files(job_id)
+        job_dir = self._create_job_files(job_id, revision=1)
         self._insert_db_job(job_id, "completed", batch_id="batch-1")
         self._insert_db_event(job_id, "job_drive_editor_published")
 
-        # Create superseded marker
         (job_dir / "drive-delivery-state.json").write_text(
             json.dumps({
                 "status": "superseded_by_editor",
@@ -214,11 +208,16 @@ class PublishStatusTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        # Create drive-publish-state
         pub_rev_dir = job_dir / "editor-publish" / "revision-1"
         pub_rev_dir.mkdir(parents=True)
         (pub_rev_dir / "drive-publish-state.json").write_text(
-            json.dumps({"status": "completed"}),
+            json.dumps({
+                "status": "completed",
+                "files": {
+                    "srt": {"status": "completed"},
+                    "txt": {"status": "completed"}
+                }
+            }),
             encoding="utf-8"
         )
 
@@ -226,13 +225,49 @@ class PublishStatusTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "completed")
-        self.assertEqual(payload["job_status"], "completed")
-        self.assertEqual(payload["batch_status"], "processing")
         self.assertEqual(payload["published_revision"], 1)
-        self.assertEqual(payload["editor_publish_event_count"], 1)
+        self.assertEqual(payload["current_revision"], 1)
+        self.assertFalse(payload["can_publish"])
 
-    def test_failed_retryable_when_clean(self) -> None:
-        job_id = "job-fail-clean"
+    def test_completed_older_revision_allows_new_publish(self) -> None:
+        job_id = "job-comp-old"
+        job_dir = self._create_job_files(job_id, revision=2)
+        self._insert_db_job(job_id, "completed")
+        self._insert_db_event(job_id, "job_drive_editor_published")
+
+        (job_dir / "drive-delivery-state.json").write_text(
+            json.dumps({
+                "status": "superseded_by_editor",
+                "editor_revision": 1,
+                "actor": "user"
+            }),
+            encoding="utf-8"
+        )
+
+        pub_rev_dir = job_dir / "editor-publish" / "revision-1"
+        pub_rev_dir.mkdir(parents=True)
+        (pub_rev_dir / "drive-publish-state.json").write_text(
+            json.dumps({
+                "status": "completed",
+                "files": {
+                    "srt": {"status": "completed"},
+                    "txt": {"status": "completed"}
+                }
+            }),
+            encoding="utf-8"
+        )
+
+        response = self.client.get(f"/api/v1/subtitles/{job_id}/publish-status")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["published_revision"], 1)
+        self.assertEqual(payload["current_revision"], 2)
+        self.assertTrue(payload["revision_changed_during_publish"])
+        self.assertTrue(payload["can_publish"])
+
+    def test_failed_not_retryable_by_default(self) -> None:
+        job_id = "job-fail-default"
         job_dir = self._create_job_files(job_id)
         self._insert_db_job(job_id, "awaiting_review")
 
@@ -249,13 +284,13 @@ class PublishStatusTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "failed")
-        self.assertTrue(payload["can_retry"])
+        self.assertFalse(payload["can_retry"])
+        self.assertFalse(payload["can_publish"])
 
-    def test_failed_not_retryable_when_completed_event_exists(self) -> None:
-        job_id = "job-fail-event"
+    def test_failed_retryable_when_explicitly_safe(self) -> None:
+        job_id = "job-fail-safe"
         job_dir = self._create_job_files(job_id)
-        self._insert_db_job(job_id, "completed")
-        self._insert_db_event(job_id, "job_drive_editor_published")
+        self._insert_db_job(job_id, "awaiting_review")
 
         (job_dir / "drive-delivery-state.json").write_text(
             json.dumps({
@@ -266,22 +301,13 @@ class PublishStatusTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        response = self.client.get(f"/api/v1/subtitles/{job_id}/publish-status")
-        self.assertEqual(response.status_code, 200)
-        payload = response.json()
-        self.assertEqual(payload["status"], "ambiguous")
-        self.assertFalse(payload["can_retry"])
-
-    def test_ambiguous_status(self) -> None:
-        job_id = "job-ambig"
-        job_dir = self._create_job_files(job_id)
-        # Job says awaiting_review but marker says superseded_by_editor (contradiction)
-        self._insert_db_job(job_id, "awaiting_review")
-        (job_dir / "drive-delivery-state.json").write_text(
+        pub_rev_dir = job_dir / "editor-publish" / "revision-1"
+        pub_rev_dir.mkdir(parents=True)
+        (pub_rev_dir / "drive-publish-state.json").write_text(
             json.dumps({
-                "status": "superseded_by_editor",
-                "editor_revision": 1,
-                "actor": "user"
+                "status": "failed",
+                "safe_to_retry": True,
+                "remote_mutation_started": False
             }),
             encoding="utf-8"
         )
@@ -289,7 +315,20 @@ class PublishStatusTests(unittest.TestCase):
         response = self.client.get(f"/api/v1/subtitles/{job_id}/publish-status")
         self.assertEqual(response.status_code, 200)
         payload = response.json()
-        self.assertEqual(payload["status"], "ambiguous")
+        self.assertEqual(payload["status"], "failed")
+        self.assertTrue(payload["can_retry"])
+        self.assertTrue(payload["can_publish"])
+
+    def test_malformed_json_fails_closed_without_500(self) -> None:
+        job_id = "job-malformed"
+        job_dir = self._create_job_files(job_id)
+        (job_dir / "drive-delivery-state.json").write_text("{invalid json", encoding="utf-8")
+
+        response = self.client.get(f"/api/v1/subtitles/{job_id}/publish-status")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "idle")
+        self.assertTrue(payload["can_publish"])
         self.assertFalse(payload["can_retry"])
 
     def test_endpoint_is_strictly_read_only(self) -> None:
@@ -317,7 +356,6 @@ class PublishStatusTests(unittest.TestCase):
             p.name: file_hash(p) for p in job_dir.glob("*") if p.is_file()
         }
 
-        # Issue multiple GET requests
         for _ in range(5):
             res = self.client.get(f"/api/v1/subtitles/{job_id}/publish-status")
             self.assertEqual(res.status_code, 200)

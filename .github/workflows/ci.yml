@@ -60,6 +60,8 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install exact dependencies
         run: npm ci
+      - name: Run frontend unit tests
+        run: npm test
       - name: Build frontend
         run: npm run build
       - name: Audit production dependencies

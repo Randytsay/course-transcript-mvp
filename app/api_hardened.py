@@ -6,10 +6,12 @@ from typing import Any
 
 from app.api_observed import app
 from app.drive_api_routes import router as drive_api_router
-from app.subtitles.editor_hardened import import_srt, get_publish_status
+from app.subtitles.editor_hardened import import_srt
+from app.subtitles.publish_status import get_publish_status
 from app.subtitles.review_publish import publish_reviewed
 
 _PUBLISH_PATH = "/api/v1/subtitles/{subtitle_id}/publish"
+_PUBLISH_STATUS_PATH = "/api/v1/subtitles/{subtitle_id}/publish-status"
 _REPLACED_ROUTES = {
     ("/api/v1/subtitles/import", "POST"),
     (_PUBLISH_PATH, "POST"),
@@ -103,6 +105,25 @@ def _assert_publish_route() -> None:
         )
 
 
+def _assert_publish_status_route() -> None:
+    matches = [
+        route
+        for route in _effective_routes(app.router.routes)
+        if str(getattr(route, "path", "")) == _PUBLISH_STATUS_PATH
+        and "GET" in _route_methods(route)
+    ]
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"Production publish-status route must be unique; found {len(matches)}"
+        )
+
+    endpoint = getattr(matches[0], "endpoint", None)
+    if _callable_identity(endpoint) != _callable_identity(get_publish_status):
+        raise RuntimeError(
+            "Production publish-status route is not the dedicated module handler"
+        )
+
+
 # Keep every existing read/edit route from the observed API, replacing only the
 # mutation endpoints that need strict parsing/locking and the Drive browser that
 # now uses the native Google Drive API with an explicit rclone fallback. The
@@ -110,9 +131,10 @@ def _assert_publish_route() -> None:
 app.router.routes = _remove_replaced_routes(list(app.router.routes))
 app.post("/api/v1/subtitles/import", status_code=201)(import_srt)
 app.post(_PUBLISH_PATH)(publish_reviewed)
-app.get("/api/v1/subtitles/{subtitle_id}/publish-status")(get_publish_status)
+app.get(_PUBLISH_STATUS_PATH)(get_publish_status)
 
 # 3. Include the new Google Drive API + health + search endpoints router
 app.include_router(drive_api_router)
 app.openapi_schema = None
 _assert_publish_route()
+_assert_publish_status_route()
