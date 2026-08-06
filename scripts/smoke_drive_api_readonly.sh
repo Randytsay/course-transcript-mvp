@@ -10,13 +10,19 @@ EXPECTED_PROVIDER="${SMOKE_EXPECTED_PROVIDER:-google_api}"
 EXPECTED_HEALTH_STATUS="${SMOKE_EXPECTED_HEALTH_STATUS:-ok}"
 EXPECTED_FALLBACK_AVAILABLE="${SMOKE_EXPECTED_FALLBACK_AVAILABLE:-false}"
 EXPECTED_COMPOSE_PROJECT="${SMOKE_EXPECTED_COMPOSE_PROJECT:-course-transcript-pr10-smoke}"
+HOST_PYTHON="${SMOKE_HOST_PYTHON:-python3}"
+
+command -v "$HOST_PYTHON" >/dev/null 2>&1 || {
+  echo "SMOKE_PREFLIGHT=FAIL host Python interpreter not found: $HOST_PYTHON" >&2
+  exit 1
+}
 
 validate_container() {
   local inspect_json
   inspect_json="$(sudo docker inspect "$API_CONTAINER")"
 
   SMOKE_CONTAINER_INSPECT="$inspect_json" \
-  python - "$EXPECTED_COMPOSE_PROJECT" <<'PY'
+  "$HOST_PYTHON" - "$EXPECTED_COMPOSE_PROJECT" <<'PY'
 import json
 import os
 import sys
