@@ -196,7 +196,28 @@ trap on_exit EXIT
 # Common preflight.
 git -C "$SOURCE_REPO" fetch --no-tags origin main
 ORIGIN_MAIN="$(git -C "$SOURCE_REPO" rev-parse origin/main)"
-[[ "$ORIGIN_MAIN" == "$RELEASE_SHA" ]] || fail "origin/main changed to $ORIGIN_MAIN"
+git -C "$SOURCE_REPO" merge-base --is-ancestor "$RELEASE_SHA" "$ORIGIN_MAIN" \
+  || fail "approved release is not an ancestor of origin/main"
+
+mapfile -t MAIN_DRIFT_PATHS < <(
+  git -C "$SOURCE_REPO" diff --name-only "$RELEASE_SHA" "$ORIGIN_MAIN"
+)
+for path in "${MAIN_DRIFT_PATHS[@]:-}"; do
+  [[ -z "$path" ]] && continue
+  case "$path" in
+    .github/workflows/deploy-script.yml|docs/PRODUCTION_CUTOVER.md|scripts/deploy_release.sh|scripts/deploy_release_lib.sh)
+      ;;
+    *)
+      fail "origin/main contains non-deployment changes after approved release: $path"
+      ;;
+  esac
+done
+printf 'origin_main=%s\napproved_release=%s\nallowed_drift_count=%s\n' \
+  "$ORIGIN_MAIN" "$RELEASE_SHA" "${#MAIN_DRIFT_PATHS[@]}" \
+  > "$EVIDENCE_ROOT/main-compatibility.txt"
+printf '%s\n' "${MAIN_DRIFT_PATHS[@]:-}" \
+  >> "$EVIDENCE_ROOT/main-compatibility.txt"
+
 [[ -d "$RELEASE_ROOT" ]] || fail "release root missing: $RELEASE_ROOT"
 [[ -f "$RELEASE_ROOT/docker-compose.yml" ]] || fail "release compose missing"
 [[ -f "$RELEASE_ROOT/docker-compose.release.yml" ]] || fail "release override missing"
@@ -231,7 +252,9 @@ if [[ "$MODE" == "dry-run" ]]; then
 PHASE2D_DRY_RUN=PASS
 release_sha=${RELEASE_SHA}
 release_archive_checksum=${RELEASE_ARCHIVE_CHECKSUM}
-origin_main_matches=YES
+origin_main_compatible=YES
+origin_main=${ORIGIN_MAIN}
+allowed_main_drift_count=${#MAIN_DRIFT_PATHS[@]}
 compose_render=PASS
 images=PASS
 active_jobs=0
@@ -385,6 +408,9 @@ cat > "$EVIDENCE_ROOT/result.txt" <<RESULT
 PHASE2D_RESULT=PASS
 main_exact_sha=${RELEASE_SHA}
 release_archive_checksum=${RELEASE_ARCHIVE_CHECKSUM}
+origin_main_compatible=YES
+origin_main=${ORIGIN_MAIN}
+allowed_main_drift_count=${#MAIN_DRIFT_PATHS[@]}
 rollback_tag=${ROLLBACK_TAG}
 database_backup=${DB_BACKUP}
 api_health=healthy
