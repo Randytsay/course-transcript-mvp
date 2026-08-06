@@ -5,26 +5,38 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TMP="$(mktemp -d)"
 trap 'rm -rf -- "$TMP"' EXIT
 
-cat > "$TMP/deploy_release.sh" <<'SCRIPT'
-#!/usr/bin/env bash
-set -Eeuo pipefail
-root="$1"
-credential_markers="$(grep -ERic \
-  '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|"refresh_token"[[:space:]]*:|"client_secret"[[:space:]]*:|Authorization: Bearer|Cf-Access-Jwt-Assertion' \
-  "$root" || true)"
-printf '%s\n' "$credential_markers"
-SCRIPT
-chmod 700 "$TMP/deploy_release.sh"
-cp "$ROOT/scripts/deploy_release_safe.sh" "$TMP/deploy_release_safe.sh"
-chmod 700 "$TMP/deploy_release_safe.sh"
+bash -n "$ROOT/scripts/deploy_release.sh"
+bash -n "$ROOT/scripts/deploy_release_safe.sh"
+python3 -m py_compile "$ROOT/scripts/scan_evidence_credentials.py"
 
 mkdir "$TMP/clean" "$TMP/dirty"
 printf 'ordinary evidence\n' > "$TMP/clean/result.txt"
-printf '%s\n' '-----BEGIN PRIVATE KEY-----' > "$TMP/dirty/leak.txt"
+printf '%s\n' '-----BEGIN PRIVATE KEY-----' > "$TMP/dirty/private-key.txt"
+printf '%s\n' 'prefix "client_secret": "redacted"' > "$TMP/dirty/client.json"
 
-clean="$(bash "$TMP/deploy_release_safe.sh" "$TMP/clean")"
-dirty="$(bash "$TMP/deploy_release_safe.sh" "$TMP/dirty")"
+clean="$({
+  python3 "$ROOT/scripts/scan_evidence_credentials.py" "$TMP/clean"
+})"
+dirty="$({
+  python3 "$ROOT/scripts/scan_evidence_credentials.py" "$TMP/dirty"
+})"
 
 [[ "$clean" == "0" ]]
-[[ "$dirty" == "1" ]]
+[[ "$dirty" == "2" ]]
+
+# The scanner must not follow a symlink out of the evidence root.
+ln -s "$TMP/dirty" "$TMP/clean/external-evidence"
+clean_with_symlink="$({
+  python3 "$ROOT/scripts/scan_evidence_credentials.py" "$TMP/clean"
+})"
+[[ "$clean_with_symlink" == "0" ]]
+
+if python3 "$ROOT/scripts/scan_evidence_credentials.py" "$TMP/missing"; then
+  echo "missing evidence directory was accepted"
+  exit 1
+fi
+
+self_test="$(bash "$ROOT/scripts/deploy_release_safe.sh" --self-test)"
+[[ "$self_test" == "SELF_TEST=PASS" ]]
+
 printf 'DEPLOY_RELEASE_SAFE_TEST=PASS\n'
