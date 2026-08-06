@@ -3,7 +3,7 @@
 import AppShell from "./app-shell";
 import Link from "next/link";
 import { AlertTriangle, ArrowLeft, Check, CloudUpload, LoaderCircle, RotateCcw, Search } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
@@ -124,6 +124,7 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
   const [publishing, setPublishing] = useState(false);
   const [publishStatus, setPublishStatus] = useState<PublishStatus | null>(null);
   const [publishMessage, setPublishMessage] = useState<string | null>(null);
+  const publishingRef = useRef(false);
 
   async function load() {
     try {
@@ -302,11 +303,12 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
   }
 
   async function publishEdited() {
-    if (!detail) return;
+    if (!detail || publishingRef.current) return;
     if (
       detail.revision === 0
       && !window.confirm("已確認目前字幕內容無需修改，並要將 SRT 與 TXT 發布回原始 Drive 資料夾嗎？")
     ) return;
+    publishingRef.current = true;
     setPublishing(true);
     setPublishMessage("正在發布至 Google Drive，請勿重複操作");
     try {
@@ -315,6 +317,7 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
         body: JSON.stringify({ expected_revision: detail.revision, output_formats: ["srt", "txt"] }),
       });
       window.alert(`回寫完成；原資料夾中同名舊檔已安全備份 ${result.backup_count} 個。`);
+      publishingRef.current = false;
       setPublishing(false);
       setPublishMessage(null);
       await load();
@@ -328,6 +331,7 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
           setPublishStatus({ status: "publishing" });
         }
       } else {
+        publishingRef.current = false;
         setError(cause instanceof Error ? cause.message : "Drive 回寫失敗");
         setPublishing(false);
         setPublishMessage(null);
@@ -365,9 +369,19 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
                     字幕已成功發布至 Google Drive (版本 {publishStatus.published_revision ?? 0})
                   </span>
                 ) : (
-                  <button type="button" className="button button--primary" disabled={publishing} onClick={() => void publishEdited()}>
-                    {publishing ? <LoaderCircle className="spin" size={18} /> : <CloudUpload size={18} />}
-                    {publishing ? "正在發布…" : detail.revision === 0 ? "確認無需修改並回寫" : "安全回寫 SRT＋TXT"}
+                  <button
+                    type="button"
+                    className="button button--primary"
+                    disabled={
+                      publishing
+                      || publishStatus?.status === "publishing"
+                      || publishStatus?.status === "ambiguous"
+                      || (publishStatus?.status === "failed" && !publishStatus.can_retry)
+                    }
+                    onClick={() => void publishEdited()}
+                  >
+                    {publishing || publishStatus?.status === "publishing" ? <LoaderCircle className="spin" size={18} /> : <CloudUpload size={18} />}
+                    {publishing || publishStatus?.status === "publishing" ? "正在發布…" : detail.revision === 0 ? "確認無需修改並回寫" : "安全回寫 SRT＋TXT"}
                   </button>
                 )
               )}

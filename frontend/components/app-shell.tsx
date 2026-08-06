@@ -20,9 +20,9 @@ import {
 import { useEffect, useState } from "react";
 
 const navigation = [
-  { href: "/", label: "儀表板", icon: Gauge, match: (path: string) => path === "/" },
-  { href: "/jobs/new", label: "新增任務", icon: Plus, match: (path: string) => path === "/jobs/new" },
-  { href: "/#jobs", label: "任務記錄", icon: FileAudio, match: (path: string) => path.startsWith("/jobs/") && path !== "/jobs/new" },
+  { href: "/", label: "儀表板", icon: Gauge, match: (path: string | null) => path === "/" },
+  { href: "/jobs/new", label: "新增任務", icon: Plus, match: (path: string | null) => path === "/jobs/new" },
+  { href: "/#jobs", label: "任務記錄", icon: FileAudio, match: (path: string | null) => Boolean(path && path.startsWith("/jobs/") && path !== "/jobs/new") },
   { href: "/#glossary", label: "術語庫", icon: Library, match: () => false }
 ];
 

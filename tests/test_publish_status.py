@@ -231,12 +231,11 @@ class PublishStatusTests(unittest.TestCase):
         self.assertEqual(payload["published_revision"], 1)
         self.assertEqual(payload["editor_publish_event_count"], 1)
 
-    def test_failed_status(self) -> None:
-        job_id = "job-fail"
+    def test_failed_retryable_when_clean(self) -> None:
+        job_id = "job-fail-clean"
         job_dir = self._create_job_files(job_id)
         self._insert_db_job(job_id, "awaiting_review")
 
-        # Create failed marker
         (job_dir / "drive-delivery-state.json").write_text(
             json.dumps({
                 "status": "editor_publish_failed",
@@ -250,7 +249,28 @@ class PublishStatusTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "failed")
-        self.assertEqual(payload["can_retry"], True)
+        self.assertTrue(payload["can_retry"])
+
+    def test_failed_not_retryable_when_completed_event_exists(self) -> None:
+        job_id = "job-fail-event"
+        job_dir = self._create_job_files(job_id)
+        self._insert_db_job(job_id, "completed")
+        self._insert_db_event(job_id, "job_drive_editor_published")
+
+        (job_dir / "drive-delivery-state.json").write_text(
+            json.dumps({
+                "status": "editor_publish_failed",
+                "editor_revision": 1,
+                "actor": "user"
+            }),
+            encoding="utf-8"
+        )
+
+        response = self.client.get(f"/api/v1/subtitles/{job_id}/publish-status")
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        self.assertEqual(payload["status"], "ambiguous")
+        self.assertFalse(payload["can_retry"])
 
     def test_ambiguous_status(self) -> None:
         job_id = "job-ambig"
@@ -270,6 +290,45 @@ class PublishStatusTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "ambiguous")
+        self.assertFalse(payload["can_retry"])
+
+    def test_endpoint_is_strictly_read_only(self) -> None:
+        import hashlib
+
+        job_id = "job-ro-check"
+        job_dir = self._create_job_files(job_id)
+        self._insert_db_job(job_id, "completed")
+        self._insert_db_event(job_id, "job_drive_editor_published")
+
+        (job_dir / "drive-delivery-state.json").write_text(
+            json.dumps({
+                "status": "superseded_by_editor",
+                "editor_revision": 1,
+                "actor": "user"
+            }),
+            encoding="utf-8"
+        )
+
+        def file_hash(path: Path) -> str:
+            return hashlib.sha256(path.read_bytes()).hexdigest()
+
+        db_hash_before = file_hash(self.db_path)
+        job_file_hashes_before = {
+            p.name: file_hash(p) for p in job_dir.glob("*") if p.is_file()
+        }
+
+        # Issue multiple GET requests
+        for _ in range(5):
+            res = self.client.get(f"/api/v1/subtitles/{job_id}/publish-status")
+            self.assertEqual(res.status_code, 200)
+
+        db_hash_after = file_hash(self.db_path)
+        job_file_hashes_after = {
+            p.name: file_hash(p) for p in job_dir.glob("*") if p.is_file()
+        }
+
+        self.assertEqual(db_hash_before, db_hash_after)
+        self.assertEqual(job_file_hashes_before, job_file_hashes_after)
 
 
 if __name__ == "__main__":

@@ -352,6 +352,7 @@ def publish_edited(
 @router.get("/api/v1/subtitles/{subtitle_id}/publish-status")
 def get_publish_status(subtitle_id: str) -> dict[str, Any]:
     import sqlite3
+
     directory, kind = base._directory(subtitle_id)
     if kind != "job":
         raise HTTPException(
@@ -385,30 +386,37 @@ def get_publish_status(subtitle_id: str) -> dict[str, Any]:
                 "SELECT status, batch_id FROM jobs WHERE id = ?", (subtitle_id,)
             ).fetchone()
             if job_row:
-                job_status = job_row["status"]
+                job_status = str(job_row["status"]) if job_row["status"] is not None else None
                 batch_id = job_row["batch_id"]
                 if batch_id:
                     batch_row = connection.execute(
                         "SELECT status FROM batches WHERE id = ?", (batch_id,)
                     ).fetchone()
-                    if batch_row:
-                        batch_status = batch_row["status"]
+                    if batch_row and batch_row["status"] is not None:
+                        batch_status = str(batch_row["status"])
             event_row = connection.execute(
                 "SELECT COUNT(*) FROM job_events WHERE job_id = ? AND event_type = 'job_drive_editor_published'",
                 (subtitle_id,)
             ).fetchone()
             if event_row:
-                event_count = event_row[0]
+                event_count = int(event_row[0])
         finally:
             connection.close()
 
     drive_publish_status = None
     if published_revision is not None:
-        publish_state_path = directory / "editor-publish" / f"revision-{published_revision}" / "drive-publish-state.json"
+        publish_state_path = (
+            directory
+            / "editor-publish"
+            / f"revision-{published_revision}"
+            / "drive-publish-state.json"
+        )
         if publish_state_path.is_file():
             publish_state = base._read_json(publish_state_path, {})
             if isinstance(publish_state, dict):
-                drive_publish_status = publish_state.get("status")
+                raw_drive_status = publish_state.get("status")
+                if raw_drive_status:
+                    drive_publish_status = str(raw_drive_status)
 
     if not drive_publish_status:
         if marker_status == "superseded_by_editor":
@@ -421,19 +429,34 @@ def get_publish_status(subtitle_id: str) -> dict[str, Any]:
     if marker_status == "editor_publish_in_progress":
         status = "publishing"
     elif marker_status == "editor_publish_failed":
-        status = "failed"
-    elif marker_status == "superseded_by_editor" or (event_count > 0 and job_status == "completed"):
+        if event_count > 0 or drive_publish_status == "completed":
+            status = "ambiguous"
+        else:
+            status = "failed"
+    elif marker_status == "superseded_by_editor":
         if job_status == "completed" and event_count > 0 and drive_publish_status == "completed":
             status = "completed"
         else:
             status = "ambiguous"
-    elif not marker_status and event_count == 0:
-        status = "idle"
+    elif not marker_status:
+        if event_count == 0 and not drive_publish_status:
+            status = "idle"
+        elif job_status == "completed" and event_count > 0 and drive_publish_status == "completed":
+            status = "completed"
+        else:
+            status = "ambiguous"
     else:
         status = "ambiguous"
 
     zero_edit_review = (published_revision == 0) if published_revision is not None else False
-    can_retry = (status == "failed" and job_status in ("completed", "awaiting_review"))
+
+    can_retry = (
+        status == "failed"
+        and marker_status == "editor_publish_failed"
+        and event_count == 0
+        and drive_publish_status != "completed"
+        and (job_status in ("completed", "awaiting_review") if job_status else True)
+    )
 
     return {
         "status": status,
