@@ -281,7 +281,7 @@ def build_chunk_progress(job_id: str) -> dict[str, Any]:
                 "endMs": int(item["endMs"]),
                 "durationMs": int(item["endMs"]) - int(item["startMs"]),
                 "status": status,
-                "wordCount": int(manifest.get("word_count") or 0),
+                "wordCount": int(manifest.get("word_count") or manifest.get("words_count") or 0),
                 "hasTranscript": (
                     status == "SUCCEEDED" and partial_path.is_file()
                 ),
