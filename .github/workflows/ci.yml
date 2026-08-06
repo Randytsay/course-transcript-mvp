@@ -63,6 +63,28 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
+  image:
+    name: Docker image build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build application image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --build-arg TARGETARCH=amd64 \
+            --build-arg RCLONE_RELEASE=1.74.0 \
+            --build-arg VCS_REF="${GITHUB_SHA}" \
+            --tag course-transcript-ci:${GITHUB_SHA} \
+            .
+      - name: Verify rclone and revision label
+        run: |
+          docker run --rm --entrypoint rclone \
+            course-transcript-ci:${GITHUB_SHA} version \
+            | grep -F 'rclone v1.74.0'
+          test "$(docker image inspect course-transcript-ci:${GITHUB_SHA} --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${GITHUB_SHA}"
+
   compose:
     name: Docker Compose validation
     runs-on: ubuntu-latest
