@@ -54,5 +54,7 @@ jobs:
           grep -Fq -- '--confirm-sha' scripts/deploy_release.sh
           grep -Fq 'ROLLBACK_ARMED' scripts/deploy_release.sh
           grep -Fq 'mode=ro' scripts/deploy_release_lib.sh
-          grep -Fq 'PRESERVE_AS_AUDIT_EVIDENCE' docs/PRODUCTION_CUTOVER.md || \
-            grep -Fq 'does not modify' docs/PRODUCTION_CUTOVER.md
+          grep -Fq 'merge-base --is-ancestor' scripts/deploy_release.sh
+          grep -Fq '.github/workflows/deploy-script.yml|docs/PRODUCTION_CUTOVER.md|scripts/deploy_release.sh|scripts/deploy_release_lib.sh' scripts/deploy_release.sh
+          grep -Fq 'origin/main contains non-deployment changes' scripts/deploy_release.sh
+          grep -Fq 'does not modify' docs/PRODUCTION_CUTOVER.md
