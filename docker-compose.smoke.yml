@@ -5,7 +5,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        RCLONE_VERSION: ${RCLONE_VERSION:-1.74.0}
+        RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
         VCS_REF: ${PR10_SMOKE_GIT_SHA:?Set PR10_SMOKE_GIT_SHA to the exact PR commit}
     image: ${PR10_SMOKE_IMAGE:-course-transcript-pr10-smoke:local}
     restart: "no"
