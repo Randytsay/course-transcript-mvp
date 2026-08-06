@@ -65,4 +65,4 @@ chmod 600 "$PATCH_DIR/deploy_release_lib.sh"
 chmod 700 "$PATCH_DIR/scan_evidence_credentials.py"
 
 bash -n "$PATCH_DIR/deploy_release.sh"
-exec bash "$PATCH_DIR/deploy_release.sh" "$@"
+bash "$PATCH_DIR/deploy_release.sh" "$@"
