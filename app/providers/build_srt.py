@@ -126,6 +126,11 @@ def segment_words(words: list[dict]) -> list[dict]:
         # them: doing so can clamp the next cue's start to the prior cue end
         # and create a zero-duration subtitle segment.
         same_provider_word = unit["word_start"] <= previous["word_end"]
+        # Force cut if segment length is exceptionally long (e.g. over 15 seconds)
+        # to prevent giant blocks of text when speaker does not pause.
+        MAX_HARD_DURATION_MS = 15_000
+        force_hard_flush = prospective_duration > MAX_HARD_DURATION_MS
+
         should_flush = (
             gap >= HARD_GAP_MS
             or (prospective_duration > TARGET_MAX_MS and current)
@@ -134,7 +139,7 @@ def segment_words(words: list[dict]) -> list[dict]:
                 and prospective_duration >= TARGET_MIN_MS
             )
         )
-        if should_flush and not same_provider_word:
+        if (should_flush and not same_provider_word) or force_hard_flush:
             flush()
         current.append(unit)
         duration = int(current[-1]["end_ms"]) - int(current[0]["start_ms"])

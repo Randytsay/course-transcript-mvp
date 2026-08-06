@@ -52,11 +52,16 @@ services:
       CHIRP_DYNAMIC_BATCHING: ${CHIRP_DYNAMIC_BATCHING:-true}
       BILLING_SNAPSHOT_STALE_SECONDS: ${BILLING_SNAPSHOT_STALE_SECONDS:-3600}
       RCLONE_CONFIG: /run/secrets/rclone.conf
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-course-transcript-mvp}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
+      GCS_BUCKET: ${GCS_BUCKET:-course-transcript-mvp}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
       - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
+      - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
     command: ["uvicorn", "app.api_hardened:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:

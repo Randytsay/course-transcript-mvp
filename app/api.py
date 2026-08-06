@@ -10,6 +10,7 @@ import json
 import os
 import re
 import sqlite3
+import subprocess
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -154,6 +155,18 @@ class JobActionRequest(BaseModel):
 
 class RetryStageRequest(JobActionRequest):
     stage: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,40}$")
+
+
+class RechunkRequest(BaseModel):
+    """Request body for single-chunk re-transcription."""
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
+
+
+class RecalculateRequest(BaseModel):
+    """Request body for single-chunk word recount."""
+    model_config = ConfigDict(extra="forbid")
+    expected_revision: int = Field(ge=1)
 
 
 def _store() -> JobStore:
@@ -538,7 +551,7 @@ def get_job_chunks(job_id: str) -> dict[str, Any]:
                         "endMs": m.get("source_end_ms"),
                         "durationMs": m.get("source_end_ms", 0) - m.get("source_start_ms", 0),
                         "status": st,
-                        "wordCount": m.get("word_count", 0),
+                        "wordCount": m.get("word_count") or m.get("words_count") or 0,
                         "hasTranscript": has_ts,
                         "updatedAt": m.get("created_at"),
                         "error": err_msg
@@ -730,6 +743,163 @@ def retry_stage(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/v1/jobs/{job_id}/rechunk/{chunk_index}")
+def rechunk_single(
+    job_id: str,
+    chunk_index: int,
+    payload: RechunkRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Re-transcribe a single 15-minute Chirp chunk and rebuild the subtitle pipeline.
+
+    Allowed only when the job is in a terminal state (completed / awaiting_review).
+    The operation runs asynchronously inside the pipeline-worker process environment;
+    this endpoint returns immediately once the subprocess is launched.
+    """
+    actor = _mutation_actor(request)
+    if chunk_index < 0 or chunk_index > 99:
+        raise HTTPException(status_code=422, detail="chunk_index must be between 0 and 99")
+    job_dir = JOBS_DIR / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Job not found")
+    plan_path = job_dir / "chunk-plan.json"
+    if not plan_path.exists():
+        raise HTTPException(status_code=409, detail="chunk-plan.json not found; job may not have completed Chirp phase")
+    try:
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=409, detail="chunk-plan.json is unreadable") from exc
+    valid_indices = {int(c["chunk_index"]) for c in (plan.get("chunks") or []) if "chunk_index" in c}
+    if chunk_index not in valid_indices:
+        raise HTTPException(
+            status_code=422,
+            detail=f"chunk_index {chunk_index} not found in plan (valid: {sorted(valid_indices)})",
+        )
+    # Check job is in a terminal-success state
+    db_job = _database_job(job_id)
+    if db_job:
+        allowed_statuses = {"completed", "awaiting_review", "failed"}
+        job_status = str(db_job.get("status", ""))
+        if job_status not in allowed_statuses:
+            raise HTTPException(
+                status_code=409,
+                detail=f"rechunk is only allowed when job status is one of {sorted(allowed_statuses)}, got '{job_status}'",
+            )
+        if int(db_job.get("revision", 0)) != payload.expected_revision:
+            raise HTTPException(
+                status_code=409,
+                detail="expected_revision mismatch; reload the page and try again",
+            )
+    # Determine pipeline-worker env from the running container (same mount paths)
+    worker_env = {
+        **dict(os.environ),
+        "JOB_NAME": job_id,
+        "CHUNK_INDEX": str(chunk_index),
+    }
+    # Launch the re-chunk subprocess detached (fire-and-forget from API perspective)
+    subprocess.Popen(
+        ["python3", "-m", "app.providers.rechunk_single"],
+        env=worker_env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        close_fds=True,
+    )
+    if db_job:
+        _store().append_audit_event(
+            job_id=job_id,
+            event_type="rechunk_submitted",
+            actor=actor,
+            payload={"chunk_index": chunk_index, "expected_revision": payload.expected_revision},
+        )
+    return {
+        "status": "submitted",
+        "job_id": job_id,
+        "chunk_index": chunk_index,
+        "message": f"chunk-{chunk_index:03d} 的重辨識已在背景啟動；完成後字詞統計與字幕將自動更新。",
+    }
+
+
+@app.post("/api/v1/jobs/{job_id}/recalculate/{chunk_index}")
+def recalculate_single(
+    job_id: str,
+    chunk_index: int,
+    payload: RecalculateRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Recalculate words and regenerate partial-transcript.json from words.json locally."""
+    actor = _mutation_actor(request)
+    if chunk_index < 0 or chunk_index > 99:
+        raise HTTPException(status_code=422, detail="chunk_index must be between 0 and 99")
+    job_dir = JOBS_DIR / job_id
+    if not job_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    chunk_dir = job_dir / "chunks" / f"chunk-{chunk_index:03d}"
+    if not chunk_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Chunk directory not found")
+    
+    words_path = chunk_dir / "words.json"
+    if not words_path.exists():
+        raise HTTPException(status_code=409, detail="words.json not found; chunk may not have succeeded ASR phase")
+    
+    # Read plan item for startMs/endMs
+    plan_path = job_dir / "chunk-plan.json"
+    plan_item = None
+    if plan_path.exists():
+        try:
+            plan = json.loads(plan_path.read_text(encoding="utf-8"))
+            for c in (plan.get("chunks") or []):
+                if int(c.get("chunk_index", -1)) == chunk_index:
+                    plan_item = {
+                        "chunkIndex": chunk_index,
+                        "startMs": c.get("source_start_ms", 0),
+                        "endMs": c.get("source_end_ms", 0),
+                    }
+                    break
+        except Exception:
+            pass
+            
+    if not plan_item:
+        # fallback if plan not found
+        manifest_path = chunk_dir / "manifest.json"
+        if manifest_path.exists():
+            try:
+                m = json.loads(manifest_path.read_text(encoding="utf-8"))
+                plan_item = {
+                    "chunkIndex": chunk_index,
+                    "startMs": m.get("source_start_ms", 0),
+                    "endMs": m.get("source_end_ms", 0),
+                }
+            except Exception:
+                pass
+                
+    if not plan_item:
+        raise HTTPException(status_code=409, detail="Could not resolve chunk time boundaries from plan or manifest")
+    
+    from app.live_features import _partial_from_words
+    
+    partial = _partial_from_words(job_dir, plan_item)
+    if not partial:
+        raise HTTPException(status_code=500, detail="Failed to process words.json")
+        
+    db_job = _database_job(job_id)
+    if db_job:
+        _store().append_audit_event(
+            job_id=job_id,
+            event_type="recalculate_submitted",
+            actor=actor,
+            payload={"chunk_index": chunk_index, "expected_revision": payload.expected_revision},
+        )
+        
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "chunk_index": chunk_index,
+        "wordCount": partial.get("wordCount", 0),
+        "message": f"chunk-{chunk_index:03d} 字詞統計已重算成功，最新統計為 {partial.get('wordCount', 0)} 字詞。",
+    }
 
 
 @app.get("/api/v1/jobs/{job_id}/segments")
