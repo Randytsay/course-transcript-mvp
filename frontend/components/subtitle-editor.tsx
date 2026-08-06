@@ -24,6 +24,7 @@ type SubtitleDetail = {
   id: string;
   name: string;
   kind: "job" | "imported";
+  status: string;
   revision: number;
   segment_count: number;
   suspected_count: number;
@@ -163,6 +164,10 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
 
   async function publishEdited() {
     if (!detail) return;
+    if (
+      detail.revision === 0
+      && !window.confirm("已確認目前字幕內容無需修改，並要將 SRT 與 TXT 發布回原始 Drive 資料夾嗎？")
+    ) return;
     setPublishing(true);
     try {
       const result = await fetchJson<{ backup_count: number }>(`/subtitles/${encodeURIComponent(subtitleId)}/publish`, {
@@ -197,10 +202,10 @@ export default function SubtitleEditor({ subtitleId }: { subtitleId: string }) {
                   {value === "suspected" ? `疑似問題 (${detail.suspected_count})` : value === "edited" ? `已修改 (${detail.edited_count})` : "全部"}
                 </button>
               ))}
-              {detail.can_publish_to_source && detail.revision > 0 && (
+              {detail.can_publish_to_source && (
                 <button type="button" className="button button--primary" disabled={publishing} onClick={() => void publishEdited()}>
                   {publishing ? <LoaderCircle className="spin" size={18} /> : <CloudUpload size={18} />}
-                  安全回寫 SRT＋TXT
+                  {detail.revision === 0 ? "確認無需修改並回寫" : "安全回寫 SRT＋TXT"}
                 </button>
               )}
             </div>
