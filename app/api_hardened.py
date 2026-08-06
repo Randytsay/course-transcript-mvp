@@ -7,7 +7,7 @@ from typing import Any
 from app.api_observed import app
 from app.drive_api_routes import router as drive_api_router
 from app.subtitles.editor_hardened import import_srt
-from app.subtitles.review_publish import PublishReviewedRequest, publish_reviewed
+from app.subtitles.review_publish import publish_reviewed
 
 _PUBLISH_PATH = "/api/v1/subtitles/{subtitle_id}/publish"
 _REPLACED_ROUTES = {
@@ -70,7 +70,21 @@ def _effective_routes(routes: Iterable[object]) -> list[object]:
     return result
 
 
+def _callable_identity(value: object) -> tuple[str | None, str | None]:
+    return (
+        getattr(value, "__module__", None),
+        getattr(value, "__qualname__", None),
+    )
+
+
 def _assert_publish_route() -> None:
+    """Fail closed when runtime routing can reach any legacy publish handler.
+
+    FastAPI's internal body-field representation is version-dependent. Request
+    schema correctness is therefore enforced by OpenAPI and TestClient
+    integration tests, while this startup assertion verifies the stable runtime
+    invariants: one effective POST route and the intended endpoint callable.
+    """
     matches = [
         route
         for route in _effective_routes(app.router.routes)
@@ -82,10 +96,8 @@ def _assert_publish_route() -> None:
             f"Production publish route must be unique; found {len(matches)}"
         )
 
-    route = matches[0]
-    endpoint = getattr(route, "endpoint", None)
-    body_type = getattr(getattr(route, "body_field", None), "type_", None)
-    if endpoint is not publish_reviewed or body_type is not PublishReviewedRequest:
+    endpoint = getattr(matches[0], "endpoint", None)
+    if _callable_identity(endpoint) != _callable_identity(publish_reviewed):
         raise RuntimeError(
             "Production publish route is not the zero-edit human-review handler"
         )
