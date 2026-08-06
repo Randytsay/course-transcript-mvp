@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release-compose:
-    name: Release env and state validation
+    name: Release env, state, and provenance validation
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -24,6 +24,8 @@ jobs:
         env:
           COURSE_TRANSCRIPT_RELEASE_TAG: ci-release
           COURSE_TRANSCRIPT_ENV_FILE: /tmp/live.env
+          COURSE_TRANSCRIPT_TARGETARCH: arm64
+          RCLONE_RELEASE: 1.74.0
           COURSE_TRANSCRIPT_DATA_HOST_PATH: /tmp/release-state/data
           COURSE_TRANSCRIPT_LOGS_HOST_PATH: /tmp/release-state/logs
           COURSE_TRANSCRIPT_TMP_HOST_PATH: /tmp/release-state/tmp
@@ -39,7 +41,7 @@ jobs:
             --profile web \
             --profile billing \
             config --format json > /tmp/release-compose.json
-      - name: Verify protected env file and mounts
+      - name: Verify protected env, mounts, and build provenance
         run: |
           python - <<'PY'
           import json
@@ -55,6 +57,27 @@ jobs:
                   sorted(environment),
               )
 
+          backend = (
+              'infrastructure-test',
+              'api',
+              'worker',
+              'pipeline-worker',
+              'delivery-worker',
+              'billing-worker',
+          )
+          for name in backend:
+              service = services[name]
+              args = (service.get('build') or {}).get('args') or {}
+              assert args.get('VCS_REF') == 'ci-release', (name, args)
+              assert args.get('TARGETARCH') == 'arm64', (name, args)
+              assert str(args.get('RCLONE_RELEASE')) == '1.74.0', (name, args)
+              assert str(service.get('image', '')).endswith(':ci-release')
+
+          frontend = services['frontend']
+          frontend_args = (frontend.get('build') or {}).get('args') or {}
+          assert frontend_args.get('VCS_REF') == 'ci-release', frontend_args
+          assert str(frontend.get('image', '')).endswith(':ci-release')
+
           data_sources = {}
           for name in ('api', 'worker', 'pipeline-worker', 'delivery-worker', 'billing-worker'):
               data = next(
@@ -62,7 +85,6 @@ jobs:
                   if item.get('target') == '/app/data'
               )
               data_sources[name] = data.get('source')
-              assert str(services[name]['image']).endswith(':ci-release')
           assert set(data_sources.values()) == {'/tmp/release-state/data'}, data_sources
 
           assert all(

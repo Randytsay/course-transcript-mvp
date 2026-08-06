@@ -68,7 +68,7 @@ jobs:
   image:
     name: Docker image build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
       - name: Build application image
@@ -80,12 +80,20 @@ jobs:
             --build-arg VCS_REF="${GITHUB_SHA}" \
             --tag course-transcript-ci:${GITHUB_SHA} \
             .
-      - name: Verify rclone and revision label
+      - name: Build frontend image
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --build-arg VCS_REF="${GITHUB_SHA}" \
+            --tag course-transcript-frontend-ci:${GITHUB_SHA} \
+            ./frontend
+      - name: Verify rclone and revision labels
         run: |
           docker run --rm --entrypoint rclone \
             course-transcript-ci:${GITHUB_SHA} version \
             | grep -F 'rclone v1.74.0'
           test "$(docker image inspect course-transcript-ci:${GITHUB_SHA} --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${GITHUB_SHA}"
+          test "$(docker image inspect course-transcript-frontend-ci:${GITHUB_SHA} --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${GITHUB_SHA}"
 
   compose:
     name: Docker Compose validation
@@ -112,6 +120,8 @@ jobs:
         env:
           COURSE_TRANSCRIPT_RELEASE_TAG: ci-release
           COURSE_TRANSCRIPT_ENV_FILE: /tmp/live.env
+          COURSE_TRANSCRIPT_TARGETARCH: arm64
+          RCLONE_RELEASE: 1.74.0
           COURSE_TRANSCRIPT_DATA_HOST_PATH: /tmp/release-state/data
           COURSE_TRANSCRIPT_LOGS_HOST_PATH: /tmp/release-state/logs
           COURSE_TRANSCRIPT_TMP_HOST_PATH: /tmp/release-state/tmp
@@ -139,11 +149,30 @@ jobs:
           }
           assert required.issubset(services), services.keys()
 
+          backend = (
+              'infrastructure-test',
+              'api',
+              'worker',
+              'pipeline-worker',
+              'delivery-worker',
+              'billing-worker',
+          )
+          for name in backend:
+              service = services[name]
+              args = (service.get('build') or {}).get('args') or {}
+              assert args.get('VCS_REF') == 'ci-release', (name, args)
+              assert args.get('TARGETARCH') == 'arm64', (name, args)
+              assert str(args.get('RCLONE_RELEASE')) == '1.74.0', (name, args)
+              assert str(service.get('image', '')).endswith(':ci-release')
+
+          frontend = services['frontend']
+          frontend_args = (frontend.get('build') or {}).get('args') or {}
+          assert frontend_args.get('VCS_REF') == 'ci-release', frontend_args
+          assert str(frontend.get('image', '')).endswith(':ci-release')
+
           data_sources = {}
           for name in ('api', 'worker', 'pipeline-worker', 'delivery-worker', 'billing-worker'):
-              service = services[name]
-              assert str(service.get('image', '')).endswith(':ci-release'), (name, service.get('image'))
-              volume = next(item for item in service.get('volumes', []) if item.get('target') == '/app/data')
+              volume = next(item for item in services[name].get('volumes', []) if item.get('target') == '/app/data')
               data_sources[name] = volume.get('source')
           assert set(data_sources.values()) == {'/tmp/release-state/data'}, data_sources
 
@@ -163,8 +192,6 @@ jobs:
               assert rclone.get('source') == '/tmp/rclone.conf'
               assert rclone.get('read_only') is True
 
-          frontend = services['frontend']
-          assert str(frontend.get('image', '')).endswith(':ci-release')
           ports = frontend.get('ports') or []
           assert len(ports) == 1
           assert ports[0].get('host_ip') == '127.0.0.1'
