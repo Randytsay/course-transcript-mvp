@@ -90,26 +90,40 @@ def _candidate() -> dict[str, Any] | None:
     connection = sqlite3.connect(DATABASE, timeout=30)
     connection.row_factory = sqlite3.Row
     try:
-        rows = connection.execute(
+        columns = {
+            str(row[1])
+            for row in connection.execute("PRAGMA table_info(jobs)").fetchall()
+        }
+        if "require_human_review" in columns:
+            query = """
+                SELECT * FROM jobs
+                WHERE source_path LIKE 'gdrive:%'
+                  AND (
+                        status = 'completed'
+                        OR (
+                            status = 'awaiting_review'
+                            AND require_human_review = 0
+                        )
+                  )
+                ORDER BY updated_at, created_at
             """
-            SELECT * FROM jobs
-            WHERE source_path LIKE 'gdrive:%'
-              AND (
-                    status = 'completed'
-                    OR (
-                        status = 'awaiting_review'
-                        AND require_human_review = 0
-                    )
-              )
-            ORDER BY updated_at, created_at
+        else:
+            # Retained databases from before the review flag existed used
+            # awaiting_review as a non-blocking terminal state.
+            query = """
+                SELECT * FROM jobs
+                WHERE source_path LIKE 'gdrive:%'
+                  AND status IN ('completed', 'awaiting_review')
+                ORDER BY updated_at, created_at
             """
-        ).fetchall()
+        rows = connection.execute(query).fetchall()
     finally:
         connection.close()
     for row in rows:
         record = dict(row)
         if (
             str(record.get("status") or "") == "awaiting_review"
+            and "require_human_review" in record
             and _review_required(record.get("require_human_review"))
         ):
             continue
@@ -208,6 +222,7 @@ def run_once() -> bool:
     # review job. No remote mutation may occur before an explicit editor publish.
     if (
         str(record.get("status") or "") == "awaiting_review"
+        and "require_human_review" in record
         and _review_required(record.get("require_human_review"))
     ):
         print(f"DRIVE_DELIVERY=SKIP_HUMAN_REVIEW job={record['id']}")
