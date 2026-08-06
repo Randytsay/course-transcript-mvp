@@ -42,6 +42,34 @@ type ReplacePreview = {
   truncated: boolean;
 };
 
+function apiErrorMessage(payload: unknown, status: number): string {
+  if (!payload || typeof payload !== "object" || !("detail" in payload)) {
+    return `API 回應 ${status}`;
+  }
+  const detail = (payload as { detail?: unknown }).detail;
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const record = item as { msg?: unknown; loc?: unknown };
+        const message = typeof record.msg === "string" ? record.msg : null;
+        if (!message) return null;
+        const location = Array.isArray(record.loc)
+          ? record.loc.map(String).filter((part) => part !== "body").join(".")
+          : "";
+        return location ? `${location}：${message}` : message;
+      })
+      .filter((message): message is string => Boolean(message));
+    if (messages.length > 0) return messages.join("；");
+  }
+  if (detail && typeof detail === "object" && "message" in detail) {
+    const message = (detail as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+  }
+  return `API 回應 ${status}`;
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${apiBase}${path}`, {
     cache: "no-store",
@@ -52,8 +80,8 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
       ...init?.headers,
     },
   });
-  const payload = await response.json().catch(() => null) as { detail?: string } | null;
-  if (!response.ok) throw new Error(payload?.detail ?? `API 回應 ${response.status}`);
+  const payload = await response.json().catch(() => null) as unknown;
+  if (!response.ok) throw new Error(apiErrorMessage(payload, response.status));
   return payload as T;
 }
 
