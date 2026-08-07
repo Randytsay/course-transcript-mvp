@@ -129,6 +129,52 @@ class NewFeatureTests(unittest.TestCase):
             backup = state["files"]["srt"]["backup_remote_path"]
             self.assertEqual(remote[backup], b"old subtitle")
 
+    def test_retry_failed_stage_with_chunk_index_and_force(self) -> None:
+        from app.jobs.store import JobStore
+
+        with tempfile.TemporaryDirectory() as temp:
+            db_path = Path(temp) / "course-transcript.db"
+            store = JobStore(db_path)
+            preview = store.create_preview(
+                source_path="/data/source.mp3",
+                source_name="source.mp3",
+                size_bytes=1024,
+                modified_at=None,
+                mime_type="audio/mp3",
+                actor="test-user",
+            )
+            job = store.create_preflight_job(
+                preview_id=preview["id"],
+                actor="test-user",
+                language_code="zh-TW",
+                profile="standard",
+                enable_gemini_correction=True,
+                enable_subtitles=True,
+                require_human_review=False,
+            )
+            with store.transaction() as connection:
+                connection.execute(
+                    "UPDATE jobs SET status = 'completed', active_stage = 'chirp', approved_at = '2026-08-01T00:00:00+00:00' WHERE id = ?",
+                    (job["id"],),
+                )
+
+            chunk_manifest = Path(temp) / job["id"] / "chunks" / "chunk-001" / "manifest.json"
+            chunk_manifest.parent.mkdir(parents=True, exist_ok=True)
+            chunk_manifest.write_text('{"status": "SUCCEEDED"}', encoding="utf-8")
+
+            res = store.retry_failed_stage(
+                job_id=job["id"],
+                expected_revision=job["revision"],
+                stage="chirp",
+                chunk_index=1,
+                force=True,
+                actor="test-user",
+            )
+            self.assertEqual(res["status"], "transcribing")
+            self.assertEqual(res["active_stage"], "chirp")
+            self.assertEqual(res["stage_detail"], "重新辨識第 2 段")
+            self.assertFalse(chunk_manifest.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

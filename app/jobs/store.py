@@ -1382,7 +1382,7 @@ class JobStore:
             detail = "等待 Worker 重試階段"
             if chunk_index is not None:
                 detail = f"重新辨識第 {chunk_index + 1} 段"
-                job_dir = Path(self.db_path).parent / job_id
+                job_dir = self.database_path.parent / job_id
                 manifest_path = job_dir / "chunks" / f"chunk-{chunk_index:03d}" / "manifest.json"
                 if manifest_path.is_file():
                     try:
