@@ -338,7 +338,7 @@ def get_publish_status(subtitle_id: str) -> dict[str, object]:
     current_history_count = history_revisions.count(current_revision)
     drive_is_complete = _drive_completed(drive_state)
     drive_is_active = _drive_active(drive_state)
-    batch_complete = batch_status in {None, "completed"}
+    batch_complete = batch_status in {None, "completed", "awaiting_review"}
 
     completed = all(
         (
@@ -348,7 +348,7 @@ def get_publish_status(subtitle_id: str) -> dict[str, object]:
             current_event_count == 1,
             current_history_count == 1,
             marker_is_current,
-            marker_status == "superseded_by_editor",
+            marker_status in {"completed", "superseded_by_editor"},
             drive_is_complete,
         )
     )
