@@ -45,7 +45,7 @@ jobs:
         run: python -m unittest discover -s tests -v
 
   frontend:
-    name: Next.js production build
+    name: Next.js tests and production build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -60,6 +60,8 @@ jobs:
           cache-dependency-path: frontend/package-lock.json
       - name: Install exact dependencies
         run: npm ci
+      - name: Run frontend behavior tests
+        run: npm test
       - name: Build frontend
         run: npm run build
       - name: Audit production dependencies

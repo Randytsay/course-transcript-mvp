@@ -20,21 +20,34 @@ class ProductionPublishRouteTests(unittest.TestCase):
 
             from app.api_hardened import (
                 _PUBLISH_PATH,
+                _PUBLISH_STATUS_PATH,
                 _callable_identity,
                 _effective_routes,
                 _route_methods,
                 app,
             )
+            from app.subtitles.publish_status import get_publish_status
             from app.subtitles.review_publish import publish_reviewed
 
-            routes = [
-                route
-                for route in _effective_routes(app.router.routes)
-                if str(getattr(route, "path", "")) == _PUBLISH_PATH
-                and "POST" in _route_methods(route)
-            ]
-            assert len(routes) == 1, len(routes)
-            assert _callable_identity(getattr(routes[0], "endpoint", None)) == _callable_identity(publish_reviewed)
+            def matches(path, method):
+                return [
+                    route
+                    for route in _effective_routes(app.router.routes)
+                    if str(getattr(route, "path", "")) == path
+                    and method in _route_methods(route)
+                ]
+
+            publish_routes = matches(_PUBLISH_PATH, "POST")
+            assert len(publish_routes) == 1, len(publish_routes)
+            assert _callable_identity(
+                getattr(publish_routes[0], "endpoint", None)
+            ) == _callable_identity(publish_reviewed)
+
+            status_routes = matches(_PUBLISH_STATUS_PATH, "GET")
+            assert len(status_routes) == 1, len(status_routes)
+            assert _callable_identity(
+                getattr(status_routes[0], "endpoint", None)
+            ) == _callable_identity(get_publish_status)
 
             schema = app.openapi()
             operation = schema["paths"][_PUBLISH_PATH]["post"]
@@ -44,6 +57,7 @@ class ProductionPublishRouteTests(unittest.TestCase):
             minimum = request_schema["properties"]["expected_revision"].get("minimum")
             assert model_name == "PublishReviewedRequest", model_name
             assert minimum == 0, minimum
+            assert "get" in schema["paths"][_PUBLISH_STATUS_PATH]
 
             client = TestClient(app)
             zero = client.post(
@@ -58,15 +72,41 @@ class ProductionPublishRouteTests(unittest.TestCase):
             )
             assert negative.status_code == 422, (negative.status_code, negative.text)
             detail = negative.json()["detail"]
-            assert any(item.get("loc") == ["body", "expected_revision"] for item in detail), detail
+            assert any(
+                item.get("loc") == ["body", "expected_revision"]
+                for item in detail
+            ), detail
+
+            missing_status = client.get(
+                "/api/v1/subtitles/route-regression-missing/publish-status"
+            )
+            assert missing_status.status_code == 404, (
+                missing_status.status_code,
+                missing_status.text,
+            )
 
             print(json.dumps({
-                "publish_route_count": len(routes),
-                "endpoint": ".".join(part for part in _callable_identity(getattr(routes[0], "endpoint", None)) if part),
+                "publish_route_count": len(publish_routes),
+                "publish_endpoint": ".".join(
+                    part
+                    for part in _callable_identity(
+                        getattr(publish_routes[0], "endpoint", None)
+                    )
+                    if part
+                ),
+                "publish_status_route_count": len(status_routes),
+                "publish_status_endpoint": ".".join(
+                    part
+                    for part in _callable_identity(
+                        getattr(status_routes[0], "endpoint", None)
+                    )
+                    if part
+                ),
                 "request_model": model_name,
                 "expected_revision_minimum": minimum,
                 "revision_zero_status": zero.status_code,
                 "negative_revision_status": negative.status_code,
+                "missing_publish_status": missing_status.status_code,
             }, sort_keys=True))
             '''
         )
@@ -89,14 +129,27 @@ class ProductionPublishRouteTests(unittest.TestCase):
                 timeout=60,
             )
 
-        self.assertEqual(completed.returncode, 0, completed.stderr or completed.stdout)
+        self.assertEqual(
+            completed.returncode,
+            0,
+            completed.stderr or completed.stdout,
+        )
         result = json.loads(completed.stdout.strip().splitlines()[-1])
         self.assertEqual(result["publish_route_count"], 1)
-        self.assertEqual(result["endpoint"], "app.subtitles.review_publish.publish_reviewed")
+        self.assertEqual(
+            result["publish_endpoint"],
+            "app.subtitles.review_publish.publish_reviewed",
+        )
+        self.assertEqual(result["publish_status_route_count"], 1)
+        self.assertEqual(
+            result["publish_status_endpoint"],
+            "app.subtitles.publish_status.get_publish_status",
+        )
         self.assertEqual(result["request_model"], "PublishReviewedRequest")
         self.assertEqual(result["expected_revision_minimum"], 0)
         self.assertEqual(result["revision_zero_status"], 404)
         self.assertEqual(result["negative_revision_status"], 422)
+        self.assertEqual(result["missing_publish_status"], 404)
 
 
 if __name__ == "__main__":
