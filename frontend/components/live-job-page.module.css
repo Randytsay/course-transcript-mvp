@@ -59,6 +59,28 @@
   border-bottom: 1px solid var(--border);
 }
 
+.feedbackSuccess,
+.feedbackError {
+  margin: 1rem 1.25rem 0.25rem;
+  padding: 0.85rem 1.15rem;
+  border-radius: var(--radius-md);
+  font-size: 0.95rem;
+  font-weight: 600;
+  line-height: 1.5;
+}
+
+.feedbackSuccess {
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
+.feedbackError {
+  border: 1px solid #fecaca;
+  background: #fef2f2;
+  color: #991b1b;
+}
+
 .sectionHeader h2 {
   margin: 0;
   font-size: clamp(1.15rem, 2vw, 1.4rem);

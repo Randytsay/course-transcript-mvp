@@ -191,25 +191,33 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
   const [manualRefresh, setManualRefresh] = useState(0);
   const [busyRetry, setBusyRetry] = useState(false);
   const [retryingChunk, setRetryingChunk] = useState<number | null>(null);
+  const [actionFeedback, setActionFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const formalLoadedRef = useRef(false);
 
   async function handleRetryStage() {
     if (!job) return;
     setBusyRetry(true);
     setError(null);
+    setActionFeedback(null);
     try {
       const response = await fetch(`${apiBase}/jobs/${encodeURIComponent(jobId)}/retry-stage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expected_revision: 1, stage: job.activeStage ?? null }),
+        body: JSON.stringify({ expected_revision: 1, stage: job.activeStage ?? "chirp", force: true }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { detail?: string } | null;
-        throw new Error(payload?.detail ?? "重試失敗");
+        throw new Error(payload?.detail ?? "重試階段失敗");
       }
+      setActionFeedback({
+        type: "success",
+        message: `✅ 已成功送出重試請求 (${job.activeStage ?? "chirp"})！系統正在重新處理中...`,
+      });
       setManualRefresh((value) => value + 1);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "重試階段失敗");
+      const msg = cause instanceof Error ? cause.message : "重試階段失敗";
+      setError(msg);
+      setActionFeedback({ type: "error", message: `❌ 重試階段失敗：${msg}` });
     } finally {
       setBusyRetry(false);
     }
@@ -218,19 +226,31 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
   async function retryChunk(chunkIndex: number) {
     setRetryingChunk(chunkIndex);
     setError(null);
+    setActionFeedback(null);
     try {
       const response = await fetch(`${apiBase}/jobs/${encodeURIComponent(jobId)}/retry-stage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expected_revision: 1, stage: job?.activeStage ?? "chirp" }),
+        body: JSON.stringify({
+          expected_revision: 1,
+          stage: job?.activeStage ?? "chirp",
+          chunk_index: chunkIndex,
+          force: true,
+        }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { detail?: string } | null;
-        throw new Error(payload?.detail ?? "重試分段失敗");
+        throw new Error(payload?.detail ?? "重試此分段失敗");
       }
+      setActionFeedback({
+        type: "success",
+        message: `✅ 已成功送出第 ${chunkIndex + 1} 段重新辨識請求！系統正重新啟動該分段的 Chirp 辨識處理。`,
+      });
       setManualRefresh((value) => value + 1);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "無法重試此分段");
+      const msg = cause instanceof Error ? cause.message : "無法重試此分段";
+      setError(msg);
+      setActionFeedback({ type: "error", message: `❌ 重試第 ${chunkIndex + 1} 段失敗：${msg}` });
     } finally {
       setRetryingChunk(null);
     }
@@ -422,6 +442,14 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
             <span className={styles.progressText}>{chunks?.completedCount ?? 0} / {chunks?.totalCount ?? 0} 分段完成</span>
           </div>
         </header>
+        {actionFeedback && (
+          <div
+            className={actionFeedback.type === "success" ? styles.feedbackSuccess : styles.feedbackError}
+            role="status"
+          >
+            {actionFeedback.message}
+          </div>
+        )}
         {!chunks || chunks.chunks.length === 0 ? (
           <div className={styles.sectionBody}>
             <p className={styles.empty}>尚未建立分段計畫。音訊正規化完成後會自動顯示全部分段。</p>
@@ -435,17 +463,16 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
                   <div className={styles.chunkMeta}>{formatTime(chunk.startMs)}–{formatTime(chunk.endMs)} · {chunk.wordCount.toLocaleString("zh-TW")} 字詞</div>
                   <span className={statusClass(chunk.status)}><StatusIcon status={chunk.status} />{statusLabel(chunk.status)}</span>
                   <div className={styles.chunkActions}>
-                    {chunk.status === "FAILED" && (
-                      <button
-                        type="button"
-                        className={styles.retryChunkButton}
-                        disabled={retryingChunk === chunk.chunkIndex}
-                        onClick={() => void retryChunk(chunk.chunkIndex)}
-                      >
-                        {retryingChunk === chunk.chunkIndex ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}
-                        重試此分段
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      className={chunk.status === "FAILED" ? styles.retryChunkButton : styles.actionButton}
+                      disabled={retryingChunk === chunk.chunkIndex}
+                      onClick={() => void retryChunk(chunk.chunkIndex)}
+                      title="重新觸發此分段的 Chirp 語音辨識"
+                    >
+                      {retryingChunk === chunk.chunkIndex ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}
+                      {chunk.status === "FAILED" ? "重試此分段" : "重新辨識"}
+                    </button>
                     <button
                       type="button"
                       className={styles.actionButton}

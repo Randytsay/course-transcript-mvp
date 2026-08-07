@@ -1358,6 +1358,8 @@ class JobStore:
         job_id: str,
         expected_revision: int,
         stage: str,
+        chunk_index: int | None = None,
+        force: bool = False,
         actor: str,
     ) -> dict[str, Any]:
         if not re.fullmatch(r"[a-z][a-z0-9_-]{1,40}", stage):
@@ -1369,12 +1371,25 @@ class JobStore:
             ).fetchone()
             if row is None:
                 raise JobNotFound("Job not found")
-            if row["revision"] != expected_revision:
+            if not force and row["revision"] != expected_revision:
                 raise JobConflict("任務已更新，請重新載入後再操作")
-            if row["status"] != "failed" or not row["approved_at"]:
-                raise JobConflict("只有已核准且失敗的任務可以重試")
-            if row["active_stage"] != stage:
+            allowed_statuses = {"failed", "completed", "awaiting_review", "transcribing", "paused"} if (force or chunk_index is not None) else {"failed"}
+            if row["status"] not in allowed_statuses or not row["approved_at"]:
+                raise JobConflict("只有已核准且允許狀態的任務可以重試")
+            if not force and row["active_stage"] and row["active_stage"] != stage:
                 raise JobConflict("只能重試目前記錄的失敗階段")
+
+            detail = "等待 Worker 重試階段"
+            if chunk_index is not None:
+                detail = f"重新辨識第 {chunk_index + 1} 段"
+                job_dir = Path(self.db_path).parent / job_id
+                manifest_path = job_dir / "chunks" / f"chunk-{chunk_index:03d}" / "manifest.json"
+                if manifest_path.is_file():
+                    try:
+                        manifest_path.unlink()
+                    except OSError:
+                        pass
+
             connection.execute(
                 """
                 UPDATE stage_runs
@@ -1383,23 +1398,24 @@ class JobStore:
                 """,
                 (job_id, stage),
             )
+            next_status = "transcribing" if stage == "chirp" else "queued"
             connection.execute(
                 """
                 UPDATE jobs
-                SET status = 'queued', stage_detail = '等待 Worker 重試失敗階段',
+                SET status = ?, active_stage = ?, stage_detail = ?,
                     error = NULL, locked_by = NULL, lease_expires_at = NULL,
                     last_heartbeat_at = NULL, updated_at = ?,
                     revision = revision + 1
                 WHERE id = ?
                 """,
-                (now, job_id),
+                (next_status, stage, detail, now, job_id),
             )
             self._event(
                 connection,
                 job_id,
                 "failed_stage_retry_requested",
                 actor,
-                {"stage": stage},
+                {"stage": stage, "chunk_index": chunk_index},
             )
             if row["batch_id"]:
                 self._refresh_batch_state(connection, row["batch_id"], now)
