@@ -1,6 +1,6 @@
 "use client";
 
-import { Ban, LoaderCircle, Pause, Play, X } from "lucide-react";
+import { Ban, LoaderCircle, Pause, Play, RotateCcw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import styles from "./job-controls.module.css";
 
@@ -35,6 +35,7 @@ const cancellable = new Set([
 type JobState = {
   status: string;
   revision: number;
+  activeStage?: string | null;
   stageDetail?: string | null;
 };
 
@@ -47,6 +48,15 @@ function mapJob(value: unknown): JobState | null {
   return {
     status: String(nested.status ?? payload.status ?? ""),
     revision: Number(nested.revision ?? payload.revision ?? 0),
+    activeStage: nested.active_stage
+      ? String(nested.active_stage)
+      : nested.activeStage
+        ? String(nested.activeStage)
+        : payload.active_stage
+          ? String(payload.active_stage)
+          : payload.activeStage
+            ? String(payload.activeStage)
+            : null,
     stageDetail: nested.stage_detail
       ? String(nested.stage_detail)
       : nested.stageDetail
@@ -73,7 +83,7 @@ async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
 
 export default function JobControls({ jobId }: { jobId: string }) {
   const [job, setJob] = useState<JobState | null>(null);
-  const [busy, setBusy] = useState<"pause" | "resume" | "cancel" | null>(null);
+  const [busy, setBusy] = useState<"pause" | "resume" | "retry" | "cancel" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [reason, setReason] = useState("來源檔或設定需要重新確認");
@@ -117,6 +127,30 @@ export default function JobControls({ jobId }: { jobId: string }) {
     }
   }
 
+  async function retryStage() {
+    if (!job || job.revision < 1) return;
+    setBusy("retry");
+    setError(null);
+    try {
+      const payload = await requestJson(
+        `/jobs/${encodeURIComponent(jobId)}/retry-stage`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            expected_revision: job.revision,
+            stage: job.activeStage ?? null,
+          }),
+        },
+      );
+      setJob(mapJob(payload));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "重試失敗階段失敗");
+      await refresh();
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function cancelJob() {
     if (!job || job.revision < 1 || !reason.trim()) return;
     setBusy("cancel");
@@ -153,6 +187,17 @@ export default function JobControls({ jobId }: { jobId: string }) {
         {error && <span className={styles.error}>{error}</span>}
       </div>
       <div className={styles.actions}>
+        {job.status === "failed" && (
+          <button
+            type="button"
+            className="button button--primary"
+            disabled={busy !== null}
+            onClick={() => void retryStage()}
+          >
+            {busy === "retry" ? <LoaderCircle className="spin" size={18} /> : <RotateCcw size={18} />}
+            重試失敗階段{job.activeStage ? ` (${job.activeStage})` : ""}
+          </button>
+        )}
         {pausable.has(job.status) && (
           <button
             type="button"

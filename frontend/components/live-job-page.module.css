@@ -72,6 +72,39 @@
   line-height: 1.55;
 }
 
+.headerControls {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.headerRetryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 2.5rem;
+  padding: 0 1rem;
+  border: 1px solid #3730a3;
+  border-radius: 0.65rem;
+  background: #3730a3;
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 750;
+  cursor: pointer;
+  box-shadow: 0 2px 8px rgba(55, 48, 163, 0.25);
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+
+.headerRetryButton:hover {
+  background: #312e81;
+}
+
+.headerRetryButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .progressText {
   flex: 0 0 auto;
   padding: 0.5rem 0.75rem;
@@ -100,6 +133,36 @@
   grid-template-columns: minmax(9rem, 1fr) minmax(10rem, 1.2fr) auto auto;
   align-items: center;
   gap: 0.85rem;
+}
+
+.chunkActions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.retryChunkButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2.5rem;
+  padding: 0 0.85rem;
+  border: 1px solid #b42318;
+  border-radius: 0.65rem;
+  background: #b42318;
+  color: #ffffff;
+  font-size: 0.9rem;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.retryChunkButton:hover {
+  background: #9f1f16;
+}
+
+.retryChunkButton:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .chunkTitle {
