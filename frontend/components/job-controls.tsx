@@ -1,6 +1,6 @@
 "use client";
 
-import { Ban, LoaderCircle, Pause, Play, RotateCcw, X } from "lucide-react";
+import { Ban, ChevronDown, LoaderCircle, Pause, Play, RotateCcw, SlidersHorizontal, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import styles from "./job-controls.module.css";
 
@@ -85,6 +85,7 @@ export default function JobControls({ jobId }: { jobId: string }) {
   const [job, setJob] = useState<JobState | null>(null);
   const [busy, setBusy] = useState<"pause" | "resume" | "retry" | "cancel" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [minimized, setMinimized] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [reason, setReason] = useState("來源檔或設定需要重新確認");
   const [cleanupTemporary, setCleanupTemporary] = useState(false);
@@ -138,7 +139,8 @@ export default function JobControls({ jobId }: { jobId: string }) {
           method: "POST",
           body: JSON.stringify({
             expected_revision: job.revision,
-            stage: job.activeStage ?? null,
+            stage: job.activeStage ?? "chirp",
+            force: true,
           }),
         },
       );
@@ -179,10 +181,33 @@ export default function JobControls({ jobId }: { jobId: string }) {
 
   if (!job) return null;
 
+  if (minimized) {
+    return (
+      <button
+        type="button"
+        className={styles.minimizedTrigger}
+        onClick={() => setMinimized(false)}
+        title="點擊展開任務控制項"
+      >
+        <SlidersHorizontal size={16} /> 任務控制 ({job.status})
+      </button>
+    );
+  }
+
   return (
     <div className={styles.wrapper} aria-live="polite">
       <div className={styles.statusCopy}>
-        <strong>任務控制</strong>
+        <div>
+          <strong>任務控制</strong>
+          <button
+            type="button"
+            className={styles.toggleMinimize}
+            onClick={() => setMinimized(true)}
+            title="縮小控制欄以獲得更大閱讀空間"
+          >
+            <ChevronDown size={14} /> 隱藏底欄
+          </button>
+        </div>
         <span>{job.status}{job.stageDetail ? `｜${job.stageDetail}` : ""}</span>
         {error && <span className={styles.error}>{error}</span>}
       </div>

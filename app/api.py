@@ -154,6 +154,8 @@ class JobActionRequest(BaseModel):
 
 class RetryStageRequest(JobActionRequest):
     stage: str = Field(pattern=r"^[a-z][a-z0-9_-]{1,40}$")
+    chunk_index: int | None = Field(default=None, ge=0)
+    force: bool = Field(default=False)
 
 
 def _store() -> JobStore:
@@ -723,6 +725,8 @@ def retry_stage(
                 job_id=job_id,
                 expected_revision=payload.expected_revision,
                 stage=payload.stage,
+                chunk_index=payload.chunk_index,
+                force=payload.force,
                 actor=actor,
             )
         )
