@@ -14,6 +14,7 @@ import {
   Copy,
   LoaderCircle,
   RefreshCw,
+  RotateCcw,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
@@ -188,7 +189,52 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [manualRefresh, setManualRefresh] = useState(0);
+  const [busyRetry, setBusyRetry] = useState(false);
+  const [retryingChunk, setRetryingChunk] = useState<number | null>(null);
   const formalLoadedRef = useRef(false);
+
+  async function handleRetryStage() {
+    if (!job) return;
+    setBusyRetry(true);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBase}/jobs/${encodeURIComponent(jobId)}/retry-stage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected_revision: 1, stage: job.activeStage ?? null }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(payload?.detail ?? "重試失敗");
+      }
+      setManualRefresh((value) => value + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "重試階段失敗");
+    } finally {
+      setBusyRetry(false);
+    }
+  }
+
+  async function retryChunk(chunkIndex: number) {
+    setRetryingChunk(chunkIndex);
+    setError(null);
+    try {
+      const response = await fetch(`${apiBase}/jobs/${encodeURIComponent(jobId)}/retry-stage`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected_revision: 1, stage: job?.activeStage ?? "chirp" }),
+      });
+      if (!response.ok) {
+        const payload = await response.json().catch(() => null) as { detail?: string } | null;
+        throw new Error(payload?.detail ?? "重試分段失敗");
+      }
+      setManualRefresh((value) => value + 1);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "無法重試此分段");
+    } finally {
+      setRetryingChunk(null);
+    }
+  }
 
   useEffect(() => {
     let disposed = false;
@@ -361,7 +407,20 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
             <h2 id="chunk-progress-heading">第一層｜分段進度</h2>
             <p>每段顯示等待中、辨識中、恢復中、完成或失敗。</p>
           </div>
-          <span className={styles.progressText}>{chunks?.completedCount ?? 0} / {chunks?.totalCount ?? 0} 分段完成</span>
+          <div className={styles.headerControls}>
+            {job?.status === "failed" && (
+              <button
+                type="button"
+                className={styles.headerRetryButton}
+                disabled={busyRetry}
+                onClick={() => void handleRetryStage()}
+              >
+                {busyRetry ? <LoaderCircle className="spin" size={16} /> : <RotateCcw size={16} />}
+                重試失敗階段{job.activeStage ? ` (${job.activeStage})` : ""}
+              </button>
+            )}
+            <span className={styles.progressText}>{chunks?.completedCount ?? 0} / {chunks?.totalCount ?? 0} 分段完成</span>
+          </div>
         </header>
         {!chunks || chunks.chunks.length === 0 ? (
           <div className={styles.sectionBody}>
@@ -375,16 +434,29 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
                   <div className={styles.chunkTitle}>第 {chunk.chunkIndex + 1} 段</div>
                   <div className={styles.chunkMeta}>{formatTime(chunk.startMs)}–{formatTime(chunk.endMs)} · {chunk.wordCount.toLocaleString("zh-TW")} 字詞</div>
                   <span className={statusClass(chunk.status)}><StatusIcon status={chunk.status} />{statusLabel(chunk.status)}</span>
-                  <button
-                    type="button"
-                    className={styles.actionButton}
-                    disabled={!chunk.hasTranscript || loadingTranscript === chunk.chunkIndex}
-                    onClick={() => void toggleTranscript(chunk)}
-                    aria-expanded={expanded.has(chunk.chunkIndex)}
-                  >
-                    {loadingTranscript === chunk.chunkIndex ? <LoaderCircle size={17} /> : expanded.has(chunk.chunkIndex) ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
-                    {expanded.has(chunk.chunkIndex) ? "收合原始稿" : "展開原始稿"}
-                  </button>
+                  <div className={styles.chunkActions}>
+                    {chunk.status === "FAILED" && (
+                      <button
+                        type="button"
+                        className={styles.retryChunkButton}
+                        disabled={retryingChunk === chunk.chunkIndex}
+                        onClick={() => void retryChunk(chunk.chunkIndex)}
+                      >
+                        {retryingChunk === chunk.chunkIndex ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}
+                        重試此分段
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className={styles.actionButton}
+                      disabled={!chunk.hasTranscript || loadingTranscript === chunk.chunkIndex}
+                      onClick={() => void toggleTranscript(chunk)}
+                      aria-expanded={expanded.has(chunk.chunkIndex)}
+                    >
+                      {loadingTranscript === chunk.chunkIndex ? <LoaderCircle size={17} /> : expanded.has(chunk.chunkIndex) ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
+                      {expanded.has(chunk.chunkIndex) ? "收合原始稿" : "展開原始稿"}
+                    </button>
+                  </div>
                 </div>
                 {chunk.error && <div className={styles.error}>{chunk.error}</div>}
                 {expanded.has(chunk.chunkIndex) && transcripts[chunk.chunkIndex] && (

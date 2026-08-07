@@ -22,7 +22,7 @@ const linkStyle = {
 export default async function Page({ params }: PageProps) {
   const { id } = await params;
   return (
-    <>
+    <div style={{ paddingBottom: "140px" }}>
       <LiveJobPage jobId={id} />
       <nav
         aria-label="任務延伸功能"
@@ -42,6 +42,6 @@ export default async function Page({ params }: PageProps) {
         <Link href={`/jobs/${id}/review`} style={{ ...linkStyle, color: "#fff", background: "#3730a3", borderColor: "#3730a3" }}>完整審查與輸出</Link>
       </nav>
       <JobControls jobId={id} />
-    </>
+    </div>
   );
 }
