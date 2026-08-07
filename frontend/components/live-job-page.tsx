@@ -37,6 +37,7 @@ type JobSummary = {
   batchId?: string | null;
   parallelism: number;
   geminiEnabled: boolean;
+  revision?: number;
 };
 
 type ChunkItem = {
@@ -116,6 +117,7 @@ function mapJob(raw: Record<string, unknown>): JobSummary {
     batchId: raw.batch_id ? String(raw.batch_id) : null,
     parallelism: Number(raw.chirp_max_parallel_chunks ?? 3),
     geminiEnabled: raw.enable_gemini_correction !== false,
+    revision: Number(raw.revision ?? 1),
   };
 }
 
@@ -203,7 +205,7 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
       const response = await fetch(`${apiBase}/jobs/${encodeURIComponent(jobId)}/retry-stage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expected_revision: 1, stage: job.activeStage ?? "chirp", force: true }),
+        body: JSON.stringify({ expected_revision: job.revision ?? 1, stage: job.activeStage ?? "chirp", force: true }),
       });
       if (!response.ok) {
         const payload = await response.json().catch(() => null) as { detail?: string } | null;
@@ -232,7 +234,7 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          expected_revision: 1,
+          expected_revision: job?.revision ?? 1,
           stage: job?.activeStage ?? "chirp",
           chunk_index: chunkIndex,
           force: true,
