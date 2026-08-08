@@ -73,6 +73,40 @@ def _operation_state(name: str) -> tuple[bool, int, str]:
     return bool(getattr(operation, "done", False)), code, message
 
 
+def _operation_file_error(name: str) -> tuple[int, str] | None:
+    """Read per-file errors embedded in a completed BatchRecognize response.
+
+    Speech can complete the long-running operation while a file result still
+    carries an error.  In that case no GCS JSON is written and polling for
+    propagation forever only hides the provider failure.
+    """
+    client = speech_v2.SpeechClient(
+        client_options={"api_endpoint": "us-speech.googleapis.com"}
+    )
+    try:
+        operation = client.transport.operations_client.get_operation(name)
+    except Exception:
+        # The regular operation-state check remains the source of truth when
+        # a second metadata fetch is temporarily unavailable.
+        return None
+    response_any = getattr(operation, "response", None)
+    if response_any is None or not getattr(response_any, "type_url", ""):
+        return None
+    response = cloud_speech.BatchRecognizeResponse()
+    try:
+        if not response_any.Unpack(response):
+            return None
+    except (TypeError, ValueError):
+        return None
+    for result in response.results.values():
+        error = getattr(result, "error", None)
+        code = int(getattr(error, "code", 0) or 0)
+        message = str(getattr(error, "message", "") or "")
+        if code or message:
+            return code or 13, message or "Speech batch file failed"
+    return None
+
+
 def _pending_or_terminal(prior: dict[str, Any], manifest_path: Path) -> int:
     now = utcnow()
     submitted = parse_time(prior.get("submitted_at") or prior.get("created_at"))
@@ -82,6 +116,25 @@ def _pending_or_terminal(prior: dict[str, Any], manifest_path: Path) -> int:
         done, code, message = _operation_state(operation_name)
         prior["operation_status_checked_at"] = iso(now)
         prior["operation_done"] = done
+        if done:
+            file_error = _operation_file_error(operation_name)
+            if file_error is not None:
+                error_code, error_message = file_error
+                prior.update(
+                    status="FAILED",
+                    error={
+                        "code": "PROVIDER_FILE_ERROR",
+                        "provider_code": error_code,
+                        "message": error_message,
+                    },
+                    terminal_at=iso(now),
+                )
+                atomic_json(manifest_path, prior)
+                print(
+                    f"RECOVER=TERMINAL file_error code={error_code} "
+                    f"message={error_message[:300]}"
+                )
+                return TERMINAL_EXIT
         if code:
             prior.update(
                 status="FAILED",

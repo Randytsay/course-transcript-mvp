@@ -1,6 +1,8 @@
 """Shared speech-adaptation and correction context for 大成佛經 lessons."""
 from __future__ import annotations
 
+import os
+
 from google.cloud.speech_v2.types import cloud_speech
 
 MANTRA_TITLE = "《得見彌勒根本大明神咒》"
@@ -45,3 +47,18 @@ def speech_adaptation() -> cloud_speech.SpeechAdaptation:
             )
         ]
     )
+
+
+def speech_adaptation_enabled() -> bool:
+    """Return whether Chirp request-level adaptation is explicitly enabled.
+
+    The mantra remains mandatory context for the text-correction prompt.  The
+    provider-side adaptation is opt-in because a malformed/provider-side
+    failure must never prevent the raw batch result from being produced.
+    """
+    return os.environ.get("CHIRP_SPEECH_ADAPTATION", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
