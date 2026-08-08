@@ -154,13 +154,21 @@ class NewFeatureTests(unittest.TestCase):
             )
             with store.transaction() as connection:
                 connection.execute(
-                    "UPDATE jobs SET status = 'completed', active_stage = 'chirp', approved_at = '2026-08-01T00:00:00+00:00' WHERE id = ?",
+                    "UPDATE jobs SET status = 'completed', active_stage = 'chirp', approved_at = '2026-08-01T00:00:00+00:00', reserved_cost_usd = '1.00' WHERE id = ?",
                     (job["id"],),
                 )
 
-            chunk_manifest = Path(temp) / job["id"] / "chunks" / "chunk-001" / "manifest.json"
+            job_dir = Path(temp) / "jobs" / job["id"]
+            chunk_manifest = job_dir / "chunks" / "chunk-001" / "manifest.json"
             chunk_manifest.parent.mkdir(parents=True, exist_ok=True)
+            (job_dir / "chunk-plan.json").write_text(
+                json.dumps({"chunks": [{"chunk_index": 1}]}),
+                encoding="utf-8",
+            )
             chunk_manifest.write_text('{"status": "SUCCEEDED"}', encoding="utf-8")
+            (chunk_manifest.parent / "chirp-raw.json").write_text("old raw", encoding="utf-8")
+            (job_dir / "merged-words.json").write_text("old merged", encoding="utf-8")
+            (job_dir / "subtitles-corrected.json").write_text("old subtitles", encoding="utf-8")
 
             res = store.retry_failed_stage(
                 job_id=job["id"],
@@ -174,6 +182,25 @@ class NewFeatureTests(unittest.TestCase):
             self.assertEqual(res["active_stage"], "chirp")
             self.assertEqual(res["stage_detail"], "重新辨識第 2 段")
             self.assertFalse(chunk_manifest.exists())
+            request = json.loads((job_dir / "chirp-retry-request.json").read_text(encoding="utf-8"))
+            self.assertEqual(request["chunks"][0]["chunk_index"], 1)
+            archive = job_dir / request["chunks"][0]["archive"]
+            self.assertEqual((archive / "merged-words.json").read_text(encoding="utf-8"), "old merged")
+            self.assertEqual((archive / "subtitles-corrected.json").read_text(encoding="utf-8"), "old subtitles")
+            attempt = chunk_manifest.parent / "attempts" / request["chunks"][0]["archive"].split("/")[-1]
+            self.assertEqual((attempt / "manifest.json").read_text(encoding="utf-8"), '{"status": "SUCCEEDED"}')
+            self.assertEqual((attempt / "chirp-raw.json").read_text(encoding="utf-8"), "old raw")
+
+            # A requested re-recognition must be routed to submission, not the
+            # normal recovery pass that only polls an existing provider operation.
+            (job_dir / "chirp-submitted.json").write_text("{}", encoding="utf-8")
+            from app.pipeline import dynamic_worker_hardened as worker
+
+            self.assertIsNone(worker._next_due_waiting(store, Path(temp)))
+            resumable = worker._next_resumable(store, Path(temp))
+            self.assertEqual(resumable["id"], job["id"])
+            worker._clear_chunk_retry_request(job_dir)
+            self.assertEqual(worker._next_due_waiting(store, Path(temp))["id"], job["id"])
 
 
 if __name__ == "__main__":

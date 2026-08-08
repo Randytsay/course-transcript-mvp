@@ -191,6 +191,7 @@ def _submit_or_resume_chirp(
             raise worker.base.PipelineError(
                 "Chirp 動態批次提交後缺少持久化證據"
             )
+        worker._clear_chunk_retry_request(job_dir)
         worker.schedule(
             job_dir,
             "submitted",

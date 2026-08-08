@@ -246,7 +246,7 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
       }
       setActionFeedback({
         type: "success",
-        message: `✅ 已成功送出第 ${chunkIndex + 1} 段重新辨識請求！系統正重新啟動該分段的 Chirp 辨識處理。`,
+        message: `✅ 第 ${chunkIndex + 1} 段已排入重新辨識；待取得新的 Chirp operation 後才會更新文字。`,
       });
       setManualRefresh((value) => value + 1);
     } catch (cause) {
