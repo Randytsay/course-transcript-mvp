@@ -19,7 +19,7 @@ export type JobStatus =
   | "failed";
 
 export type PipelineStepStatus = "completed" | "running" | "pending" | "warning" | "failed";
-export type OutputFormat = "srt" | "txt" | "csv" | "vtt" | "ass" | "docx" | "pdf";
+export type OutputFormat = "srt" | "txt" | "csv" | "json" | "vtt" | "ass" | "docx" | "pdf";
 export type ProcessingStrategy = "DYNAMIC_BATCHING" | "STANDARD_BATCH";
 
 export interface PipelineStep {

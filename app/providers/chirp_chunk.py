@@ -14,6 +14,7 @@ from google.cloud import speech_v2, storage
 from google.cloud.speech_v2.types import cloud_speech
 
 from app.live_features import words_to_text
+from app.providers.mantra_context import speech_adaptation
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
@@ -145,6 +146,7 @@ def main() -> None:
         language_codes=[os.getenv("LANGUAGE_CODE", "cmn-Hant-TW")],
         model="chirp_3",
         features=cloud_speech.RecognitionFeatures(enable_word_time_offsets=True),
+        adaptation=speech_adaptation(),
     )
     uri = f"gs://{bucket_name}/{object_name}"
     output_uri = f"gs://{bucket_name}/jobs/{JOB_NAME}/chunks/{name}/chirp-output/"

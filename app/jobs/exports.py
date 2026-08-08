@@ -7,9 +7,9 @@ import os
 
 DEFAULT_OUTPUT_FORMATS = ("srt", "txt", "csv")
 ALLOWED_OUTPUT_FORMATS = frozenset(
-    {"srt", "txt", "csv", "vtt", "ass", "docx", "pdf"}
+    {"srt", "txt", "csv", "json", "vtt", "ass", "docx", "pdf"}
 )
-PRODUCTION_OUTPUT_FORMATS = frozenset({"srt", "txt", "csv", "vtt", "ass"})
+PRODUCTION_OUTPUT_FORMATS = frozenset({"srt", "txt", "csv", "json", "vtt", "ass"})
 DEPRECATED_DOCUMENT_FORMATS = frozenset({"docx", "pdf"})
 
 

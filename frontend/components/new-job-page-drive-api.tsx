@@ -296,7 +296,7 @@ export default function NewJobPageDriveApi() {
               {[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}{value === 3 ? "（建議）" : ""}</option>)}
             </select>
             <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginTop: 16 }}>
-              {(["srt", "txt", "csv", "vtt", "ass", "docx", "pdf"] as OutputFormat[]).map((format) => (
+              {(["srt", "txt", "csv", "json", "vtt", "ass", "docx", "pdf"] as OutputFormat[]).map((format) => (
                 <button type="button" key={format} className={`button ${outputFormats.includes(format) ? "button--primary" : "button--ghost"}`} onClick={() => toggleOutputFormat(format)}>.{format}</button>
               ))}
             </div>

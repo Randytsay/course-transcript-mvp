@@ -254,6 +254,13 @@ def main() -> int:
         target = JOB / "transcript_corrected.txt"
         atomic_bytes(target, source_txt.read_bytes())
         public_paths["txt"] = target
+    if "json" in selected:
+        # Keep a clearly named raw Chirp sidecar for downstream LLM work. The
+        # immutable subtitles.json contains the merged, timestamped Chirp text;
+        # Gemini corrections remain in transcript.json and never replace it.
+        target = JOB / "chirp.json"
+        atomic_bytes(target, (JOB / "subtitles.json").read_bytes())
+        public_paths["json"] = target
     if "vtt" in selected:
         target = JOB / "transcript.vtt"
         atomic_bytes(target, source_vtt.read_bytes())

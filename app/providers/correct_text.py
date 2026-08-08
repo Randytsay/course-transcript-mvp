@@ -21,13 +21,15 @@ from typing import Any
 from google import genai
 from google.genai import types
 
+from app.providers.mantra_context import MANTRA_TEXT
+
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 WORK = JOB / "correction-v2"
 MODEL = "gemini-3.6-flash"
 WINDOW_MS = max(15_000, int(os.environ.get("GEMINI_CORRECTION_WINDOW_MS", "60000")))
 MAX_WORKERS = max(1, int(os.environ.get("GEMINI_MAX_PARALLEL_WINDOWS", "2")))
-PROMPT_VERSION = "fixed-segments-v3-adaptive-window"
+PROMPT_VERSION = "fixed-segments-v4-dacheng-mantra"
 _CLIENTS = threading.local()
 
 TERMS_SCHEMA = {
@@ -275,7 +277,13 @@ def correct_window(
         "summarize, add information, split, merge, reorder, or alter segment IDs/"
         "timestamps. Apply only clear corrections. Return exactly one object for "
         "every input segment with the same segment_id. uncertain_terms must list "
-        "unresolved terms.\n\nGlobal terminology:\n"
+        "unresolved terms. This is a 大成佛經 lesson and may contain collective "
+        "chanting. When the leader and congregation repeat the supplied mantra, "
+        "emit it only once in the corrected text (do not duplicate the echo, "
+        "translate it, or replace any characters). Use this exact canonical text "
+        "whenever the spoken passage is that mantra:\n\n"
+        + MANTRA_TEXT
+        + "\n\nGlobal terminology:\n"
         + json.dumps(terms, ensure_ascii=False)
         + "\n\nSegments:\n"
         + json.dumps(

@@ -43,6 +43,7 @@ const PRIMARY_OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string; detail
   { value: "srt", label: ".srt", detail: "通用字幕" },
   { value: "txt", label: ".txt", detail: "可讀逐字稿" },
   { value: "csv", label: ".csv", detail: "校正與詞彙資料" },
+  { value: "json", label: ".json", detail: "Chirp 原始時間軸" },
 ];
 const ADVANCED_OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string; detail: string }> = [
   { value: "vtt", label: ".vtt", detail: "網頁字幕" },

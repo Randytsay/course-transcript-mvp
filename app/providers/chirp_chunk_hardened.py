@@ -9,6 +9,7 @@ from pathlib import Path
 
 from google.cloud import speech_v2, storage
 from google.cloud.speech_v2.types import cloud_speech
+from app.providers.mantra_context import speech_adaptation
 
 from app.providers.hardening_common import atomic_json, env_true, iso, window_matches
 
@@ -100,6 +101,7 @@ def main() -> int:
         language_codes=[os.getenv("LANGUAGE_CODE", "cmn-Hant-TW")],
         model="chirp_3",
         features=cloud_speech.RecognitionFeatures(enable_word_time_offsets=True),
+        adaptation=speech_adaptation(),
     )
     input_uri = f"gs://{bucket_name}/{input_object}"
     output_uri = f"gs://{bucket_name}/{output_prefix}"
