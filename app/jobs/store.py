@@ -61,6 +61,83 @@ def _batch_id() -> str:
     return f"batch-{stamp}-{uuid.uuid4().hex[:6]}"
 
 
+_CHUNK_RETRY_DERIVED_ARTIFACTS = (
+    "chirp-complete.json",
+    "chirp-waiting.json",
+    "chirp-recovery-state.json",
+    "merged-words.json",
+    "join-qa.json",
+    "subtitles.json",
+    "subtitles.srt",
+    "subtitles.vtt",
+    "subtitles.ass",
+    "subtitles-corrected.json",
+    "subtitles-corrected.srt",
+    "subtitles-corrected.vtt",
+    "subtitles-corrected.ass",
+    "transcript-raw.txt",
+    "transcript-raw.md",
+    "transcript-corrected.txt",
+    "transcript-corrected.md",
+    "transcript-timestamped.txt",
+    "transcript-segments.csv",
+    "transcript.json",
+    "transcript.csv",
+    "transcript.docx",
+    "transcript.pdf",
+    "transcript_raw.txt",
+    "transcript_corrected.txt",
+    "transcript_timestamped.txt",
+    "transcript.srt",
+    "transcript.vtt",
+    "export-manifest.json",
+    "qa-report.json",
+    "qa-report.md",
+    "qa_report.json",
+    "qa_report.html",
+    "content-qa.json",
+    "pipeline-manifest.json",
+    "processing_manifest.json",
+    "review-terms.json",
+)
+
+
+def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _archive_chunk_retry_evidence(job_dir: Path, chunk_index: int) -> str:
+    """Preserve old evidence while making derived outputs ineligible for reuse."""
+    retry_id = f"retry-{utc_now().strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}"
+    archive = job_dir / "retry-archives" / retry_id
+    archive.mkdir(parents=True, exist_ok=False)
+
+    chunk = job_dir / "chunks" / f"chunk-{chunk_index:03d}"
+    if chunk.is_dir():
+        attempts = chunk / "attempts"
+        attempts.mkdir(exist_ok=True)
+        attempt_archive = attempts / retry_id
+        attempt_archive.mkdir()
+        for item in list(chunk.iterdir()):
+            if item.name != "attempts":
+                item.replace(attempt_archive / item.name)
+
+    for name in _CHUNK_RETRY_DERIVED_ARTIFACTS:
+        source = job_dir / name
+        if source.exists():
+            source.replace(archive / name)
+    for name in ("glossary", "gemini-audit"):
+        source = job_dir / name
+        if source.exists():
+            source.replace(archive / name)
+    return str(archive.relative_to(job_dir))
+
+
 class JobStore:
     def __init__(self, database_path: Path):
         self.database_path = database_path
@@ -1380,23 +1457,55 @@ class JobStore:
                 raise JobConflict("只能重試目前記錄的失敗階段")
 
             detail = "等待 Worker 重試階段"
+            retry_archive: str | None = None
             if chunk_index is not None:
+                if stage != "chirp":
+                    raise JobConflict("單段重新辨識只支援 Chirp 階段")
                 detail = f"重新辨識第 {chunk_index + 1} 段"
-                job_dir = self.database_path.parent / job_id
-                manifest_path = job_dir / "chunks" / f"chunk-{chunk_index:03d}" / "manifest.json"
-                if manifest_path.is_file():
-                    try:
-                        manifest_path.unlink()
-                    except OSError:
-                        pass
+                job_dir = self.database_path.parent / "jobs" / job_id
+                try:
+                    plan = json.loads((job_dir / "chunk-plan.json").read_text(encoding="utf-8"))
+                    planned_indices = {
+                        int(item["chunk_index"])
+                        for item in plan["chunks"]
+                        if isinstance(item, dict)
+                    }
+                except (FileNotFoundError, OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+                    raise JobConflict("找不到可驗證的 Chirp 分段計畫，無法重新辨識") from None
+                if chunk_index not in planned_indices:
+                    raise JobConflict("指定的 Chirp 分段不存在")
+                retry_archive = _archive_chunk_retry_evidence(job_dir, chunk_index)
+                request_path = job_dir / "chirp-retry-request.json"
+                prior_request: dict[str, Any] = {}
+                try:
+                    loaded = json.loads(request_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        prior_request = loaded
+                except (FileNotFoundError, OSError, json.JSONDecodeError):
+                    pass
+                requested = [
+                    item for item in prior_request.get("chunks", [])
+                    if isinstance(item, dict) and item.get("chunk_index") != chunk_index
+                ]
+                requested.append(
+                    {
+                        "chunk_index": chunk_index,
+                        "requested_at": now,
+                        "archive": retry_archive,
+                    }
+                )
+                _atomic_json(
+                    request_path,
+                    {"requested_at": now, "chunks": requested},
+                )
 
             connection.execute(
                 """
                 UPDATE stage_runs
                 SET status = 'pending', error = NULL
-                WHERE job_id = ? AND stage = ?
+                WHERE job_id = ? AND stage IN ('chirp', 'segment', 'correction', 'export', 'qa', 'validation')
                 """,
-                (job_id, stage),
+                (job_id,),
             )
             next_status = "transcribing" if stage == "chirp" else "queued"
             connection.execute(
@@ -1415,7 +1524,11 @@ class JobStore:
                 job_id,
                 "failed_stage_retry_requested",
                 actor,
-                {"stage": stage, "chunk_index": chunk_index},
+                {
+                    "stage": stage,
+                    "chunk_index": chunk_index,
+                    "retry_archive": retry_archive,
+                },
             )
             if row["batch_id"]:
                 self._refresh_batch_state(connection, row["batch_id"], now)

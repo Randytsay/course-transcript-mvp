@@ -159,12 +159,28 @@ def _waiting_count(store: JobStore) -> int:
     return int(row["count"] if row else 0)
 
 
+def _chunk_retry_requested(job_dir: Path) -> bool:
+    try:
+        payload = json.loads((job_dir / "chirp-retry-request.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return False
+    return isinstance(payload, dict) and bool(payload.get("chunks"))
+
+
+def _clear_chunk_retry_request(job_dir: Path) -> None:
+    (job_dir / "chirp-retry-request.json").unlink(missing_ok=True)
+
+
 def _next_due_waiting(store: JobStore, data_dir: Path) -> dict[str, Any] | None:
     for record in _available_rows(store, ("transcribing",)):
         if str(record.get("active_stage") or "") != "chirp":
             continue
         job_dir = data_dir / "jobs" / record["id"]
-        if (job_dir / "chirp-submitted.json").is_file() and is_due(job_dir):
+        if (
+            not _chunk_retry_requested(job_dir)
+            and (job_dir / "chirp-submitted.json").is_file()
+            and is_due(job_dir)
+        ):
             return record
     return None
 
@@ -176,6 +192,7 @@ def _next_resumable(store: JobStore, data_dir: Path) -> dict[str, Any] | None:
             record.get("status") == "transcribing"
             and record.get("active_stage") == "chirp"
             and (job_dir / "chirp-submitted.json").is_file()
+            and not _chunk_retry_requested(job_dir)
         ):
             continue
         return record
@@ -248,6 +265,7 @@ def _submit_job(
         _, total = _chunk_counts(job_dir)
         if total <= 0 or not (job_dir / "chirp-submitted.json").is_file():
             raise base.PipelineError("Chirp 動態批次提交後缺少持久化證據")
+        _clear_chunk_retry_request(job_dir)
         schedule(job_dir, "submitted", detail=f"submitted_chunks={total}")
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         with store.transaction() as connection:
@@ -449,6 +467,8 @@ def _resume_job(
     worker_id: str,
 ) -> dict[str, Any]:
     job_dir = data_dir / "jobs" / record["id"]
+    if _chunk_retry_requested(job_dir):
+        return _submit_job(store, record, data_dir=data_dir, worker_id=worker_id)
     if (job_dir / "merged-words.json").is_file():
         leased = store.acquire_lease(record["id"], worker_id, lease_seconds=300)
         return _finish_after_chirp(store, leased, data_dir=data_dir, worker_id=worker_id)
