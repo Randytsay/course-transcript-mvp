@@ -20,6 +20,7 @@ export type JobStatus =
 
 export type PipelineStepStatus = "completed" | "running" | "pending" | "warning" | "failed";
 export type OutputFormat = "srt" | "txt" | "csv" | "vtt" | "ass" | "docx" | "pdf";
+export type ProcessingStrategy = "DYNAMIC_BATCHING" | "STANDARD_BATCH";
 
 export interface PipelineStep {
   id: string;
@@ -77,6 +78,7 @@ export interface TranscriptJob {
   error?: string | null;
   revision: number;
   batchId?: string | null;
+  processingStrategy: ProcessingStrategy;
   estimatedCostUsd?: string | null;
   chirpMaxParallelChunks?: number;
   outputFormats: OutputFormat[];
@@ -135,6 +137,7 @@ export interface CreatedBatch {
   createdAt: string;
   paidOperationStarted: false;
   nextAction: string;
+  processingStrategy: ProcessingStrategy;
 }
 
 export interface CostSummary {
@@ -237,5 +240,6 @@ export interface BatchDetail {
   createdAt: string;
   updatedAt: string;
   revision: number;
+  processingStrategy: ProcessingStrategy;
   jobs: TranscriptJob[];
 }

@@ -22,6 +22,7 @@ from typing import Any
 from app.jobs.costs import CostConfig, estimate_job_cost
 from app.jobs.drive_publish import DrivePublishError, publish_outputs, source_parent_destination
 from app.jobs.store import JobConflict, JobStore
+from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 
 
 class PipelineError(RuntimeError):
@@ -425,8 +426,10 @@ def _record_usage_evidence(
     data_dir: Path,
     worker_id: str,
 ) -> None:
+    strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
     estimate = estimate_job_cost(
-        float(record["duration_seconds"]), CostConfig.from_env()
+        float(record["duration_seconds"]),
+        CostConfig.from_env().for_processing_strategy(strategy),
     )
     store.record_usage(
         job_id=record["id"],

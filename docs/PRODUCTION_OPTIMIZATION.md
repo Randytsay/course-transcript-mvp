@@ -20,9 +20,11 @@ Recommended product labels:
 | Fast | standard batch | Explicit urgent request only | Faster, higher cost |
 | Canary | first 120 seconds | Validate media/language before full work | Required before chunks |
 
-The UI must show the strategy, estimated cost, and completion expectation before
-approval. Switching a submitted Dynamic Batch job to Fast mode must be a manual
-operator action after confirming the retained operation will not be duplicated.
+The UI lets the operator choose the strategy before preflight. The selected
+strategy is persisted on the batch and every child job, and the estimate is
+calculated with the matching Chirp rate. Switching a submitted job to another
+mode is prohibited; an operator must first clear any retained operation and
+duplicate-billing risk before creating a replacement.
 
 ## 2. Operational health command
 
@@ -173,7 +175,8 @@ Requires explicit approval:
 1. Merge production health and alert thresholds.
 2. Add an authenticated admin health endpoint that only returns the generated
    report; do not duplicate the scanning logic in the API.
-3. Add UI labels for Economical/Fast/Canary modes and the split cost estimate.
+3. Canary remains an internal validation step; Economical/Fast are selectable
+   before preflight and the split cost estimate is shown after inspection.
 4. Connect Cloud Billing read-only reconciliation and verify the actual SKU.
 5. Add optional Telegram notifications consuming health JSON.
 6. Complete single-chunk re-transcription with revision and cost isolation.

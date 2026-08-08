@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api import _mutation_actor, _store, app
 from app.jobs import JobConflict, JobNotFound, normalize_output_formats
+from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, DYNAMIC_BATCHING, STANDARD_BATCH
 from app.live_error import safe_chunk_error
 import app.live_features as live_features
 
@@ -24,6 +25,7 @@ class CreateJobWithParallelismRequest(BaseModel):
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = False
+    processing_strategy: Literal[DYNAMIC_BATCHING, STANDARD_BATCH] = DEFAULT_PROCESSING_STRATEGY
     chirp_max_parallel_chunks: int = Field(default=3, ge=1, strict=True)
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
@@ -36,6 +38,7 @@ class CreateBatchWithParallelismRequest(BaseModel):
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = False
+    processing_strategy: Literal[DYNAMIC_BATCHING, STANDARD_BATCH] = DEFAULT_PROCESSING_STRATEGY
     chirp_max_parallel_chunks: int = Field(default=3, ge=1, strict=True)
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
@@ -96,6 +99,7 @@ def create_batch_with_parallelism(
             enable_gemini_correction=payload.enable_gemini_correction,
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
+            processing_strategy=payload.processing_strategy,
             chirp_max_parallel_chunks=parallelism,
             output_formats=payload.output_formats,
             actor=actor,
@@ -111,6 +115,7 @@ def create_batch_with_parallelism(
         "batch_id": batch["id"],
         "status": batch["status"],
         "item_count": batch["item_count"],
+        "processing_strategy": batch["processing_strategy"],
         "job_ids": [job["id"] for job in result["jobs"]],
         "chirp_max_parallel_chunks": parallelism,
         "output_formats": normalize_output_formats(payload.output_formats),
@@ -135,6 +140,7 @@ def create_job_with_parallelism(
             enable_gemini_correction=payload.enable_gemini_correction,
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
+            processing_strategy=payload.processing_strategy,
             chirp_max_parallel_chunks=parallelism,
             output_formats=payload.output_formats,
             actor=actor,
@@ -148,6 +154,7 @@ def create_job_with_parallelism(
     return {
         "job_id": record["id"],
         "status": record["status"],
+        "processing_strategy": record["processing_strategy"],
         "chirp_max_parallel_chunks": parallelism,
         "output_formats": normalize_output_formats(payload.output_formats),
         "created_at": record["created_at"],

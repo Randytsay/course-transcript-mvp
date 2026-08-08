@@ -11,6 +11,12 @@ from typing import Any
 from app.jobs.drive_lock import drive_publish_lock
 from app.jobs.drive_publish import DrivePublishError
 from app.jobs.store import JobConflict, JobStore
+from app.jobs.strategy import (
+    DEFAULT_PROCESSING_STRATEGY,
+    is_dynamic_batching,
+    normalize_processing_strategy,
+    strategy_label,
+)
 from app.pipeline import dynamic_worker_hardened as worker
 
 _ORIGINAL_AUTO_PUBLISH = worker.base._auto_publish_to_source
@@ -23,16 +29,18 @@ def _review_required(value: object) -> bool:
     return bool(value)
 
 
-def _processing_strategy(job_dir: Path) -> str:
+def _processing_strategy(record: dict[str, Any], job_dir: Path) -> str:
     try:
         payload = json.loads((job_dir / "chunk-plan.json").read_text(encoding="utf-8"))
     except (FileNotFoundError, OSError, json.JSONDecodeError):
-        return "DYNAMIC_BATCHING"
+        return normalize_processing_strategy(
+            record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
+        )
     strategy = str(payload.get("processing_strategy") or "")
-    return (
-        strategy
-        if strategy in {"DYNAMIC_BATCHING", "PROCESSING_STRATEGY_UNSPECIFIED"}
-        else "DYNAMIC_BATCHING"
+    if strategy == "PROCESSING_STRATEGY_UNSPECIFIED":
+        return "STANDARD_BATCH"
+    return normalize_processing_strategy(
+        strategy or record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
     )
 
 
@@ -70,7 +78,7 @@ def _finish_with_actual_strategy(
 ) -> dict[str, Any]:
     """Use the retained strategy and enforce the persisted review gate."""
     job_dir = data_dir / "jobs" / leased["id"]
-    strategy = _processing_strategy(job_dir)
+    strategy = _processing_strategy(leased, job_dir)
     previous = os.environ.get("CHIRP_DYNAMIC_BATCHING")
     os.environ["CHIRP_DYNAMIC_BATCHING"] = (
         "true" if strategy == "DYNAMIC_BATCHING" else "false"
@@ -126,12 +134,14 @@ def _submit_or_resume_chirp(
     data_dir: Path,
     worker_id: str,
 ) -> dict[str, Any]:
-    """Submit dynamic work or finish a retained standard-batch job safely."""
+    """Submit the persisted strategy and finish standard work synchronously."""
     leased = store.acquire_lease(record["id"], worker_id, lease_seconds=300)
     if not leased["approved_at"] or Decimal(leased["reserved_cost_usd"]) <= 0:
         store.release_lease(record["id"], worker_id)
         raise JobConflict("未經人工費用確認的任務不可進入付費管線")
     job_dir = data_dir / "jobs" / leased["id"]
+    strategy = _processing_strategy(leased, job_dir)
+    dynamic = is_dynamic_batching(strategy)
     try:
         source = worker.base._download_source(
             store,
@@ -158,10 +168,13 @@ def _submit_or_resume_chirp(
         env = worker.base._module_env(leased, job_dir)
         env.update(
             {
-                "CHIRP_DYNAMIC_BATCHING": "true",
-                "CHIRP_SUBMIT_ONLY": "1",
+                "CHIRP_DYNAMIC_BATCHING": "true" if dynamic else "false",
             }
         )
+        if dynamic:
+            env["CHIRP_SUBMIT_ONLY"] = "1"
+        else:
+            env.pop("CHIRP_SUBMIT_ONLY", None)
         worker.base._run_with_heartbeat(
             [
                 sys.executable,
@@ -186,6 +199,10 @@ def _submit_or_resume_chirp(
                 worker_id=worker_id,
             )
 
+        if not dynamic:
+            raise worker.base.PipelineError(
+                "Standard Batch 完成後缺少 merged-words.json"
+            )
         _, total = worker._chunk_counts(job_dir)
         if total <= 0 or not (job_dir / "chirp-submitted.json").is_file():
             raise worker.base.PipelineError(
@@ -212,7 +229,7 @@ def _submit_or_resume_chirp(
                 WHERE id=?
                 """,
                 (
-                    f"Chirp 動態批次已提交 {total} 段；等待 Google 離峰處理",
+                    f"{strategy_label(strategy)}已提交 {total} 段；等待 Google 處理",
                     now,
                     leased["id"],
                 ),
@@ -221,9 +238,13 @@ def _submit_or_resume_chirp(
             store._event(
                 connection,
                 leased["id"],
-                "chirp_dynamic_batch_submitted",
+                "chirp_batch_submitted",
                 worker_id,
-                {"chunk_count": total, "worker_released": True},
+                {
+                    "chunk_count": total,
+                    "worker_released": True,
+                    "processing_strategy": strategy,
+                },
             )
         return store.get_job(leased["id"])
     except worker.base.PipelinePaused:

@@ -22,16 +22,20 @@ the timing layer is complete.
 3. Create a zero-cost preflight batch. The sequential worker copies one source
    at a time, runs checksum/FFprobe, records an estimated cost, and removes the
    temporary copy.
-4. The user must explicitly confirm the whole batch estimate before any paid
+4. Choose `Economical` (Chirp Dynamic Batch, up to 24-hour completion
+   expectation) or `Fast` (Standard Batch, higher estimated cost) before
+   preflight. The choice is persisted per batch/job.
+5. The user must explicitly confirm the whole batch estimate before any paid
    transcription can be queued.
-5. Read the approved Google Drive source through rclone and normalize with FFmpeg.
-6. Split to ≤15-minute Chirp chunks with 10-second overlap.
-7. Run Chirp 3 BatchRecognize with GCS output and word timestamps.
-8. Merge words by midpoint ownership boundaries.
-9. Build fixed subtitle segments; Gemini may only return corrected text for the
+6. Read the approved Google Drive source through rclone and normalize with FFmpeg.
+7. Split to ≤15-minute Chirp chunks with 10-second overlap.
+8. Run Chirp 3 BatchRecognize with the selected processing strategy, GCS output
+   and word timestamps.
+9. Merge words by midpoint ownership boundaries.
+10. Build fixed subtitle segments; Gemini may only return corrected text for the
    existing IDs, order, and timestamps.
-10. Generate every local artifact, verify checksums, and stop for review before
-    any Drive upload.
+11. Generate every local artifact, verify checksums, and stop for review before
+   any Drive upload.
 
 The web batch is a queue, not parallel source processing: only one source job
 may hold an active worker lease. There is no scheduled Drive scan.

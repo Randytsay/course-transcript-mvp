@@ -21,6 +21,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.jobs import CostConfig, JobConflict, JobNotFound, JobStore, normalize_output_formats
+from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, DYNAMIC_BATCHING, STANDARD_BATCH
 from app.jobs.source import (
     SourceInspectionError,
     inspect_rclone_selection,
@@ -114,6 +115,7 @@ class CreateJobRequest(BaseModel):
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = True
+    processing_strategy: Literal[DYNAMIC_BATCHING, STANDARD_BATCH] = DEFAULT_PROCESSING_STRATEGY
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
 
@@ -125,6 +127,7 @@ class CreateBatchRequest(BaseModel):
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = True
+    processing_strategy: Literal[DYNAMIC_BATCHING, STANDARD_BATCH] = DEFAULT_PROCESSING_STRATEGY
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
 
 
@@ -407,6 +410,7 @@ def _database_job_summary(record: dict[str, Any]) -> dict[str, Any]:
         "stage_detail": record["stage_detail"],
         "error": record["error"],
         "batch_id": record.get("batch_id"),
+        "processing_strategy": record.get("processing_strategy", DEFAULT_PROCESSING_STRATEGY),
         "chirp_max_parallel_chunks": record.get("chirp_max_parallel_chunks", 3),
         "output_formats": _output_formats(record.get("output_formats_json")),
         "drive_published": bool(manifest.get("drive_upload_started")),
@@ -1007,6 +1011,7 @@ def create_batch(
             enable_gemini_correction=payload.enable_gemini_correction,
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
+            processing_strategy=payload.processing_strategy,
             output_formats=payload.output_formats,
             actor=actor,
         )
@@ -1021,6 +1026,7 @@ def create_batch(
         "batch_id": batch["id"],
         "status": batch["status"],
         "item_count": batch["item_count"],
+        "processing_strategy": batch["processing_strategy"],
         "job_ids": [job["id"] for job in result["jobs"]],
         "created_at": batch["created_at"],
         "paid_operation_started": False,
@@ -1049,6 +1055,7 @@ def get_batch(batch_id: str) -> dict[str, Any]:
         "created_at": batch["created_at"],
         "updated_at": batch["updated_at"],
         "revision": batch["revision"],
+        "processing_strategy": batch["processing_strategy"],
         "total_duration_seconds": sum(
             float(job["duration_seconds"] or 0) for job in batch["jobs"]
         ),
@@ -1096,6 +1103,7 @@ def create_job(payload: CreateJobRequest, request: Request) -> dict[str, Any]:
             enable_gemini_correction=payload.enable_gemini_correction,
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
+            processing_strategy=payload.processing_strategy,
             output_formats=payload.output_formats,
             actor=actor,
         )
@@ -1108,6 +1116,7 @@ def create_job(payload: CreateJobRequest, request: Request) -> dict[str, Any]:
     return {
         "job_id": record["id"],
         "status": record["status"],
+        "processing_strategy": record["processing_strategy"],
         "created_at": record["created_at"],
         "paid_operation_started": False,
         "next_action": "等待本機 preflight 取得音訊長度與預估費用",

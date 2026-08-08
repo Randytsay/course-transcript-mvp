@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.costs import CostConfig, estimate_job_cost
+from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 from app.jobs.preflight import PreflightError, _check_disk, _probe, _sha256
 from app.jobs.store import JobConflict, JobStore
 
@@ -112,9 +113,10 @@ def run_preflight(
                 raise PreflightCancelled("任務已由使用者取消")
             checksum = _sha256(local_source)
             probe = _probe(local_source)
+            strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
             estimate = estimate_job_cost(
                 probe["duration_seconds"],
-                CostConfig.from_env(),
+                CostConfig.from_env().for_processing_strategy(strategy),
             )
         if store.get_job(leased["id"])["status"] in {"cancelled", "cancelling"}:
             raise PreflightCancelled("任務已由使用者取消")

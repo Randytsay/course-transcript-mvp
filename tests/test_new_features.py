@@ -16,6 +16,42 @@ sys.path.insert(0, str(ROOT))
 
 
 class NewFeatureTests(unittest.TestCase):
+    def test_processing_strategy_changes_estimate_and_is_persisted(self) -> None:
+        from app.jobs.costs import CostConfig, estimate_job_cost
+        from app.jobs.strategy import DYNAMIC_BATCHING, STANDARD_BATCH
+        from app.jobs.store import JobStore
+
+        dynamic = estimate_job_cost(
+            900,
+            CostConfig().for_processing_strategy(DYNAMIC_BATCHING),
+        )
+        standard = estimate_job_cost(
+            900,
+            CostConfig().for_processing_strategy(STANDARD_BATCH),
+        )
+        self.assertLess(dynamic.chirp_usd, standard.chirp_usd)
+        with tempfile.TemporaryDirectory() as temp:
+            store = JobStore(Path(temp) / "course-transcript.db")
+            preview = store.create_preview(
+                source_path="gdrive:課程/急件.mp3",
+                source_name="急件.mp3",
+                size_bytes=1024,
+                modified_at=None,
+                mime_type="audio/mp3",
+                actor="test-user",
+            )
+            job = store.create_preflight_job(
+                preview_id=preview["id"],
+                language_code="zh-TW",
+                profile="highest_accuracy",
+                enable_gemini_correction=True,
+                enable_subtitles=True,
+                require_human_review=True,
+                processing_strategy=STANDARD_BATCH,
+                actor="test-user",
+            )
+            self.assertEqual(job["processing_strategy"], STANDARD_BATCH)
+
     def test_output_compatibility_and_production_filter(self) -> None:
         from app.jobs.exports import normalize_output_formats, production_output_formats
 

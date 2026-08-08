@@ -19,6 +19,8 @@ SQLite stores `batch_previews`, `source_previews`, `batches`, `jobs`,
 `job_events`, `stage_runs`, and `usage_records`. Each media file is an
 independent resumable job. A batch may contain many preflight/queued jobs, but
 the lease manager permits only one unexpired source-processing lease globally.
+Each batch persists one immutable processing strategy: `DYNAMIC_BATCHING` for
+economical non-urgent work or `STANDARD_BATCH` for an urgent faster request.
 
 The preflight worker has rclone and FFprobe but no GCP credential mount. It
 copies one source into a controlled temporary directory, records SHA-256,
@@ -34,7 +36,7 @@ Cloudflare Access
      └─ SQLite batches/jobs/cost ledger
   → sequential Worker
      ├─ non-paid preflight
-     └─ approved pipeline worker
+     └─ approved pipeline worker (selected Dynamic or Standard strategy)
         ├─ Drive copy/checksum + FFmpeg normalization
         ├─ 120-second chunk-000 canary, then ≤3 parallel 15-minute Chirp chunks
         ├─ midpoint merge + immutable subtitle segments

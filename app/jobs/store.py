@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .exports import normalize_output_formats
+from .strategy import DEFAULT_PROCESSING_STRATEGY, normalize_processing_strategy
 
 
 ACTIVE_STATUSES = frozenset(
@@ -209,6 +210,7 @@ class JobStore:
                     selection_mode TEXT NOT NULL,
                     source_root TEXT,
                     status TEXT NOT NULL,
+                    processing_strategy TEXT NOT NULL DEFAULT 'DYNAMIC_BATCHING',
                     item_count INTEGER NOT NULL,
                     completed_count INTEGER NOT NULL DEFAULT 0,
                     failed_count INTEGER NOT NULL DEFAULT 0,
@@ -234,6 +236,7 @@ class JobStore:
                     enable_gemini_correction INTEGER NOT NULL,
                     enable_subtitles INTEGER NOT NULL,
                     require_human_review INTEGER NOT NULL,
+                    processing_strategy TEXT NOT NULL DEFAULT 'DYNAMIC_BATCHING',
                     chirp_max_parallel_chunks INTEGER NOT NULL DEFAULT 3,
                     output_formats_json TEXT NOT NULL DEFAULT '["srt","txt","csv"]',
                     status TEXT NOT NULL,
@@ -299,6 +302,18 @@ class JobStore:
                 CREATE INDEX IF NOT EXISTS events_job_idx ON job_events(job_id, id);
                 CREATE INDEX IF NOT EXISTS usage_job_idx ON usage_records(job_id, id);
                 """
+            )
+            self._ensure_column(
+                connection,
+                "jobs",
+                "processing_strategy",
+                "TEXT NOT NULL DEFAULT 'DYNAMIC_BATCHING'",
+            )
+            self._ensure_column(
+                connection,
+                "batches",
+                "processing_strategy",
+                "TEXT NOT NULL DEFAULT 'DYNAMIC_BATCHING'",
             )
             self._ensure_column(
                 connection,
@@ -500,11 +515,13 @@ class JobStore:
         enable_gemini_correction: bool,
         enable_subtitles: bool,
         require_human_review: bool,
+        processing_strategy: str = DEFAULT_PROCESSING_STRATEGY,
         chirp_max_parallel_chunks: int = 3,
         output_formats: list[str] | None = None,
         actor: str,
     ) -> dict[str, Any]:
         selected_output_formats = normalize_output_formats(output_formats)
+        processing_strategy = normalize_processing_strategy(processing_strategy)
         now = _iso()
         with self.transaction() as connection:
             preview = connection.execute(
@@ -537,8 +554,8 @@ class JobStore:
                 """
                 INSERT INTO batches(
                     id, batch_preview_id, name, selection_mode, source_root,
-                    status, item_count, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'preflight', ?, ?, ?, ?)
+                    status, processing_strategy, item_count, created_by, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 'preflight', ?, ?, ?, ?, ?)
                 """,
                 (
                     batch_id,
@@ -546,6 +563,7 @@ class JobStore:
                     batch_name,
                     preview["selection_mode"],
                     preview["source_root"],
+                    processing_strategy,
                     len(items),
                     actor,
                     now,
@@ -562,9 +580,9 @@ class JobStore:
                         id, preview_id, batch_id, queue_position, source_path,
                         source_name, source_size_bytes, language_code, profile,
                         enable_gemini_correction, enable_subtitles,
-                        require_human_review, chirp_max_parallel_chunks, output_formats_json, status, active_stage, stage_detail,
+                        require_human_review, processing_strategy, chirp_max_parallel_chunks, output_formats_json, status, active_stage, stage_detail,
                         created_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         'preflight', 'source', '等待安全下載與媒體檢查',
                         ?, ?, ?)
                     """,
@@ -581,6 +599,7 @@ class JobStore:
                         int(enable_gemini_correction),
                         int(enable_subtitles),
                         int(require_human_review),
+                        processing_strategy,
                         int(chirp_max_parallel_chunks),
                         json.dumps(selected_output_formats),
                         actor,
@@ -596,6 +615,7 @@ class JobStore:
                     {
                         "status": "preflight",
                         "batch_id": batch_id,
+                        "processing_strategy": processing_strategy,
                         "output_formats": selected_output_formats,
                     },
                 )
@@ -646,11 +666,13 @@ class JobStore:
         enable_gemini_correction: bool,
         enable_subtitles: bool,
         require_human_review: bool,
+        processing_strategy: str = DEFAULT_PROCESSING_STRATEGY,
         chirp_max_parallel_chunks: int = 3,
         output_formats: list[str] | None = None,
         actor: str,
     ) -> dict[str, Any]:
         selected_output_formats = normalize_output_formats(output_formats)
+        processing_strategy = normalize_processing_strategy(processing_strategy)
         now = _iso()
         with self.transaction() as connection:
             active = connection.execute(
@@ -675,9 +697,9 @@ class JobStore:
                 INSERT INTO jobs(
                     id, preview_id, source_path, source_name, source_size_bytes,
                     language_code, profile, enable_gemini_correction,
-                    enable_subtitles, require_human_review, chirp_max_parallel_chunks, output_formats_json, status, active_stage,
+                    enable_subtitles, require_human_review, processing_strategy, chirp_max_parallel_chunks, output_formats_json, status, active_stage,
                     stage_detail, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preflight',
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preflight',
                     'source', '等待安全下載與媒體檢查', ?, ?, ?)
                 """,
                 (
@@ -691,6 +713,7 @@ class JobStore:
                     int(enable_gemini_correction),
                     int(enable_subtitles),
                     int(require_human_review),
+                    processing_strategy,
                     int(chirp_max_parallel_chunks),
                     json.dumps(selected_output_formats),
                     actor,
@@ -707,7 +730,11 @@ class JobStore:
                 job_id,
                 "job_preflight_created",
                 actor,
-                {"status": "preflight", "output_formats": selected_output_formats},
+                {
+                    "status": "preflight",
+                    "output_formats": selected_output_formats,
+                    "processing_strategy": processing_strategy,
+                },
             )
         return self.get_job(job_id)
 

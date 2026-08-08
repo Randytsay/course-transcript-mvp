@@ -9,6 +9,7 @@ import {
   Folder,
   HardDrive,
   LoaderCircle,
+  Layers3,
   RefreshCw,
   Search,
   Square,
@@ -28,6 +29,7 @@ import type {
   CreatedBatch,
   DriveEntry,
   OutputFormat,
+  ProcessingStrategy,
 } from "@/lib/types";
 
 type SelectionMode = "files" | "folder";
@@ -66,6 +68,7 @@ export default function NewJobPageDriveApi() {
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
   const [chirpMaxParallelChunks, setChirpMaxParallelChunks] = useState(3);
+  const [processingStrategy, setProcessingStrategy] = useState<ProcessingStrategy>("DYNAMIC_BATCHING");
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>(DEFAULT_OUTPUT_FORMATS);
 
   const selectedEntries = useMemo(() => Array.from(selected.values()), [selected]);
@@ -182,7 +185,7 @@ export default function NewJobPageDriveApi() {
     setBusy("create");
     setError(null);
     try {
-      setCreated(await createBatch(preview.batchPreviewId, chirpMaxParallelChunks, outputFormats));
+      setCreated(await createBatch(preview.batchPreviewId, chirpMaxParallelChunks, outputFormats, processingStrategy));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法建立批次");
     } finally {
@@ -278,6 +281,16 @@ export default function NewJobPageDriveApi() {
 
           <div className="form-section">
             <div className="section-heading"><span className="step-number">3</span><div><h2>輸出與併發</h2><p>建立工作前只做唯讀預覽；付費辨識仍需另行確認費用。</p></div></div>
+            <label style={{ display: "block", fontWeight: 700, marginBottom: 8 }}>辨識處理模式</label>
+            <div className="selection-mode-grid">
+              <button type="button" className={`selection-mode-card ${processingStrategy === "DYNAMIC_BATCHING" ? "selection-mode-card--active" : ""}`} onClick={() => setProcessingStrategy("DYNAMIC_BATCHING")}>
+                <Layers3 size={21} /><span><strong>經濟模式（Dynamic Batch）</strong><small>Google 離峰處理，最多等待約 24 小時；費用較低</small></span>{processingStrategy === "DYNAMIC_BATCHING" && <Check size={17} />}
+              </button>
+              <button type="button" className={`selection-mode-card ${processingStrategy === "STANDARD_BATCH" ? "selection-mode-card--active" : ""}`} onClick={() => setProcessingStrategy("STANDARD_BATCH")}>
+                <LoaderCircle size={21} /><span><strong>快速模式（Standard Batch）</strong><small>優先較快完成；費用較高，適合急件</small></span>{processingStrategy === "STANDARD_BATCH" && <Check size={17} />}
+              </button>
+            </div>
+            <p style={{ margin: "8px 0 16px", fontSize: 13, color: "#64748b" }}>模式會寫入每個任務並反映到 preflight 預估費用；付費提交後不能切換。</p>
             <label style={{ display: "block", fontWeight: 700, marginBottom: 8 }}>Chirp 同時辨識分段數</label>
             <select value={chirpMaxParallelChunks} onChange={(event) => setChirpMaxParallelChunks(Number(event.target.value))} style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid var(--border-strong)" }}>
               {[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}{value === 3 ? "（建議）" : ""}</option>)}
@@ -294,7 +307,7 @@ export default function NewJobPageDriveApi() {
               {busy === "preview" ? <LoaderCircle className="spin" size={18} /> : <Check size={18} />}建立唯讀批次預覽
             </button>
             {preview && <div className="empty-state" style={{ marginTop: 14 }}>已預覽 {preview.itemCount} 個檔案，共 {formatBytes(preview.totalSizeBytes)}。<button type="button" className="button button--primary" disabled={busy !== null} onClick={() => void createPreflightBatch()}>{busy === "create" ? "建立中…" : "建立 preflight 工作"}</button></div>}
-            {created && <div className="empty-state" style={{ marginTop: 14 }}>批次已建立：{created.batchId}。尚未啟動付費辨識。</div>}
+            {created && <div className="empty-state" style={{ marginTop: 14 }}>批次已建立：{created.batchId}。模式：{created.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}；尚未啟動付費辨識。</div>}
           </div>
         </section>
 

@@ -15,6 +15,7 @@ from fastapi import APIRouter, HTTPException
 from app.billing.config import BillingConfig, BillingConfigError
 from app.billing.snapshot import snapshot_for_api
 from app.jobs.costs import CostConfig
+from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 from app.jobs.store import JobNotFound, JobStore
 
 
@@ -391,7 +392,9 @@ def _money(value: Decimal) -> str:
 def build_live_cost(job_id: str) -> dict[str, Any]:
     record = _job_record(job_id)
     job_dir = JOBS_DIR / job_id
-    config = CostConfig.from_env()
+    config = CostConfig.from_env().for_processing_strategy(
+        record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
+    )
     total_estimated = Decimal(str(record.get("estimated_cost_usd") or "0"))
     committed_seconds = Decimal("0")
     submitted_indices: set[int] = set()

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.costs import CostConfig, estimate_job_cost
+from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 from app.jobs.store import JobConflict, JobStore
 
 
@@ -130,8 +131,10 @@ def run_preflight(
                 raise PreflightError("rclone 未建立有效的本機來源檔")
             checksum = _sha256(local_source)
             probe = _probe(local_source)
+            strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
             estimate = estimate_job_cost(
-                probe["duration_seconds"], CostConfig.from_env()
+                probe["duration_seconds"],
+                CostConfig.from_env().for_processing_strategy(strategy),
             )
         return store.record_preflight_result(
             job_id=leased["id"],

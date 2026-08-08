@@ -9,6 +9,7 @@ import type {
   JobEvent,
   ReviewTerm,
   OutputFormat,
+  ProcessingStrategy,
   TranscriptJob,
   TranscriptSegment,
 } from "./types";
@@ -19,7 +20,7 @@ import type {
 // already-built absolute localhost URL.
 const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
-type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd" | "chirpMaxParallelChunks" | "outputFormats"> & {
+type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd" | "chirpMaxParallelChunks" | "outputFormats" | "processingStrategy"> & {
   source_path: string;
   duration_seconds: number;
   created_at: string;
@@ -33,6 +34,7 @@ type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt"
   estimated_cost_usd?: string | null;
   chirp_max_parallel_chunks?: number;
   output_formats?: OutputFormat[];
+  processing_strategy?: ProcessingStrategy;
   pipeline: Array<{ id: string; label: string; detail: string; status: PipelineStep["status"] }>;
 };
 
@@ -62,6 +64,7 @@ function mapJob(job: ApiJob): TranscriptJob {
     error: job.error,
     revision: job.revision,
     batchId: job.batch_id ?? null,
+    processingStrategy: job.processing_strategy ?? "DYNAMIC_BATCHING",
     estimatedCostUsd: job.estimated_cost_usd ?? null,
     chirpMaxParallelChunks: job.chirp_max_parallel_chunks ?? 3,
     outputFormats: job.output_formats ?? ["srt", "txt", "csv"],
@@ -312,7 +315,7 @@ export async function previewBatch(
   };
 }
 
-export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks: number = 3, outputFormats: OutputFormat[] = ["srt", "txt", "csv"]): Promise<CreatedBatch> {
+export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks: number = 3, outputFormats: OutputFormat[] = ["srt", "txt", "csv"], processingStrategy: ProcessingStrategy = "DYNAMIC_BATCHING"): Promise<CreatedBatch> {
   const result = await postJson<{
     batch_id: string;
     status: string;
@@ -321,6 +324,7 @@ export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks
     created_at: string;
     paid_operation_started: false;
     next_action: string;
+    processing_strategy: ProcessingStrategy;
   }>("/batches", {
     batch_preview_id: batchPreviewId,
     language_code: "cmn-Hant-TW",
@@ -328,6 +332,7 @@ export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks
     enable_gemini_correction: true,
     enable_subtitles: true,
     require_human_review: true,
+    processing_strategy: processingStrategy,
     chirp_max_parallel_chunks: chirpMaxParallelChunks,
     output_formats: outputFormats,
   });
@@ -339,6 +344,7 @@ export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks
     createdAt: result.created_at,
     paidOperationStarted: result.paid_operation_started,
     nextAction: result.next_action,
+    processingStrategy: result.processing_strategy,
   };
 }
 
@@ -380,6 +386,7 @@ export async function getBatch(id: string): Promise<BatchDetail> {
     created_at: string;
     updated_at: string;
     revision: number;
+    processing_strategy: ProcessingStrategy;
     jobs: ApiJob[];
   }>(`/batches/${encodeURIComponent(id)}`);
   return {
@@ -398,6 +405,7 @@ export async function getBatch(id: string): Promise<BatchDetail> {
     createdAt: formatDate(result.created_at),
     updatedAt: formatDate(result.updated_at),
     revision: result.revision,
+    processingStrategy: result.processing_strategy,
     jobs: result.jobs.map(mapJob),
   };
 }

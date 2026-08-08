@@ -88,6 +88,7 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
             <article className="metric-card"><div className="metric-icon metric-icon--blue"><FileAudio2 size={20} /></div><div className="metric-copy"><span>影音檔案</span><strong>{batch.itemCount}</strong><small>Preflight {preflightDone} / {batch.itemCount}</small></div></article>
             <article className="metric-card"><div className="metric-icon metric-icon--violet"><Clock3 size={20} /></div><div className="metric-copy"><span>總音訊時長</span><strong>{batch.totalDurationSeconds ? duration(batch.totalDurationSeconds) : "檢查中"}</strong><small>由 FFprobe 逐檔確認</small></div></article>
             <article className="metric-card"><div className="metric-icon metric-icon--amber"><Coins size={20} /></div><div className="metric-copy"><span>整批估計費用</span><strong>{batch.estimatedCostUsd ? `US$${batch.estimatedCostUsd}` : "計算中"}</strong><small>非 Cloud Billing 實際帳務</small></div></article>
+            <article className="metric-card"><div className="metric-icon metric-icon--violet"><Clock3 size={20} /></div><div className="metric-copy"><span>辨識模式</span><strong>{batch.processingStrategy === "DYNAMIC_BATCHING" ? "經濟模式" : "快速模式"}</strong><small>{batch.processingStrategy === "DYNAMIC_BATCHING" ? "Google 離峰批次，最多約 24 小時" : "Standard Batch，較快但費用較高"}</small></div></article>
           </section>
 
           <section className="batch-detail-grid">
@@ -111,7 +112,7 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
               {batch.status === "preflight" && <p>Worker 正在逐檔檢查格式與時長。完成前不會呼叫 Chirp 或 Gemini。</p>}
               {batch.status === "awaiting_confirmation" && batch.estimatedCostUsd && (
                 <>
-                  <p>確認後，這 {batch.itemCount} 個檔案將依序進入付費辨識。預估總額為 <strong>US${batch.estimatedCostUsd}</strong>。</p>
+                  <p>確認後，這 {batch.itemCount} 個檔案將依序進入<strong>{batch.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}</strong>。預估總額為 <strong>US${batch.estimatedCostUsd}</strong>。</p>
                   <label className="approval-check">
                     <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
                     <span>我確認這是估計費用，並授權此批次進入付費處理佇列。</span>

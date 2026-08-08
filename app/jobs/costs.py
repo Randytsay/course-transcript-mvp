@@ -7,8 +7,10 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from decimal import Decimal, ROUND_UP
+
+from .strategy import DYNAMIC_BATCHING, normalize_processing_strategy
 
 
 def _money(value: Decimal) -> Decimal:
@@ -94,6 +96,27 @@ class CostConfig:
                 "COURSE_TRANSCRIPT_PRICING_VERSION",
                 default_pricing_version,
             ),
+        )
+
+    def for_processing_strategy(self, strategy: object) -> "CostConfig":
+        """Use the rate and pricing label for one immutable job choice.
+
+        An explicit operator override remains authoritative; otherwise the
+        two supported provider modes use their configured public estimates.
+        """
+        normalized = normalize_processing_strategy(strategy)
+        if "COURSE_TRANSCRIPT_CHIRP_USD_PER_MINUTE" in os.environ:
+            return self
+        if normalized == DYNAMIC_BATCHING:
+            return replace(
+                self,
+                chirp_usd_per_minute=Decimal("0.003"),
+                pricing_version="google-cloud-speech-v2-dynamic-batching-2026-08",
+            )
+        return replace(
+            self,
+            chirp_usd_per_minute=Decimal("0.016"),
+            pricing_version="google-cloud-public-pricing-2026-07-31",
         )
 
 

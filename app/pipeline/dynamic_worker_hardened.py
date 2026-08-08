@@ -18,6 +18,7 @@ from app.jobs.completion import install_completion_patch
 from app.jobs.drive_publish import DrivePublishError
 from app.jobs.performance_enhanced import build_performance_summary as enhanced_performance_summary
 from app.jobs.store import JobConflict, JobStore
+from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, is_dynamic_batching
 from app.pipeline import worker as base
 from app.pipeline import worker_observed as observed
 from app.pipeline.recovery_schedule import is_due, schedule
@@ -44,7 +45,8 @@ def _module_env(record: dict[str, Any], job_dir: Path) -> dict[str, str]:
     env["OUTPUT_FORMATS_JSON"] = str(
         record.get("output_formats_json") or '["srt","txt"]'
     )
-    env["CHIRP_DYNAMIC_BATCHING"] = "true"
+    strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
+    env["CHIRP_DYNAMIC_BATCHING"] = "true" if is_dynamic_batching(strategy) else "false"
     env.setdefault("GEMINI_CORRECTION_WINDOW_MS", "60000")
     return env
 
@@ -412,7 +414,14 @@ def _recover_job(
     leased = store.acquire_lease(record["id"], worker_id, lease_seconds=300)
     job_dir = data_dir / "jobs" / leased["id"]
     env = base._module_env(leased, job_dir)
-    env.update({"CHIRP_DYNAMIC_BATCHING": "true", "CHIRP_RECOVER_ONCE": "1"})
+    env.update({
+        "CHIRP_DYNAMIC_BATCHING": (
+            "true"
+            if is_dynamic_batching(leased.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY)
+            else "false"
+        ),
+        "CHIRP_RECOVER_ONCE": "1",
+    })
     try:
         returncode, stdout, stderr = _run_allow_pending(
             [sys.executable, "-m", "app.providers.run_chirp_pipeline_hardened"],

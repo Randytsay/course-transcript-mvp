@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.costs import CostConfig
+from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 
 COMMITTED_CHUNK_STATES = {
     "SUBMITTED",
@@ -434,6 +435,13 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
 
 def estimated_accrued_cost(database_path: Path, data_dir: Path, job_id: str) -> Decimal:
     config = CostConfig.from_env()
+    with _connection(database_path) as connection:
+        row = connection.execute(
+            "SELECT processing_strategy FROM jobs WHERE id = ?", (job_id,)
+        ).fetchone()
+    config = config.for_processing_strategy(
+        (row["processing_strategy"] if row else None) or DEFAULT_PROCESSING_STRATEGY
+    )
     job_dir = data_dir / "jobs" / job_id
     chunks = _chunk_metrics(job_dir, config) if job_dir.is_dir() else []
     chirp = sum(
@@ -486,7 +494,9 @@ def build_performance_summary(database_path: Path, data_dir: Path, job_id: str) 
     active_processing_ms = sum(int(item["activeDurationMs"]) for item in attempts)
     wall_processing_ms = max(0, total_elapsed_ms - queue_ms - paused_ms)
     job_dir = data_dir / "jobs" / job_id
-    config = CostConfig.from_env()
+    config = CostConfig.from_env().for_processing_strategy(
+        job["processing_strategy"] or DEFAULT_PROCESSING_STRATEGY
+    )
     chunks = _chunk_metrics(job_dir, config) if job_dir.is_dir() else []
     gemini_calls = _gemini_calls(job_dir, config) if job_dir.is_dir() else []
     audio_duration_ms = round(float(job["duration_seconds"] or 0) * 1000)
