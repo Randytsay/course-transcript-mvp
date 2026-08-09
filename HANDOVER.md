@@ -37,6 +37,7 @@ Read `README.md`, `ARCHITECTURE.md`, `RUNBOOK.md`, `DEPLOYMENT.md`, `docs/DYNAMI
 - `app/providers/build_srt.py`: lexical Chinese subtitle segmentation with immutable timings.
 - `app/providers/correct_text_hardened.py`: `gemini-3.6-flash` text-only correction, 60-second windows, immutable per-attempt audit evidence, adaptive split, and severe-drift fallback to raw Chirp text.
 - `app/providers/validate_outputs_hardened.py`: structural validation plus content-drift QA; `content-qa.json` is checksummed in the export manifest.
+- `app/providers/subtitle_cleanup.py`: deterministic high-confidence filler/stutter cleanup with immutable timing and a `cleanup-review.json` manual-review list.
 - `app/jobs/drive_publish.py`: resumable pending/verify/backup/promote/final-verify publication transaction.
 - `app/jobs/delivery_worker.py`: retries Drive delivery from existing local artifacts only; it never repeats Chirp or Gemini.
 - `app/jobs/drive_lock.py`: cross-process global Drive lock and shared cooldown. It requires all participating containers to mount the same host `./data` directory at `/app/data`.

@@ -164,14 +164,33 @@ def main() -> int:
         if corrected_payload
         else {}
     )
+    cleaned_path = JOB / "subtitles-cleaned.json"
+    cleaned_payload = (
+        json.loads(cleaned_path.read_text(encoding="utf-8"))
+        if cleaned_path.exists()
+        else None
+    )
+    cleaned_by_id = (
+        {str(item["segment_id"]): item for item in cleaned_payload["segments"]}
+        if isinstance(cleaned_payload, dict)
+        and isinstance(cleaned_payload.get("segments"), list)
+        else {}
+    )
     published_segments: list[dict[str, Any]] = []
     for segment in raw_segments:
         correction = corrected_by_id.get(str(segment["segment_id"]), {})
+        cleaned = cleaned_by_id.get(str(segment["segment_id"]), {})
+        corrected_text = cleaned.get(
+            "cleaned_text",
+            correction.get("corrected_text", segment["raw_text"]),
+        )
         published_segments.append(
             {
                 **segment,
-                "corrected_text": correction.get("corrected_text", segment["raw_text"]),
+                "corrected_text": corrected_text,
                 "uncertain_terms": correction.get("uncertain_terms", []),
+                "cleanup_actions": cleaned.get("cleanup_actions", []),
+                "cleanup_review_reasons": cleaned.get("cleanup_review_reasons", []),
             }
         )
 
@@ -195,6 +214,7 @@ def main() -> int:
                 "end_ms",
                 "raw_text",
                 "corrected_text",
+                "cleaned_text",
                 "uncertain_terms",
             ],
         )
@@ -207,6 +227,7 @@ def main() -> int:
                     "end_ms": segment["end_ms"],
                     "raw_text": segment["raw_text"],
                     "corrected_text": segment["corrected_text"],
+                    "cleaned_text": segment["corrected_text"],
                     "uncertain_terms": " | ".join(segment["uncertain_terms"]),
                 }
             )
@@ -230,17 +251,23 @@ def main() -> int:
         atomic_text(JOB / "glossary_candidates.csv", "canonical,variants,confidence\n")
 
     source_srt = (
-        JOB / "subtitles-corrected.srt"
+        JOB / "subtitles-cleaned.srt"
+        if (JOB / "subtitles-cleaned.srt").exists()
+        else JOB / "subtitles-corrected.srt"
         if (JOB / "subtitles-corrected.srt").exists()
         else JOB / "subtitles.srt"
     )
     source_vtt = (
-        JOB / "subtitles-corrected.vtt"
+        JOB / "subtitles-cleaned.vtt"
+        if (JOB / "subtitles-cleaned.vtt").exists()
+        else JOB / "subtitles-corrected.vtt"
         if (JOB / "subtitles-corrected.vtt").exists()
         else JOB / "subtitles.vtt"
     )
     source_txt = (
-        JOB / "transcript-corrected.txt"
+        JOB / "transcript-cleaned.txt"
+        if (JOB / "transcript-cleaned.txt").exists()
+        else JOB / "transcript-corrected.txt"
         if (JOB / "transcript-corrected.txt").exists()
         else JOB / "transcript-raw.txt"
     )
@@ -302,6 +329,9 @@ def main() -> int:
         JOB / "glossary_decisions.yaml",
         JOB / "join_qa.json",
     ]
+    for cleanup_path in (JOB / "subtitles-cleaned.json", JOB / "cleanup-review.json"):
+        if cleanup_path.is_file():
+            internal_paths.append(cleanup_path)
     artifacts = [_artifact(path, public=False) for path in internal_paths]
     artifacts.extend(_artifact(path, public=False) for path in legacy_paths)
     artifacts.extend(

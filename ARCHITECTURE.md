@@ -41,6 +41,7 @@ Cloudflare Access
         ├─ 120-second chunk-000 canary, then ≤3 parallel 15-minute Chirp chunks
         ├─ midpoint merge + immutable subtitle segments
         ├─ Gemini 3.6 Flash text-only correction
+        ├─ deterministic subtitle cleanup/review (raw and timestamps immutable)
         └─ local exports/QA/checksums → selected sidecars in source folder → awaiting_review
 ```
 

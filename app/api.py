@@ -40,6 +40,9 @@ ARTIFACT_ALLOWLIST = frozenset(
         "subtitles-corrected.srt",
         "subtitles-corrected.vtt",
         "subtitles-corrected.ass",
+        "subtitles-cleaned.json",
+        "subtitles-cleaned.srt",
+        "subtitles-cleaned.vtt",
         "subtitles.json",
         "subtitles-corrected.json",
         "transcript-raw.txt",
@@ -47,6 +50,7 @@ ARTIFACT_ALLOWLIST = frozenset(
         "transcript-corrected.txt",
         "transcript-corrected.md",
         "transcript-timestamped.txt",
+        "transcript-cleaned.txt",
         "transcript-segments.csv",
         "transcript.json",
         "transcript.csv",
@@ -70,6 +74,7 @@ ARTIFACT_ALLOWLIST = frozenset(
         "merged-words.json",
         "merge-decisions.json",
         "join-qa.json",
+        "cleanup-review.json",
     }
 )
 

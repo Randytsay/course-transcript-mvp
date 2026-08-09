@@ -100,6 +100,18 @@ Run `build_srt` only after merging the Chirp word timeline. It uses local lexica
 
 External SRT import is all-or-nothing. Reject the complete import when any cue is malformed, empty, non-positive, overlapping, out of order, or has minute/second components outside `00..59`. Never silently drop invalid cues.
 
+## Automatic subtitle cleanup and review
+
+After optional Gemini correction, `app.providers.subtitle_cleanup` creates a
+separate cleaned text layer. It may remove only high-confidence boundary
+fillers and obvious triple stutters. Raw Chirp/Gemini JSON, segment IDs and
+timestamps are preserved. It always writes `subtitles-cleaned.json`,
+`subtitles-cleaned.srt`, `subtitles-cleaned.vtt`, `transcript-cleaned.txt`,
+and `cleanup-review.json`. Inner fillers, possible double stutters, duplicate
+cues, suspected audio interruptions, long cues and invalid timing are listed
+for review instead of being silently rewritten. User-facing SRT/TXT/ASS
+exports prefer this cleaned layer; the raw `chirp.json` sidecar remains raw.
+
 ## Drive publication
 
 Automatic post-QA publication is controlled by:

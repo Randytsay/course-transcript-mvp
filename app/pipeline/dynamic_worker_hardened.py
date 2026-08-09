@@ -348,9 +348,17 @@ def _finish_after_chirp(
         )
     base._run_module_stage(
         store, leased, data_dir, worker_id,
+        stage="cleanup", status="quality_check",
+        detail="自動清理贅字、邊界語助詞與明顯口吃並建立複核清單",
+        progress_start=89, progress_end=90,
+        module="app.providers.subtitle_cleanup", timeout_seconds=600,
+        evidence=("subtitles-cleaned.json", "subtitles-cleaned.srt", "transcript-cleaned.txt", "cleanup-review.json"),
+    )
+    base._run_module_stage(
+        store, leased, data_dir, worker_id,
         stage="export", status="exporting",
         detail="產生選定的字幕與逐字稿輸出",
-        progress_start=89, progress_end=94,
+        progress_start=90, progress_end=94,
         module="app.providers.export_formats", timeout_seconds=600,
         evidence=("export-manifest.json",),
     )

@@ -201,7 +201,27 @@ def main() -> int:
     if corrected:
         correction_invariant = len(corrected["segments"]) == len(segments) and all((a["segment_id"], a["start_ms"], a["end_ms"]) == (b["segment_id"], b["start_ms"], b["end_ms"]) for a, b in zip(segments, corrected["segments"]))
         if not correction_invariant: warnings.append("existing correction is stale and requires a new segment-level correction pass")
-    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": "PASS" if not errors else "FAIL", "errors": errors, "warnings": warnings, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "timing_collision_segments": timing_collisions, "segment_quality": segment_quality_report}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}}
+    cleanup_report: dict[str, object] | None = None
+    cleanup_path = JOB / "cleanup-review.json"
+    if cleanup_path.is_file():
+        try:
+            loaded = json.loads(cleanup_path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                cleanup_report = {
+                    "status": loaded.get("status"),
+                    "summary": loaded.get("summary", {}),
+                    "review_required": loaded.get("review_required", []),
+                }
+                review_count = int(
+                    (cleanup_report.get("summary") or {}).get("review_count", 0)
+                )
+                if review_count:
+                    warnings.append(f"automatic cleanup requires review: {review_count} segments")
+        except (OSError, ValueError, TypeError):
+            errors.append("cleanup-review.json is invalid")
+    else:
+        errors.append("missing cleanup-review.json")
+    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": "PASS" if not errors else "FAIL", "errors": errors, "warnings": warnings, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "timing_collision_segments": timing_collisions, "segment_quality": segment_quality_report}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
     atomic(JOB / "qa-report.json", report)
     md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
     temporary = JOB / "qa-report.md.tmp"; temporary.write_text("\n".join(md) + "\n", encoding="utf-8"); temporary.replace(JOB / "qa-report.md")

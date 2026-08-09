@@ -87,6 +87,30 @@ def main() -> int:
     ):
         errors.append("corrected segment IDs or timing changed")
 
+    cleaned_path = JOB / "subtitles-cleaned.json"
+    cleanup_report_path = JOB / "cleanup-review.json"
+    if not cleaned_path.exists() or not cleanup_report_path.exists():
+        errors.append("missing automatic cleanup evidence")
+    else:
+        try:
+            cleaned = json.loads(cleaned_path.read_text(encoding="utf-8"))
+            cleaned_segments = cleaned.get("segments", []) if isinstance(cleaned, dict) else []
+            cleanup_report = json.loads(cleanup_report_path.read_text(encoding="utf-8"))
+            if len(cleaned_segments) != len(raw_segments):
+                errors.append("cleaned segment count differs from raw")
+            elif any(
+                (a.get("segment_id"), a.get("start_ms"), a.get("end_ms"))
+                != (b.get("segment_id"), b.get("start_ms"), b.get("end_ms"))
+                for a, b in zip(raw_segments, cleaned_segments)
+            ):
+                errors.append("cleaned segment IDs or timing changed")
+            if any(not str(item.get("cleaned_text", "")).strip() for item in cleaned_segments):
+                errors.append("cleaned subtitle contains empty text")
+            if not isinstance(cleanup_report, dict) or not isinstance(cleanup_report.get("review_required", []), list):
+                errors.append("cleanup-review.json has invalid review list")
+        except (OSError, json.JSONDecodeError, TypeError, AttributeError):
+            errors.append("automatic cleanup evidence is invalid JSON")
+
     selected_paths = {
         "srt": JOB / "transcript.srt",
         "txt": JOB / "transcript_corrected.txt",
@@ -142,6 +166,8 @@ def main() -> int:
         "glossary_candidates.csv",
         "glossary_decisions.yaml",
         "join_qa.json",
+        "subtitles-cleaned.json",
+        "cleanup-review.json",
         "qa_report.json",
         "qa_report.html",
     ]
