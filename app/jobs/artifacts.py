@@ -59,8 +59,12 @@ def cleanup_completed_audio(job_dir: Path) -> dict[str, Any]:
     observable; failures are reported rather than hidden.
     """
     candidates = [job_dir / "normalized.flac", job_dir / "normalized.tmp.flac"]
+    # Retries are retained below chunk-*/attempts/*/audio.flac, so use a
+    # recursive scan rather than cleaning only the first-attempt file.
     candidates.extend((job_dir / "chunks").glob("chunk-*/audio.flac"))
     candidates.extend((job_dir / "chunks").glob("chunk-*/audio.flac.tmp"))
+    candidates.extend((job_dir / "chunks").glob("chunk-*/attempts/*/audio.flac"))
+    candidates.extend((job_dir / "chunks").glob("chunk-*/attempts/*/audio.flac.tmp"))
     candidates.extend(job_dir.glob("*.partial"))
     removed: list[str] = []
     errors: list[dict[str, str]] = []

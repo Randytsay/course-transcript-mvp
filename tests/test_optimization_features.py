@@ -15,13 +15,16 @@ class OptimizationFeatureTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             job = Path(tmp)
             (job / "chunks" / "chunk-001").mkdir(parents=True)
+            (job / "chunks" / "chunk-001" / "attempts" / "retry-001").mkdir(parents=True)
             (job / "normalized.flac").write_bytes(b"audio")
             (job / "chunks" / "chunk-001" / "audio.flac").write_bytes(b"chunk")
+            (job / "chunks" / "chunk-001" / "attempts" / "retry-001" / "audio.flac").write_bytes(b"retry")
             (job / "merged-words.json").write_text("{}", encoding="utf-8")
             report = cleanup_completed_audio(job)
             self.assertEqual(report["status"], "PASS")
             self.assertFalse((job / "normalized.flac").exists())
             self.assertFalse((job / "chunks" / "chunk-001" / "audio.flac").exists())
+            self.assertFalse((job / "chunks" / "chunk-001" / "attempts" / "retry-001" / "audio.flac").exists())
             self.assertTrue((job / "merged-words.json").exists())
 
     def test_density_flags_outlier_and_creates_patch_shape(self):
