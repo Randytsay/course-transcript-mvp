@@ -13,6 +13,19 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+try:
+    from app.providers.mantra_context import MANTRA_LINES, MANTRA_TITLE
+except ImportError:  # keep local cleanup/QA usable without optional Chirp SDK
+    MANTRA_TITLE = "《得見彌勒根本大明神咒》"
+    MANTRA_LINES = (
+        "南謨囉怛那怛囉夜耶。", "南謨吠嚕左那莎彌儞。", "怛他誐多耶。",
+        "阿囉喝帝三藐三沒馱耶。", "怛姪他。唵。", "昧咄侶怛哩。",
+        "昧怛囉縛婆悉儞。", "昧咄侶怛葛吒耶。", "三摩囉三摩囉。",
+        "莎剛鉢囉底倪也。", "娑囉娑囉。", "尾娑囉尾娑囉。",
+        "冒馱耶。冒馱耶。", "冒馱耨誐帝。", "摩訶冒地。", "波哩縛哩",
+        "底多摩那細 莎訶。",
+    )
+
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 FILLERS = "嗯呃欸誒啊喔哦哎嘿"
@@ -21,6 +34,51 @@ BOUNDARY_FILLER_TAIL_RE = re.compile(rf"(?:[\s，、。！？,.!?]*[{FILLERS}]){
 TRIPLE_STUTTER_RE = re.compile(r"([\u4e00-\u9fffA-Za-z]{1,3})\1{2,}")
 DOUBLE_STUTTER_RE = re.compile(r"([\u4e00-\u9fffA-Za-z]{1,2})\1")
 INTERRUPTION_RE = re.compile(r"(?:音訊|音頻|聲音).{0,4}(?:中斷|斷線|消失)|\[+\s*(?:inaudible|不清楚|聽不清)\s*\]+", re.I)
+
+
+def _mantra_key(value: str) -> str:
+    return re.sub(r"[^\u3400-\u9fffA-Za-z0-9]", "", str(value or "")).lower()
+
+
+def _deduplicate_mantra(cleaned: list[dict[str, Any]]) -> dict[str, Any]:
+    """Canonicalise the end-of-lesson leader/congregation repetition once.
+
+    This is intentionally conservative: it only fires in the last 30% of a
+    lesson and requires multiple canonical-line anchors. Raw and corrected
+    provider files remain unchanged; only the derived cleaned layer changes.
+    """
+    if not cleaned:
+        return {"applied": False, "reason": "empty"}
+    audio_end = max(int(item.get("end_ms", 0)) for item in cleaned)
+    start_floor = int(audio_end * 0.70)
+    keys = [_mantra_key(line) for line in MANTRA_LINES]
+    matches: list[int] = []
+    for index, item in enumerate(cleaned):
+        if int(item.get("start_ms", 0)) < start_floor:
+            continue
+        text_key = _mantra_key(item.get("cleaned_text", ""))
+        if MANTRA_TITLE.replace("《", "").replace("》", "") in str(item.get("cleaned_text", "")) or sum(1 for key in keys if key and key in text_key) >= 1:
+            matches.append(index)
+    if len(matches) < 4:
+        return {"applied": False, "reason": "insufficient_canonical_anchors", "anchor_count": len(matches)}
+    first = min(matches)
+    # Keep timing structure: place one canonical line per existing cue and
+    # suppress the echo cycle by making subsequent matching cues invisible.
+    block_end = max(matches)
+    available = cleaned[first : block_end + 1]
+    canonical = [MANTRA_TITLE, *MANTRA_LINES]
+    for offset, item in enumerate(available):
+        item.setdefault("cleanup_actions", [])
+        item["cleanup_actions"].append("mantra_canonicalized")
+        if offset < len(canonical):
+            item["cleaned_text"] = canonical[offset]
+            item["corrected_text"] = canonical[offset]
+        else:
+            item["cleaned_text"] = ""
+            item["corrected_text"] = ""
+            item["cleanup_actions"].append("mantra_duplicate_suppressed")
+        item["char_count"] = len(item["cleaned_text"])
+    return {"applied": True, "start_segment_id": cleaned[first].get("segment_id"), "end_segment_id": cleaned[block_end].get("segment_id"), "suppressed_cues": max(0, len(available) - len(canonical)), "canonical_line_count": len(canonical)}
 
 
 def _atomic_text(path: Path, value: str) -> None:
@@ -145,6 +203,8 @@ def build_report(source_name: str, segments: list[dict[str, Any]]) -> dict[str, 
                 "reasons": ["possible_duplicate_cue"],
             })
 
+    mantra = _deduplicate_mantra(cleaned)
+
     return {
         "version": "cleanup-v1",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -157,9 +217,11 @@ def build_report(source_name: str, segments: list[dict[str, Any]]) -> dict[str, 
             "review_count": len(review),
             "possible_duplicate_cue_count": duplicate_count,
             "total_cleaned_chars": sum(len(str(item["cleaned_text"])) for item in cleaned),
+            "mantra": mantra,
         },
         "segments": cleaned,
         "review_required": review,
+        "mantra": mantra,
     }
 
 

@@ -176,6 +176,8 @@ def build_report(
         "failed": 0,
         "dynamic_waiting": 0,
         "drive_pending": 0,
+        "expired_leases": 0,
+        "stale_heartbeats": 0,
     }
     if not database.is_file():
         findings.append(
@@ -198,12 +200,10 @@ def build_report(
     connection = sqlite3.connect(database, timeout=10)
     connection.row_factory = sqlite3.Row
     try:
+        columns = {str(item[1]) for item in connection.execute("PRAGMA table_info(jobs)").fetchall()}
+        optional = ", lease_expires_at, last_heartbeat_at, locked_by" if {"lease_expires_at", "last_heartbeat_at", "locked_by"} <= columns else ", NULL AS lease_expires_at, NULL AS last_heartbeat_at, NULL AS locked_by"
         rows = connection.execute(
-            """
-            SELECT id, status, active_stage, stage_detail, error, updated_at
-            FROM jobs
-            ORDER BY updated_at DESC
-            """
+            f"SELECT id, status, active_stage, stage_detail, error, updated_at{optional} FROM jobs ORDER BY updated_at DESC"
         ).fetchall()
     except sqlite3.Error as exc:
         findings.append(
@@ -236,6 +236,15 @@ def build_report(
         counts["jobs"] += 1
         if row["status"] in active_statuses:
             counts["active"] += 1
+            lease = _parse_time(row["lease_expires_at"])
+            if lease and lease < now:
+                counts["expired_leases"] += 1
+                findings.append(Finding("critical", "expired_lease", "工作 lease 已過期，可能造成任務卡住或重複處理。", job_id, round((now - lease).total_seconds() / 3600, 2)))
+            heartbeat = _parse_time(row["last_heartbeat_at"])
+            max_hours = _env_float("HEALTH_HEARTBEAT_MAX_HOURS", 1)
+            if heartbeat and (now - heartbeat).total_seconds() / 3600 > max_hours:
+                counts["stale_heartbeats"] += 1
+                findings.append(Finding("critical", "stale_heartbeat", f"Worker heartbeat 超過 {max_hours:g} 小時未更新。", job_id, round((now - heartbeat).total_seconds() / 3600, 2)))
         if row["status"] == "failed":
             counts["failed"] += 1
             findings.append(

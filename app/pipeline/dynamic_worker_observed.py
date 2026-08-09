@@ -293,7 +293,7 @@ def _finish_after_chirp(
         progress_end=98,
         module="app.providers.qa_report",
         timeout_seconds=600,
-        evidence=("qa-report.json", "qa-report.md"),
+        evidence=("qa-report.json", "qa-report.md", "density-retry-plan.json"),
     )
     base._run_module_stage(
         store,
@@ -342,6 +342,7 @@ def _finish_after_chirp(
     }
     base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
     base._atomic_json(job_dir / "processing_manifest.json", manifest)
+    base.cleanup_completed_audio(job_dir)
     result = store.finish_for_review(
         job_id=leased["id"],
         worker_id=worker_id,

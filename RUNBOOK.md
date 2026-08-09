@@ -196,3 +196,18 @@ Rollback:
 6. rebuild and restart the prior worker entry point after verifying the database lease state.
 
 Already submitted dynamic operations remain billable and may complete after rollback. Recover them from saved operation/GCS evidence rather than re-submitting audio.
+# 暫存清理與健康監控（新增）
+
+正常完成的 pipeline 會在 `audio-cleanup.json` 留下稽核紀錄，並只清除
+`normalized.flac`／chunk FLAC；raw provider evidence、字幕、逐字稿與 manifest
+不會刪除。取消或失敗任務仍保留診斷用暫存。
+
+先以 dry-run 檢查 GCS 孤兒與 Drive backup：
+
+```bash
+python -m app.operations.retention_cleanup --data-dir /app/data
+```
+
+確認 `retention-report.json` 後才可明確加 `--apply`。VPS 的
+`health-monitor` 每 15 分鐘產生 `production-health.json`，會檢查過期 lease、
+heartbeat、Dynamic Batch 逾時與 Drive delivery retry。

@@ -184,3 +184,24 @@ Requires explicit approval:
 
 Do not combine all follow-up work into one high-risk release. Each step should
 retain CI evidence and pass the non-paid VPS gate before any real provider test.
+# 2026-08 production hardening additions
+
+The pipeline now writes `density-retry-plan.json` from QA. It evaluates full
+15-minute windows against 2,500–3,500 characters and flags audible mid-file
+gaps. The plan is review-only: it never submits a paid patch automatically.
+
+After a successful, evidenced completion, `audio-cleanup.json` records removal
+of `normalized.flac` and chunk `audio.flac` files. Raw provider evidence,
+transcripts, manifests and user-facing exports remain available. Cancelled or
+failed jobs keep their temporary audio for diagnosis under the existing
+cancellation policy.
+
+Run `python -m app.operations.retention_cleanup` as a dry run. Add `--apply`
+only after reviewing `retention-report.json`; GCS orphan candidates and old
+Drive backup paths are then deleted individually.
+
+The `health-monitor` compose service refreshes `production-health.json` every
+15 minutes and reports expired leases, stale heartbeats, Dynamic Batch SLA
+breaches and Drive delivery retries. Application cost endpoints now include
+patch chunks, submitted-but-unfinished operations and retry counts. These are
+estimates; Cloud Billing remains authoritative.

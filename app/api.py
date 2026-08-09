@@ -75,6 +75,9 @@ ARTIFACT_ALLOWLIST = frozenset(
         "merge-decisions.json",
         "join-qa.json",
         "cleanup-review.json",
+        "density-retry-plan.json",
+        "audio-cleanup.json",
+        "retention-report.json",
     }
 )
 
@@ -599,56 +602,22 @@ def get_job_live_cost(job_id: str) -> dict[str, Any]:
     if not record:
         raise HTTPException(status_code=404, detail="Job not found")
         
-    # We will compute the cost using the module
-    from app.jobs import costs
-    # Read the chunks
+    from app.jobs.performance import _chunk_metrics, _gemini_calls, CostConfig
+    from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
     job_dir = JOBS_DIR / job_id
-    chunks_dir = job_dir / "chunks"
-    
+    strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
+    config = CostConfig.from_env().for_processing_strategy(strategy)
+    chunks = _chunk_metrics(job_dir, config) if job_dir.is_dir() else []
+    calls = _gemini_calls(job_dir, config) if job_dir.is_dir() else []
     total_estimated = Decimal(record.get("estimated_cost_usd", "0"))
-    
-    chirp_duration_s = 0.0
-    completed_chunks = 0
-    submitted_chunks = 0
-    
-    if chunks_dir.is_dir():
-        for d in chunks_dir.iterdir():
-            if d.is_dir() and d.name.startswith("chunk-"):
-                manifest_path = d / "manifest.json"
-                if manifest_path.exists():
-                    m = _read_json(manifest_path, {})
-                    st = m.get("status", "")
-                    submitted_chunks += 1
-                    if st in ("SUCCEEDED", "EMPTY_SILENCE", "SUBMITTED", "RUNNING", "RECOVERING"):
-                        dur_s = (m.get("source_end_ms", 0) - m.get("source_start_ms", 0)) / 1000.0
-                        chirp_duration_s += dur_s
-                    if st in ("SUCCEEDED", "EMPTY_SILENCE"):
-                        completed_chunks += 1
-                        
-    chirp_cost = costs.estimated_usd("speech", "chirp_3", int(chirp_duration_s))
-    gemini_cost = Decimal("0")
-    
-    qa = _read_json(job_dir / "qa-report.json")
-    if qa and isinstance(qa, dict):
-        gemini_stats = qa.get("gemini_correction", {})
-        if gemini_stats.get("applied") and "usage" in gemini_stats:
-            pass # TODO parse usage
-    # Look for correct-work/ window usage
-    correct_dir = job_dir / "correct-work"
-    if correct_dir.is_dir():
-        total_in = 0
-        total_out = 0
-        for w in correct_dir.glob("window-*.json"):
-            data = _read_json(w, {})
-            u = data.get("usage_metadata", {})
-            if u:
-                total_in += int(u.get("promptTokenCount", 0))
-                total_out += int(u.get("candidatesTokenCount", 0))
-        if total_in or total_out:
-            gemini_cost = costs.estimated_usd("vertex", record.get("profile", "highest_accuracy") + "_input", total_in) + costs.estimated_usd("vertex", record.get("profile", "highest_accuracy") + "_output", total_out)
-
+    chirp_cost = sum((Decimal(item["estimatedCostUsd"]) for item in chunks if item.get("countedAsSubmitted")), Decimal("0"))
+    gemini_cost = sum((Decimal(item["estimatedCostUsd"]) for item in calls), Decimal("0"))
     accrued = chirp_cost + gemini_cost
     remaining = max(Decimal("0"), total_estimated - accrued)
+    completed_chunks = sum(item["status"] in {"SUCCEEDED", "EMPTY_SILENCE"} for item in chunks)
+    submitted_chunks = sum(bool(item.get("countedAsSubmitted")) for item in chunks)
+    patch_chunks = sum(bool(item.get("isPatch")) for item in chunks)
+    retries = sum(max(0, int(item.get("attemptCount", 1)) - 1) for item in chunks) + sum(max(0, int(item.get("attemptCount", 1)) - 1) for item in calls)
     
     return {
         "estimatedTotalUsd": str(total_estimated.quantize(Decimal("0.01"))),
@@ -658,6 +627,12 @@ def get_job_live_cost(job_id: str) -> dict[str, Any]:
         "geminiEstimatedUsd": str(gemini_cost.quantize(Decimal("0.01"))),
         "submittedChunkCount": submitted_chunks,
         "completedChunkCount": completed_chunks,
+        "patchChunkCount": patch_chunks,
+        "retryCount": retries,
+        "unfinishedChunkCount": sum(item["status"] not in {"SUCCEEDED", "EMPTY_SILENCE", "FAILED", "CANCELLED"} for item in chunks),
+        "geminiInputTokens": sum(int(item.get("inputTokens", 0)) for item in calls),
+        "geminiOutputTokens": sum(int(item.get("outputTokens", 0)) for item in calls),
+        "unpricedGeminiRetryCount": sum(int(item.get("retryCount", 0)) for item in calls),
         "isEstimate": True
     }
 

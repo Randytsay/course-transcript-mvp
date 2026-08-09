@@ -144,6 +144,86 @@ def segment_quality(segments: list[dict[str, object]]) -> tuple[list[str], dict[
     }
 
 
+def density_windows(segments: list[dict[str, object]], audio_ms: int) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Measure transcript characters in fixed 15-minute windows.
+
+    The final partial window is reported but not failed unless it reaches the
+    minimum evaluation duration; this avoids treating a short tail as a bad
+    recognition.  Each outlier becomes a durable, operator-reviewable patch
+    plan rather than an automatic paid submission.
+    """
+    window_ms = int(os.environ.get("CHIRP_DENSITY_WINDOW_SECONDS", "900")) * 1000
+    low = int(os.environ.get("CHIRP_DENSITY_LOW_CHARS", "2500"))
+    high = int(os.environ.get("CHIRP_DENSITY_HIGH_CHARS", "3500"))
+    minimum = int(os.environ.get("CHIRP_DENSITY_MIN_EVALUATED_SECONDS", "600")) * 1000
+    windows: list[dict[str, object]] = []
+    plans: list[dict[str, object]] = []
+    for start in range(0, max(audio_ms, 1), window_ms):
+        end = min(audio_ms, start + window_ms)
+        chars = 0
+        for item in segments:
+            midpoint = (int(item.get("start_ms", 0)) + int(item.get("end_ms", 0))) // 2
+            if start <= midpoint < end:
+                chars += len(str(item.get("cleaned_text") or item.get("corrected_text") or item.get("raw_text") or item.get("text") or ""))
+        evaluated = (end - start) >= minimum or end >= audio_ms and (end - start) >= minimum
+        reason = None
+        if evaluated and chars < low:
+            reason = f"char_count={chars}<{low}"
+        elif evaluated and chars > high:
+            reason = f"char_count={chars}>{high}"
+        item = {
+            "window_index": len(windows) + 1,
+            "start_ms": start,
+            "end_ms": end,
+            "duration_ms": end - start,
+            "char_count": chars,
+            "low_chars": low,
+            "high_chars": high,
+            "evaluated": evaluated,
+            "reason": reason,
+        }
+        windows.append(item)
+        if reason:
+            plans.append({
+                "plan_id": f"density-{len(plans)+1:03d}",
+                "reason": "density_out_of_range",
+                "detail": reason,
+                "start_ms": max(0, start - 10_000),
+                "end_ms": min(audio_ms, end + 10_000),
+                "window_index": item["window_index"],
+            })
+    return windows, plans
+
+
+def audible_gap_plan(segments: list[dict[str, object]], audio_ms: int) -> tuple[list[str], list[dict[str, object]], list[dict[str, object]]]:
+    errors: list[str] = []
+    warnings: list[dict[str, object]] = []
+    plans: list[dict[str, object]] = []
+    minimum = int(os.environ.get("CHIRP_MID_GAP_MIN_MS", "5000"))
+    for before, after in zip(segments, segments[1:]):
+        gap = int(after.get("start_ms", 0)) - int(before.get("end_ms", 0))
+        if gap < minimum:
+            continue
+        audible = audible_between(int(before.get("end_ms", 0)), int(after.get("start_ms", 0)))
+        entry = {"before": before.get("segment_id"), "after": after.get("segment_id"), "gap_ms": gap, "audible": audible}
+        if audible is True:
+            errors.append(f"audible subtitle gap: {entry['before']}->{entry['after']} ({gap}ms)")
+            plans.append({
+                "plan_id": f"audible-gap-{len(plans)+1:03d}",
+                "reason": "audible_subtitle_gap",
+                "start_ms": max(0, int(before.get("end_ms", 0)) - 10_000),
+                "end_ms": min(audio_ms, int(after.get("start_ms", 0)) + 10_000),
+                "before_segment_id": before.get("segment_id"),
+                "after_segment_id": after.get("segment_id"),
+                "gap_ms": gap,
+            })
+        elif audible is False:
+            warnings.append(entry)
+        else:
+            warnings.append({**entry, "warning": "unable_to_measure_audio"})
+    return errors, warnings, plans
+
+
 def main() -> int:
     merged = json.loads((JOB / "merged-words.json").read_text(encoding="utf-8"))
     raw = json.loads((JOB / "subtitles.json").read_text(encoding="utf-8"))
@@ -172,6 +252,21 @@ def main() -> int:
     long_gaps = [{"before": a["segment_id"], "after": b["segment_id"], "gap_ms": int(b["start_ms"]) - int(a["end_ms"])} for a, b in zip(segments, segments[1:]) if int(b["start_ms"]) - int(a["end_ms"]) > 5000]
     if long_gaps: warnings.append(f"subtitle gaps over 5 seconds: {len(long_gaps)}")
     audio = duration_ms(); end = int(segments[-1]["end_ms"]) if segments else 0; uncovered = max(0, audio - end)
+    gap_errors, audible_gaps, gap_plans = audible_gap_plan(segments, audio)
+    errors.extend(gap_errors)
+    if audible_gaps:
+        warnings.append(f"audible-gap measurements completed: {len(audible_gaps)} mid-file gaps")
+    density, density_plans = density_windows(segments, audio)
+    density_failures = [item for item in density if item.get("reason")]
+    errors.extend([f"15-minute character density out of range: window {item['window_index']} ({item['reason']})" for item in density_failures])
+    retry_items = density_plans + gap_plans
+    atomic(JOB / "density-retry-plan.json", {
+        "version": "density-retry-plan-v1",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "status": "needs_review" if retry_items else "none",
+        "policy": "plan_only_no_automatic_paid_retry",
+        "items": retry_items,
+    })
     segment_errors, segment_quality_report = segment_quality(segments)
     errors.extend(segment_errors)
     overrun_limit = int(os.environ.get("CHIRP_MAX_TIMELINE_OVERRUN_MS", "15000"))
@@ -221,7 +316,7 @@ def main() -> int:
             errors.append("cleanup-review.json is invalid")
     else:
         errors.append("missing cleanup-review.json")
-    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": "PASS" if not errors else "FAIL", "errors": errors, "warnings": warnings, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "timing_collision_segments": timing_collisions, "segment_quality": segment_quality_report}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
+    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": "PASS" if not errors else "FAIL", "errors": errors, "warnings": warnings, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
     atomic(JOB / "qa-report.json", report)
     md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
     temporary = JOB / "qa-report.md.tmp"; temporary.write_text("\n".join(md) + "\n", encoding="utf-8"); temporary.replace(JOB / "qa-report.md")

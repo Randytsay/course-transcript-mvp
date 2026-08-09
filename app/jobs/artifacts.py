@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -48,6 +49,41 @@ def artifact_evidence(job_dir: Path) -> list[dict[str, Any]]:
             }
         )
     return evidence
+
+
+def cleanup_completed_audio(job_dir: Path) -> dict[str, Any]:
+    """Remove only derived audio after a successful, evidenced pipeline run.
+
+    Raw provider JSON/transcripts and all user-facing exports are deliberately
+    untouched.  The audit file makes the destructive part resumable and
+    observable; failures are reported rather than hidden.
+    """
+    candidates = [job_dir / "normalized.flac", job_dir / "normalized.tmp.flac"]
+    candidates.extend((job_dir / "chunks").glob("chunk-*/audio.flac"))
+    candidates.extend((job_dir / "chunks").glob("chunk-*/audio.flac.tmp"))
+    candidates.extend(job_dir.glob("*.partial"))
+    removed: list[str] = []
+    errors: list[dict[str, str]] = []
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            path.unlink()
+            removed.append(str(path.relative_to(job_dir)))
+        except OSError as exc:
+            errors.append({"path": str(path.relative_to(job_dir)), "error": str(exc)})
+    report = {
+        "version": "audio-cleanup-v1",
+        "policy": "completed-only-derived-audio",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "removed": removed,
+        "errors": errors,
+        "status": "PASS" if not errors else "REVIEW",
+    }
+    temporary = job_dir / "audio-cleanup.json.tmp"
+    temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.replace(job_dir / "audio-cleanup.json")
+    return report
 
 
 def install_artifact_patch(worker_module: Any) -> None:

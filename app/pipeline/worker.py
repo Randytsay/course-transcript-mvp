@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.costs import CostConfig, estimate_job_cost
+from app.jobs.artifacts import cleanup_completed_audio
 from app.jobs.drive_publish import DrivePublishError, publish_outputs, source_parent_destination
 from app.jobs.store import JobConflict, JobStore
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
@@ -711,7 +712,7 @@ def run_paid_job(
             progress_end=98,
             module="app.providers.qa_report",
             timeout_seconds=600,
-            evidence=("qa-report.json", "qa-report.md"),
+            evidence=("qa-report.json", "qa-report.md", "density-retry-plan.json"),
         )
         _run_module_stage(
             store,
@@ -757,6 +758,7 @@ def run_paid_job(
             }
         _atomic_json(job_dir / "pipeline-manifest.json", processing_manifest)
         _atomic_json(job_dir / "processing_manifest.json", processing_manifest)
+        cleanup_completed_audio(job_dir)
         return store.finish_for_review(
             job_id=leased["id"],
             worker_id=worker_id,

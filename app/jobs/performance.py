@@ -299,6 +299,7 @@ def _chunk_metrics(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
     if not isinstance(plan, list):
         plan = []
     result: list[dict[str, Any]] = []
+    seen: set[Path] = set()
     for item in plan:
         if not isinstance(item, dict):
             continue
@@ -312,13 +313,16 @@ def _chunk_metrics(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
             job_dir / "chunks" / f"chunk-{index:03d}" / "manifest.json", {}
         )
         manifest = manifest if isinstance(manifest, dict) else {}
+        manifest_path = job_dir / "chunks" / f"chunk-{index:03d}" / "manifest.json"
+        seen.add(manifest_path)
         duration_ms = max(0, end_ms - start_ms)
         cost = (
             Decimal(duration_ms)
             / Decimal("60000")
             * config.chirp_usd_per_minute
         )
-        submitted_at = manifest.get("submitted_at") or manifest.get("created_at")
+        submitted_at = manifest.get("submitted_at")
+        submitted_marker = bool(submitted_at or manifest.get("operation_name") or str(manifest.get("status") or "") in COMMITTED_CHUNK_STATES)
         provider_completed_at = manifest.get("provider_completed_at")
         recovered_at = manifest.get("recovered_at") or manifest.get("completed_at")
         if not recovered_at:
@@ -360,8 +364,49 @@ def _chunk_metrics(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
                     if isinstance(manifest.get("error"), dict)
                     else None
                 ),
+                "role": manifest.get("role", "base"),
+                "isPatch": manifest.get("role") == "patch" or bool(manifest.get("patch_mode")),
+                "operationName": manifest.get("operation_name"),
+                "countedAsSubmitted": submitted_marker,
             }
         )
+    # Patch/recovery chunks are intentionally not required to be in the
+    # original plan. Include every durable manifest so local cost reports do
+    # not undercount partial retries.
+    for manifest_path in sorted((job_dir / "chunks").glob("chunk-*/manifest.json")):
+        if manifest_path in seen:
+            continue
+        manifest = _read_json(manifest_path, {})
+        if not isinstance(manifest, dict):
+            continue
+        try:
+            index = int(manifest_path.parent.name.split("-")[-1])
+            start_ms = int(manifest.get("source_start_ms", 0))
+            end_ms = int(manifest.get("source_end_ms", 0))
+        except (TypeError, ValueError):
+            continue
+        submitted_at = manifest.get("submitted_at")
+        submitted_marker = bool(submitted_at or manifest.get("operation_name") or str(manifest.get("status") or "") in COMMITTED_CHUNK_STATES)
+        duration_ms = max(0, end_ms - start_ms)
+        cost = Decimal(duration_ms) / Decimal("60000") * config.chirp_usd_per_minute
+        result.append({
+            "chunkIndex": index, "startMs": start_ms, "endMs": end_ms,
+            "audioDurationMs": duration_ms, "status": str(manifest.get("status") or "WAITING"),
+            "attemptCount": int(manifest.get("attempt_count") or (1 if submitted_at else 0)),
+            "submittedAt": submitted_at, "providerCompletedAt": manifest.get("provider_completed_at"),
+            "recoveredAt": manifest.get("recovered_at") or manifest.get("completed_at"),
+            "submitLatencyMs": int(manifest.get("submit_latency_ms") or 0),
+            "providerProcessingMs": int(manifest.get("provider_processing_ms") or 0),
+            "recoveryDelayMs": int(manifest.get("recovery_delay_ms") or 0),
+            "totalWallMs": int(manifest.get("total_wall_ms") or 0),
+            "wordCount": int(manifest.get("word_count") or 0),
+            "billedAudioSeconds": round(duration_ms / 1000, 3),
+            "estimatedCostUsd": _money(cost),
+            "errorCode": manifest.get("error", {}).get("code") if isinstance(manifest.get("error"), dict) else None,
+            "role": manifest.get("role", "patch"), "isPatch": True,
+            "operationName": manifest.get("operation_name"),
+            "countedAsSubmitted": submitted_marker,
+        })
     return result
 
 
@@ -423,6 +468,7 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
                     or 0
                 ),
                 "attemptCount": int(payload.get("attempt_count") or 1),
+                "retryCount": max(0, int(payload.get("attempt_count") or 1) - 1),
                 "inputTokens": input_tokens,
                 "outputTokens": output_tokens,
                 "estimatedCostUsd": _money(cost),
@@ -448,7 +494,7 @@ def estimated_accrued_cost(database_path: Path, data_dir: Path, job_id: str) -> 
         (
             Decimal(item["estimatedCostUsd"])
             for item in chunks
-            if item["status"] in COMMITTED_CHUNK_STATES
+            if item["countedAsSubmitted"] or item["status"] in COMMITTED_CHUNK_STATES
         ),
         Decimal("0"),
     )
@@ -530,6 +576,9 @@ def build_performance_summary(database_path: Path, data_dir: Path, job_id: str) 
     gemini_retries = sum(max(0, int(item["attemptCount"]) - 1) for item in gemini_calls)
     if gemini_retries:
         suggestions.append(f"Gemini 共發生 {gemini_retries} 次額外嘗試；提高併發前先確認 429 與延遲分布。")
+    unpriced_retries = sum(int(item.get("retryCount", 0)) for item in gemini_calls)
+    if unpriced_retries:
+        suggestions.append("Gemini 重試的個別 token usage 未完整保存；目前金額為保守 application estimate，需以 Cloud Billing 對帳。")
     if rtf is not None and rtf > 1:
         suggestions.append("整體處理速度慢於音訊即時播放；優先檢查最長階段與 Canary 等待比例。")
     if not suggestions:
@@ -556,6 +605,13 @@ def build_performance_summary(database_path: Path, data_dir: Path, job_id: str) 
         "pauseIntervals": pause_intervals,
         "chunks": chunks,
         "geminiCalls": gemini_calls,
+        "accounting": {
+            "chirpRetryCount": retries,
+            "geminiRetryCount": gemini_retries,
+            "unpricedGeminiRetryCount": unpriced_retries,
+            "patchChunkCount": sum(bool(item.get("isPatch")) for item in chunks),
+            "unfinishedSubmittedChunkCount": sum(item.get("countedAsSubmitted") and item["status"] not in {"SUCCEEDED", "EMPTY_SILENCE", "FAILED", "CANCELLED"} for item in chunks),
+        },
         "bottleneckSuggestions": suggestions,
         "generatedAt": _iso(),
         "accountingNote": "Application estimates only; Cloud Billing is authoritative.",

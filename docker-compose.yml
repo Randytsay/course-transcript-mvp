@@ -124,6 +124,7 @@ services:
       GEMINI_CORRECTION_WINDOW_MS: ${GEMINI_CORRECTION_WINDOW_MS:-60000}
       GEMINI_MAX_PARALLEL_WINDOWS: ${GEMINI_MAX_PARALLEL_WINDOWS:-2}
       COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE: ${COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE:-true}
+      CHIRP_SPEECH_ADAPTATION: ${CHIRP_SPEECH_ADAPTATION:-true}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -148,6 +149,26 @@ services:
       - ./logs:/app/logs
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
     command: ["python", "-m", "app.jobs.delivery_worker", "--poll-seconds", "60"]
+
+  health-monitor:
+    profiles: ["web"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-pipeline-worker:local
+    restart: unless-stopped
+    environment:
+      COURSE_TRANSCRIPT_DATA_DIR: /app/data
+      PRODUCTION_HEALTH_POLL_SECONDS: ${PRODUCTION_HEALTH_POLL_SECONDS:-900}
+    volumes:
+      - ./data:/app/data
+    command: ["sh", "-c", "while true; do python -m app.operations.production_health --output /app/data/production-health.json || true; sleep $${PRODUCTION_HEALTH_POLL_SECONDS}; done"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json,time,pathlib; p=pathlib.Path('/app/data/production-health.json'); d=json.loads(p.read_text()); assert d.get('status') != 'critical' and time.time()-__import__('datetime').datetime.fromisoformat(d['generated_at'].replace('Z','+00:00')).timestamp() < 1800"]
+      interval: 5m
+      timeout: 10s
+      retries: 2
+      start_period: 30s
 
   billing-worker:
     profiles: ["billing"]
@@ -187,6 +208,8 @@ services:
       pipeline-worker:
         condition: service_started
       delivery-worker:
+        condition: service_started
+      health-monitor:
         condition: service_started
     ports:
       - "127.0.0.1:3300:3000"
