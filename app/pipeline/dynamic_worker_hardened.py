@@ -484,6 +484,30 @@ def _resume_job(
     return _submit_job(store, record, data_dir=data_dir, worker_id=worker_id)
 
 
+def _record_unhandled_pipeline_failure(
+    store: JobStore,
+    record: dict[str, Any],
+    *,
+    data_dir: Path,
+    worker_id: str,
+    error: Exception,
+) -> None:
+    """Persist a queued/resumed stage failure without taking down the worker."""
+    try:
+        current = store.get_job(record["id"])
+        store.fail_job(
+            job_id=record["id"],
+            stage=current.get("active_stage") or "pipeline",
+            error=base._safe_error(str(error)),
+            worker_id=worker_id,
+        )
+    except (JobConflict, KeyError):
+        # The stage may already have released or lost its lease; the worker
+        # must remain alive and the existing evidence remains authoritative.
+        pass
+    observed._write_report_safely(data_dir, record["id"])
+
+
 def run_once(store: JobStore, *, data_dir: Path, worker_id: str) -> bool:
     cancellation = next_cancelling_job(data_dir / "course-transcript.db")
     if cancellation is not None:
@@ -512,6 +536,10 @@ def run_once(store: JobStore, *, data_dir: Path, worker_id: str) -> bool:
             _resume_job(store, resumable, data_dir=data_dir, worker_id=worker_id)
         except JobConflict:
             return False
+        except base.PipelineError as exc:
+            _record_unhandled_pipeline_failure(
+                store, resumable, data_dir=data_dir, worker_id=worker_id, error=exc
+            )
         return True
 
     max_inflight = max(1, int(os.environ.get("CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS", "5")))
@@ -522,6 +550,10 @@ def run_once(store: JobStore, *, data_dir: Path, worker_id: str) -> bool:
                 _submit_job(store, queued, data_dir=data_dir, worker_id=worker_id)
             except JobConflict:
                 return False
+            except base.PipelineError as exc:
+                _record_unhandled_pipeline_failure(
+                    store, queued, data_dir=data_dir, worker_id=worker_id, error=exc
+                )
             return True
     return False
 
