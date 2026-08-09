@@ -86,6 +86,64 @@ def tail_patch_verified(end_ms: int, audio_ms: int) -> bool:
     return False
 
 
+def segment_quality(segments: list[dict[str, object]]) -> tuple[list[str], dict[str, object]]:
+    """Detect provider timing/text collapses before publication.
+
+    A short interjection is valid, but a cue containing hundreds of provider
+    words or a multi-second cue containing only one/two words is evidence of a
+    malformed Chirp timestamp/merge result.  Keep the offending IDs in the
+    report so a targeted chunk retry can be planned without rerunning a file.
+    """
+    max_words = int(os.environ.get("CHIRP_MAX_SEGMENT_WORDS", "120"))
+    low_word_limit = int(os.environ.get("CHIRP_LOW_WORD_COUNT", "2"))
+    low_word_duration_ms = int(
+        os.environ.get("CHIRP_LOW_WORD_DURATION_MS", "10000")
+    )
+    errors: list[str] = []
+    abnormal: list[dict[str, object]] = []
+    for item in segments:
+        try:
+            word_count = int(item.get("word_count", -1))
+            start_ms = int(item.get("start_ms", 0))
+            end_ms = int(item.get("end_ms", 0))
+        except (TypeError, ValueError):
+            continue
+        duration_ms_value = max(0, end_ms - start_ms)
+        reasons: list[str] = []
+        if word_count > max_words:
+            reasons.append(f"word_count={word_count}>{max_words}")
+        if duration_ms_value > low_word_duration_ms and 0 <= word_count <= low_word_limit:
+            reasons.append(
+                f"duration_ms={duration_ms_value}>{low_word_duration_ms}"
+                f" with word_count={word_count}"
+            )
+        if reasons:
+            abnormal.append(
+                {
+                    "segment_id": item.get("segment_id"),
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "word_count": word_count,
+                    "duration_ms": duration_ms_value,
+                    "reasons": reasons,
+                }
+            )
+    if abnormal:
+        preview = ", ".join(
+            f"{item['segment_id']}({';'.join(item['reasons'])})"
+            for item in abnormal[:10]
+        )
+        errors.append(f"abnormal subtitle segment quality: {preview}")
+    return errors, {
+        "thresholds": {
+            "max_segment_words": max_words,
+            "low_word_count": low_word_limit,
+            "low_word_duration_ms": low_word_duration_ms,
+        },
+        "abnormal_segments": abnormal,
+    }
+
+
 def main() -> int:
     merged = json.loads((JOB / "merged-words.json").read_text(encoding="utf-8"))
     raw = json.loads((JOB / "subtitles.json").read_text(encoding="utf-8"))
@@ -114,6 +172,19 @@ def main() -> int:
     long_gaps = [{"before": a["segment_id"], "after": b["segment_id"], "gap_ms": int(b["start_ms"]) - int(a["end_ms"])} for a, b in zip(segments, segments[1:]) if int(b["start_ms"]) - int(a["end_ms"]) > 5000]
     if long_gaps: warnings.append(f"subtitle gaps over 5 seconds: {len(long_gaps)}")
     audio = duration_ms(); end = int(segments[-1]["end_ms"]) if segments else 0; uncovered = max(0, audio - end)
+    segment_errors, segment_quality_report = segment_quality(segments)
+    errors.extend(segment_errors)
+    overrun_limit = int(os.environ.get("CHIRP_MAX_TIMELINE_OVERRUN_MS", "15000"))
+    overrun_words = [
+        word
+        for word in words
+        if int(word.get("end_ms", 0)) > audio + overrun_limit
+    ]
+    if overrun_words:
+        errors.append(
+            "merged words exceed audio duration: "
+            f"{len(overrun_words)} words beyond {overrun_limit}ms tolerance"
+        )
     if uncovered > 1000:
         tail_audible = audible_between(end, audio)
         if tail_audible is True and tail_patch_verified(end, audio):
@@ -130,7 +201,7 @@ def main() -> int:
     if corrected:
         correction_invariant = len(corrected["segments"]) == len(segments) and all((a["segment_id"], a["start_ms"], a["end_ms"]) == (b["segment_id"], b["start_ms"], b["end_ms"]) for a, b in zip(segments, corrected["segments"]))
         if not correction_invariant: warnings.append("existing correction is stale and requires a new segment-level correction pass")
-    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": "PASS" if not errors else "FAIL", "errors": errors, "warnings": warnings, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "timing_collision_segments": timing_collisions}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}}
+    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": "PASS" if not errors else "FAIL", "errors": errors, "warnings": warnings, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "timing_collision_segments": timing_collisions, "segment_quality": segment_quality_report}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}}
     atomic(JOB / "qa-report.json", report)
     md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
     temporary = JOB / "qa-report.md.tmp"; temporary.write_text("\n".join(md) + "\n", encoding="utf-8"); temporary.replace(JOB / "qa-report.md")

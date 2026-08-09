@@ -91,6 +91,10 @@ def main() -> int:
         "srt": JOB / "transcript.srt",
         "txt": JOB / "transcript_corrected.txt",
         "csv": JOB / "transcript.csv",
+        # ``json`` is the requested raw Chirp sidecar.  It is deliberately
+        # separate from the internal ``transcript.json`` evidence so a
+        # downstream LLM can consume the immutable provider result.
+        "json": JOB / "chirp.json",
         "vtt": JOB / "transcript.vtt",
         "ass": JOB / "subtitles-corrected.ass",
     }
@@ -110,6 +114,19 @@ def main() -> int:
             with path.open(encoding="utf-8", newline="") as stream:
                 if len(list(csv.DictReader(stream))) != len(raw_segments):
                     errors.append("transcript.csv row count mismatch")
+        elif output_format == "json":
+            try:
+                sidecar = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                errors.append("chirp.json is not valid JSON")
+            else:
+                sidecar_segments = (
+                    sidecar.get("segments", [])
+                    if isinstance(sidecar, dict)
+                    else []
+                )
+                if len(sidecar_segments) != len(raw_segments):
+                    errors.append("chirp.json segment count mismatch")
         elif output_format == "ass":
             dialogues = [
                 line

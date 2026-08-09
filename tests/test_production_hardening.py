@@ -191,6 +191,37 @@ class ProductionHardeningTests(unittest.TestCase):
             ),
         )
 
+    def test_segment_quality_flags_provider_collapses(self) -> None:
+        from app.providers.qa_report import segment_quality
+
+        errors, report = segment_quality(
+            [
+                {
+                    "segment_id": "normal",
+                    "start_ms": 0,
+                    "end_ms": 4000,
+                    "word_count": 8,
+                },
+                {
+                    "segment_id": "collapsed",
+                    "start_ms": 4000,
+                    "end_ms": 12000,
+                    "word_count": 900,
+                },
+                {
+                    "segment_id": "long-short",
+                    "start_ms": 12000,
+                    "end_ms": 30000,
+                    "word_count": 1,
+                },
+            ]
+        )
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(
+            [item["segment_id"] for item in report["abnormal_segments"]],
+            ["collapsed", "long-short"],
+        )
+
     def test_malformed_parent_gemini_response_is_persisted_before_split(self) -> None:
         from app.providers import correct_text_hardened as hardened
 
