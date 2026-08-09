@@ -74,7 +74,11 @@ def repair_chunk_timings(
                 except (KeyError, TypeError, ValueError):
                     next_start = None
             if next_start is not None and start < next_start <= source_end + max_word_duration:
-                end = next_start
+                # The provider sometimes sets a collapsed word's end equal to
+                # the following word's start, even when that boundary is
+                # hundreds of seconds away.  Preserve the ordering hint but
+                # still enforce the derived per-word duration cap.
+                end = min(next_start, start + max_word_duration, source_end)
             else:
                 end = min(end, start + max_word_duration, source_end)
             if end <= start:
