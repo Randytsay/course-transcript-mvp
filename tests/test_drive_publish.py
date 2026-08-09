@@ -19,6 +19,7 @@ class DrivePublishTests(unittest.TestCase):
         job.mkdir()
         (job / "subtitles-corrected.srt").write_text("subtitle", encoding="utf-8")
         (job / "transcript-corrected.txt").write_text("transcript", encoding="utf-8")
+        (job / "chirp.json").write_text("{}\n", encoding="utf-8")
         (job / "transcript-segments.csv").write_text("raw_text,corrected_text,uncertain_terms\n", encoding="utf-8")
         return job
 
@@ -73,6 +74,26 @@ class DrivePublishTests(unittest.TestCase):
                     authorized=False,
                 )
             self.assertFalse((job / "drive-publish-state.json").exists())
+
+    def test_json_sidecar_is_publishable(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            job = self._job(Path(temp))
+
+            def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+                if command[1] == "copyto":
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                return subprocess.CompletedProcess(command, 0, '{"bytes": 3}', "")
+
+            result = publish_outputs(
+                job,
+                source_name="lesson.mp3",
+                destination="gdrive:course/output",
+                output_formats=["json"],
+                authorized=True,
+                runner=runner,
+            )
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["files"]["json"]["local_name"], "chirp.json")
 
     def test_completed_state_resumes_without_another_drive_request(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

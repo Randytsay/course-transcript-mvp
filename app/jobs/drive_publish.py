@@ -51,6 +51,9 @@ _ARTIFACTS: dict[str, tuple[PublishArtifact, ...]] = {
         PublishArtifact("txt", "transcript-raw.txt", ".txt"),
         PublishArtifact("txt", "transcript_raw.txt", ".txt"),
     ),
+    "json": (
+        PublishArtifact("json", "chirp.json", ".json"),
+    ),
     "csv": (
         PublishArtifact("csv", "transcript-segments.csv", ".csv"),
         PublishArtifact("csv", "transcript.csv", ".csv"),
