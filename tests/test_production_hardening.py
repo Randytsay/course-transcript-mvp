@@ -222,6 +222,21 @@ class ProductionHardeningTests(unittest.TestCase):
             ["collapsed", "long-short"],
         )
 
+    def test_chunk_timing_repair_preserves_raw_word_and_clamps_derived_time(self) -> None:
+        from app.providers.merge_chunks import repair_chunk_timings
+
+        manifest = {"chunk_index": 2, "source_start_ms": 1000, "source_end_ms": 5000}
+        raw = [
+            {"word": "甲", "start_ms": 2000, "end_ms": 45000},
+            {"word": "乙", "start_ms": 2200, "end_ms": 2400},
+            {"word": "丙", "start_ms": 900000, "end_ms": 901000},
+        ]
+        repaired, repairs = repair_chunk_timings(manifest, raw)
+        self.assertEqual(raw[0]["end_ms"], 45000)
+        self.assertEqual(repaired[0]["end_ms"], 2200)
+        self.assertLessEqual(repaired[-1]["start_ms"], manifest["source_end_ms"])
+        self.assertEqual(len(repairs), 2)
+
     def test_malformed_parent_gemini_response_is_persisted_before_split(self) -> None:
         from app.providers import correct_text_hardened as hardened
 

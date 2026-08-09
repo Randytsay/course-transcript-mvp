@@ -40,6 +40,68 @@ def patch_extends_timeline(merged: list[dict], patch_words: list[dict]) -> bool:
     return patch_end > baseline_end
 
 
+def repair_chunk_timings(
+    manifest: dict, words: list[dict]
+) -> tuple[list[dict], list[dict]]:
+    """Repair impossible provider timings in the derived merge only.
+
+    Chirp can occasionally return a word whose end is minutes/hours after its
+    neighbours, or whose start jumps beyond the chunk window.  Keeping that
+    raw word untouched makes the subtitle builder collapse an entire speech
+    interval into one giant cue.  Preserve the raw chunk evidence and clamp
+    only the derived timing to the next word or the chunk boundary.
+    """
+    max_word_duration = int(os.environ.get("CHIRP_MAX_WORD_DURATION_MS", "10000"))
+    source_start = int(manifest["source_start_ms"])
+    source_end = int(manifest["source_end_ms"])
+    repaired: list[dict] = []
+    repairs: list[dict] = []
+    previous_end = source_start
+    for offset, original in enumerate(words):
+        word = dict(original)
+        start = int(word["start_ms"])
+        end = int(word["end_ms"])
+        original_start, original_end = start, end
+        if start > source_end + max_word_duration:
+            start = max(source_start, source_end - 40)
+        elif start < source_start - max_word_duration:
+            start = source_start
+        if end <= start or end - start > max_word_duration:
+            next_start = None
+            if offset + 1 < len(words):
+                try:
+                    next_start = int(words[offset + 1]["start_ms"])
+                except (KeyError, TypeError, ValueError):
+                    next_start = None
+            if next_start is not None and start < next_start <= source_end + max_word_duration:
+                end = next_start
+            else:
+                end = min(end, start + max_word_duration, source_end)
+            if end <= start:
+                end = start + 40
+        if start < previous_end and original_start >= previous_end:
+            start = previous_end
+            if end <= start:
+                end = start + 40
+        word["start_ms"], word["end_ms"] = start, end
+        previous_end = max(previous_end, end)
+        if (start, end) != (original_start, original_end):
+            repairs.append(
+                {
+                    "chunk_index": manifest["chunk_index"],
+                    "word_offset": offset,
+                    "word": original.get("word", ""),
+                    "original_start_ms": original_start,
+                    "original_end_ms": original_end,
+                    "repaired_start_ms": start,
+                    "repaired_end_ms": end,
+                    "reason": "provider_timing_outlier",
+                }
+            )
+        repaired.append(word)
+    return repaired, repairs
+
+
 def load_chunks() -> list[tuple[dict, list[dict]]]:
     result: list[tuple[dict, list[dict]]] = []
     for directory in sorted(CHUNKS.glob("chunk-*")):
@@ -71,6 +133,7 @@ def main() -> int:
         return 1
     valid_words: list[list[dict]] = []
     anomalies: list[dict] = []
+    timing_repairs: list[dict] = []
     for manifest, words in chunks:
         clean = []
         for offset, word in enumerate(words):
@@ -79,7 +142,9 @@ def main() -> int:
                 anomalies.append({"chunk_index": manifest["chunk_index"], "word_offset": offset, "word": word, "reason": "non_positive_duration"})
             else:
                 clean.append(word)
-        valid_words.append(clean)
+        repaired, repairs = repair_chunk_timings(manifest, clean)
+        timing_repairs.extend(repairs)
+        valid_words.append(repaired)
 
     # Chunk i owns [lower_boundary, upper_boundary). The boundary is the
     # midpoint of the adjacent source intervals, not a text-similarity result.
@@ -107,6 +172,7 @@ def main() -> int:
             for (manifest, _), words in zip(chunks, valid_words)
         ],
         "dropped_anomalies": anomalies,
+        "timing_repairs": timing_repairs,
     }
     atomic_json(JOB / "pre-merge-words.json", pre_merge)
 
@@ -161,7 +227,7 @@ def main() -> int:
             "window_end_ms": boundary + 10_000,
             "words": [word for word in merged if max(0, boundary - 10_000) <= midpoint(word) <= boundary + 10_000],
         })
-    atomic_json(JOB / "merge-decisions.json", {"job": JOB.name, "boundaries_ms": boundaries, "decisions": decisions, "patch_decisions": patch_decisions, "dropped_anomalies": anomalies})
+    atomic_json(JOB / "merge-decisions.json", {"job": JOB.name, "boundaries_ms": boundaries, "decisions": decisions, "patch_decisions": patch_decisions, "dropped_anomalies": anomalies, "timing_repairs": timing_repairs})
     atomic_json(JOB / "join-qa.json", {"job": JOB.name, "joins": join_qa})
 
     output = {
@@ -172,6 +238,7 @@ def main() -> int:
         "boundaries_ms": boundaries,
         "chunks_merged": [manifest["chunk_index"] for manifest, _ in chunks],
         "dropped_anomaly_count": len(anomalies),
+        "timing_repair_count": len(timing_repairs),
         "words": merged,
     }
     atomic_json(JOB / "merged-words.json", output)
