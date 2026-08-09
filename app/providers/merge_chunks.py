@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -24,6 +25,21 @@ def atomic_json(path: Path, value: object) -> None:
 
 def midpoint(word: dict) -> int:
     return (int(word["start_ms"]) + int(word["end_ms"])) // 2
+
+
+def impossible_provider_text(word: dict) -> bool:
+    """Reject obvious provider text corruption from the derived timeline.
+
+    Chirp occasionally emits a very long run of digits as one "word".  It is
+    not speech and can inflate a chunk's character count or create a giant
+    subtitle cue.  The original ``words.json`` remains untouched; the token
+    is recorded in merge QA and omitted only from derived outputs.
+    """
+    value = word.get("word", "")
+    if not isinstance(value, str):
+        return False
+    compact = re.sub(r"[\s,.;:!?，。！？、；：]+", "", value)
+    return len(compact) >= 30 and all(char.isdigit() for char in compact)
 
 
 def patch_extends_timeline(merged: list[dict], patch_words: list[dict]) -> bool:
@@ -144,6 +160,15 @@ def main() -> int:
             start, end = int(word["start_ms"]), int(word["end_ms"])
             if end <= start:
                 anomalies.append({"chunk_index": manifest["chunk_index"], "word_offset": offset, "word": word, "reason": "non_positive_duration"})
+            elif impossible_provider_text(word):
+                anomalies.append(
+                    {
+                        "chunk_index": manifest["chunk_index"],
+                        "word_offset": offset,
+                        "word": word,
+                        "reason": "provider_text_outlier",
+                    }
+                )
             else:
                 clean.append(word)
         repaired, repairs = repair_chunk_timings(manifest, clean)
