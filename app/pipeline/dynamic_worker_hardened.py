@@ -497,19 +497,31 @@ def run_once(store: JobStore, *, data_dir: Path, worker_id: str) -> bool:
 
     due = _next_due_waiting(store, data_dir)
     if due is not None:
-        _recover_job(store, due, data_dir=data_dir, worker_id=worker_id)
+        try:
+            _recover_job(store, due, data_dir=data_dir, worker_id=worker_id)
+        except JobConflict:
+            # Another source currently owns the single global lease.  This is
+            # expected while a Batch operation is in flight; do not crash and
+            # restart the worker, just let the next poll retry this record.
+            return False
         return True
 
     resumable = _next_resumable(store, data_dir)
     if resumable is not None:
-        _resume_job(store, resumable, data_dir=data_dir, worker_id=worker_id)
+        try:
+            _resume_job(store, resumable, data_dir=data_dir, worker_id=worker_id)
+        except JobConflict:
+            return False
         return True
 
     max_inflight = max(1, int(os.environ.get("CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS", "5")))
     if _waiting_count(store) < max_inflight:
         queued = _next_fresh(store)
         if queued is not None:
-            _submit_job(store, queued, data_dir=data_dir, worker_id=worker_id)
+            try:
+                _submit_job(store, queued, data_dir=data_dir, worker_id=worker_id)
+            except JobConflict:
+                return False
             return True
     return False
 
