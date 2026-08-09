@@ -96,7 +96,7 @@ def _operation_file_error(name: str) -> tuple[int, str] | None:
     try:
         if not response_any.Unpack(response):
             return None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, AttributeError):
         return None
     for result in response.results.values():
         error = getattr(result, "error", None)
@@ -232,6 +232,16 @@ def main() -> int:
     if not prior:
         print(f"RECOVER_{name}=TERMINAL missing manifest")
         return TERMINAL_EXIT
+    # A successful recovery persists ``words.json`` before deleting the GCS
+    # result.  Do not query the already-consumed operation again on a later
+    # retry; some google-protobuf versions cannot unpack the operation's
+    # response wrapper and would otherwise turn a completed chunk into a
+    # false recovery error.
+    if prior.get("status") in {"SUCCEEDED", "EMPTY_SILENCE"} and (
+        chunk / "words.json"
+    ).is_file():
+        print(f"RECOVER_{name}=RETAINED status={prior.get('status')}")
+        return 0
     if not window_matches(
         prior,
         start_seconds=start,

@@ -225,7 +225,31 @@ def main() -> int:
     # without reprocessing the entire long recording.
     patch_decisions = []
     for manifest, patch_words in sorted(patches, key=lambda pair: int(pair[0]["source_start_ms"])):
-        valid_patch = [word for word in patch_words if int(word["end_ms"]) > int(word["start_ms"])]
+        patch_candidates = []
+        for offset, word in enumerate(patch_words):
+            start, end = int(word["start_ms"]), int(word["end_ms"])
+            if end <= start:
+                anomalies.append(
+                    {
+                        "chunk_index": manifest["chunk_index"],
+                        "word_offset": offset,
+                        "word": word,
+                        "reason": "non_positive_duration",
+                    }
+                )
+            elif impossible_provider_text(word):
+                anomalies.append(
+                    {
+                        "chunk_index": manifest["chunk_index"],
+                        "word_offset": offset,
+                        "word": word,
+                        "reason": "provider_text_outlier",
+                    }
+                )
+            else:
+                patch_candidates.append(word)
+        valid_patch, patch_repairs = repair_chunk_timings(manifest, patch_candidates)
+        timing_repairs.extend(patch_repairs)
         start, end = int(manifest["source_start_ms"]), int(manifest["source_end_ms"])
         # Tail patches retain the conservative extend-only rule by default.
         # A targeted mid-recording repair explicitly owns its window and may
