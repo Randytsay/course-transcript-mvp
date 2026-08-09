@@ -128,6 +128,7 @@ def main() -> int:
     record = {
         "chunk_index": index,
         "role": os.getenv("CHUNK_ROLE", "base"),
+        "patch_mode": os.getenv("CHUNK_PATCH_MODE", ""),
         "source_start_ms": round(start * 1000),
         "source_end_ms": round(end * 1000),
         "operation_name": operation.operation.name,

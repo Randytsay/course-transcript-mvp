@@ -202,7 +202,12 @@ def main() -> int:
     for manifest, patch_words in sorted(patches, key=lambda pair: int(pair[0]["source_start_ms"])):
         valid_patch = [word for word in patch_words if int(word["end_ms"]) > int(word["start_ms"])]
         start, end = int(manifest["source_start_ms"]), int(manifest["source_end_ms"])
-        if not patch_extends_timeline(merged, valid_patch):
+        # Tail patches retain the conservative extend-only rule by default.
+        # A targeted mid-recording repair explicitly owns its window and may
+        # replace malformed baseline words even when it does not extend the
+        # overall timeline.
+        force_replace = manifest.get("patch_mode") == "replace_window"
+        if not valid_patch or (not force_replace and not patch_extends_timeline(merged, valid_patch)):
             patch_decisions.append({
                 "chunk_index": manifest["chunk_index"],
                 "source_start_ms": start,
@@ -210,7 +215,7 @@ def main() -> int:
                 "baseline_words_replaced": 0,
                 "patch_words_inserted": 0,
                 "applied": False,
-                "reason": "patch_does_not_extend_timeline",
+                "reason": "patch_empty" if not valid_patch else "patch_does_not_extend_timeline",
             })
             continue
         before = len(merged)
