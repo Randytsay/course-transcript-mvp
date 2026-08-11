@@ -56,6 +56,101 @@ def _find_full_mantra_cycle(items: list[dict[str, Any]], start: int) -> int | No
     return None
 
 
+# Chirp's phonetic rendering of Sanskrit can be very far from the canonical
+# Chinese spelling.  These are deliberately *families*, not a fuzzy-edit
+# threshold: publication only falls back when several independent families
+# repeat in the closing section and a post-chant closing cue follows.
+_MANTRA_FUZZY_ANCHORS = (
+    re.compile(r"(?:南[謨無]|[吶納那]摩|納丹)"),
+    re.compile(r"(?:三[藐菩佛]|阿[囉拉].{0,3}[喝喝羅])"),
+    re.compile(r"(?:摩[訶哈]|牟[朵帝]|菩提|勃提)"),
+    re.compile(r"(?:莎訶|梭呵|索呵|[吶納]施)"),
+)
+_CLOSING_CUE_RE = re.compile(r"(?:大眾.{0,6}(?:起立|鼓掌)|問訊|法會.{0,6}(?:圓滿|完滿))")
+
+
+def _fuzzy_mantra_display_layer(
+    cleaned: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+    """Canonically publish a noisy two-cycle closing mantra only with strong evidence.
+
+    Older ASR may put several chant phrases inside one cue, so the strict
+    one-line matcher cannot see two cycles.  This fallback is constrained to
+    the trailing portion, requires three independent phonetic anchor families
+    across at least six cues, and requires a recognizable post-chant ritual
+    cue.  It replaces *only* the derived display layer with the supplied
+    canonical wording; evidence layers retain every original cue and text.
+    """
+    if len(cleaned) < 24:
+        return None
+    start_floor = max(0, len(cleaned) - max(180, len(cleaned) // 8))
+    anchor_hits: list[tuple[int, set[int]]] = []
+    for index in range(start_floor, len(cleaned)):
+        text = _mantra_key(str(cleaned[index].get("cleaned_text", "")))
+        families = {
+            family_index
+            for family_index, pattern in enumerate(_MANTRA_FUZZY_ANCHORS)
+            if pattern.search(text)
+        }
+        if families:
+            anchor_hits.append((index, families))
+    if not anchor_hits:
+        return None
+
+    start = anchor_hits[0][0]
+    closing = next(
+        (
+            index
+            for index in range(start + 1, len(cleaned))
+            if _CLOSING_CUE_RE.search(str(cleaned[index].get("cleaned_text", "")))
+        ),
+        None,
+    )
+    if closing is None or closing <= start + 10:
+        return None
+    hits_in_span = [families for index, families in anchor_hits if start <= index < closing]
+    family_set = set().union(*hits_in_span) if hits_in_span else set()
+    if len(hits_in_span) < 6 or len(family_set) < 3:
+        return None
+    end = closing
+    start_ms = int(cleaned[start].get("start_ms", 0))
+    end_ms = int(cleaned[end - 1].get("end_ms", 0))
+    if end_ms - start_ms < len(MANTRA_LINES) * 500:
+        return None
+
+    source_ids = [str(item["segment_id"]) for item in cleaned[start:end]]
+    display_cues: list[dict[str, Any]] = []
+    for offset, line in enumerate(MANTRA_LINES):
+        cue_start = start_ms + (end_ms - start_ms) * offset // len(MANTRA_LINES)
+        cue_end = start_ms + (end_ms - start_ms) * (offset + 1) // len(MANTRA_LINES)
+        text = f"{MANTRA_TITLE}\n{line}" if offset == 0 else line
+        display_cues.append(
+            {
+                **cleaned[start],
+                "segment_id": f"mantra-display-{offset + 1:03d}",
+                "start_ms": cue_start,
+                "end_ms": max(cue_start + 1, cue_end),
+                "raw_text": text,
+                "corrected_text": text,
+                "cleaned_text": text,
+                "source_segment_ids": source_ids,
+                "cleanup_actions": ["mantra_display_canonicalized_fuzzy"],
+                "cleanup_review_reasons": [],
+            }
+        )
+    return [*cleaned[:start], *display_cues, *cleaned[end:]], {
+        "applied": True,
+        "match": "fuzzy_closing_two_cycle",
+        "first_cycle_start_segment_id": cleaned[start]["segment_id"],
+        "suppressed_cycle_end_segment_id": cleaned[end - 1]["segment_id"],
+        "replaced_source_cues": end - start,
+        "canonical_line_count": len(MANTRA_LINES),
+        "anchor_family_count": len(family_set),
+        "anchor_cue_count": len(hits_in_span),
+        "publication_layer": "display_segments",
+    }
+
+
 def _mantra_display_layer(cleaned: list[dict[str, Any]], content_mode: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """Build a separate publication layer for a verified two-cycle mantra.
 
@@ -67,7 +162,8 @@ def _mantra_display_layer(cleaned: list[dict[str, Any]], content_mode: str) -> t
     if content_mode != "dacheng_buddhist":
         return display, {"applied": False, "reason": "content_mode_not_buddhist"}
     if len(cleaned) < len(MANTRA_LINES) * 2:
-        return display, {"applied": False, "reason": "insufficient_segments"}
+        fuzzy = _fuzzy_mantra_display_layer(cleaned)
+        return fuzzy if fuzzy is not None else (display, {"applied": False, "reason": "insufficient_segments"})
     # Two complete, exact cycles are stronger evidence than an arbitrary
     # position threshold. Do not reject short lessons where the closing chant
     # occupies most of the recording.
@@ -99,7 +195,8 @@ def _mantra_display_layer(cleaned: list[dict[str, Any]], content_mode: str) -> t
             "canonical_line_count": len(MANTRA_LINES),
             "publication_layer": "display_segments",
         }
-    return display, {"applied": False, "reason": "no_complete_contiguous_two_cycle_match"}
+    fuzzy = _fuzzy_mantra_display_layer(cleaned)
+    return fuzzy if fuzzy is not None else (display, {"applied": False, "reason": "no_complete_contiguous_two_cycle_match"})
 
 
 def _atomic_text(path: Path, value: str) -> None:

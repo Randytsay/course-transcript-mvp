@@ -72,6 +72,35 @@ class SubtitleCleanupTests(unittest.TestCase):
             [item["corrected_text"] for item in segments],
         )
 
+    def test_noisy_closing_two_cycle_mantra_uses_canonical_display_only(self) -> None:
+        noisy_tail = (
+            "前言",
+            "南無納丹納丹納耶", "阿啦囉狄三藐三菩提耶", "摩訶菩提", "梭呵",
+            "南無納丹納丹納耶", "阿啦囉狄三佛陀耶", "菩提摩訶", "索呵",
+            "南無毗盧佛", "三藐三佛", "菩提", "梭呵", "大眾請起立", "問訊",
+            "後續禮儀", "後續禮儀", "後續禮儀", "後續禮儀", "後續禮儀",
+            "後續禮儀", "後續禮儀", "後續禮儀", "後續禮儀", "後續禮儀",
+        )
+        segments = [
+            {
+                "segment_id": f"seg-{index:03d}",
+                "start_ms": index * 1_000,
+                "end_ms": (index + 1) * 1_000,
+                "raw_text": text,
+                "corrected_text": text,
+            }
+            for index, text in enumerate(noisy_tail)
+        ]
+        report = build_report("subtitles.json", segments, content_mode="dacheng_buddhist")
+        self.assertTrue(report["mantra"]["applied"])
+        self.assertEqual(report["mantra"]["match"], "fuzzy_closing_two_cycle")
+        self.assertEqual(len(report["segments"]), len(segments))
+        display = report["display_segments"]
+        self.assertTrue(any(item["segment_id"] == "mantra-display-001" for item in display))
+        canonical = next(item for item in display if item["segment_id"] == "mantra-display-001")
+        self.assertTrue(canonical["cleaned_text"].startswith("《得見彌勒根本大明神咒》"))
+        self.assertTrue(any(item["cleaned_text"] == "大眾請起立" for item in display))
+
 
 if __name__ == "__main__":
     unittest.main()
