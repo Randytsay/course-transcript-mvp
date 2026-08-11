@@ -92,6 +92,19 @@ services:
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
 
+  retention-monitor:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        TARGETARCH: ${COURSE_TRANSCRIPT_TARGETARCH:-arm64}
+        RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
+        VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    image: course-transcript-pipeline-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    volumes:
+      - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
+      - ${GCP_CREDENTIALS_HOST_PATH:?Set GCP_CREDENTIALS_HOST_PATH}:/run/secrets/gcp-sa.json:ro
+
   billing-worker:
     build:
       context: .
