@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.api import _mutation_actor, _store, app
 from app.jobs import JobConflict, JobNotFound, normalize_output_formats
+from app.jobs.content_context import MAX_DOCUMENT_CONTEXT_CHARS
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, DYNAMIC_BATCHING, STANDARD_BATCH
 from app.live_error import safe_chunk_error
 import app.live_features as live_features
@@ -28,6 +29,8 @@ class CreateJobWithParallelismRequest(BaseModel):
     processing_strategy: Literal[DYNAMIC_BATCHING, STANDARD_BATCH] = DEFAULT_PROCESSING_STRATEGY
     chirp_max_parallel_chunks: int = Field(default=3, ge=1, strict=True)
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
+    content_mode: Literal["general", "dacheng_buddhist"] = "general"
+    document_context: str = Field(default="", max_length=MAX_DOCUMENT_CONTEXT_CHARS)
 
 
 class CreateBatchWithParallelismRequest(BaseModel):
@@ -41,6 +44,8 @@ class CreateBatchWithParallelismRequest(BaseModel):
     processing_strategy: Literal[DYNAMIC_BATCHING, STANDARD_BATCH] = DEFAULT_PROCESSING_STRATEGY
     chirp_max_parallel_chunks: int = Field(default=3, ge=1, strict=True)
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
+    content_mode: Literal["general", "dacheng_buddhist"] = "general"
+    document_context: str = Field(default="", max_length=MAX_DOCUMENT_CONTEXT_CHARS)
 
 
 def _parallelism_limit() -> int:
@@ -102,6 +107,8 @@ def create_batch_with_parallelism(
             processing_strategy=payload.processing_strategy,
             chirp_max_parallel_chunks=parallelism,
             output_formats=payload.output_formats,
+            content_mode=payload.content_mode,
+            document_context=payload.document_context,
             actor=actor,
         )
     except JobNotFound as exc:
@@ -119,6 +126,7 @@ def create_batch_with_parallelism(
         "job_ids": [job["id"] for job in result["jobs"]],
         "chirp_max_parallel_chunks": parallelism,
         "output_formats": normalize_output_formats(payload.output_formats),
+        "content_mode": payload.content_mode,
         "created_at": batch["created_at"],
         "paid_operation_started": False,
         "next_action": "等待各檔案本機 preflight 取得音訊長度與批次預估費用",
@@ -143,6 +151,8 @@ def create_job_with_parallelism(
             processing_strategy=payload.processing_strategy,
             chirp_max_parallel_chunks=parallelism,
             output_formats=payload.output_formats,
+            content_mode=payload.content_mode,
+            document_context=payload.document_context,
             actor=actor,
         )
     except JobNotFound as exc:

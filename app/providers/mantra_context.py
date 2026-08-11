@@ -62,3 +62,12 @@ def speech_adaptation_enabled() -> bool:
         "yes",
         "on",
     }
+
+
+def buddhist_context_enabled() -> bool:
+    """Only specialised Buddhist jobs may opt into mantra adaptation.
+
+    Request-level adaptation remains disabled by default because raw Chirp
+    output is more important than a specialised hint that can fail remotely.
+    """
+    return os.environ.get("CONTENT_MODE", "legacy_unspecified").strip().lower() == "dacheng_buddhist"

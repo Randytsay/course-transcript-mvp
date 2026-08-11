@@ -24,6 +24,7 @@ from app.providers.hardening_common import (
     retry_delay_seconds,
     utcnow,
 )
+from app.operations.runtime_heartbeat import write_service_heartbeat
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 DATABASE = DATA_DIR / "course-transcript.db"
@@ -267,9 +268,11 @@ def main() -> int:
     parser.add_argument("--poll-seconds", type=float, default=60)
     args = parser.parse_args()
     if args.once:
+        write_service_heartbeat(DATA_DIR, "delivery-worker", state="once")
         run_once()
         return 0
     while True:
+        write_service_heartbeat(DATA_DIR, "delivery-worker")
         worked = run_once()
         time.sleep(1 if worked else max(5, args.poll_seconds))
 

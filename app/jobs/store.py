@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from .exports import normalize_output_formats
+from .content_context import (
+    CONTEXT_VERSION,
+    context_digest,
+    normalize_content_mode,
+    normalize_document_context,
+)
 from .strategy import DEFAULT_PROCESSING_STRATEGY, normalize_processing_strategy
 
 
@@ -244,6 +250,10 @@ class JobStore:
                     processing_strategy TEXT NOT NULL DEFAULT 'DYNAMIC_BATCHING',
                     chirp_max_parallel_chunks INTEGER NOT NULL DEFAULT 3,
                     output_formats_json TEXT NOT NULL DEFAULT '["srt","txt","csv"]',
+                    content_mode TEXT NOT NULL DEFAULT 'legacy_unspecified',
+                    document_context TEXT NOT NULL DEFAULT '',
+                    context_version TEXT NOT NULL DEFAULT 'job-context-v1',
+                    context_digest TEXT,
                     status TEXT NOT NULL,
                     active_stage TEXT,
                     stage_detail TEXT,
@@ -332,6 +342,27 @@ class JobStore:
                 "output_formats_json",
                 "TEXT NOT NULL DEFAULT '[\"srt\",\"txt\",\"csv\"]'",
             )
+            # Existing jobs must remain explicitly legacy/unknown rather than
+            # being silently relabelled as either general or Buddhist.
+            self._ensure_column(
+                connection,
+                "jobs",
+                "content_mode",
+                "TEXT NOT NULL DEFAULT 'legacy_unspecified'",
+            )
+            self._ensure_column(
+                connection,
+                "jobs",
+                "document_context",
+                "TEXT NOT NULL DEFAULT ''",
+            )
+            self._ensure_column(
+                connection,
+                "jobs",
+                "context_version",
+                "TEXT NOT NULL DEFAULT 'job-context-v1'",
+            )
+            self._ensure_column(connection, "jobs", "context_digest", "TEXT")
             self._ensure_column(
                 connection,
                 "source_previews",
@@ -523,10 +554,15 @@ class JobStore:
         processing_strategy: str = DEFAULT_PROCESSING_STRATEGY,
         chirp_max_parallel_chunks: int = 3,
         output_formats: list[str] | None = None,
+        content_mode: str = "general",
+        document_context: str = "",
         actor: str,
     ) -> dict[str, Any]:
         selected_output_formats = normalize_output_formats(output_formats)
         processing_strategy = normalize_processing_strategy(processing_strategy)
+        content_mode = normalize_content_mode(content_mode)
+        document_context = normalize_document_context(document_context)
+        digest = context_digest(mode=content_mode, document_context=document_context)
         now = _iso()
         with self.transaction() as connection:
             preview = connection.execute(
@@ -585,9 +621,11 @@ class JobStore:
                         id, preview_id, batch_id, queue_position, source_path,
                         source_name, source_size_bytes, language_code, profile,
                         enable_gemini_correction, enable_subtitles,
-                        require_human_review, processing_strategy, chirp_max_parallel_chunks, output_formats_json, status, active_stage, stage_detail,
+                        require_human_review, processing_strategy, chirp_max_parallel_chunks, output_formats_json,
+                        content_mode, document_context, context_version, context_digest,
+                        status, active_stage, stage_detail,
                         created_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         'preflight', 'source', '等待安全下載與媒體檢查',
                         ?, ?, ?)
                     """,
@@ -607,6 +645,10 @@ class JobStore:
                         processing_strategy,
                         int(chirp_max_parallel_chunks),
                         json.dumps(selected_output_formats),
+                        content_mode,
+                        document_context,
+                        CONTEXT_VERSION,
+                        digest,
                         actor,
                         now,
                         now,
@@ -622,6 +664,8 @@ class JobStore:
                         "batch_id": batch_id,
                         "processing_strategy": processing_strategy,
                         "output_formats": selected_output_formats,
+                        "content_mode": content_mode,
+                        "context_digest": digest,
                     },
                 )
             connection.execute(
@@ -674,10 +718,15 @@ class JobStore:
         processing_strategy: str = DEFAULT_PROCESSING_STRATEGY,
         chirp_max_parallel_chunks: int = 3,
         output_formats: list[str] | None = None,
+        content_mode: str = "general",
+        document_context: str = "",
         actor: str,
     ) -> dict[str, Any]:
         selected_output_formats = normalize_output_formats(output_formats)
         processing_strategy = normalize_processing_strategy(processing_strategy)
+        content_mode = normalize_content_mode(content_mode)
+        document_context = normalize_document_context(document_context)
+        digest = context_digest(mode=content_mode, document_context=document_context)
         now = _iso()
         with self.transaction() as connection:
             active = connection.execute(
@@ -702,9 +751,11 @@ class JobStore:
                 INSERT INTO jobs(
                     id, preview_id, source_path, source_name, source_size_bytes,
                     language_code, profile, enable_gemini_correction,
-                    enable_subtitles, require_human_review, processing_strategy, chirp_max_parallel_chunks, output_formats_json, status, active_stage,
+                    enable_subtitles, require_human_review, processing_strategy, chirp_max_parallel_chunks, output_formats_json,
+                    content_mode, document_context, context_version, context_digest,
+                    status, active_stage,
                     stage_detail, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preflight',
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preflight',
                     'source', '等待安全下載與媒體檢查', ?, ?, ?)
                 """,
                 (
@@ -721,6 +772,10 @@ class JobStore:
                     processing_strategy,
                     int(chirp_max_parallel_chunks),
                     json.dumps(selected_output_formats),
+                    content_mode,
+                    document_context,
+                    CONTEXT_VERSION,
+                    digest,
                     actor,
                     now,
                     now,
@@ -739,6 +794,8 @@ class JobStore:
                     "status": "preflight",
                     "output_formats": selected_output_formats,
                     "processing_strategy": processing_strategy,
+                    "content_mode": content_mode,
+                    "context_digest": digest,
                 },
             )
         return self.get_job(job_id)

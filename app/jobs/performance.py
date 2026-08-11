@@ -8,6 +8,7 @@ contract used by the worker.
 from __future__ import annotations
 
 import csv
+from contextlib import closing
 import html
 import io
 import json
@@ -42,7 +43,7 @@ def _connection(database_path: Path) -> sqlite3.Connection:
 
 def ensure_schema(database_path: Path) -> None:
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    with _connection(database_path) as connection:
+    with closing(_connection(database_path)) as connection:
         connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS performance_stage_attempts (
@@ -106,7 +107,7 @@ def _safe_error(value: object) -> str | None:
 
 def record_stage_started(database_path: Path, job_id: str, stage: str) -> int:
     ensure_schema(database_path)
-    with _connection(database_path) as connection:
+    with closing(_connection(database_path)) as connection:
         row = connection.execute(
             """
             SELECT COALESCE(MAX(attempt_number), 0) AS attempt_number
@@ -138,7 +139,7 @@ def _finish_latest_stage(
 ) -> None:
     ensure_schema(database_path)
     completed_at = _iso()
-    with _connection(database_path) as connection:
+    with closing(_connection(database_path)) as connection:
         row = connection.execute(
             """
             SELECT id, started_at
@@ -407,6 +408,91 @@ def _chunk_metrics(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
             "operationName": manifest.get("operation_name"),
             "countedAsSubmitted": submitted_marker,
         })
+    # A retry can be preserved under attempts/<id>/manifest.json while the
+    # root manifest points at the latest attempt. Count each submitted provider
+    # operation once. If old deployments only retained attempt_count, use that
+    # as a clearly labelled conservative fallback rather than silently
+    # undercounting it.
+    archived_by_chunk: dict[int, list[Path]] = {}
+    for attempt_path in sorted((job_dir / "chunks").glob("chunk-*/attempts/*/manifest.json")):
+        try:
+            index = int(attempt_path.parents[2].name.split("-")[-1])
+        except (IndexError, ValueError):
+            continue
+        archived_by_chunk.setdefault(index, []).append(attempt_path)
+
+    seen_operations = {
+        str(item["operationName"])
+        for item in result
+        if item.get("operationName")
+    }
+    for item in result:
+        archive_count = len(archived_by_chunk.get(int(item["chunkIndex"]), []))
+        attempts = max(0, int(item.get("attemptCount") or 0))
+        item["billedAttemptCount"] = 1 if item["countedAsSubmitted"] else 0
+        if item["countedAsSubmitted"] and attempts > 1 and not archive_count:
+            item["billedAttemptCount"] = attempts
+            item["estimatedCostUsd"] = _money(
+                Decimal(item["estimatedCostUsd"]) * Decimal(attempts)
+            )
+            item["costEvidence"] = "manifest_attempt_count_fallback"
+        else:
+            item["costEvidence"] = "submitted_manifest"
+
+    for index, paths in archived_by_chunk.items():
+        for attempt_path in paths:
+            manifest = _read_json(attempt_path, {})
+            if not isinstance(manifest, dict):
+                continue
+            submitted_at = manifest.get("submitted_at")
+            operation_name = manifest.get("operation_name")
+            submitted = bool(
+                submitted_at
+                or operation_name
+                or str(manifest.get("status") or "") in COMMITTED_CHUNK_STATES
+            )
+            operation_key = str(operation_name or "")
+            if operation_key and operation_key in seen_operations:
+                continue
+            if operation_key:
+                seen_operations.add(operation_key)
+            start_ms = int(manifest.get("source_start_ms", 0) or 0)
+            end_ms = int(manifest.get("source_end_ms", 0) or 0)
+            duration_ms = max(0, end_ms - start_ms)
+            if not duration_ms:
+                # Old manifests may lack coordinates; use the parent chunk's
+                # plan interval as an estimate and mark the evidence.
+                parent = next((item for item in result if int(item["chunkIndex"]) == index), None)
+                duration_ms = int(parent["audioDurationMs"]) if parent else 0
+            cost = Decimal(duration_ms) / Decimal("60000") * config.chirp_usd_per_minute
+            result.append(
+                {
+                    "chunkIndex": index,
+                    "attemptId": attempt_path.parent.name,
+                    "startMs": start_ms,
+                    "endMs": end_ms,
+                    "audioDurationMs": duration_ms,
+                    "status": str(manifest.get("status") or "UNKNOWN"),
+                    "attemptCount": 1,
+                    "billedAttemptCount": 1 if submitted else 0,
+                    "submittedAt": submitted_at,
+                    "providerCompletedAt": manifest.get("provider_completed_at"),
+                    "recoveredAt": manifest.get("recovered_at") or manifest.get("completed_at"),
+                    "submitLatencyMs": int(manifest.get("submit_latency_ms") or 0),
+                    "providerProcessingMs": int(manifest.get("provider_processing_ms") or 0),
+                    "recoveryDelayMs": int(manifest.get("recovery_delay_ms") or 0),
+                    "totalWallMs": int(manifest.get("total_wall_ms") or 0),
+                    "wordCount": int(manifest.get("word_count") or 0),
+                    "billedAudioSeconds": round(duration_ms / 1000, 3),
+                    "estimatedCostUsd": _money(cost),
+                    "errorCode": manifest.get("error", {}).get("code") if isinstance(manifest.get("error"), dict) else None,
+                    "role": manifest.get("role", "retry"),
+                    "isPatch": manifest.get("role") == "patch" or bool(manifest.get("patch_mode")),
+                    "operationName": operation_name,
+                    "countedAsSubmitted": submitted,
+                    "costEvidence": "archived_attempt_manifest",
+                }
+            )
     return result
 
 

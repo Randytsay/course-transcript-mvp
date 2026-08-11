@@ -9,6 +9,7 @@ import type {
   JobEvent,
   ReviewTerm,
   OutputFormat,
+  ContentMode,
   ProcessingStrategy,
   TranscriptJob,
   TranscriptSegment,
@@ -35,6 +36,8 @@ type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt"
   chirp_max_parallel_chunks?: number;
   output_formats?: OutputFormat[];
   processing_strategy?: ProcessingStrategy;
+  content_mode?: ContentMode | "legacy_unspecified";
+  document_context?: string;
   pipeline: Array<{ id: string; label: string; detail: string; status: PipelineStep["status"] }>;
 };
 
@@ -68,6 +71,8 @@ function mapJob(job: ApiJob): TranscriptJob {
     estimatedCostUsd: job.estimated_cost_usd ?? null,
     chirpMaxParallelChunks: job.chirp_max_parallel_chunks ?? 3,
     outputFormats: job.output_formats ?? ["srt", "txt", "csv"],
+    contentMode: job.content_mode,
+    documentContext: job.document_context,
   };
 }
 
@@ -315,7 +320,14 @@ export async function previewBatch(
   };
 }
 
-export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks: number = 3, outputFormats: OutputFormat[] = ["srt", "txt", "csv"], processingStrategy: ProcessingStrategy = "DYNAMIC_BATCHING"): Promise<CreatedBatch> {
+export async function createBatch(
+  batchPreviewId: string,
+  chirpMaxParallelChunks: number = 3,
+  outputFormats: OutputFormat[] = ["srt", "txt", "csv"],
+  processingStrategy: ProcessingStrategy = "DYNAMIC_BATCHING",
+  contentMode: ContentMode = "general",
+  documentContext: string = "",
+): Promise<CreatedBatch> {
   const result = await postJson<{
     batch_id: string;
     status: string;
@@ -335,6 +347,8 @@ export async function createBatch(batchPreviewId: string, chirpMaxParallelChunks
     processing_strategy: processingStrategy,
     chirp_max_parallel_chunks: chirpMaxParallelChunks,
     output_formats: outputFormats,
+    content_mode: contentMode,
+    document_context: documentContext,
   });
   return {
     batchId: result.batch_id,

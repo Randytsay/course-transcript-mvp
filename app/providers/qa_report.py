@@ -230,7 +230,7 @@ def main() -> int:
     corrected_path = JOB / "subtitles-corrected.json"
     corrected = json.loads(corrected_path.read_text(encoding="utf-8")) if corrected_path.exists() else None
     words, segments = merged["words"], raw["segments"]
-    errors, warnings = [], []
+    errors, warnings, review_required = [], [], []
     if any(int(word["end_ms"]) <= int(word["start_ms"]) for word in words): errors.append("merged words contain non-positive durations")
     if any(next_word["start_ms"] < word["start_ms"] for word, next_word in zip(words, words[1:])): errors.append("merged word starts regress")
     ids = [item.get("segment_id") for item in segments]
@@ -253,12 +253,15 @@ def main() -> int:
     if long_gaps: warnings.append(f"subtitle gaps over 5 seconds: {len(long_gaps)}")
     audio = duration_ms(); end = int(segments[-1]["end_ms"]) if segments else 0; uncovered = max(0, audio - end)
     gap_errors, audible_gaps, gap_plans = audible_gap_plan(segments, audio)
-    errors.extend(gap_errors)
+    # A volume reading can detect a suspicious gap but cannot prove spoken
+    # words (music, room noise and applause are common).  Keep a durable patch
+    # plan for human approval instead of failing a structurally valid job.
+    review_required.extend(gap_errors)
     if audible_gaps:
         warnings.append(f"audible-gap measurements completed: {len(audible_gaps)} mid-file gaps")
     density, density_plans = density_windows(segments, audio)
     density_failures = [item for item in density if item.get("reason")]
-    errors.extend([f"15-minute character density out of range: window {item['window_index']} ({item['reason']})" for item in density_failures])
+    review_required.extend([f"15-minute character density out of range: window {item['window_index']} ({item['reason']})" for item in density_failures])
     retry_items = density_plans + gap_plans
     atomic(JOB / "density-retry-plan.json", {
         "version": "density-retry-plan-v1",
@@ -316,9 +319,10 @@ def main() -> int:
             errors.append("cleanup-review.json is invalid")
     else:
         errors.append("missing cleanup-review.json")
-    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": "PASS" if not errors else "FAIL", "errors": errors, "warnings": warnings, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
+    status = "FAIL" if errors else "REVIEW" if review_required else "PASS"
+    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": status, "errors": errors, "warnings": warnings, "review_required": review_required, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.6-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
     atomic(JOB / "qa-report.json", report)
-    md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
+    md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Review required"] + ([f"- {item}" for item in review_required] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
     temporary = JOB / "qa-report.md.tmp"; temporary.write_text("\n".join(md) + "\n", encoding="utf-8"); temporary.replace(JOB / "qa-report.md")
     html = [
         "<!doctype html><html lang=\"zh-Hant\"><meta charset=\"utf-8\">",
@@ -328,6 +332,8 @@ def main() -> int:
         f"<p>Status: <strong class=\"{'pass' if report['status'] == 'PASS' else 'fail'}\">{report['status']}</strong></p>",
         "<h2>Errors</h2><ul>",
         *([f"<li>{escape(item)}</li>" for item in errors] or ["<li>None</li>"]),
+        "</ul><h2>Review required</h2><ul>",
+        *([f"<li>{escape(item)}</li>" for item in review_required] or ["<li>None</li>"]),
         "</ul><h2>Warnings</h2><ul>",
         *([f"<li>{escape(item)}</li>" for item in warnings] or ["<li>None</li>"]),
         "</ul></html>",
@@ -336,7 +342,7 @@ def main() -> int:
     temporary.write_text("".join(html), encoding="utf-8")
     temporary.replace(JOB / "qa_report.html")
     atomic(JOB / "qa_report.json", report)
-    print(f"QA={report['status']} errors={len(errors)} warnings={len(warnings)}")
+    print(f"QA={report['status']} errors={len(errors)} review={len(review_required)} warnings={len(warnings)}")
     return 0 if not errors else 2
 
 

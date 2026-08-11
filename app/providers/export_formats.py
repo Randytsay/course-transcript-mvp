@@ -176,6 +176,12 @@ def main() -> int:
         and isinstance(cleaned_payload.get("segments"), list)
         else {}
     )
+    display_segments = (
+        cleaned_payload.get("display_segments")
+        if isinstance(cleaned_payload, dict)
+        and isinstance(cleaned_payload.get("display_segments"), list)
+        else None
+    )
     published_segments: list[dict[str, Any]] = []
     for segment in raw_segments:
         correction = corrected_by_id.get(str(segment["segment_id"]), {})
@@ -199,6 +205,7 @@ def main() -> int:
         "source_timing": "chirp_3 word timestamps",
         "correction_model": corrected_payload.get("model") if corrected_payload else None,
         "segments": published_segments,
+        "display_segments": display_segments,
     }
     atomic_text(
         JOB / "transcript.json",

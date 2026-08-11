@@ -40,45 +40,66 @@ def _mantra_key(value: str) -> str:
     return re.sub(r"[^\u3400-\u9fffA-Za-z0-9]", "", str(value or "")).lower()
 
 
-def _deduplicate_mantra(cleaned: list[dict[str, Any]]) -> dict[str, Any]:
-    """Canonicalise the end-of-lesson leader/congregation repetition once.
+def _matches_mantra_line(item: dict[str, Any], line: str) -> bool:
+    """Use a strict match: a false suppression is worse than a duplicate."""
+    actual = _mantra_key(item.get("cleaned_text", ""))
+    expected = _mantra_key(line)
+    return bool(actual and expected and (actual == expected or expected in actual))
 
-    This is intentionally conservative: it only fires in the last 30% of a
-    lesson and requires multiple canonical-line anchors. Raw and corrected
-    provider files remain unchanged; only the derived cleaned layer changes.
+
+def _find_full_mantra_cycle(items: list[dict[str, Any]], start: int) -> int | None:
+    end = start + len(MANTRA_LINES)
+    if end > len(items):
+        return None
+    if all(_matches_mantra_line(item, line) for item, line in zip(items[start:end], MANTRA_LINES)):
+        return end
+    return None
+
+
+def _mantra_display_layer(cleaned: list[dict[str, Any]], content_mode: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build a separate publication layer for a verified two-cycle mantra.
+
+    The raw/corrected/cleaned segment layers remain one-for-one with Chirp.
+    Only the display layer omits the second *complete, contiguous and ordered*
+    recitation.  It never emits empty cues or overwrites intervening speech.
     """
-    if not cleaned:
-        return {"applied": False, "reason": "empty"}
-    audio_end = max(int(item.get("end_ms", 0)) for item in cleaned)
-    start_floor = int(audio_end * 0.70)
-    keys = [_mantra_key(line) for line in MANTRA_LINES]
-    matches: list[int] = []
-    for index, item in enumerate(cleaned):
-        if int(item.get("start_ms", 0)) < start_floor:
+    display = [{**item, "source_segment_ids": [item["segment_id"]]} for item in cleaned]
+    if content_mode != "dacheng_buddhist":
+        return display, {"applied": False, "reason": "content_mode_not_buddhist"}
+    if len(cleaned) < len(MANTRA_LINES) * 2:
+        return display, {"applied": False, "reason": "insufficient_segments"}
+    # Two complete, exact cycles are stronger evidence than an arbitrary
+    # position threshold. Do not reject short lessons where the closing chant
+    # occupies most of the recording.
+    start_floor = 0
+    for first in range(len(cleaned) - len(MANTRA_LINES) * 2 + 1):
+        if int(cleaned[first].get("start_ms", 0)) < start_floor:
             continue
-        text_key = _mantra_key(item.get("cleaned_text", ""))
-        if MANTRA_TITLE.replace("《", "").replace("》", "") in str(item.get("cleaned_text", "")) or sum(1 for key in keys if key and key in text_key) >= 1:
-            matches.append(index)
-    if len(matches) < 4:
-        return {"applied": False, "reason": "insufficient_canonical_anchors", "anchor_count": len(matches)}
-    first = min(matches)
-    # Keep timing structure: place one canonical line per existing cue and
-    # suppress the echo cycle by making subsequent matching cues invisible.
-    block_end = max(matches)
-    available = cleaned[first : block_end + 1]
-    canonical = [MANTRA_TITLE, *MANTRA_LINES]
-    for offset, item in enumerate(available):
-        item.setdefault("cleanup_actions", [])
-        item["cleanup_actions"].append("mantra_canonicalized")
-        if offset < len(canonical):
-            item["cleaned_text"] = canonical[offset]
-            item["corrected_text"] = canonical[offset]
-        else:
-            item["cleaned_text"] = ""
-            item["corrected_text"] = ""
-            item["cleanup_actions"].append("mantra_duplicate_suppressed")
-        item["char_count"] = len(item["cleaned_text"])
-    return {"applied": True, "start_segment_id": cleaned[first].get("segment_id"), "end_segment_id": cleaned[block_end].get("segment_id"), "suppressed_cues": max(0, len(available) - len(canonical)), "canonical_line_count": len(canonical)}
+        first_end = _find_full_mantra_cycle(cleaned, first)
+        if first_end is None:
+            continue
+        second_end = _find_full_mantra_cycle(cleaned, first_end)
+        if second_end is None:
+            continue
+        # Canonicalise the first cycle only in display output. Combining the
+        # title with the first line avoids creating an artificial cue/timing.
+        for offset, line in enumerate(MANTRA_LINES):
+            cue = display[first + offset]
+            cue["cleaned_text"] = f"{MANTRA_TITLE}\n{line}" if offset == 0 else line
+            cue["corrected_text"] = cue["cleaned_text"]
+            cue["cleanup_actions"] = [*cue.get("cleanup_actions", []), "mantra_display_canonicalized"]
+        display = [*display[:first_end], *display[second_end:]]
+        return display, {
+            "applied": True,
+            "first_cycle_start_segment_id": cleaned[first]["segment_id"],
+            "first_cycle_end_segment_id": cleaned[first_end - 1]["segment_id"],
+            "suppressed_cycle_start_segment_id": cleaned[first_end]["segment_id"],
+            "suppressed_cycle_end_segment_id": cleaned[second_end - 1]["segment_id"],
+            "suppressed_cues": len(MANTRA_LINES),
+            "canonical_line_count": len(MANTRA_LINES),
+            "publication_layer": "display_segments",
+        }
+    return display, {"applied": False, "reason": "no_complete_contiguous_two_cycle_match"}
 
 
 def _atomic_text(path: Path, value: str) -> None:
@@ -146,7 +167,12 @@ def _base_segments() -> tuple[str, list[dict[str, Any]]]:
     raise RuntimeError("subtitles.json or subtitles-corrected.json is missing")
 
 
-def build_report(source_name: str, segments: list[dict[str, Any]]) -> dict[str, Any]:
+def build_report(
+    source_name: str,
+    segments: list[dict[str, Any]],
+    *,
+    content_mode: str | None = None,
+) -> dict[str, Any]:
     cleaned: list[dict[str, Any]] = []
     review: list[dict[str, Any]] = []
     changed_count = 0
@@ -203,10 +229,13 @@ def build_report(source_name: str, segments: list[dict[str, Any]]) -> dict[str, 
                 "reasons": ["possible_duplicate_cue"],
             })
 
-    mantra = _deduplicate_mantra(cleaned)
+    display_segments, mantra = _mantra_display_layer(
+        cleaned,
+        content_mode or os.environ.get("CONTENT_MODE", "legacy_unspecified").strip().lower(),
+    )
 
     return {
-        "version": "cleanup-v1",
+        "version": "cleanup-v2-display-layer",
         "generated_at": datetime.now(UTC).isoformat(),
         "source": source_name,
         "timestamps_immutable": True,
@@ -220,6 +249,7 @@ def build_report(source_name: str, segments: list[dict[str, Any]]) -> dict[str, 
             "mantra": mantra,
         },
         "segments": cleaned,
+        "display_segments": display_segments,
         "review_required": review,
         "mantra": mantra,
     }
@@ -228,8 +258,16 @@ def build_report(source_name: str, segments: list[dict[str, Any]]) -> dict[str, 
 def main() -> int:
     source_name, segments = _base_segments()
     report = build_report(source_name, segments)
-    _atomic_json(JOB / "subtitles-cleaned.json", {"source": source_name, "segments": report["segments"]})
-    cleaned = report["segments"]
+    _atomic_json(
+        JOB / "subtitles-cleaned.json",
+        {
+            "source": source_name,
+            "segments": report["segments"],
+            "display_segments": report["display_segments"],
+            "display_layer": "display_segments",
+        },
+    )
+    cleaned = report["display_segments"]
     _atomic_text(
         JOB / "subtitles-cleaned.srt",
         "\n\n".join(

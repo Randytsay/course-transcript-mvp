@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from contextlib import closing
 from typing import Any
 
 
@@ -10,7 +11,7 @@ def _iso() -> str:
 
 
 def count_waiting_dynamic(store: Any) -> int:
-    with store.connect() as connection:
+    with closing(store.connect()) as connection:
         row = connection.execute(
             """
             SELECT COUNT(*) AS count
@@ -25,7 +26,7 @@ def count_waiting_dynamic(store: Any) -> int:
 
 def next_waiting_dynamic(store: Any) -> dict[str, Any] | None:
     now = _iso()
-    with store.connect() as connection:
+    with closing(store.connect()) as connection:
         row = connection.execute(
             """
             SELECT * FROM jobs
@@ -47,7 +48,7 @@ def next_waiting_dynamic(store: Any) -> dict[str, Any] | None:
 
 def next_fresh_queued(store: Any) -> dict[str, Any] | None:
     now = _iso()
-    with store.connect() as connection:
+    with closing(store.connect()) as connection:
         row = connection.execute(
             """
             SELECT * FROM jobs

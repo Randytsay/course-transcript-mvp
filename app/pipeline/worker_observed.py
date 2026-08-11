@@ -34,6 +34,7 @@ _ORIGINAL_COMPLETE = base._complete
 _ORIGINAL_RUN_PAID_JOB = base.run_paid_job
 _ORIGINAL_RUN_ONCE = base.run_once
 _CURRENT_STAGE: dict[str, str] = {}
+_CURRENT_DATA_DIR: dict[str, Path] = {}
 
 
 def _database_path(data_dir: Path) -> Path:
@@ -130,7 +131,9 @@ def _begin(
         progress=progress,
     )
     _CURRENT_STAGE[record["id"]] = stage
-    data_dir = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+    data_dir = _CURRENT_DATA_DIR.get(
+        record["id"], Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+    )
     record_stage_started(_database_path(data_dir), record["id"], stage)
 
 
@@ -151,7 +154,9 @@ def _complete(
         detail=detail,
         progress=progress,
     )
-    data_dir = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+    data_dir = _CURRENT_DATA_DIR.get(
+        job_id, Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+    )
     record_stage_completed(_database_path(data_dir), job_id, stage)
     if _CURRENT_STAGE.get(job_id) == stage:
         _CURRENT_STAGE.pop(job_id, None)
@@ -199,6 +204,7 @@ def run_paid_job(
 ) -> dict[str, Any]:
     database_path = _database_path(data_dir)
     ensure_schema(database_path)
+    _CURRENT_DATA_DIR[record["id"]] = data_dir
     try:
         result = _ORIGINAL_RUN_PAID_JOB(
             store,
@@ -233,6 +239,7 @@ def run_paid_job(
                 status="paused",
             )
         _CURRENT_STAGE.pop(record["id"], None)
+        _CURRENT_DATA_DIR.pop(record["id"], None)
         _write_report_safely(data_dir, record["id"])
         return result
     except Exception as exc:
@@ -248,6 +255,7 @@ def run_paid_job(
             )
         finally:
             _CURRENT_STAGE.pop(record["id"], None)
+            _CURRENT_DATA_DIR.pop(record["id"], None)
             _write_report_safely(data_dir, record["id"])
         raise
 

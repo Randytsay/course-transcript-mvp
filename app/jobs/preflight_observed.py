@@ -14,6 +14,7 @@ from app.jobs.costs import CostConfig, estimate_job_cost
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 from app.jobs.preflight import PreflightError, _check_disk, _probe, _sha256
 from app.jobs.store import JobConflict, JobStore
+from app.operations.runtime_heartbeat import write_service_heartbeat
 
 
 class PreflightCancelled(RuntimeError):
@@ -172,9 +173,11 @@ def main() -> int:
     store = JobStore(data_dir / "course-transcript.db")
     worker_id = os.environ.get("COURSE_TRANSCRIPT_WORKER_ID", "preflight-worker")
     if args.once:
+        write_service_heartbeat(data_dir, "preflight-worker", state="once")
         run_once(store, data_dir=data_dir, worker_id=worker_id)
         return 0
     while True:
+        write_service_heartbeat(data_dir, "preflight-worker")
         worked = run_once(store, data_dir=data_dir, worker_id=worker_id)
         if not worked:
             time.sleep(max(1, args.poll_seconds))

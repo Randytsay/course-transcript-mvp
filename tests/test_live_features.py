@@ -240,6 +240,28 @@ class LiveChunkTests(unittest.TestCase):
         self.assertEqual(Decimal(result["chirpEstimatedUsd"]), Decimal("0.48"))
         self.assertGreater(Decimal(result["geminiEstimatedUsd"]), Decimal("0"))
 
+    def test_live_cost_includes_archived_retry_and_patch_once_each(self) -> None:
+        self.write_json(
+            self.job_dir / "chunk-plan.json",
+            {"chunks": [{"chunk_index": 0, "source_start_ms": 0, "source_end_ms": 60000}]},
+        )
+        self.write_json(
+            self.job_dir / "chunks/chunk-000/manifest.json",
+            {"chunk_index": 0, "status": "SUCCEEDED", "operation_name": "operations/latest"},
+        )
+        self.write_json(
+            self.job_dir / "chunks/chunk-000/attempts/retry-a/manifest.json",
+            {"chunk_index": 0, "source_start_ms": 0, "source_end_ms": 60000, "status": "FAILED", "operation_name": "operations/retry-a"},
+        )
+        self.write_json(
+            self.job_dir / "chunks/chunk-900/manifest.json",
+            {"chunk_index": 900, "source_start_ms": 60000, "source_end_ms": 90000, "status": "SUCCEEDED", "role": "patch", "operation_name": "operations/patch"},
+        )
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_CHIRP_USD_PER_MINUTE": "0.016"}):
+            result = live_features.build_live_cost(self.job_id)
+        self.assertEqual(result["submittedChunkCount"], 3)
+        self.assertEqual(Decimal(result["chirpEstimatedUsd"]), Decimal("0.04"))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,7 @@ import {
 } from "@/lib/drive-browser-client";
 import type {
   BatchPreview,
+  ContentMode,
   CostSummary,
   CreatedBatch,
   DriveEntry,
@@ -70,6 +71,8 @@ export default function NewJobPageDriveApi() {
   const [chirpMaxParallelChunks, setChirpMaxParallelChunks] = useState(3);
   const [processingStrategy, setProcessingStrategy] = useState<ProcessingStrategy>("DYNAMIC_BATCHING");
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>(DEFAULT_OUTPUT_FORMATS);
+  const [contentMode, setContentMode] = useState<ContentMode>("general");
+  const [documentContext, setDocumentContext] = useState("");
 
   const selectedEntries = useMemo(() => Array.from(selected.values()), [selected]);
   const selectedSize = selectedEntries.reduce((sum, item) => sum + item.sizeBytes, 0);
@@ -185,7 +188,14 @@ export default function NewJobPageDriveApi() {
     setBusy("create");
     setError(null);
     try {
-      setCreated(await createBatch(preview.batchPreviewId, chirpMaxParallelChunks, outputFormats, processingStrategy));
+      setCreated(await createBatch(
+        preview.batchPreviewId,
+        chirpMaxParallelChunks,
+        outputFormats,
+        processingStrategy,
+        contentMode,
+        documentContext,
+      ));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法建立批次");
     } finally {
@@ -279,8 +289,24 @@ export default function NewJobPageDriveApi() {
             {selectionMode === "files" && selectedEntries.length > 0 && <div className="selected-files-strip"><strong>已選 {selectedEntries.length} 個影音檔</strong><span>{formatBytes(selectedSize)}</span><button type="button" className="button button--ghost button--small" onClick={() => setSelected(new Map())}>清除</button></div>}
           </div>
 
+          <div className="form-section document-context-section">
+            <div className="section-heading"><span className="step-number">3</span><div><h2>文件方向與辨識背景</h2><p>設定會隨每個工作保存；不會套用到之後的新文件。</p></div></div>
+            <div className="context-mode-grid">
+              <button type="button" className={`context-mode-card ${contentMode === "general" ? "context-mode-card--active" : ""}`} onClick={() => setContentMode("general")}>
+                <span><strong>一般文件</strong><small>預設。課程、會議、訪談或其他非特定宗教內容。</small></span>{contentMode === "general" && <Check size={17} />}
+              </button>
+              <button type="button" className={`context-mode-card ${contentMode === "dacheng_buddhist" ? "context-mode-card--active" : ""}`} onClick={() => setContentMode("dacheng_buddhist")}>
+                <span><strong>大成佛經</strong><small>使用固定咒語拼寫；講師與大眾完整重複時只在輸出字幕保留一次。</small></span>{contentMode === "dacheng_buddhist" && <Check size={17} />}
+              </button>
+            </div>
+            <label className="context-textarea-label" htmlFor="document-context">補充說明（選填）</label>
+            <textarea id="document-context" className="context-textarea" value={documentContext} maxLength={2400} onChange={(event) => setDocumentContext(event.target.value)} placeholder="例如：能源績效量測驗證課程；講者林佑璇；常見術語包含 M&V、基準線、節能量。" />
+            <div className="context-note"><span>此背景只作校正參考，不會改變原始 Chirp 結果、時間碼或分段。</span><span>{documentContext.length}/2400</span></div>
+            {selectionMode === "files" && selectedEntries.length > 1 && <p className="context-batch-note">目前會將這個設定套用到已選的 {selectedEntries.length} 個檔案；不同主題請分批建立。</p>}
+          </div>
+
           <div className="form-section">
-            <div className="section-heading"><span className="step-number">3</span><div><h2>輸出與併發</h2><p>建立工作前只做唯讀預覽；付費辨識仍需另行確認費用。</p></div></div>
+            <div className="section-heading"><span className="step-number">4</span><div><h2>輸出與併發</h2><p>建立工作前只做唯讀預覽；付費辨識仍需另行確認費用。</p></div></div>
             <label style={{ display: "block", fontWeight: 700, marginBottom: 8 }}>辨識處理模式</label>
             <div className="selection-mode-grid">
               <button type="button" className={`selection-mode-card ${processingStrategy === "DYNAMIC_BATCHING" ? "selection-mode-card--active" : ""}`} onClick={() => setProcessingStrategy("DYNAMIC_BATCHING")}>

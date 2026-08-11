@@ -124,7 +124,7 @@ services:
       GEMINI_CORRECTION_WINDOW_MS: ${GEMINI_CORRECTION_WINDOW_MS:-60000}
       GEMINI_MAX_PARALLEL_WINDOWS: ${GEMINI_MAX_PARALLEL_WINDOWS:-2}
       COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE: ${COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE:-true}
-      CHIRP_SPEECH_ADAPTATION: ${CHIRP_SPEECH_ADAPTATION:-true}
+      CHIRP_SPEECH_ADAPTATION: ${CHIRP_SPEECH_ADAPTATION:-false}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
@@ -160,6 +160,8 @@ services:
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
       PRODUCTION_HEALTH_POLL_SECONDS: ${PRODUCTION_HEALTH_POLL_SECONDS:-900}
+      HEALTH_REQUIRE_SERVICE_HEARTBEATS: "true"
+      HEALTH_SERVICE_HEARTBEAT_MAX_SECONDS: ${HEALTH_SERVICE_HEARTBEAT_MAX_SECONDS:-180}
     volumes:
       - ./data:/app/data
     command: ["sh", "-c", "while true; do python -m app.operations.production_health --output /app/data/production-health.json || true; sleep $${PRODUCTION_HEALTH_POLL_SECONDS}; done"]
@@ -169,6 +171,24 @@ services:
       timeout: 10s
       retries: 2
       start_period: 30s
+
+  retention-monitor:
+    profiles: ["web"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-pipeline-worker:local
+    restart: unless-stopped
+    environment:
+      COURSE_TRANSCRIPT_DATA_DIR: /app/data
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
+      GCS_BUCKET: ${GCS_BUCKET:-course-transcript-mvp}
+      COURSE_TRANSCRIPT_RETENTION_POLL_SECONDS: ${COURSE_TRANSCRIPT_RETENTION_POLL_SECONDS:-86400}
+    volumes:
+      - ./data:/app/data
+      - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
+    # Always dry-run: deletion still requires an explicit, reviewed --apply.
+    command: ["sh", "-c", "while true; do python -m app.operations.retention_cleanup --data-dir /app/data --output /app/data/retention-report.json || true; sleep $${COURSE_TRANSCRIPT_RETENTION_POLL_SECONDS}; done"]
 
   billing-worker:
     profiles: ["billing"]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 import signal
@@ -19,6 +20,7 @@ from app.jobs.drive_publish import DrivePublishError
 from app.jobs.performance_enhanced import build_performance_summary as enhanced_performance_summary
 from app.jobs.store import JobConflict, JobStore
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, is_dynamic_batching
+from app.operations.runtime_heartbeat import write_service_heartbeat
 from app.pipeline import worker as base
 from app.pipeline import worker_observed as observed
 from app.pipeline.recovery_schedule import is_due, schedule
@@ -127,7 +129,7 @@ def _available_rows(store: JobStore, statuses: tuple[str, ...]) -> list[dict[str
         from datetime import UTC, datetime
 
         now = datetime.now(UTC).isoformat()
-    with store.connect() as connection:
+    with closing(store.connect()) as connection:
         rows = connection.execute(
             f"""
             SELECT * FROM jobs
@@ -148,7 +150,7 @@ def _available_rows(store: JobStore, statuses: tuple[str, ...]) -> list[dict[str
 
 
 def _waiting_count(store: JobStore) -> int:
-    with store.connect() as connection:
+    with closing(store.connect()) as connection:
         row = connection.execute(
             """
             SELECT COUNT(*) AS count
@@ -578,9 +580,11 @@ def main() -> int:
     store = JobStore(data_dir / "course-transcript.db")
     worker_id = os.environ.get("COURSE_TRANSCRIPT_PIPELINE_WORKER_ID", "pipeline-worker-1")
     if args.once:
+        write_service_heartbeat(data_dir, "pipeline-worker", state="once")
         run_once(store, data_dir=data_dir, worker_id=worker_id)
         return 0
     while True:
+        write_service_heartbeat(data_dir, "pipeline-worker")
         worked = run_once(store, data_dir=data_dir, worker_id=worker_id)
         time.sleep(0.25 if worked else max(1.0, args.poll_seconds))
 

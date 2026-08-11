@@ -211,3 +211,17 @@ python -m app.operations.retention_cleanup --data-dir /app/data
 確認 `retention-report.json` 後才可明確加 `--apply`。VPS 的
 `health-monitor` 每 15 分鐘產生 `production-health.json`，會檢查過期 lease、
 heartbeat、Dynamic Batch 逾時與 Drive delivery retry。
+
+## 文件內容模式與提示詞
+
+建立任務時，先選擇每份文件的內容模式：`一般文件` 是預設值，不會帶入佛經
+或咒語偏置；`大成佛經` 才會使用固定咒語拼寫。選填的「補充說明」會與該工作
+一併保存為不可變背景，用於 Gemini 3.6 Flash 的純文字校正，不會更動原始 Chirp
+結果、時間碼或分段。
+
+咒語的講師／大眾重複只會在輸出層做去重，且必須偵測到兩輪完整、連續、順序正確
+的咒語；未達條件只會保留原字幕並標示複核，絕不以空白 cue 覆寫原始內容。
+
+`retention-monitor` 每日產生唯讀的 `retention-report.json`，列出可處理的 GCS
+孤兒與 Drive backup。它不會自行刪除；仍需人工檢視報告後，以明確的 `--apply`
+執行清理。

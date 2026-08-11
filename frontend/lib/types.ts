@@ -21,6 +21,7 @@ export type JobStatus =
 export type PipelineStepStatus = "completed" | "running" | "pending" | "warning" | "failed";
 export type OutputFormat = "srt" | "txt" | "csv" | "json" | "vtt" | "ass" | "docx" | "pdf";
 export type ProcessingStrategy = "DYNAMIC_BATCHING" | "STANDARD_BATCH";
+export type ContentMode = "general" | "dacheng_buddhist";
 
 export interface PipelineStep {
   id: string;
@@ -82,6 +83,8 @@ export interface TranscriptJob {
   estimatedCostUsd?: string | null;
   chirpMaxParallelChunks?: number;
   outputFormats: OutputFormat[];
+  contentMode?: ContentMode | "legacy_unspecified";
+  documentContext?: string;
   drivePublished?: boolean;
   drivePublicationStatus?: string | null;
 }

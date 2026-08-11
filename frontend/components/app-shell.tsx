@@ -46,11 +46,11 @@ export default function AppShell({
 }) {
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [fontSize, setFontSize] = useState<FontSize>("large");
+  const [fontSize, setFontSize] = useState<FontSize>("standard");
 
   useEffect(() => {
-    const saved = localStorage.getItem("course-transcript-font-size");
-    const initialSize: FontSize = saved === "standard" || saved === "large" || saved === "xlarge" ? saved : "large";
+    const saved = localStorage.getItem("course-transcript-font-size-v2");
+    const initialSize: FontSize = saved === "standard" || saved === "large" || saved === "xlarge" ? saved : "standard";
     setFontSize(initialSize);
     document.documentElement.setAttribute("data-font-size", initialSize);
   }, []);
@@ -58,7 +58,7 @@ export default function AppShell({
   function handleFontSizeChange(size: FontSize) {
     setFontSize(size);
     document.documentElement.setAttribute("data-font-size", size);
-    localStorage.setItem("course-transcript-font-size", size);
+    localStorage.setItem("course-transcript-font-size-v2", size);
   }
 
   return (

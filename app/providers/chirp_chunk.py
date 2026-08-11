@@ -14,7 +14,7 @@ from google.cloud import speech_v2, storage
 from google.cloud.speech_v2.types import cloud_speech
 
 from app.live_features import words_to_text
-from app.providers.mantra_context import speech_adaptation, speech_adaptation_enabled
+from app.providers.mantra_context import buddhist_context_enabled, speech_adaptation, speech_adaptation_enabled
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB_NAME = os.environ.get("JOB_NAME", "voice_11386603-seg1")
@@ -147,7 +147,7 @@ def main() -> None:
         "model": "chirp_3",
         "features": cloud_speech.RecognitionFeatures(enable_word_time_offsets=True),
     }
-    if speech_adaptation_enabled():
+    if buddhist_context_enabled() and speech_adaptation_enabled():
         config_kwargs["adaptation"] = speech_adaptation()
     config = cloud_speech.RecognitionConfig(
         **config_kwargs,

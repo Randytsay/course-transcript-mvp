@@ -106,6 +106,16 @@ def main() -> int:
                 errors.append("cleaned segment IDs or timing changed")
             if any(not str(item.get("cleaned_text", "")).strip() for item in cleaned_segments):
                 errors.append("cleaned subtitle contains empty text")
+            display_segments = cleaned.get("display_segments", cleaned_segments)
+            if not isinstance(display_segments, list) or not display_segments:
+                errors.append("display subtitle layer is missing")
+            elif any(not str(item.get("cleaned_text", "")).strip() for item in display_segments):
+                errors.append("display subtitle contains empty text")
+            elif any(
+                int(after.get("start_ms", 0)) < int(before.get("end_ms", 0))
+                for before, after in zip(display_segments, display_segments[1:])
+            ):
+                errors.append("display subtitle overlaps")
             if not isinstance(cleanup_report, dict) or not isinstance(cleanup_report.get("review_required", []), list):
                 errors.append("cleanup-review.json has invalid review list")
         except (OSError, json.JSONDecodeError, TypeError, AttributeError):

@@ -372,6 +372,8 @@ def _module_env(record: dict[str, Any], job_dir: Path) -> dict[str, str]:
                 "1" if record["enable_gemini_correction"] else "0"
             ),
             "CHIRP_MAX_PARALLEL_CHUNKS": str(effective_parallelism),
+            "CONTENT_MODE": str(record.get("content_mode") or "legacy_unspecified"),
+            "DOCUMENT_CONTEXT": str(record.get("document_context") or ""),
         }
     )
     return env

@@ -35,7 +35,7 @@ class OptimizationFeatureTests(unittest.TestCase):
         self.assertEqual(windows[0]["reason"], "char_count=10<2500")
         self.assertEqual(plans[0]["reason"], "density_out_of_range")
 
-    def test_mantra_duplicate_cycle_is_canonicalized(self):
+    def test_partial_mantra_anchors_are_not_canonicalized_or_suppressed(self):
         lines = ["《得見彌勒根本大明神咒》"] + [
             "南謨囉怛那怛囉夜耶。", "南謨吠嚕左那莎彌儞。", "怛他誐多耶。", "阿囉喝帝三藐三沒馱耶。"
         ] * 2
@@ -43,10 +43,10 @@ class OptimizationFeatureTests(unittest.TestCase):
             {"segment_id": f"s{i}", "start_ms": 800_000 + i * 1000, "end_ms": 801_000 + i * 1000, "raw_text": text, "corrected_text": text}
             for i, text in enumerate(lines)
         ]
-        report = cleanup_report("subtitles.json", segments)
-        self.assertTrue(report["mantra"]["applied"])
+        report = cleanup_report("subtitles.json", segments, content_mode="dacheng_buddhist")
+        self.assertFalse(report["mantra"]["applied"])
         self.assertEqual(report["segments"][0]["cleaned_text"], "《得見彌勒根本大明神咒》")
-        self.assertTrue(any("mantra_canonicalized" in item["cleanup_actions"] for item in report["segments"]))
+        self.assertEqual(len(report["display_segments"]), len(segments))
 
     def test_retention_is_dry_run_by_default(self):
         with tempfile.TemporaryDirectory() as tmp:

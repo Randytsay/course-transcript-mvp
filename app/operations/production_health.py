@@ -174,16 +174,30 @@ def build_report(
         "jobs": 0,
         "active": 0,
         "failed": 0,
+        "historical_failed": 0,
         "dynamic_waiting": 0,
         "drive_pending": 0,
         "expired_leases": 0,
         "stale_heartbeats": 0,
+        "missing_services": 0,
     }
     if not database.is_file():
         findings.append(
             Finding("critical", "database_missing", f"找不到資料庫：{database}")
         )
         return _finalize(data_dir, now, counts, findings)
+
+    require_service_heartbeats = os.environ.get("HEALTH_REQUIRE_SERVICE_HEARTBEATS", "false").strip().lower() in {"1", "true", "yes", "on"}
+    if require_service_heartbeats:
+        service_max_age_seconds = _env_float("HEALTH_SERVICE_HEARTBEAT_MAX_SECONDS", 180)
+        for service in ("preflight-worker", "pipeline-worker", "delivery-worker"):
+            heartbeat = _read_json_object(data_dir / "runtime" / f"{service}.heartbeat.json")
+            updated_at = _parse_time((heartbeat or {}).get("updated_at"))
+            age_seconds = (now - updated_at).total_seconds() if updated_at else None
+            if age_seconds is None or age_seconds > service_max_age_seconds:
+                counts["missing_services"] += 1
+                detail = "尚未寫入心跳" if age_seconds is None else f"心跳已過期 {round(age_seconds)} 秒"
+                findings.append(Finding("critical", "service_heartbeat_missing", f"{service} {detail}。", service, None if age_seconds is None else round(age_seconds / 3600, 2)))
 
     warning_hours = _env_float("DYNAMIC_BATCH_WARNING_HOURS", 18)
     critical_hours = _env_float("DYNAMIC_BATCH_CRITICAL_HOURS", 23)
@@ -247,14 +261,20 @@ def build_report(
                 findings.append(Finding("critical", "stale_heartbeat", f"Worker heartbeat 超過 {max_hours:g} 小時未更新。", job_id, round((now - heartbeat).total_seconds() / 3600, 2)))
         if row["status"] == "failed":
             counts["failed"] += 1
-            findings.append(
-                Finding(
-                    "warning",
-                    "job_failed",
-                    f"任務失敗：{str(row['error'] or '未提供錯誤')[:300]}",
-                    job_id,
+            age_hours = _hours_since(row["updated_at"], now=now)
+            review_hours = _env_float("HEALTH_FAILED_JOB_ALERT_HOURS", 168)
+            if age_hours is not None and age_hours <= review_hours:
+                findings.append(
+                    Finding(
+                        "warning",
+                        "job_failed",
+                        f"任務失敗：{str(row['error'] or '未提供錯誤')[:300]}",
+                        job_id,
+                        round(age_hours, 2),
+                    )
                 )
-            )
+            else:
+                counts["historical_failed"] += 1
         is_dynamic = _is_dynamic_batch(row, job_dir)
         if is_dynamic:
             counts["dynamic_waiting"] += 1

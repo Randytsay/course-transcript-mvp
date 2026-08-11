@@ -9,7 +9,7 @@ from pathlib import Path
 
 from google.cloud import speech_v2, storage
 from google.cloud.speech_v2.types import cloud_speech
-from app.providers.mantra_context import speech_adaptation, speech_adaptation_enabled
+from app.providers.mantra_context import buddhist_context_enabled, speech_adaptation, speech_adaptation_enabled
 
 from app.providers.hardening_common import atomic_json, env_true, iso, window_matches
 
@@ -102,7 +102,7 @@ def main() -> int:
         "model": "chirp_3",
         "features": cloud_speech.RecognitionFeatures(enable_word_time_offsets=True),
     }
-    if speech_adaptation_enabled():
+    if buddhist_context_enabled() and speech_adaptation_enabled():
         config_kwargs["adaptation"] = speech_adaptation()
     config = cloud_speech.RecognitionConfig(
         **config_kwargs,

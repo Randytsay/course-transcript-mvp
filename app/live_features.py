@@ -397,24 +397,25 @@ def build_live_cost(job_id: str) -> dict[str, Any]:
     )
     total_estimated = Decimal(str(record.get("estimated_cost_usd") or "0"))
     committed_seconds = Decimal("0")
-    submitted_indices: set[int] = set()
+    chirp_cost = Decimal("0")
+    submitted_operations: set[str] = set()
     completed_count = 0
     if job_dir.is_dir():
-        for item in _chunk_plan(job_dir):
-            index = int(item["chunkIndex"])
-            status = normalize_chunk_status(_manifest(job_dir, index).get("status"))
-            if status in COMMITTED_COST_STATES:
-                submitted_indices.add(index)
-                committed_seconds += Decimal(
-                    int(item["endMs"]) - int(item["startMs"])
-                ) / Decimal("1000")
-            if status in {"SUCCEEDED", "EMPTY_SILENCE"}:
+        # Reuse the durable report accounting so retries and targeted patches
+        # have the same totals in the operator UI and exported performance log.
+        from app.jobs.performance import _chunk_metrics
+
+        for item in _chunk_metrics(job_dir, config):
+            status = normalize_chunk_status(str(item.get("status") or ""))
+            if item.get("countedAsSubmitted"):
+                operation_key = str(item.get("operationName") or f"{item.get('chunkIndex')}:{item.get('attemptId', 'root')}")
+                if operation_key not in submitted_operations:
+                    submitted_operations.add(operation_key)
+                    committed_seconds += Decimal(str(item.get("billedAudioSeconds") or 0))
+                    chirp_cost += Decimal(str(item.get("estimatedCostUsd") or 0))
+            if status in {"SUCCEEDED", "EMPTY_SILENCE"} and not item.get("attemptId"):
                 completed_count += 1
-    chirp_cost = (
-        committed_seconds
-        / Decimal("60")
-        * config.chirp_usd_per_minute
-    ).quantize(Decimal("0.0001"), rounding=ROUND_UP)
+    chirp_cost = chirp_cost.quantize(Decimal("0.0001"), rounding=ROUND_UP)
     prompt_tokens, output_tokens = _usage_tokens(job_dir)
     gemini_cost = (
         Decimal(prompt_tokens)
@@ -432,7 +433,7 @@ def build_live_cost(job_id: str) -> dict[str, Any]:
         "estimatedRemainingUsd": _money(remaining),
         "chirpEstimatedUsd": _money(chirp_cost),
         "geminiEstimatedUsd": _money(gemini_cost),
-        "submittedChunkCount": len(submitted_indices),
+        "submittedChunkCount": len(submitted_operations),
         "completedChunkCount": completed_count,
         "isEstimate": True,
         "warning": "系統即時估算，Cloud Billing 為最終依據。",

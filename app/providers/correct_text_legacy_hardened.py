@@ -180,7 +180,9 @@ def correct_window(
         "summarize, add information, split, merge, reorder, or alter segment IDs/"
         "timestamps. Apply only clear corrections. Return exactly one object for "
         "every input segment with the same segment_id. uncertain_terms must list "
-        "unresolved terms. JSON only.\n\nGlobal terminology:\n"
+        "unresolved terms. JSON only.\n\n"
+        + base.correction_context_instruction()
+        + "\n\nGlobal terminology:\n"
         + json.dumps(terms, ensure_ascii=False)
         + "\n\nSegments:\n"
         + json.dumps(
