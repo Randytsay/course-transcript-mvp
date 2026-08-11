@@ -80,10 +80,10 @@ def _operation_file_error(name: str) -> tuple[int, str] | None:
     carries an error.  In that case no GCS JSON is written and polling for
     propagation forever only hides the provider failure.
     """
-    client = speech_v2.SpeechClient(
-        client_options={"api_endpoint": "us-speech.googleapis.com"}
-    )
     try:
+        client = speech_v2.SpeechClient(
+            client_options={"api_endpoint": "us-speech.googleapis.com"}
+        )
         operation = client.transport.operations_client.get_operation(name)
     except Exception:
         # The regular operation-state check remains the source of truth when

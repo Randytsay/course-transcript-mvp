@@ -81,6 +81,12 @@ class ProductionHardeningTests(unittest.TestCase):
             terminal = json.loads(path.read_text(encoding="utf-8"))
             self.assertEqual(terminal["error"]["code"], "OUTPUT_MISSING")
 
+    def test_file_error_lookup_degrades_when_client_cannot_initialize(self) -> None:
+        from app.providers import recover_chunk_hardened as recovery
+
+        with patch.object(recovery.speech_v2, "SpeechClient", side_effect=RuntimeError("no adc")):
+            self.assertIsNone(recovery._operation_file_error("operations/1"))
+
     def test_retained_window_requires_exact_strategy_and_offsets(self) -> None:
         from app.providers.hardening_common import window_matches
 
