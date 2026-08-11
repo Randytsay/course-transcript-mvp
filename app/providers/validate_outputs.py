@@ -61,6 +61,22 @@ def _validate_vtt(path: Path, segment_count: int) -> bool:
     )
 
 
+def _published_subtitle_count(cleaned_path: Path, raw_count: int) -> int:
+    """Return the cue count for user-facing SRT/VTT exports.
+
+    Cleanup keeps a one-to-one evidence layer, but may intentionally publish a
+    shorter display layer when a verified leader-and-congregation mantra is
+    repeated.  Validate the exported cue structure against that display layer;
+    raw Chirp JSON and CSV evidence continue to use the immutable raw count.
+    """
+    try:
+        payload = json.loads(cleaned_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return raw_count
+    display = payload.get("display_segments") if isinstance(payload, dict) else None
+    return len(display) if isinstance(display, list) and display else raw_count
+
+
 def main() -> int:
     errors: list[str] = []
     selected = _selected()
@@ -73,6 +89,9 @@ def main() -> int:
         else {"segments": []}
     )
     raw_segments = raw.get("segments", [])
+    published_subtitle_count = _published_subtitle_count(
+        JOB / "subtitles-cleaned.json", len(raw_segments)
+    )
     corrected_segments = corrected.get("segments", [])
     if not raw_segments:
         errors.append("raw subtitle segments are empty")
@@ -140,9 +159,9 @@ def main() -> int:
         if not path.is_file() or path.stat().st_size <= 0:
             errors.append(f"missing selected output: {path.name}")
             continue
-        if output_format == "srt" and not _validate_srt(path, len(raw_segments)):
+        if output_format == "srt" and not _validate_srt(path, published_subtitle_count):
             errors.append("transcript.srt cue structure mismatch")
-        elif output_format == "vtt" and not _validate_vtt(path, len(raw_segments)):
+        elif output_format == "vtt" and not _validate_vtt(path, published_subtitle_count):
             errors.append("transcript.vtt cue structure mismatch")
         elif output_format == "csv":
             with path.open(encoding="utf-8", newline="") as stream:
