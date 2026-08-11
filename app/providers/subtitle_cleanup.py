@@ -117,6 +117,13 @@ def _fuzzy_mantra_display_layer(
     end_ms = int(cleaned[end - 1].get("end_ms", 0))
     if end_ms - start_ms < len(MANTRA_LINES) * 500:
         return None
+    # A full two-cycle closing chant is normally a few minutes.  A much wider
+    # span is ambiguous (it can include lecture content with incidental
+    # phonetic matches), so leave it for human review rather than suppressing
+    # legitimate speech.
+    max_duration_ms = int(os.environ.get("MANTRA_FUZZY_MAX_DURATION_MS", "300000"))
+    if end_ms - start_ms > max_duration_ms:
+        return None
 
     source_ids = [str(item["segment_id"]) for item in cleaned[start:end]]
     display_cues: list[dict[str, Any]] = []
