@@ -342,7 +342,7 @@ def _finish_after_chirp(
         base._run_module_stage(
             store, leased, data_dir, worker_id,
             stage="correction", status="correcting",
-            detail="Gemini 3.6 Flash 固定 segment 純文字校正",
+            detail="Gemini 3.7 Flash 固定 segment 純文字校正",
             progress_start=73, progress_end=88,
             module=("app.providers.fake_correction" if fake_provider else "app.providers.correct_text_hardened"),
             timeout_seconds=14_400,
@@ -392,7 +392,7 @@ def _finish_after_chirp(
         "status": "COMPLETED",
         "chirp_model": "chirp_3",
         "chirp_processing_strategy": "DYNAMIC_BATCHING",
-        "correction_model": "gemini-3.6-flash" if leased["enable_gemini_correction"] else None,
+        "correction_model": "gemini-3.7-flash" if leased["enable_gemini_correction"] else None,
         "drive_upload_started": publication is not None,
         "drive_publication_status": publication.get("status") if publication else "pending_retry" if publication_error else "not_requested",
         "drive_publication_error": publication_error,

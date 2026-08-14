@@ -2,7 +2,7 @@
 
 ## Scope
 
-This change keeps `gemini-3.6-flash` and changes the operating model:
+This change uses `gemini-3.7-flash` for text correction and changes the operating model:
 
 1. Chirp 3 uses Speech-to-Text V2 dynamic batching by default.
 2. Up to five source jobs may wait in Google simultaneously without holding the global worker lease.

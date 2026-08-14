@@ -1,4 +1,4 @@
-"""Gemini 3.6 correction with auditable splitting and content-safety guards."""
+"""Gemini 3.7 correction with auditable splitting and content-safety guards."""
 from __future__ import annotations
 
 import hashlib

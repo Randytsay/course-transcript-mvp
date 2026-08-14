@@ -323,7 +323,7 @@ def _finish_after_chirp(
         "chirp_model": "chirp_3",
         "chirp_processing_strategy": "DYNAMIC_BATCHING",
         "correction_model": (
-            "gemini-3.6-flash" if leased["enable_gemini_correction"] else None
+            "gemini-3.7-flash" if leased["enable_gemini_correction"] else None
         ),
         "drive_upload_started": publication is not None,
         "drive_publication_status": (

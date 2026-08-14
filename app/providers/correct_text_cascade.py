@@ -23,8 +23,8 @@ from google.genai import types
 from app.providers import correct_text as base
 
 PRIMARY_MODEL = os.getenv("CORRECTION_PRIMARY_MODEL", "gemini-3.1-flash-lite")
-ESCALATION_MODEL = os.getenv("CORRECTION_ESCALATION_MODEL", "gemini-3.6-flash")
-PROMPT_VERSION = "fixed-segments-v5-cascade"
+ESCALATION_MODEL = os.getenv("CORRECTION_ESCALATION_MODEL", "gemini-3.7-flash")
+PROMPT_VERSION = "fixed-segments-v6-cascade-gemini-3.7"
 AUDIT_DIR = base.JOB / "correction-cascade-v1"
 MAX_ATTEMPTS = max(1, int(os.getenv("CORRECTION_MODEL_MAX_ATTEMPTS", "3")))
 ESCALATE_UNCERTAIN = os.getenv("CORRECTION_ESCALATE_UNCERTAIN", "true").lower() in {

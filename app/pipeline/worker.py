@@ -506,7 +506,7 @@ def _record_usage_evidence(
         job_id=record["id"],
         dedupe_key="gemini-segment-correction",
         provider="google-vertex-ai",
-        model="gemini-3.6-flash",
+        model="gemini-3.7-flash",
         input_units=prompt_tokens,
         output_units=output_tokens,
         estimated_cost_usd=gemini_estimate,
@@ -520,7 +520,7 @@ def _record_usage_evidence(
     usage_records.append(
         {
             "provider": "google-vertex-ai",
-            "model": "gemini-3.6-flash",
+            "model": "gemini-3.7-flash",
             "estimated_cost_usd": str(gemini_estimate),
             "unit": "tokens",
             "input_units": prompt_tokens,
@@ -744,7 +744,7 @@ def run_paid_job(
                 "status": "AWAITING_HUMAN_REVIEW",
                 "chirp_model": "chirp_3",
                 "correction_model": (
-                    "gemini-3.6-flash"
+                    "gemini-3.7-flash"
                     if leased["enable_gemini_correction"]
                     else None
                 ),

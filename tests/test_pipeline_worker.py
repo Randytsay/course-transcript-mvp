@@ -288,7 +288,7 @@ class ExportTests(unittest.TestCase):
                 encoding="utf-8",
             )
             corrected = {
-                "model": "gemini-3.6-flash",
+                "model": "gemini-3.7-flash",
                 "segments": [
                     {
                         **segments[0],

@@ -1,4 +1,4 @@
-"""Gemini 3.6 Flash text-only correction for immutable subtitle segments.
+"""Gemini 3.7 Flash text-only correction for immutable subtitle segments.
 
 The default correction window is deliberately larger than the original
 30-second setting to reduce API round trips. Every response is checked against
@@ -26,10 +26,10 @@ from app.providers.mantra_context import MANTRA_TEXT
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 WORK = JOB / "correction-v2"
-MODEL = "gemini-3.6-flash"
+MODEL = "gemini-3.7-flash"
 WINDOW_MS = max(15_000, int(os.environ.get("GEMINI_CORRECTION_WINDOW_MS", "60000")))
 MAX_WORKERS = max(1, int(os.environ.get("GEMINI_MAX_PARALLEL_WINDOWS", "2")))
-PROMPT_VERSION = "fixed-segments-v5-job-context"
+PROMPT_VERSION = "fixed-segments-v6-gemini-3.7-job-context"
 _CLIENTS = threading.local()
 
 TERMS_SCHEMA = {
@@ -490,7 +490,7 @@ def main() -> int:
             }
         )
     payload = {
-        "source": "chirp_3_merged + gemini-3.6-flash segment correction",
+        "source": "chirp_3_merged + gemini-3.7-flash segment correction",
         "model": MODEL,
         "prompt_version": PROMPT_VERSION,
         "configured_window_ms": WINDOW_MS,

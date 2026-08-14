@@ -35,7 +35,7 @@ Read `README.md`, `ARCHITECTURE.md`, `RUNBOOK.md`, `DEPLOYMENT.md`, `docs/DYNAMI
 - `app/providers/run_chirp_pipeline_hardened.py`: preserves compatible retained standard/dynamic plans and merges only after every chunk is recovered.
 - `app/pipeline/dynamic_worker_production.py`: production paid runner with leases, non-blocking dynamic submission, retained-standard compatibility, actual-strategy accounting, restart resume, and locked Drive publication.
 - `app/providers/build_srt.py`: lexical Chinese subtitle segmentation with immutable timings.
-- `app/providers/correct_text_hardened.py`: `gemini-3.6-flash` text-only correction, 60-second windows, immutable per-attempt audit evidence, adaptive split, and severe-drift fallback to raw Chirp text.
+- `app/providers/correct_text_hardened.py`: `gemini-3.7-flash` text-only correction, 60-second windows, immutable per-attempt audit evidence, adaptive split, and severe-drift fallback to raw Chirp text.
 - `app/providers/validate_outputs_hardened.py`: structural validation plus content-drift QA; `content-qa.json` is checksummed in the export manifest.
 - `app/providers/subtitle_cleanup.py`: deterministic high-confidence filler/stutter cleanup with immutable timing and a `cleanup-review.json` manual-review list.
 - `app/jobs/drive_publish.py`: resumable pending/verify/backup/promote/final-verify publication transaction.

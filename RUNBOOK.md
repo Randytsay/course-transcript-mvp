@@ -90,7 +90,7 @@ GEMINI_CORRECTION_WINDOW_MS=60000
 GEMINI_MAX_PARALLEL_WINDOWS=2
 ```
 
-The model remains `gemini-3.6-flash`. Every paid response is stored under a prompt-version, source-digest, and attempt-unique audit filename. If a structured response is malformed, the parent response must be persisted before the window is split.
+The model is `gemini-3.7-flash`. Every paid response is stored under a prompt-version, source-digest, and attempt-unique audit filename. If a structured response is malformed, the parent response must be persisted before the window is split.
 
 Severe deletion, addition, repetition, or likely semantic rewrite triggers fallback to immutable Chirp text. The fallback reason must remain visible in corrected subtitle evidence and `content-qa.json`.
 

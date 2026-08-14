@@ -188,7 +188,7 @@ class CancellationPerformanceTests(unittest.TestCase):
         (glossary_dir / "global-terms.json").write_text(
             json.dumps(
                 {
-                    "model": "gemini-3.6-flash",
+                    "model": "gemini-3.7-flash",
                     "request_started_at": "2026-08-01T00:06:00+00:00",
                     "response_completed_at": "2026-08-01T00:06:10+00:00",
                     "attempt_count": 1,
@@ -203,7 +203,7 @@ class CancellationPerformanceTests(unittest.TestCase):
         (correction_dir / "segment-1.json").write_text(
             json.dumps(
                 {
-                    "model": "gemini-3.6-flash",
+                    "model": "gemini-3.7-flash",
                     "source_start_ms": 0,
                     "source_end_ms": 30000,
                     "request_started_at": "2026-08-01T00:06:10+00:00",

@@ -241,9 +241,10 @@ def main() -> int:
     correction_records = list((JOB / "correction-v2").glob("*.json"))
     if require_correction and not correction_records:
         errors.append("missing Gemini correction records")
+    supported_correction_models = {"gemini-3.6-flash", "gemini-3.7-flash"}
     for path in correction_records:
         record = json.loads(path.read_text(encoding="utf-8"))
-        if record.get("model") != "gemini-3.6-flash" or not isinstance(
+        if record.get("model") not in supported_correction_models or not isinstance(
             record.get("raw_response"), str
         ):
             errors.append(f"invalid Gemini evidence: {path.name}")

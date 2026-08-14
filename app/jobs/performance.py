@@ -540,7 +540,7 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
             {
                 "callId": path.stem,
                 "kind": kind,
-                "model": payload.get("model") or "gemini-3.6-flash",
+                "model": payload.get("model") or "gemini-3.7-flash",
                 "sourceStartMs": payload.get("source_start_ms"),
                 "sourceEndMs": payload.get("source_end_ms"),
                 "requestStartedAt": payload.get("request_started_at"),

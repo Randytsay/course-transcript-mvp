@@ -135,7 +135,7 @@ def main() -> int:
     bucket = require_env("GCS_BUCKET")
     prefix = os.getenv("INFRA_TEST_PREFIX", "test").strip("/") or "test"
     vertex_location = os.getenv("GOOGLE_CLOUD_LOCATION", "global")
-    vertex_model = os.getenv("VERTEX_MODEL", "gemini-3.6-flash")
+    vertex_model = os.getenv("VERTEX_MODEL", "gemini-3.7-flash")
     speech_location = os.getenv("SPEECH_LOCATION", "global")
     checks = [gcs_check(bucket, prefix), vertex_check(project, vertex_location, vertex_model), speech_check(project, speech_location)]
     context = {"runtime": "Docker", "vertex_model": vertex_model, "vertex_location": vertex_location, "speech_location": speech_location}
