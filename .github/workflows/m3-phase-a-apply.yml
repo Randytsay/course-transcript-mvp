@@ -1,0 +1,44 @@
+name: Apply M3 Phase A hardening
+
+on:
+  push:
+    branches: [agent/m3-production-readiness-phase-a]
+    paths:
+      - scripts/.phasea/**
+      - .github/workflows/m3-phase-a-apply.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: agent/m3-production-readiness-phase-a
+          fetch-depth: 0
+      - name: Apply deterministic patches
+        run: |
+          python scripts/.phasea/frontend_patch.py
+          python scripts/.phasea/provider_patch.py
+          python scripts/.phasea/runtime_patch.py
+          python scripts/.phasea/manifest_patch.py
+          python scripts/.phasea/tests_patch.py
+      - name: Focused validation
+        run: |
+          python -m py_compile app/providers/minimax_provider.py app/providers/correction_runtime.py app/providers/correction_evidence.py app/providers/terminology_consistency.py app/providers/correct_text_hardened.py app/pipeline/dynamic_worker_hardened.py tests/test_m3_phase_a.py
+          python -m unittest discover -s tests -p 'test_m3_phase_a.py' -v
+          npm --prefix frontend test
+          grep -Fq 'MINIMAX_M3_ENABLED=false' .env.example
+          grep -Fq 'MINIMAX_M3_QUOTA_CHECK_ENABLED=false' .env.example
+          git diff --check
+      - name: Commit implementation and remove bootstrap
+        run: |
+          rm -rf scripts/.phasea .github/workflows/m3-phase-a-apply.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'feat: harden M3 production readiness'
+          git push origin HEAD:agent/m3-production-readiness-phase-a
