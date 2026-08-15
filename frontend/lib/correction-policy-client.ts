@@ -76,6 +76,8 @@ export async function getCorrectionProviderStatus(): Promise<{
   m3Model: string;
   minimaxConfigured: boolean;
   quotaState: "available" | "unavailable" | "unknown";
+  quotaCheckedAt: string | null;
+  quotaSourcePool: string | null;
 }> {
   const response = await fetch(`${baseUrl}/correction/provider-status`, {
     cache: "no-store",
@@ -88,6 +90,8 @@ export async function getCorrectionProviderStatus(): Promise<{
       m3Model: "MiniMax-M3",
       minimaxConfigured: false,
       quotaState: "unknown",
+      quotaCheckedAt: null,
+      quotaSourcePool: null,
     };
   }
   const payload = await response.json() as {
@@ -97,6 +101,8 @@ export async function getCorrectionProviderStatus(): Promise<{
     m3_model?: string;
     minimax_configured?: boolean;
     quota_state?: "available" | "unavailable" | "unknown";
+    quota_checked_at?: string | null;
+    quota_source_pool?: string | null;
   };
   return {
     defaultPolicy: payload.default_policy ?? "GEMINI_FIRST",
@@ -105,5 +111,7 @@ export async function getCorrectionProviderStatus(): Promise<{
     m3Model: payload.m3_model ?? "MiniMax-M3",
     minimaxConfigured: Boolean(payload.minimax_configured),
     quotaState: payload.quota_state ?? "unknown",
+    quotaCheckedAt: payload.quota_checked_at ?? null,
+    quotaSourcePool: payload.quota_source_pool ?? null,
   };
 }

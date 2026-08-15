@@ -1,9 +1,4 @@
-from pathlib import Path
-
-def put(path,content):
- p=Path(path); p.parent.mkdir(parents=True,exist_ok=True); p.write_text(content)
-
-put('tests/test_m3_phase_a.py',r'''from __future__ import annotations
+from __future__ import annotations
 import json, os, tempfile, unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -41,15 +36,3 @@ class PhaseATests(unittest.TestCase):
     def test_consistency_is_report_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp); (root/'glossary').mkdir(); (root/'glossary'/'global-terms.json').write_text(json.dumps({"terms":[{"canonical":"UnFranchise","variants":["Unfranchise"],"confidence":"high"}]})); (root/'subtitles-corrected.json').write_text(json.dumps({"segments":[{"segment_id":"s1","corrected_text":"UnFranchise"},{"segment_id":"s2","corrected_text":"Unfranchise"}]})); report=build_report(root); self.assertEqual(report["issue_count"],1); self.assertFalse(report["timestamps_modified"]); self.assertFalse(report["segments_modified"])
-''')
-
-pkg=Path('frontend/package.json'); s=pkg.read_text(); old='    "test": "node --experimental-strip-types --test components/tests/publish-coordinator.test.mjs"'
-if old not in s: raise SystemExit('missing frontend test script')
-pkg.write_text(s.replace(old,'    "test": "node --experimental-strip-types --test components/tests/*.test.mjs"',1))
-put('frontend/components/tests/m3-readiness.test.mjs',r'''import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import test from "node:test";
-const source=readFileSync(new URL("../new-job-page-drive-api.tsx",import.meta.url),"utf8");
-test("active UI gates M3 on feature and credentials",()=>{assert.match(source,/const m3Ready = m3Enabled && m3Configured/);assert.match(source,/disabled={!m3StatusLoaded \|\| !m3Ready}/);assert.match(source,/MiniMax 憑證尚未完成設定/);});
-test("active UI has one preflight action",()=>{assert.match(source,/檢查檔案與估價/);assert.doesNotMatch(source,/>建立唯讀批次預覽/);assert.doesNotMatch(source,/>建立 preflight 工作/);assert.match(source,/router\.push\(`\/batches\/\$\{nextBatch\.batchId\}`\)/);});
-''')

@@ -6,7 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --experimental-strip-types --test components/tests/publish-coordinator.test.mjs"
+    "test": "node --experimental-strip-types --test components/tests/*.test.mjs"
   },
   "dependencies": {
     "lucide-react": "1.27.0",

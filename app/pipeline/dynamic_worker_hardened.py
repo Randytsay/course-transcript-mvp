@@ -27,6 +27,7 @@ from app.operations.runtime_heartbeat import write_service_heartbeat
 from app.pipeline import worker as base
 from app.pipeline import worker_observed as observed
 from app.pipeline.recovery_schedule import is_due, schedule
+from app.providers.correction_evidence import summarize_routing
 
 install_completion_patch(JobStore)
 install_artifact_patch(base)
@@ -66,6 +67,14 @@ def _module_env(record: dict[str, Any], job_dir: Path) -> dict[str, str]:
 
 
 base._module_env = _module_env
+
+
+def _correction_manifest_fields(job_dir: Path, enabled: bool) -> dict[str, Any]:
+    if not enabled:
+        return {"correction_model": None, "correction_policy": None, "correction_initial_provider": None, "correction_route": None, "correction_models_used": [], "correction_segment_counts": {}, "correction_routing_manifest": None}
+    summary = summarize_routing(job_dir)
+    models = summary.get("correction_models_used", [])
+    return {"correction_model": models[0] if isinstance(models, list) and len(models) == 1 else None, **summary}
 
 
 def _env_true(name: str, default: bool = False) -> bool:
@@ -438,9 +447,7 @@ def _repair_qa_only(
             "job_id": leased["id"],
             "status": "AWAITING_HUMAN_REVIEW",
             "chirp_model": "chirp_3",
-            "correction_model": (
-                "gemini-3.7-flash" if leased["enable_gemini_correction"] else None
-            ),
+            **_correction_manifest_fields(job_dir, bool(leased["enable_gemini_correction"])),
             "drive_upload_started": False,
             "drive_publication_status": "awaiting_human_review",
             "drive_publication_error": None,
@@ -523,11 +530,11 @@ def _finish_after_chirp(
         base._run_module_stage(
             store, leased, data_dir, worker_id,
             stage="correction", status="correcting",
-            detail="Gemini 3.7 Flash 固定 segment 純文字校正",
+            detail="固定 segment AI 純文字校正",
             progress_start=73, progress_end=88,
             module=("app.providers.fake_correction" if fake_provider else "app.providers.correct_text_hardened"),
             timeout_seconds=14_400,
-            evidence=("glossary/global-terms.json", "subtitles-corrected.json", "review-terms.json"),
+            evidence=("glossary/global-terms.json", "subtitles-corrected.json", "review-terms.json", "terminology-consistency.json"),
         )
     base._run_module_stage(
         store, leased, data_dir, worker_id,
@@ -573,7 +580,7 @@ def _finish_after_chirp(
         "status": "COMPLETED",
         "chirp_model": "chirp_3",
         "chirp_processing_strategy": "DYNAMIC_BATCHING",
-        "correction_model": "gemini-3.7-flash" if leased["enable_gemini_correction"] else None,
+        **_correction_manifest_fields(job_dir, bool(leased["enable_gemini_correction"])),
         "drive_upload_started": publication is not None,
         "drive_publication_status": publication.get("status") if publication else "pending_retry" if publication_error else "not_requested",
         "drive_publication_error": publication_error,
