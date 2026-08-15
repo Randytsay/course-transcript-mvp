@@ -5,6 +5,7 @@ import Link from "next/link";
 import { Activity, ArrowRight, CheckCircle2, Clock3, Coins, FileAudio2, MoreHorizontal, Plus, ShieldCheck, Sparkles, TimerReset, TriangleAlert } from "lucide-react";
 import { getCosts, getJobs, getBillingSummary } from "@/lib/api-client";
 import type { CostSummary, TranscriptJob, BillingSummary } from "@/lib/types";
+import { formatTwd } from "@/lib/currency";
 import ProgressRing from "./progress-ring";
 import StatusBadge from "./status-badge";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -59,7 +60,7 @@ export default function DashboardPage() {
     { label: "處理中任務", value: String(active), detail: active ? "後端目前正在處理" : "目前沒有處理中的任務", icon: Activity, tone: "blue" },
     { label: "待人工確認", value: String(reviewing + awaitingConfirmation), detail: awaitingConfirmation ? `${awaitingConfirmation} 個待確認費用` : reviewing ? `${reviewing} 個待內容審查` : "目前沒有待確認項目", icon: TriangleAlert, tone: "amber" },
     { label: "已有輸出", value: String(completed), detail: "包含待審查與已完成任務", icon: CheckCircle2, tone: "green" },
-    { label: "剩餘預估額度", value: costs ? `US$${costs.remainingEstimatedBudgetUsd}` : "—", detail: "上限 US$200；非實際帳務", icon: TimerReset, tone: "violet" },
+    { label: "剩餘預估額度", value: costs ? formatTwd(costs.remainingEstimatedBudgetTwd) : "—", detail: `起始額度 ${costs ? formatTwd(costs.budgetStartingBalanceTwd) : "NT$1,200"}；非實際帳務`, icon: TimerReset, tone: "violet" },
   ];
 
   return (
@@ -71,7 +72,7 @@ export default function DashboardPage() {
             <div>
               <strong style={{ fontSize: "var(--font-md)", color: "#9a3412" }}>有 {awaitingConfirmation} 個任務正在等待費用確認授權</strong>
               <p style={{ margin: "4px 0 0", fontSize: "var(--font-sm)", color: "#9a3412", lineHeight: 1.6 }}>
-                例如：<strong>{firstAwaitingJob.filename}</strong>（預估費用 {firstAwaitingJob.estimatedCostUsd ? `US$ ${firstAwaitingJob.estimatedCostUsd}` : "仍在計算"}）。確認後才會開始付費轉錄。
+                例如：<strong>{firstAwaitingJob.filename}</strong>（預估費用 {firstAwaitingJob.estimatedCostTwd ? formatTwd(firstAwaitingJob.estimatedCostTwd) : "仍在計算"}）。確認後才會開始付費轉錄。
               </p>
             </div>
           </div>
@@ -156,7 +157,7 @@ export default function DashboardPage() {
                   <div>
                     {job.status === "awaiting_confirmation" ? (
                       <Link href={job.batchId ? `/batches/${job.batchId}` : `/jobs/${job.id}`} className="button button--confirm button--small">
-                        <CheckCircle2 size={14} />{job.estimatedCostUsd ? `確認費用 US$${job.estimatedCostUsd}` : "確認費用"}
+                        <CheckCircle2 size={14} />{job.estimatedCostTwd ? `確認費用 ${formatTwd(job.estimatedCostTwd)}` : "確認費用"}
                       </Link>
                     ) : (
                       <StatusBadge status={job.status} />

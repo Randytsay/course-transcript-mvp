@@ -32,6 +32,7 @@ import type {
   OutputFormat,
   ProcessingStrategy,
 } from "@/lib/types";
+import { formatTwd } from "@/lib/currency";
 
 type SelectionMode = "files" | "folder";
 type BusyState = "browse" | "search" | "more" | "preview" | "create" | null;
@@ -338,7 +339,7 @@ export default function NewJobPageDriveApi() {
         </section>
 
         <aside className="dashboard-side">
-          <div className="panel quick-panel"><h2>Drive 混合架構</h2><p>目錄瀏覽、搜尋與健康檢查使用 Google Drive API；下載、成果上傳、備份與升版仍使用 rclone。</p><small>剩餘預估額度：{costs ? `US$${costs.remainingEstimatedBudgetUsd}` : "讀取中"}</small></div>
+          <div className="panel quick-panel"><h2>Drive 混合架構</h2><p>目錄瀏覽、搜尋與健康檢查使用 Google Drive API；下載、成果上傳、備份與升版仍使用 rclone。</p><small>剩餘預估額度：{costs ? formatTwd(costs.remainingEstimatedBudgetTwd) : "讀取中"}</small></div>
         </aside>
       </div>
     </AppShell>

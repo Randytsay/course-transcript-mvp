@@ -1250,7 +1250,7 @@ class JobStore:
                 connection, exclude_batch_id=batch_id
             )
             if committed + estimate > project_limit_usd:
-                raise JobConflict("確認後將超過 US$200 專案預估成本上限")
+                raise JobConflict("確認後將超過專案預估成本上限")
             connection.execute(
                 """
                 UPDATE jobs
@@ -1309,7 +1309,7 @@ class JobStore:
                 raise JobConflict("確認金額與最新預估費用不一致")
             committed = self._committed_cost(connection, exclude_job_id=job_id)
             if committed + estimate > project_limit_usd:
-                raise JobConflict("確認後將超過 US$200 專案預估成本上限")
+                raise JobConflict("確認後將超過專案預估成本上限")
             connection.execute(
                 """
                 UPDATE jobs

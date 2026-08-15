@@ -3,6 +3,7 @@
 import AppShell from "./app-shell";
 import { approveBatch, decideReviewTerm, getArtifacts, getBatch, getJob, getJobEvents, getReviewTerms, getSegments, pauseJob, resumeJob, retryFailedStage, getJobChunks, getJobChunkTranscript, getJobLiveCost } from "@/lib/api-client";
 import type { Artifact, JobEvent, ReviewTerm, TranscriptJob, TranscriptSegment, ChunkProgressResponse, LiveCost } from "@/lib/types";
+import { formatTwd } from "@/lib/currency";
 import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, Clock3, ExternalLink, FileJson, FileText, FolderUp, Gauge, Headphones, LoaderCircle, Pause, Play, RotateCcw, TriangleAlert, ChevronRight, ChevronDown, Activity, Coins } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
@@ -231,14 +232,14 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
       <section className="qa-notice" style={{ marginBottom: "16px", padding: "18px", background: "#fff7ed", border: "2px solid #f59e0b", borderRadius: "12px" }}>
         <TriangleAlert size={28} className="text-warning" style={{ flexShrink: 0, marginTop: "2px" }} />
         <div style={{ flex: 1 }}>
-          <strong style={{ fontSize: "16px", color: "#9a3412" }}>預估辨識費用待確認：US$ {job.estimatedCostUsd ?? "2.68"}</strong>
+          <strong style={{ fontSize: "16px", color: "#9a3412" }}>預估辨識費用待確認：{formatTwd(job.estimatedCostTwd)}</strong>
           <p style={{ fontSize: "14px", color: "#c2410c", marginTop: "4px" }}>
             本機 Preflight 格式與時長檢查已完成（影音時長 {job.duration}）。確認授權後，系統將自動排入付費轉錄佇列 (Chirp 3 + Gemini 3.7 Flash)。
           </p>
           <div style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
             <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", fontWeight: 600, color: "#7c2d12", cursor: "pointer" }}>
               <input type="checkbox" checked={confirmedCost} onChange={(e) => setConfirmedCost(e.target.checked)} style={{ width: "18px", height: "18px", accentColor: "var(--brand)" }} />
-              我確認預估費用 US$ {job.estimatedCostUsd ?? "2.68"}，並授權排入處理
+              我確認預估費用 {formatTwd(job.estimatedCostTwd)}，並授權排入處理
             </label>
             <button className="button button--primary button--large" disabled={!confirmedCost || approvingCost} onClick={() => void approveJobCost()}>
               {approvingCost ? <LoaderCircle className="spin" size={18} /> : <CheckCircle2 size={18} />}
@@ -267,13 +268,13 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
             <span className="status-badge status-badge--queued" style={{ marginLeft: "auto", fontSize: "11px" }}>系統即時估算，Cloud Billing 為最終依據</span>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: "24px" }}>
-            <div><span style={{ fontSize: "12px", color: "var(--text-muted)" }}>預估總費用</span><strong style={{ display: "block", fontSize: "18px" }}>US$ {liveCost.estimatedTotalUsd}</strong></div>
-            <div><span style={{ fontSize: "12px", color: "var(--text-muted)" }}>已承諾成本 (Accrued)</span><strong style={{ display: "block", fontSize: "18px", color: "var(--brand)" }}>US$ {liveCost.estimatedAccruedUsd}</strong></div>
-            <div><span style={{ fontSize: "12px", color: "var(--text-muted)" }}>剩餘預估成本</span><strong style={{ display: "block", fontSize: "18px" }}>US$ {liveCost.estimatedRemainingUsd}</strong></div>
+            <div><span style={{ fontSize: "12px", color: "var(--text-muted)" }}>預估總費用</span><strong style={{ display: "block", fontSize: "18px" }}>{formatTwd(liveCost.estimatedTotalTwd)}</strong></div>
+            <div><span style={{ fontSize: "12px", color: "var(--text-muted)" }}>已承諾成本 (Accrued)</span><strong style={{ display: "block", fontSize: "18px", color: "var(--brand)" }}>{formatTwd(liveCost.estimatedAccruedTwd)}</strong></div>
+            <div><span style={{ fontSize: "12px", color: "var(--text-muted)" }}>剩餘預估成本</span><strong style={{ display: "block", fontSize: "18px" }}>{formatTwd(liveCost.estimatedRemainingTwd)}</strong></div>
           </div>
           <div style={{ display: "flex", gap: "16px", marginTop: "12px", paddingTop: "12px", borderTop: "1px solid var(--border-strong)", fontSize: "12px", color: "var(--text-soft)" }}>
-            <span>Chirp (共 {liveCost.submittedChunkCount} 段): US$ {liveCost.chirpEstimatedUsd}</span>
-            <span>Gemini: US$ {liveCost.geminiEstimatedUsd}</span>
+            <span>Chirp (共 {liveCost.submittedChunkCount} 段): {formatTwd(liveCost.chirpEstimatedTwd)}</span>
+            <span>Gemini: {formatTwd(liveCost.geminiEstimatedTwd)}</span>
           </div>
         </div>
       )}

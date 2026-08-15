@@ -493,6 +493,8 @@ def _chunk_metrics(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
                     "costEvidence": "archived_attempt_manifest",
                 }
             )
+    for item in result:
+        item["estimatedCostTwd"] = str(config.usd_as_twd(item["estimatedCostUsd"]))
     return result
 
 
@@ -569,6 +571,8 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
                 "promptVersion": payload.get("prompt_version"),
             }
         )
+    for item in calls:
+        item["estimatedCostTwd"] = str(config.usd_as_twd(item["estimatedCostUsd"]))
     return calls
 
 
@@ -689,7 +693,9 @@ def build_performance_summary(database_path: Path, data_dir: Path, job_id: str) 
         "realTimeFactor": rtf,
         "activeRealTimeFactor": active_rtf,
         "estimatedAccruedCostUsd": _money(accrued),
+        "estimatedAccruedCostTwd": str(config.usd_as_twd(accrued)),
         "estimatedCostPerAudioHourUsd": _money(cost_per_hour),
+        "estimatedCostPerAudioHourTwd": str(config.usd_as_twd(cost_per_hour)),
         "stageAttempts": attempts,
         "stageTotals": [
             {"stage": stage, "durationMs": duration}
@@ -726,13 +732,13 @@ def write_performance_reports(job_dir: Path, summary: dict[str, Any]) -> dict[st
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["category", "item", "status", "duration_ms", "input_units", "output_units", "estimated_cost_usd"])
+    writer.writerow(["category", "item", "status", "duration_ms", "input_units", "output_units", "estimated_cost_usd", "estimated_cost_twd"])
     for item in summary.get("stageAttempts", []):
         writer.writerow(["stage", f"{item['stage']}#{item['attemptNumber']}", item["status"], item["activeDurationMs"], "", "", ""])
     for item in summary.get("chunks", []):
-        writer.writerow(["chirp_chunk", item["chunkIndex"], item["status"], item["totalWallMs"], item["billedAudioSeconds"], item["wordCount"], item["estimatedCostUsd"]])
+        writer.writerow(["chirp_chunk", item["chunkIndex"], item["status"], item["totalWallMs"], item["billedAudioSeconds"], item["wordCount"], item["estimatedCostUsd"], item["estimatedCostTwd"]])
     for item in summary.get("geminiCalls", []):
-        writer.writerow(["gemini_call", item["callId"], item["kind"], item["latencyMs"], item["inputTokens"], item["outputTokens"], item["estimatedCostUsd"]])
+        writer.writerow(["gemini_call", item["callId"], item["kind"], item["latencyMs"], item["inputTokens"], item["outputTokens"], item["estimatedCostUsd"], item["estimatedCostTwd"]])
     _atomic_text(csv_path, output.getvalue())
 
     rows = "".join(
@@ -742,6 +748,6 @@ def write_performance_reports(job_dir: Path, summary: dict[str, Any]) -> dict[st
     suggestions = "".join(
         f"<li>{html.escape(str(item))}</li>" for item in summary.get("bottleneckSuggestions", [])
     )
-    document = f"""<!doctype html><html lang='zh-Hant'><meta charset='utf-8'><title>Performance {html.escape(summary['jobId'])}</title><style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:32px auto;padding:0 20px;color:#172033}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ccd4e0;padding:10px;text-align:left}}.metric{{display:inline-block;margin:8px;padding:14px;border:1px solid #ccd4e0;border-radius:10px}}</style><h1>任務效能報告</h1><div class='metric'>音訊 {summary['audioDurationMs']} ms</div><div class='metric'>總經過 {summary['totalElapsedMs']} ms</div><div class='metric'>RTF {summary['realTimeFactor']}</div><div class='metric'>預估費用 US${summary['estimatedAccruedCostUsd']}</div><h2>階段嘗試</h2><table><thead><tr><th>階段</th><th>嘗試</th><th>狀態</th><th>有效時間 ms</th></tr></thead><tbody>{rows}</tbody></table><h2>瓶頸建議</h2><ul>{suggestions}</ul><p>{html.escape(summary['accountingNote'])}</p></html>"""
+    document = f"""<!doctype html><html lang='zh-Hant'><meta charset='utf-8'><title>Performance {html.escape(summary['jobId'])}</title><style>body{{font-family:system-ui,sans-serif;max-width:1100px;margin:32px auto;padding:0 20px;color:#172033}}table{{border-collapse:collapse;width:100%}}th,td{{border:1px solid #ccd4e0;padding:10px;text-align:left}}.metric{{display:inline-block;margin:8px;padding:14px;border:1px solid #ccd4e0;border-radius:10px}}</style><h1>任務效能報告</h1><div class='metric'>音訊 {summary['audioDurationMs']} ms</div><div class='metric'>總經過 {summary['totalElapsedMs']} ms</div><div class='metric'>RTF {summary['realTimeFactor']}</div><div class='metric'>預估費用 NT${summary['estimatedAccruedCostTwd']}</div><h2>階段嘗試</h2><table><thead><tr><th>階段</th><th>嘗試</th><th>狀態</th><th>有效時間 ms</th></tr></thead><tbody>{rows}</tbody></table><h2>瓶頸建議</h2><ul>{suggestions}</ul><p>{html.escape(summary['accountingNote'])}</p></html>"""
     _atomic_text(html_path, document)
     return {"json": json_path, "csv": csv_path, "html": html_path}

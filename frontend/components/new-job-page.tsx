@@ -40,6 +40,7 @@ import type {
   OutputFormat,
   ProcessingStrategy,
 } from "@/lib/types";
+import { formatTwd } from "@/lib/currency";
 
 type SelectionMode = "files" | "folder";
 
@@ -434,7 +435,7 @@ export default function NewJobPage() {
             <div><span>文字校正</span><strong>{correctionPolicy === "M3_FIRST" ? "M3 → Gemini 3.7" : "Gemini 3.7"}</strong></div>
             <div><span>輸出</span><strong>{outputFormats.map((format) => `.${format}`).join("、")}</strong></div>
             <div><span>Chirp 併發</span><strong>自動 / {chirpMaxParallelChunks}</strong></div>
-            <div><span>預估成本上限</span><strong>US${costs?.projectLimitUsd ?? "200"}</strong></div>
+            <div><span>剩餘預估額度</span><strong>{formatTwd(costs?.remainingEstimatedBudgetTwd ?? "1200")}</strong></div>
           </div>
           <div className="cost-note">
             <Info size={17} />

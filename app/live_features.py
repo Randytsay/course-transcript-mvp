@@ -432,10 +432,15 @@ def build_live_cost(job_id: str) -> dict[str, Any]:
     remaining = max(Decimal("0"), total_estimated - accrued)
     return {
         "estimatedTotalUsd": _money(total_estimated),
+        "estimatedTotalTwd": str(config.usd_as_twd(total_estimated)),
         "estimatedAccruedUsd": _money(accrued),
+        "estimatedAccruedTwd": str(config.usd_as_twd(accrued)),
         "estimatedRemainingUsd": _money(remaining),
+        "estimatedRemainingTwd": str(config.usd_as_twd(remaining)),
         "chirpEstimatedUsd": _money(chirp_cost),
+        "chirpEstimatedTwd": str(config.usd_as_twd(chirp_cost)),
         "geminiEstimatedUsd": _money(gemini_cost),
+        "geminiEstimatedTwd": str(config.usd_as_twd(gemini_cost)),
         "submittedChunkCount": len(submitted_operations),
         "completedChunkCount": completed_count,
         "isEstimate": True,
