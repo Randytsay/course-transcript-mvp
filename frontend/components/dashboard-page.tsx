@@ -5,7 +5,7 @@ import Link from "next/link";
 import { Activity, ArrowRight, CheckCircle2, Clock3, Coins, FileAudio2, MoreHorizontal, Plus, ShieldCheck, Sparkles, TimerReset, TriangleAlert } from "lucide-react";
 import { getCosts, getJobs, getBillingSummary } from "@/lib/api-client";
 import type { CostSummary, TranscriptJob, BillingSummary } from "@/lib/types";
-import { formatTwd } from "@/lib/currency";
+import { formatTwd, formatTwdRate } from "@/lib/currency";
 import ProgressRing from "./progress-ring";
 import StatusBadge from "./status-badge";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -60,7 +60,7 @@ export default function DashboardPage() {
     { label: "處理中任務", value: String(active), detail: active ? "後端目前正在處理" : "目前沒有處理中的任務", icon: Activity, tone: "blue" },
     { label: "待人工確認", value: String(reviewing + awaitingConfirmation), detail: awaitingConfirmation ? `${awaitingConfirmation} 個待確認費用` : reviewing ? `${reviewing} 個待內容審查` : "目前沒有待確認項目", icon: TriangleAlert, tone: "amber" },
     { label: "已有輸出", value: String(completed), detail: "包含待審查與已完成任務", icon: CheckCircle2, tone: "green" },
-    { label: "剩餘預估額度", value: costs ? formatTwd(costs.remainingEstimatedBudgetTwd) : "—", detail: `起始額度 ${costs ? formatTwd(costs.budgetStartingBalanceTwd) : "NT$1,200"}；非實際帳務`, icon: TimerReset, tone: "violet" },
+    { label: "剩餘預估額度", value: costs ? formatTwd(costs.remainingEstimatedBudgetTwd) : "—", detail: costs ? `匯率 USD 1 = ${formatTwdRate(costs.usdToTwd)}${costs.fxRateDate ? `（${costs.fxRateDate}）` : ""}${costs.fxStale ? "；暫用快取" : ""}` : "非實際帳務", icon: TimerReset, tone: "violet" },
   ];
 
   return (

@@ -154,6 +154,11 @@ export interface CostSummary {
   committedEstimatedCostTwd: string;
   remainingEstimatedBudgetTwd: string;
   usdToTwd: string;
+  fxSource: string;
+  fxRateDate: string | null;
+  fxFetchedAt: string | null;
+  fxStale: boolean;
+  fxAutoEnabled: boolean;
   warningThresholdsUsd: string[];
   pricingVersion: string;
   accountingNote: string;
