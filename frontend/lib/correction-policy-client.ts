@@ -48,7 +48,7 @@ export async function createBatchWithPolicy(
     profile: "highest_accuracy",
     enable_gemini_correction: true,
     enable_subtitles: true,
-    require_human_review: false,
+    require_human_review: true,
     processing_strategy: processingStrategy,
     chirp_max_parallel_chunks: chirpMaxParallelChunks,
     output_formats: outputFormats,
