@@ -15,6 +15,27 @@ ITEMS = [
 
 
 class MiniMaxProviderTests(unittest.TestCase):
+    def test_invalid_structured_response_is_retried_before_accepting_terms(self) -> None:
+        calls = 0
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "key"
+            key.write_text("test-secret", encoding="utf-8")
+
+            def http_post(url: str, headers: object, body: bytes, timeout: float) -> tuple[int, dict[str, str], bytes]:
+                nonlocal calls
+                calls += 1
+                content = (
+                    '{"terms":[{"canonical":"錯誤","variants":"not-an-array","confidence":"high"}]}'
+                    if calls == 1
+                    else '{"terms":[{"canonical":"正確術語","variants":["正確術語"],"confidence":"high"}]}'
+                )
+                return 200, {}, json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+
+            client = MiniMaxCorrectionClient(key_file=key, http_post=http_post, sleeper=lambda _: None)
+            terms = client.extract_terms(ITEMS)
+            self.assertEqual(calls, 2)
+            self.assertEqual(terms[0]["canonical"], "正確術語")
+
     def test_structured_response_preserves_ids_and_timestamps_are_not_in_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             key = Path(directory) / "key"
@@ -78,6 +99,35 @@ class MiniMaxProviderTests(unittest.TestCase):
                         },
                         ensure_ascii=False,
                     )
+                )
+                return 200, {}, json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+
+            client = MiniMaxCorrectionClient(key_file=key, http_post=http_post, sleeper=lambda _: None)
+            result = client.correct_window(ITEMS, [])
+            self.assertEqual(result["s1"]["corrected_text"], "這是一段課程內容。")
+
+    def test_reasoning_wrapper_and_inner_fenced_json_are_removed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "key"
+            key.write_text("test-secret", encoding="utf-8")
+
+            def http_post(url: str, headers: object, body: bytes, timeout: float) -> tuple[int, dict[str, str], bytes]:
+                content = (
+                    "<think>provider reasoning</think>\n"
+                    "```json\n"
+                    + json.dumps(
+                        {
+                            "segments": [
+                                {
+                                    "segment_id": "s1",
+                                    "corrected_text": "這是一段課程內容。",
+                                    "uncertain_terms": [],
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n```"
                 )
                 return 200, {}, json.dumps({"choices": [{"message": {"content": content}}]}).encode()
 

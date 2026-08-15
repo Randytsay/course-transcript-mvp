@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import csv
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -57,6 +58,8 @@ class CorrectionRuntime:
         self.context = context
         self._lock = threading.RLock()
         self._switches: list[dict[str, Any]] = []
+        self._terminology_provider: str | None = None
+        self._terminology_term_count = 0
         self._counts = {
             CorrectionProvider.MINIMAX_M3.value: 0,
             CorrectionProvider.GEMINI.value: 0,
@@ -98,6 +101,8 @@ class CorrectionRuntime:
                 "m3_weekly_reset_at": self.quota.weekly_reset_at,
                 "m3_quota_reason": self.quota.reason,
                 "provider_switches": list(self._switches),
+                "terminology_provider": self._terminology_provider,
+                "terminology_term_count": self._terminology_term_count,
                 "segment_counts": dict(self._counts),
                 "chirp_raw_immutable": True,
                 "timestamps_immutable": True,
@@ -132,6 +137,79 @@ class CorrectionRuntime:
         )
         self.active_provider = CorrectionProvider.GEMINI
         self._write_manifest()
+
+    def generate_terms(
+        self,
+        raw_segments: list[dict[str, Any]],
+        gemini_terms: Callable[[list[dict[str, Any]]], list[dict[str, Any]]],
+    ) -> list[dict[str, Any]]:
+        with self._lock:
+            if self.active_provider is CorrectionProvider.MINIMAX_M3:
+                try:
+                    terms = self.m3_client.extract_terms(raw_segments, context=self.context)
+                    self._terminology_provider = CorrectionProvider.MINIMAX_M3.value
+                    self._terminology_term_count = len(terms)
+                    self._write_glossary(raw_segments, terms)
+                    self._write_manifest()
+                    return terms
+                except MiniMaxProviderError as exc:
+                    failure = decide_provider_failure(
+                        CorrectionProvider.MINIMAX_M3,
+                        exc.kind,
+                    )
+                    if failure.fail_closed:
+                        self._write_manifest()
+                        raise
+                    self._switch_to_gemini(
+                        kind=exc.kind,
+                        segment_id=str(raw_segments[0]["segment_id"]),
+                    )
+            terms = gemini_terms(raw_segments)
+            self._terminology_provider = CorrectionProvider.GEMINI.value
+            self._terminology_term_count = len(terms)
+            self._write_manifest()
+            return terms
+
+    def _write_glossary(
+        self,
+        raw_segments: list[dict[str, Any]],
+        terms: list[dict[str, Any]],
+    ) -> None:
+        source = [
+            {"segment_id": item["segment_id"], "text": item["raw_text"]}
+            for item in raw_segments
+        ]
+        import hashlib
+        source_sha256 = hashlib.sha256(
+            json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        glossary = self.manifest_path.parent / "glossary"
+        # The runtime manifest is in the job root; keep the glossary next to it.
+        glossary.mkdir(parents=True, exist_ok=True)
+        _atomic_json(
+            glossary / "global-terms.json",
+            {
+                "provider": "minimax",
+                "model": os.getenv("MINIMAX_M3_MODEL", "MiniMax-M3"),
+                "prompt_version": "terminology-v1-minimax-m3",
+                "source_sha256": source_sha256,
+                "usage_metadata": {"billing_mode": "token_plan"},
+                "terms": terms,
+                "raw_response": "stored in correction-m3-v1 terminology audit",
+                "cache_hit": False,
+            },
+        )
+        with (glossary / "global-terms.csv").open("w", encoding="utf-8", newline="") as stream:
+            writer = csv.DictWriter(stream, fieldnames=["canonical", "variants", "confidence"])
+            writer.writeheader()
+            for term in terms:
+                writer.writerow(
+                    {
+                        "canonical": term.get("canonical", ""),
+                        "variants": " | ".join(term.get("variants", [])),
+                        "confidence": term.get("confidence", ""),
+                    }
+                )
 
     def correct_window(
         self,
@@ -171,39 +249,6 @@ class CorrectionRuntime:
             return result
 
 
-def _empty_terms(raw_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """M3-first avoids an unrequested Gemini glossary call."""
-    from app.providers import correct_text as base
-
-    source = [
-        {"segment_id": item["segment_id"], "text": item["raw_text"]}
-        for item in raw_segments
-    ]
-    import hashlib
-    source_sha256 = hashlib.sha256(
-        json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    glossary = base.JOB / "glossary"
-    glossary.mkdir(parents=True, exist_ok=True)
-    _atomic_json(
-        glossary / "global-terms.json",
-        {
-            "provider": "minimax",
-            "model": os.getenv("MINIMAX_M3_MODEL", "MiniMax-M3"),
-            "prompt_version": "no-gemini-glossary-m3-first-v1",
-            "source_sha256": source_sha256,
-            "usage_metadata": {"request_count": 0, "billing_mode": "token_plan"},
-            "terms": [],
-            "raw_response": None,
-            "cache_hit": False,
-        },
-    )
-    (glossary / "global-terms.csv").write_text(
-        "canonical,variants,confidence\n", encoding="utf-8"
-    )
-    return []
-
-
 def main() -> int:
     from app.providers import correct_text as base
     from app.providers import correct_text_legacy_hardened as legacy
@@ -235,8 +280,7 @@ def main() -> int:
     original_correct_window = base.correct_window
     original_prompt = base.PROMPT_VERSION
     try:
-        if runtime.decision.provider is CorrectionProvider.MINIMAX_M3:
-            base.generate_terms = _empty_terms
+        base.generate_terms = lambda raw: runtime.generate_terms(raw, original_terms)
         base.correct_window = runtime.correct_window
         base.PROMPT_VERSION = "fixed-segments-v1-routed-correction"
         result = base.main()

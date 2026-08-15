@@ -37,8 +37,34 @@ class FakeM3:
             raise MiniMaxProviderError("quota exhausted", kind=ProviderFailureKind.USAGE_LIMIT)
         return {str(items[0]["segment_id"]): {"segment_id": str(items[0]["segment_id"]), "corrected_text": "M3文字"}}
 
+    def extract_terms(self, items: list[dict[str, object]], *, context: str) -> list[dict[str, object]]:
+        return [{"canonical": "術語", "variants": ["術語"], "confidence": "high"}]
+
 
 class RuntimeRoutingTests(unittest.TestCase):
+    def test_m3_terminology_is_written_and_manifested(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            quota = FakeQuota()
+            m3 = FakeM3()
+            runtime = CorrectionRuntime(
+                requested_policy=M3_FIRST,
+                m3_feature_enabled=True,
+                quota_check_enabled=True,
+                quota_client=quota,  # type: ignore[arg-type]
+                m3_client=m3,  # type: ignore[arg-type]
+                gemini_corrector=lambda items, terms: {},
+                manifest_path=Path(directory) / "correction-routing.json",
+            )
+            terms = runtime.generate_terms([ITEM], lambda items: [])
+            self.assertEqual(terms[0]["canonical"], "術語")
+            glossary = Path(directory) / "glossary/global-terms.json"
+            payload = json.loads(glossary.read_text(encoding="utf-8"))
+            self.assertEqual(payload["provider"], "minimax")
+            self.assertEqual(payload["usage_metadata"]["billing_mode"], "token_plan")
+            manifest = json.loads((Path(directory) / "correction-routing.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["terminology_provider"], "minimax-m3")
+            self.assertEqual(manifest["terminology_term_count"], 1)
+
     def test_usage_limit_switches_once_and_never_reenters_m3(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             quota = FakeQuota()
