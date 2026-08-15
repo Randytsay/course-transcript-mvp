@@ -57,6 +57,7 @@ services:
       - ./logs:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
       - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
+      - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
     command: ["uvicorn", "app.api_hardened:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
@@ -131,6 +132,7 @@ services:
       - ./tmp:/app/tmp
       - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
+      - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
     command: ["python", "-m", "app.pipeline.dynamic_worker_production"]
 
   delivery-worker:

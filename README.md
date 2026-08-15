@@ -1,7 +1,7 @@
 # Course Transcript MVP
 
 Private, resumable long-audio transcription MVP. Chirp 3 provides word-level
-timing; Google Vertex AI Gemini 3.6 Flash performs text-only correction after
+timing; Google Vertex AI Gemini 3.7 Flash performs text-only correction after
 the timing layer is complete.
 
 ## Security
@@ -69,7 +69,7 @@ export manifest and these review artifacts:
 
 Run `python -m app.providers.validate_outputs` after QA. It checks immutable
 segment timing, subtitle structures, CSV row counts, raw provider evidence,
-Gemini 3.6 Flash correction records, glossary, and join QA without modifying
+Gemini 3.7 Flash correction records, glossary, and join QA without modifying
 files. DOCX/PDF are local files; Google Docs and Drive upload remain disabled
 until separate OAuth design and explicit approval.
 

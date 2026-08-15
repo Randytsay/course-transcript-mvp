@@ -40,6 +40,6 @@ Pending human gates:
 1. Refresh the already authenticated production browser and confirm Dashboard
    and `新增轉錄任務` render.
 2. Select one small Drive media file and run only non-paid preflight.
-3. Report the chosen source, exact estimate, Chirp 3 + Gemini 3.6 Flash, and
+3. Report the chosen source, exact estimate, Chirp 3 + Gemini 3.7 Flash, and
    whether to authorize the first paid five-minute request.
 4. Keep Drive upload disabled until a later explicit approval.

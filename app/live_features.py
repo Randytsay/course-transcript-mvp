@@ -358,7 +358,8 @@ def _usage_tokens(job_dir: Path) -> tuple[int, int]:
     glossary = job_dir / "glossary" / "global-terms.json"
     if glossary.is_file():
         evidence.append(glossary)
-    evidence.extend(sorted((job_dir / "correction-v2").glob("*.json")))
+    for correction_dir in ("correction-v2", "correction-cascade-v1", "correction-m3-v1"):
+        evidence.extend(sorted((job_dir / correction_dir).glob("*.json")))
     seen: set[Path] = set()
     for path in evidence:
         if path in seen:
@@ -371,6 +372,7 @@ def _usage_tokens(job_dir: Path) -> tuple[int, int]:
         prompt_tokens += int(
             usage.get("prompt_token_count")
             or usage.get("input_token_count")
+            or usage.get("input_tokens")
             or usage.get("promptTokenCount")
             or usage.get("inputTokenCount")
             or 0
@@ -378,6 +380,7 @@ def _usage_tokens(job_dir: Path) -> tuple[int, int]:
         output_tokens += int(
             usage.get("candidates_token_count")
             or usage.get("output_token_count")
+            or usage.get("output_tokens")
             or usage.get("candidatesTokenCount")
             or usage.get("outputTokenCount")
             or 0

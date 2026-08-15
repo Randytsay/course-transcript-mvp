@@ -6,13 +6,13 @@ import json
 import re
 import time
 import uuid
-from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
 from google.genai import types
 
 from app.providers import correct_text as base
+from app.providers.correction_guard import content_guard
 
 PROMPT_VERSION = "fixed-segments-v4-production-hardening"
 SAFE_PROMPT_VERSION = re.sub(r"[^A-Za-z0-9._-]+", "-", PROMPT_VERSION).strip("-")
@@ -62,34 +62,6 @@ def generate_json(prompt: str, schema: dict[str, Any]) -> tuple[object, dict[str
                 raise
             time.sleep(min(30, 2**attempt))
     raise RuntimeError("unreachable") from last_error
-
-
-def content_guard(raw: str, corrected: str) -> list[str]:
-    """Return only severe rewrite indicators; normal spelling fixes remain allowed."""
-    raw_text = "".join(raw.split())
-    corrected_text = "".join(corrected.split())
-    reasons: list[str] = []
-    if raw_text and not corrected_text:
-        reasons.append("empty_correction")
-        return reasons
-    if len(corrected_text) > 4_000:
-        reasons.append("correction_too_long")
-    if re.search(r"(.)\1{5,}", corrected_text):
-        reasons.append("repeated_character_run")
-    if len(raw_text) >= 8:
-        ratio = len(corrected_text) / max(1, len(raw_text))
-        if ratio < 0.30:
-            reasons.append("excessive_deletion")
-        elif ratio > 2.50:
-            reasons.append("excessive_addition")
-        similarity = SequenceMatcher(None, raw_text, corrected_text).ratio()
-        if len(raw_text) >= 20 and similarity < 0.20:
-            reasons.append("semantic_rewrite_risk")
-        elif similarity < 0.15 and abs(
-            len(corrected_text) - len(raw_text)
-        ) > max(12, round(len(raw_text) * 0.8)):
-            reasons.append("semantic_rewrite_risk")
-    return reasons
 
 
 def _source_segments(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

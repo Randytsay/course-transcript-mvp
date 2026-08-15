@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Literal
 
 from fastapi import HTTPException, Request
@@ -18,6 +19,8 @@ from app.jobs.correction_policy import (
 )
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, DYNAMIC_BATCHING, STANDARD_BATCH
 from app.live_error import safe_chunk_error
+from app.providers.correction_routing import M3QuotaState
+from app.providers.minimax_quota import MiniMaxQuotaClient
 import app.live_features as live_features
 
 live_features.safe_chunk_error = safe_chunk_error
@@ -108,16 +111,31 @@ app.router.routes = [route for route in app.router.routes if _keep_route(route)]
 
 @app.get("/api/v1/correction/provider-status")
 def correction_provider_status() -> dict[str, object]:
-    """Expose capability flags only; never expose provider credentials."""
+    """Expose safe capability/quota fields; never expose provider credentials."""
+    quota_live_check = _m3_enabled() and os.environ.get(
+        "MINIMAX_M3_QUOTA_CHECK_ENABLED", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    quota = None
+    if quota_live_check:
+        quota = MiniMaxQuotaClient().get_quota(force_refresh=True)
+    key_file = Path(os.environ.get("MINIMAX_API_KEY_FILE", "/run/secrets/minimax-api-key"))
+    try:
+        minimax_configured = key_file.is_file() and key_file.stat().st_size > 0
+    except OSError:
+        minimax_configured = False
     return {
         "default_policy": DEFAULT_CORRECTION_POLICY,
         "m3_enabled": _m3_enabled(),
         "gemini_model": "gemini-3.7-flash",
-        "m3_model": "minimax-m3",
-        "quota_live_check": False,
+        "m3_model": os.environ.get("MINIMAX_M3_MODEL", "MiniMax-M3"),
+        "minimax_configured": minimax_configured,
+        "quota_live_check": quota_live_check,
+        "quota_state": quota.state.value if quota else M3QuotaState.UNKNOWN.value,
+        "quota_checked_at": quota.checked_at if quota else None,
+        "quota_source_pool": quota.source_pool if quota else None,
         "note": (
-            "M3 policy can be persisted now. Live MiniMax quota/provider routing "
-            "must remain disabled until runtime validation is complete."
+            "M3 policy may be persisted, but routing remains fail-closed: unknown "
+            "quota always selects Gemini 3.7."
         ),
     }
 

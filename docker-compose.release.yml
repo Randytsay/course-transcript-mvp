@@ -34,6 +34,7 @@ services:
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
       - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
+      - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
 
   worker:
     build:
@@ -65,6 +66,7 @@ services:
       - ${COURSE_TRANSCRIPT_TMP_HOST_PATH:?Set COURSE_TRANSCRIPT_TMP_HOST_PATH}:/app/tmp
       - ${GCP_CREDENTIALS_HOST_PATH:?Set GCP_CREDENTIALS_HOST_PATH}:/run/secrets/gcp-sa.json:ro
       - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
+      - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
 
   delivery-worker:
     build:

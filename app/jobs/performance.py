@@ -501,8 +501,10 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
     glossary = job_dir / "glossary" / "global-terms.json"
     if glossary.is_file():
         paths.append(("glossary", glossary))
-    for path in sorted((job_dir / "correction-v2").glob("*.json")):
-        paths.append(("correction", path))
+    for correction_dir in ("correction-v2", "correction-cascade-v1", "correction-m3-v1"):
+        kind = "correction-m3" if correction_dir == "correction-m3-v1" else "correction"
+        for path in sorted((job_dir / correction_dir).glob("*.json")):
+            paths.append((kind, path))
     calls: list[dict[str, Any]] = []
     for kind, path in paths:
         payload = _read_json(path, {})
@@ -515,6 +517,7 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
             (
                 "prompt_token_count",
                 "input_token_count",
+                "input_tokens",
                 "promptTokenCount",
                 "inputTokenCount",
             ),
@@ -524,11 +527,13 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
             (
                 "candidates_token_count",
                 "output_token_count",
+                "output_tokens",
                 "candidatesTokenCount",
                 "outputTokenCount",
             ),
         )
-        cost = (
+        provider = "minimax" if payload.get("provider") == "minimax" or kind == "correction-m3" else "google-vertex-ai"
+        cost = Decimal("0") if provider == "minimax" else (
             Decimal(input_tokens)
             * config.gemini_input_usd_per_million_tokens
             / Decimal("1000000")
@@ -541,6 +546,7 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
                 "callId": path.stem,
                 "kind": kind,
                 "model": payload.get("model") or "gemini-3.7-flash",
+                "provider": provider,
                 "sourceStartMs": payload.get("source_start_ms"),
                 "sourceEndMs": payload.get("source_end_ms"),
                 "requestStartedAt": payload.get("request_started_at"),
@@ -558,6 +564,7 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
                 "inputTokens": input_tokens,
                 "outputTokens": output_tokens,
                 "estimatedCostUsd": _money(cost),
+                "billingMode": "token_plan" if provider == "minimax" else "vertex_estimate",
                 "cached": bool(payload.get("cache_hit")),
                 "promptVersion": payload.get("prompt_version"),
             }
