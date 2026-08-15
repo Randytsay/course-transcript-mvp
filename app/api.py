@@ -887,6 +887,7 @@ def get_costs() -> dict[str, Any]:
     result.update(
         config.budget_summary(Decimal(result["committed_estimated_cost_usd"]))
     )
+    result.update(config.fx_summary())
     return result
 
 

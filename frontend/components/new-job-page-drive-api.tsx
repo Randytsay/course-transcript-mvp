@@ -12,17 +12,24 @@ import {
   Layers3,
   RefreshCw,
   Search,
+  ShieldCheck,
+  Sparkles,
   Square,
   SquareCheckBig,
   TriangleAlert,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { createBatch, getCosts, previewBatch } from "@/lib/api-client";
+import { getCosts, previewBatch } from "@/lib/api-client";
 import {
   browseDrivePage,
   DriveDirectoryPage,
   searchDrivePage,
 } from "@/lib/drive-browser-client";
+import {
+  createBatchWithPolicy,
+  getCorrectionProviderStatus,
+  type CorrectionPolicy,
+} from "@/lib/correction-policy-client";
 import type {
   BatchPreview,
   ContentMode,
@@ -71,6 +78,11 @@ export default function NewJobPageDriveApi() {
   const [error, setError] = useState<string | null>(null);
   const [chirpMaxParallelChunks, setChirpMaxParallelChunks] = useState(3);
   const [processingStrategy, setProcessingStrategy] = useState<ProcessingStrategy>("DYNAMIC_BATCHING");
+  const [correctionPolicy, setCorrectionPolicy] = useState<CorrectionPolicy>("GEMINI_FIRST");
+  const [m3Enabled, setM3Enabled] = useState(false);
+  const [m3StatusLoaded, setM3StatusLoaded] = useState(false);
+  const [m3Model, setM3Model] = useState("MiniMax-M3");
+  const [m3QuotaState, setM3QuotaState] = useState<"available" | "unavailable" | "unknown">("unknown");
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>(DEFAULT_OUTPUT_FORMATS);
   const [contentMode, setContentMode] = useState<ContentMode>("general");
   const [documentContext, setDocumentContext] = useState("");
@@ -144,6 +156,14 @@ export default function NewJobPageDriveApi() {
   useEffect(() => {
     void openDirectory("gdrive:");
     getCosts().then(setCosts).catch(() => null);
+    getCorrectionProviderStatus()
+      .then((status) => {
+        setM3Enabled(status.m3Enabled);
+        setM3Model(status.m3Model);
+        setM3QuotaState(status.quotaState);
+        if (!status.m3Enabled) setCorrectionPolicy("GEMINI_FIRST");
+      })
+      .finally(() => setM3StatusLoaded(true));
   }, []);
 
   function toggleFile(entry: DriveEntry) {
@@ -189,8 +209,9 @@ export default function NewJobPageDriveApi() {
     setBusy("create");
     setError(null);
     try {
-      setCreated(await createBatch(
+      setCreated(await createBatchWithPolicy(
         preview.batchPreviewId,
+        correctionPolicy,
         chirpMaxParallelChunks,
         outputFormats,
         processingStrategy,
@@ -307,7 +328,19 @@ export default function NewJobPageDriveApi() {
           </div>
 
           <div className="form-section">
-            <div className="section-heading"><span className="step-number">4</span><div><h2>輸出與併發</h2><p>建立工作前只做唯讀預覽；付費辨識仍需另行確認費用。</p></div></div>
+            <div className="section-heading"><span className="step-number">4</span><div><h2>AI 文字校正模型</h2><p>選擇本批次的文字校正路由；原始 Chirp 文字、時間碼與分段永遠保留。</p></div></div>
+            <div className="selection-mode-grid">
+              <button type="button" className={`selection-mode-card ${correctionPolicy === "GEMINI_FIRST" ? "selection-mode-card--active" : ""}`} onClick={() => setCorrectionPolicy("GEMINI_FIRST")}>
+                <ShieldCheck size={21} /><span><strong>Gemini 3.7 優先</strong><small>正式品質基準；全程優先使用 Gemini 3.7 Flash</small></span>{correctionPolicy === "GEMINI_FIRST" && <Check size={17} />}
+              </button>
+              <button type="button" disabled={!m3StatusLoaded || !m3Enabled} className={`selection-mode-card ${correctionPolicy === "M3_FIRST" ? "selection-mode-card--active" : ""}`} onClick={() => m3Enabled && setCorrectionPolicy("M3_FIRST")} title={!m3StatusLoaded ? "正在確認 MiniMax M3 狀態" : !m3Enabled ? "MiniMax M3 尚未在 production 啟用" : undefined}>
+                <Sparkles size={21} /><span><strong>{m3Model} 優先{!m3StatusLoaded ? "（檢查中）" : !m3Enabled ? "（未啟用）" : ""}</strong><small>{m3QuotaState === "available" ? "目前 quota 可用；額度不足或異常時自動轉 Gemini 3.7" : "已啟用後會先檢查 quota；不可用時安全轉 Gemini 3.7"}</small></span>{correctionPolicy === "M3_FIRST" && <Check size={17} />}
+              </button>
+            </div>
+          </div>
+
+          <div className="form-section">
+            <div className="section-heading"><span className="step-number">5</span><div><h2>輸出與併發</h2><p>建立工作前只做唯讀預覽；付費辨識仍需另行確認費用。</p></div></div>
             <label style={{ display: "block", fontWeight: 700, marginBottom: 8 }}>辨識處理模式</label>
             <div className="selection-mode-grid">
               <button type="button" className={`selection-mode-card ${processingStrategy === "DYNAMIC_BATCHING" ? "selection-mode-card--active" : ""}`} onClick={() => setProcessingStrategy("DYNAMIC_BATCHING")}>
@@ -334,12 +367,12 @@ export default function NewJobPageDriveApi() {
               {busy === "preview" ? <LoaderCircle className="spin" size={18} /> : <Check size={18} />}建立唯讀批次預覽
             </button>
             {preview && <div className="empty-state" style={{ marginTop: 14 }}>已預覽 {preview.itemCount} 個檔案，共 {formatBytes(preview.totalSizeBytes)}。<button type="button" className="button button--primary" disabled={busy !== null} onClick={() => void createPreflightBatch()}>{busy === "create" ? "建立中…" : "建立 preflight 工作"}</button></div>}
-            {created && <div className="empty-state" style={{ marginTop: 14 }}>批次已建立：{created.batchId}。模式：{created.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}；尚未啟動付費辨識。</div>}
+            {created && <div className="empty-state" style={{ marginTop: 14 }}>批次已建立：{created.batchId}。模型：{correctionPolicy === "M3_FIRST" ? `${m3Model} → Gemini 3.7` : "Gemini 3.7"}；模式：{created.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}；尚未啟動付費辨識。</div>}
           </div>
         </section>
 
         <aside className="dashboard-side">
-          <div className="panel quick-panel"><h2>Drive 混合架構</h2><p>目錄瀏覽、搜尋與健康檢查使用 Google Drive API；下載、成果上傳、備份與升版仍使用 rclone。</p><small>剩餘預估額度：{costs ? formatTwd(costs.remainingEstimatedBudgetTwd) : "讀取中"}</small></div>
+          <div className="panel quick-panel"><h2>Drive 混合架構</h2><p>目錄瀏覽、搜尋與健康檢查使用 Google Drive API；下載、成果上傳、備份與升版仍使用 rclone。</p><small>校正模型：{correctionPolicy === "M3_FIRST" ? `${m3Model} → Gemini 3.7` : "Gemini 3.7"}</small><small>剩餘預估額度：{costs ? formatTwd(costs.remainingEstimatedBudgetTwd) : "讀取中"}</small></div>
         </aside>
       </div>
     </AppShell>

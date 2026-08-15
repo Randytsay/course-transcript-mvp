@@ -183,6 +183,8 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(after_new_estimate["remaining_estimated_budget_twd"], "1192.00")
         self.assertEqual(api_costs["budget_currency"], "TWD")
         self.assertEqual(api_costs["remaining_estimated_budget_twd"], "1200.00")
+        self.assertEqual(api_costs["fx_source"], "configured_manual")
+        self.assertFalse(api_costs["fx_auto_enabled"])
 
     def test_term_decision_preserves_original_transcript(self) -> None:
         original = (self.data / "jobs" / "sample-job" / "subtitles.json").read_bytes()

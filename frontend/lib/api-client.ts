@@ -380,6 +380,11 @@ export async function getCosts(): Promise<CostSummary> {
     committed_estimated_cost_twd: string;
     remaining_estimated_budget_twd: string;
     usd_to_twd: string;
+    fx_source: string;
+    fx_rate_date: string | null;
+    fx_fetched_at: string | null;
+    fx_stale: boolean;
+    fx_auto_enabled: boolean;
     warning_thresholds_usd: string[];
     pricing_version: string;
     accounting_note: string;
@@ -394,6 +399,11 @@ export async function getCosts(): Promise<CostSummary> {
     committedEstimatedCostTwd: result.committed_estimated_cost_twd,
     remainingEstimatedBudgetTwd: result.remaining_estimated_budget_twd,
     usdToTwd: result.usd_to_twd,
+    fxSource: result.fx_source,
+    fxRateDate: result.fx_rate_date,
+    fxFetchedAt: result.fx_fetched_at,
+    fxStale: result.fx_stale,
+    fxAutoEnabled: result.fx_auto_enabled,
     warningThresholdsUsd: result.warning_thresholds_usd,
     pricingVersion: result.pricing_version,
     accountingNote: result.accounting_note,

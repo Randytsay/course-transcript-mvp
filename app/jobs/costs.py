@@ -10,6 +10,7 @@ import os
 from dataclasses import asdict, dataclass, replace
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
+from .fx_rates import resolve_from_env
 from .strategy import DYNAMIC_BATCHING, normalize_processing_strategy
 
 
@@ -50,6 +51,11 @@ class CostConfig:
     usd_to_twd: Decimal = Decimal("32")
     budget_remaining_twd: Decimal | None = None
     budget_baseline_committed_usd: Decimal = Decimal("0")
+    fx_source: str = "configured_manual"
+    fx_rate_date: str | None = None
+    fx_fetched_at: str | None = None
+    fx_stale: bool = False
+    fx_auto_enabled: bool = False
 
     @classmethod
     def from_env(cls) -> "CostConfig":
@@ -68,11 +74,13 @@ class CostConfig:
             if dynamic_batching
             else "google-cloud-public-pricing-2026-07-31"
         )
-        usd_to_twd = Decimal(
+        manual_usd_to_twd = Decimal(
             os.environ.get("COURSE_TRANSCRIPT_USD_TO_TWD", "32")
         )
-        if usd_to_twd <= 0:
+        if manual_usd_to_twd <= 0:
             raise ValueError("COURSE_TRANSCRIPT_USD_TO_TWD must be positive")
+        fx = resolve_from_env(manual_usd_to_twd)
+        usd_to_twd = fx.rate
         budget_remaining_raw = os.environ.get("COURSE_TRANSCRIPT_BUDGET_REMAINING_TWD")
         budget_remaining_twd = (
             Decimal(budget_remaining_raw) if budget_remaining_raw else None
@@ -130,6 +138,11 @@ class CostConfig:
             usd_to_twd=usd_to_twd,
             budget_remaining_twd=budget_remaining_twd,
             budget_baseline_committed_usd=budget_baseline_committed_usd,
+            fx_source=fx.source,
+            fx_rate_date=fx.rate_date,
+            fx_fetched_at=fx.fetched_at,
+            fx_stale=fx.stale,
+            fx_auto_enabled=fx.auto_enabled,
         )
 
     def usd_as_twd(self, amount_usd: Decimal | str | int | float) -> Decimal:
@@ -163,6 +176,15 @@ class CostConfig:
             "committed_estimated_cost_twd": str(spent),
             "remaining_estimated_budget_twd": str(remaining),
             "usd_to_twd": str(self.usd_to_twd),
+        }
+
+    def fx_summary(self) -> dict[str, object]:
+        return {
+            "fx_source": self.fx_source,
+            "fx_rate_date": self.fx_rate_date,
+            "fx_fetched_at": self.fx_fetched_at,
+            "fx_stale": self.fx_stale,
+            "fx_auto_enabled": self.fx_auto_enabled,
         }
 
     def for_processing_strategy(self, strategy: object) -> "CostConfig":
