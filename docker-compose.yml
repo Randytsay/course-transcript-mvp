@@ -52,11 +52,19 @@ services:
       CHIRP_DYNAMIC_BATCHING: ${CHIRP_DYNAMIC_BATCHING:-true}
       BILLING_SNAPSHOT_STALE_SECONDS: ${BILLING_SNAPSHOT_STALE_SECONDS:-3600}
       RCLONE_CONFIG: /run/secrets/rclone.conf
+      MINIMAX_M3_ENABLED: ${MINIMAX_M3_ENABLED:-false}
+      MINIMAX_M3_QUOTA_CHECK_ENABLED: ${MINIMAX_M3_QUOTA_CHECK_ENABLED:-false}
+      MINIMAX_M3_MODEL: ${MINIMAX_M3_MODEL:-MiniMax-M3}
+      MINIMAX_M3_QUOTA_URL: ${MINIMAX_M3_QUOTA_URL:-https://api.minimaxi.com/v1/token_plan/remains}
+      MINIMAX_M3_API_PATH: ${MINIMAX_M3_API_PATH:-/v1/chat/completions}
+      MINIMAX_API_BASE_URL: ${MINIMAX_API_BASE_URL:-https://api.minimaxi.com}
+      MINIMAX_API_KEY_FILE: /run/secrets/minimax-api-key
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
       - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
+      - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
     command: ["uvicorn", "app.api_hardened:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
@@ -125,12 +133,20 @@ services:
       GEMINI_MAX_PARALLEL_WINDOWS: ${GEMINI_MAX_PARALLEL_WINDOWS:-2}
       COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE: ${COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE:-true}
       CHIRP_SPEECH_ADAPTATION: ${CHIRP_SPEECH_ADAPTATION:-false}
+      MINIMAX_M3_ENABLED: ${MINIMAX_M3_ENABLED:-false}
+      MINIMAX_M3_QUOTA_CHECK_ENABLED: ${MINIMAX_M3_QUOTA_CHECK_ENABLED:-false}
+      MINIMAX_M3_MODEL: ${MINIMAX_M3_MODEL:-MiniMax-M3}
+      MINIMAX_M3_QUOTA_URL: ${MINIMAX_M3_QUOTA_URL:-https://api.minimaxi.com/v1/token_plan/remains}
+      MINIMAX_M3_API_PATH: ${MINIMAX_M3_API_PATH:-/v1/chat/completions}
+      MINIMAX_API_BASE_URL: ${MINIMAX_API_BASE_URL:-https://api.minimaxi.com}
+      MINIMAX_API_KEY_FILE: /run/secrets/minimax-api-key
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./tmp:/app/tmp
       - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
+      - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
     command: ["python", "-m", "app.pipeline.dynamic_worker_production"]
 
   delivery-worker:

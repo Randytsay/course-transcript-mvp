@@ -474,27 +474,38 @@ def _record_usage_evidence(
         return
     job_dir = data_dir / "jobs" / record["id"]
     evidence = [job_dir / "glossary" / "global-terms.json"]
-    evidence.extend(sorted((job_dir / "correction-v2").glob("*.json")))
-    prompt_tokens = 0
-    output_tokens = 0
-    raw_usage: list[dict[str, Any]] = []
+    for directory_name in ("correction-v2", "correction-cascade-v1", "correction-m3-v1"):
+        evidence.extend(sorted((job_dir / directory_name).glob("*.json")))
+    provider_usage: dict[str, dict[str, Any]] = {
+        "google-vertex-ai": {"input": 0, "output": 0, "records": 0, "models": set()},
+        "minimax": {"input": 0, "output": 0, "records": 0, "requests": 0, "models": set()},
+    }
     for path in evidence:
         if not path.exists():
             continue
         payload = json.loads(path.read_text(encoding="utf-8"))
         usage = payload.get("usage_metadata") or {}
-        prompt_tokens += int(
+        provider = "minimax" if payload.get("provider") == "minimax" or path.parent.name == "correction-m3-v1" else "google-vertex-ai"
+        bucket = provider_usage[provider]
+        bucket["input"] += int(
             usage.get("prompt_token_count")
             or usage.get("input_token_count")
+            or usage.get("input_tokens")
             or 0
         )
-        output_tokens += int(
+        bucket["output"] += int(
             usage.get("candidates_token_count")
             or usage.get("output_token_count")
+            or usage.get("output_tokens")
             or 0
         )
-        raw_usage.append(usage)
+        bucket["records"] += 1
+        bucket["models"].add(str(payload.get("model") or ("MiniMax-M3" if provider == "minimax" else "gemini-3.7-flash")))
+        bucket["requests"] = bucket.get("requests", 0) + int(usage.get("request_count") or 0)
     config = CostConfig.from_env()
+    prompt_tokens = int(provider_usage["google-vertex-ai"]["input"])
+    output_tokens = int(provider_usage["google-vertex-ai"]["output"])
+    raw_usage_records = int(provider_usage["google-vertex-ai"]["records"])
     gemini_estimate = (
         Decimal(prompt_tokens)
         * config.gemini_input_usd_per_million_tokens
@@ -513,7 +524,7 @@ def _record_usage_evidence(
         estimated_cost_usd=gemini_estimate,
         usage={
             "unit": "tokens",
-            "records": len(raw_usage),
+            "records": raw_usage_records,
             "accounting_note": "Application estimate; Cloud Billing is authoritative.",
         },
         worker_id=worker_id,
@@ -528,6 +539,38 @@ def _record_usage_evidence(
             "output_units": output_tokens,
         }
     )
+    minimax_input = int(provider_usage["minimax"]["input"])
+    minimax_output = int(provider_usage["minimax"]["output"])
+    minimax_records = int(provider_usage["minimax"]["records"])
+    if minimax_records:
+        store.record_usage(
+            job_id=record["id"],
+            dedupe_key="minimax-m3-segment-correction",
+            provider="minimax",
+        model=sorted(provider_usage["minimax"]["models"])[0] if provider_usage["minimax"]["models"] else "MiniMax-M3",
+            input_units=minimax_input,
+            output_units=minimax_output,
+            estimated_cost_usd=Decimal("0"),
+            usage={
+                "unit": "tokens",
+                "records": minimax_records,
+                "request_count": int(provider_usage["minimax"].get("requests") or 0),
+                "billing_mode": "token_plan",
+                "accounting_note": "Token Plan usage; monetary cost is not estimated by this application.",
+            },
+            worker_id=worker_id,
+        )
+        usage_records.append(
+            {
+                "provider": "minimax",
+                "model": sorted(provider_usage["minimax"]["models"])[0] if provider_usage["minimax"]["models"] else "MiniMax-M3",
+                "estimated_cost_usd": "0",
+                "unit": "tokens",
+                "billing_mode": "token_plan",
+                "input_units": minimax_input,
+                "output_units": minimax_output,
+            }
+        )
     _atomic_json(
         job_dir / "usage_report.json",
         {

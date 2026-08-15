@@ -31,7 +31,6 @@ function duration(seconds: number) {
 
 export default function BatchDetailPage({ batchId }: { batchId: string }) {
   const [batch, setBatch] = useState<BatchDetail | null>(null);
-  const [confirmed, setConfirmed] = useState(false);
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -60,12 +59,11 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
   );
 
   async function approve() {
-    if (!batch?.estimatedCostUsd || !confirmed) return;
+    if (!batch?.estimatedCostUsd) return;
     setApproving(true);
     setError(null);
     try {
       await approveBatch(batch.id, batch.revision, batch.estimatedCostUsd);
-      setConfirmed(false);
       await load();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "無法確認批次費用");
@@ -77,7 +75,7 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
   return (
     <AppShell
       title={batch?.name ?? "批次任務"}
-      description="逐檔本機檢查、整批費用確認、依序轉錄。"
+      description="逐檔本機檢查、一次費用確認、依序轉錄。"
       actions={<Link className="button button--secondary" href="/jobs/new"><ArrowLeft size={15} />返回選檔</Link>}
     >
       {error && <div className="form-error"><TriangleAlert size={17} /><span>{error}</span></div>}
@@ -108,22 +106,22 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
 
             <aside className="panel batch-approval-card">
               <div className="approval-icon"><ShieldAlert size={22} /></div>
-              <h2>付費操作確認</h2>
-              {batch.status === "preflight" && <p>Worker 正在逐檔檢查格式與時長。完成前不會呼叫 Chirp 或 Gemini。</p>}
+              <h2>最後一次付費確認</h2>
+              {batch.status === "preflight" && <p>Worker 正在逐檔檢查格式與時長。完成前不會呼叫 Chirp、Gemini 或其他文字模型。</p>}
               {batch.status === "awaiting_confirmation" && batch.estimatedCostUsd && (
                 <>
-                  <p>確認後，這 {batch.itemCount} 個檔案將依序進入<strong>{batch.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}</strong>。預估總額為 <strong>US${batch.estimatedCostUsd}</strong>。</p>
-                  <label className="approval-check">
-                    <input type="checkbox" checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} />
-                    <span>我確認這是估計費用，並授權此批次進入付費處理佇列。</span>
-                  </label>
-                  <button className="button button--primary button--full button--large" disabled={!confirmed || approving} onClick={() => void approve()}>
+                  <p>
+                    這 {batch.itemCount} 個檔案將依序進入<strong>{batch.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}</strong>。
+                    預估總額為 <strong>US${batch.estimatedCostUsd}</strong>。
+                  </p>
+                  <button className="button button--primary button--full button--large" disabled={approving} onClick={() => void approve()}>
                     {approving ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />}
-                    確認並排入處理
+                    確認 US${batch.estimatedCostUsd} 並開始處理
                   </button>
+                  <small>按下此按鈕即代表你確認估計費用並授權此批次進入付費處理佇列，不再要求第二個核取方塊。</small>
                 </>
               )}
-              {batch.status === "queued" && <p className="approval-success"><CheckCircle2 size={17} />費用已由你確認，檔案正在依序等待 Worker。</p>}
+              {batch.status === "queued" && <p className="approval-success"><CheckCircle2 size={17} />費用已確認，檔案正在依序等待 Worker。</p>}
               {batch.failedCount > 0 && <p className="approval-warning"><TriangleAlert size={17} />有 {batch.failedCount} 個檔案未通過本機媒體檢查，不會產生辨識費用。</p>}
               <small>程式上限 US$200；Cloud Billing 才是實際帳務依據。</small>
             </aside>

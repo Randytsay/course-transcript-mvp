@@ -20,6 +20,7 @@ from app.jobs.cancellation import next_cancelling_job
 from app.jobs.completion import install_completion_patch
 from app.jobs.drive_publish import DrivePublishError
 from app.jobs.performance_enhanced import build_performance_summary as enhanced_performance_summary
+from app.jobs.correction_policy import get_job_correction_policy
 from app.jobs.store import JobConflict, JobStore
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, is_dynamic_batching
 from app.operations.runtime_heartbeat import write_service_heartbeat
@@ -52,6 +53,15 @@ def _module_env(record: dict[str, Any], job_dir: Path) -> dict[str, str]:
     strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
     env["CHIRP_DYNAMIC_BATCHING"] = "true" if is_dynamic_batching(strategy) else "false"
     env.setdefault("GEMINI_CORRECTION_WINDOW_MS", "60000")
+    data_dir = Path(env.get("COURSE_TRANSCRIPT_DATA_DIR", str(job_dir.parent.parent)))
+    try:
+        env["CORRECTION_REQUESTED_POLICY"] = get_job_correction_policy(
+            JobStore(data_dir / "course-transcript.db"), record["id"]
+        )
+    except Exception:
+        # Missing policy evidence must be safe: the correction runtime defaults
+        # to Gemini rather than accidentally enabling M3 for an unlabelled job.
+        env["CORRECTION_REQUESTED_POLICY"] = "GEMINI_FIRST"
     return env
 
 

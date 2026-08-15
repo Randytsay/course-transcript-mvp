@@ -238,18 +238,20 @@ def main() -> int:
     if len(base_payloads) != expected_chunks:
         errors.append("missing required chunk manifests")
 
-    correction_records = list((JOB / "correction-v2").glob("*.json"))
+    correction_records: list[Path] = []
+    for correction_dir in ("correction-v2", "correction-cascade-v1", "correction-m3-v1"):
+        correction_records.extend((JOB / correction_dir).glob("*.json"))
     if require_correction and not correction_records:
-        errors.append("missing Gemini correction records")
-    # Keep 3.6 readable for historical evidence; all new correction paths are
-    # locked to 3.7 by the active provider configuration and regression tests.
-    supported_correction_models = {"gemini-3.6-flash", "gemini-3.7-flash"}
+        errors.append("missing text-correction provider records")
+    # Historical Gemini evidence remains readable; M3 records are accepted
+    # only from the dedicated provider audit directory.
+    supported_correction_models = {"gemini-3.6-flash", "gemini-3.7-flash", "minimax-m3", "MiniMax-M3"}
     for path in correction_records:
         record = json.loads(path.read_text(encoding="utf-8"))
         if record.get("model") not in supported_correction_models or not isinstance(
             record.get("raw_response"), str
         ):
-            errors.append(f"invalid Gemini evidence: {path.name}")
+            errors.append(f"invalid text-correction evidence: {path.name}")
             break
     if require_correction and not (JOB / "glossary" / "global-terms.json").is_file():
         errors.append("missing global terminology evidence")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Literal
 
 from fastapi import HTTPException, Request
@@ -10,8 +11,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api import _mutation_actor, _store, app
 from app.jobs import JobConflict, JobNotFound, normalize_output_formats
 from app.jobs.content_context import MAX_DOCUMENT_CONTEXT_CHARS
+from app.jobs.correction_policy import (
+    DEFAULT_CORRECTION_POLICY,
+    get_job_correction_policy,
+    set_batch_correction_policy,
+    set_job_correction_policy,
+)
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, DYNAMIC_BATCHING, STANDARD_BATCH
 from app.live_error import safe_chunk_error
+from app.providers.correction_routing import M3QuotaState
+from app.providers.minimax_quota import MiniMaxQuotaClient
 import app.live_features as live_features
 
 live_features.safe_chunk_error = safe_chunk_error
@@ -31,6 +40,7 @@ class CreateJobWithParallelismRequest(BaseModel):
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
     content_mode: Literal["general", "dacheng_buddhist"] = "general"
     document_context: str = Field(default="", max_length=MAX_DOCUMENT_CONTEXT_CHARS)
+    correction_policy: Literal["GEMINI_FIRST", "M3_FIRST"] = DEFAULT_CORRECTION_POLICY
 
 
 class CreateBatchWithParallelismRequest(BaseModel):
@@ -46,6 +56,7 @@ class CreateBatchWithParallelismRequest(BaseModel):
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
     content_mode: Literal["general", "dacheng_buddhist"] = "general"
     document_context: str = Field(default="", max_length=MAX_DOCUMENT_CONTEXT_CHARS)
+    correction_policy: Literal["GEMINI_FIRST", "M3_FIRST"] = DEFAULT_CORRECTION_POLICY
 
 
 def _parallelism_limit() -> int:
@@ -64,6 +75,15 @@ def _validate_parallelism(value: int) -> int:
             detail=f"chirp_max_parallel_chunks must be between 1 and {limit}",
         )
     return value
+
+
+def _m3_enabled() -> bool:
+    return os.environ.get("MINIMAX_M3_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 _REPLACED_READ_PATHS = {
@@ -89,6 +109,50 @@ def _keep_route(route: object) -> bool:
 app.router.routes = [route for route in app.router.routes if _keep_route(route)]
 
 
+@app.get("/api/v1/correction/provider-status")
+def correction_provider_status() -> dict[str, object]:
+    """Expose safe capability/quota fields; never expose provider credentials."""
+    quota_live_check = _m3_enabled() and os.environ.get(
+        "MINIMAX_M3_QUOTA_CHECK_ENABLED", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    quota = None
+    if quota_live_check:
+        quota = MiniMaxQuotaClient().get_quota(force_refresh=True)
+    key_file = Path(os.environ.get("MINIMAX_API_KEY_FILE", "/run/secrets/minimax-api-key"))
+    try:
+        minimax_configured = key_file.is_file() and key_file.stat().st_size > 0
+    except OSError:
+        minimax_configured = False
+    return {
+        "default_policy": DEFAULT_CORRECTION_POLICY,
+        "m3_enabled": _m3_enabled(),
+        "gemini_model": "gemini-3.7-flash",
+        "m3_model": os.environ.get("MINIMAX_M3_MODEL", "MiniMax-M3"),
+        "minimax_configured": minimax_configured,
+        "quota_live_check": quota_live_check,
+        "quota_state": quota.state.value if quota else M3QuotaState.UNKNOWN.value,
+        "quota_checked_at": quota.checked_at if quota else None,
+        "quota_source_pool": quota.source_pool if quota else None,
+        "note": (
+            "M3 policy may be persisted, but routing remains fail-closed: unknown "
+            "quota always selects Gemini 3.7."
+        ),
+    }
+
+
+@app.get("/api/v1/jobs/{job_id}/correction-policy")
+def get_correction_policy(job_id: str) -> dict[str, object]:
+    try:
+        _store().get_job(job_id)
+    except JobNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {
+        "job_id": job_id,
+        "requested_policy": get_job_correction_policy(_store(), job_id),
+        "m3_enabled": _m3_enabled(),
+    }
+
+
 @app.post("/api/v1/batches", status_code=201)
 def create_batch_with_parallelism(
     payload: CreateBatchWithParallelismRequest,
@@ -111,11 +175,18 @@ def create_batch_with_parallelism(
             document_context=payload.document_context,
             actor=actor,
         )
+        job_ids = [job["id"] for job in result["jobs"]]
+        policy = set_batch_correction_policy(
+            _store(),
+            job_ids=job_ids,
+            policy=payload.correction_policy,
+            actor=actor,
+        )
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
+    except (LookupError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     batch = result["batch"]
     return {
@@ -123,7 +194,8 @@ def create_batch_with_parallelism(
         "status": batch["status"],
         "item_count": batch["item_count"],
         "processing_strategy": batch["processing_strategy"],
-        "job_ids": [job["id"] for job in result["jobs"]],
+        "correction_policy": policy,
+        "job_ids": job_ids,
         "chirp_max_parallel_chunks": parallelism,
         "output_formats": normalize_output_formats(payload.output_formats),
         "content_mode": payload.content_mode,
@@ -155,16 +227,23 @@ def create_job_with_parallelism(
             document_context=payload.document_context,
             actor=actor,
         )
+        policy = set_job_correction_policy(
+            _store(),
+            job_id=record["id"],
+            policy=payload.correction_policy,
+            actor=actor,
+        )
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except ValueError as exc:
+    except (LookupError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {
         "job_id": record["id"],
         "status": record["status"],
         "processing_strategy": record["processing_strategy"],
+        "correction_policy": policy,
         "chirp_max_parallel_chunks": parallelism,
         "output_formats": normalize_output_formats(payload.output_formats),
         "created_at": record["created_at"],

@@ -47,6 +47,12 @@ def correct_window(
 
 
 def main() -> int:
+    if os.getenv("MINIMAX_M3_ENABLED", "false").strip().lower() in {
+        "1", "true", "yes", "on"
+    }:
+        from app.providers import correction_runtime
+
+        return correction_runtime.main()
     if correction_cascade_enabled():
         return cascade.main()
     # Keep the default path byte-for-byte compatible in behavior with the
