@@ -290,7 +290,7 @@ export default function NewJobPage() {
               <div className="workflow-choice__check"><Check size={13} /></div>
               <div className="workflow-choice__icon"><Layers3 size={22} /></div>
               <div>
-                <strong>Chirp 3 時間軸 + Gemini 3.6 Flash 固定段落校正</strong>
+                <strong>Chirp 3 時間軸 + Gemini 3.7 Flash 固定段落校正</strong>
                 <span>輸出原始稿、校正版、字幕與 QA；Gemini 不改動字幕時間。</span>
               </div>
               <span className="recommended-tag">固定模式</span>

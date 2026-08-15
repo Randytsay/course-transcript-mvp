@@ -6,7 +6,7 @@
 - Google Drive: source and only user-approved final-output destination.
 - GCS: private input chunks and raw Chirp result JSON.
 - Chirp 3 in `us`: word timestamps and subtitle timing.
-- Google Vertex AI Gemini 3.6 Flash: text-only correction, never subtitle timing.
+- Google Vertex AI Gemini 3.7 Flash: text-only correction, never subtitle timing.
 
 ## Web batch boundary
 
@@ -40,7 +40,7 @@ Cloudflare Access
         ├─ Drive copy/checksum + FFmpeg normalization
         ├─ 120-second chunk-000 canary, then ≤3 parallel 15-minute Chirp chunks
         ├─ midpoint merge + immutable subtitle segments
-        ├─ Gemini 3.6 Flash text-only correction
+        ├─ Gemini 3.7 Flash text-only correction
         ├─ deterministic subtitle cleanup/review (raw and timestamps immutable)
         └─ local exports/QA/checksums → selected sidecars in source folder → awaiting_review
 ```

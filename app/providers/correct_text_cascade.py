@@ -22,8 +22,14 @@ from google.genai import types
 
 from app.providers import correct_text as base
 
-PRIMARY_MODEL = os.getenv("CORRECTION_PRIMARY_MODEL", "gemini-3.1-flash-lite")
-ESCALATION_MODEL = os.getenv("CORRECTION_ESCALATION_MODEL", "gemini-3.7-flash")
+ACTIVE_MODEL = "gemini-3.7-flash"
+PRIMARY_MODEL = os.getenv("CORRECTION_PRIMARY_MODEL", ACTIVE_MODEL)
+ESCALATION_MODEL = os.getenv("CORRECTION_ESCALATION_MODEL", ACTIVE_MODEL)
+if PRIMARY_MODEL != ACTIVE_MODEL or ESCALATION_MODEL != ACTIVE_MODEL:
+    raise RuntimeError(
+        "text correction is locked to gemini-3.7-flash; "
+        "set CORRECTION_PRIMARY_MODEL and CORRECTION_ESCALATION_MODEL accordingly"
+    )
 PROMPT_VERSION = "fixed-segments-v6-cascade-gemini-3.7"
 AUDIT_DIR = base.JOB / "correction-cascade-v1"
 MAX_ATTEMPTS = max(1, int(os.getenv("CORRECTION_MODEL_MAX_ATTEMPTS", "3")))

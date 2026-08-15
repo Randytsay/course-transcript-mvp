@@ -241,6 +241,8 @@ def main() -> int:
     correction_records = list((JOB / "correction-v2").glob("*.json"))
     if require_correction and not correction_records:
         errors.append("missing Gemini correction records")
+    # Keep 3.6 readable for historical evidence; all new correction paths are
+    # locked to 3.7 by the active provider configuration and regression tests.
     supported_correction_models = {"gemini-3.6-flash", "gemini-3.7-flash"}
     for path in correction_records:
         record = json.loads(path.read_text(encoding="utf-8"))

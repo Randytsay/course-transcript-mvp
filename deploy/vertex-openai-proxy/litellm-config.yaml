@@ -1,14 +1,19 @@
 model_list:
   - model_name: gcp-flash
     litellm_params:
-      model: vertex_ai/gemini-3.6-flash
+      model: vertex_ai/gemini-3.7-flash
       rpm: 30
       timeout: 120
   - model_name: gcp-pro
     litellm_params:
-      model: vertex_ai/gemini-3.6-flash
+      model: vertex_ai/gemini-3.7-flash
       rpm: 10
       timeout: 180
+  - model_name: gcp-flash-37
+    litellm_params:
+      model: vertex_ai/gemini-3.7-flash
+      rpm: 30
+      timeout: 120
 
 litellm_settings:
   master_key: os.environ/LITELLM_MASTER_KEY

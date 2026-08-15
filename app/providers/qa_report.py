@@ -195,6 +195,108 @@ def density_windows(segments: list[dict[str, object]], audio_ms: int) -> tuple[l
     return windows, plans
 
 
+def patch_word_density(
+    manifest: dict[str, object],
+    words: list[dict[str, object]],
+    total_words: int,
+    audio_ms: int,
+) -> tuple[dict[str, object], dict[str, object] | None]:
+    """Classify patch word counts by their covered audio duration.
+
+    A raw ``patch_words`` count is not comparable across patches: a 20-second
+    repair and a 3-minute repair can legitimately contain very different
+    counts. Persist words/minute and compare it with deliberately broad bounds
+    so impossible provider/timestamp collapses become review plans without
+    rejecting a valid speech burst or silently publishing it.
+    """
+    start_ms = int(manifest.get("source_start_ms", 0) or 0)
+    end_ms = int(manifest.get("source_end_ms", 0) or 0)
+    duration_ms_value = max(0, end_ms - start_ms)
+    word_count = len(words)
+    words_per_minute = (
+        word_count * 60_000 / duration_ms_value
+        if duration_ms_value > 0
+        else None
+    )
+    job_words_per_minute = (
+        total_words * 60_000 / audio_ms
+        if audio_ms > 0
+        else None
+    )
+    low = float(os.environ.get("CHIRP_PATCH_MIN_WORDS_PER_MINUTE", "20"))
+    high = float(os.environ.get("CHIRP_PATCH_MAX_WORDS_PER_MINUTE", "360"))
+    reason: str | None = None
+    if manifest.get("status") == "SUCCEEDED" and word_count == 0:
+        reason = "successful_patch_has_no_words"
+    elif word_count and duration_ms_value <= 0:
+        reason = "patch_window_has_no_duration"
+    elif words_per_minute is not None and not low <= words_per_minute <= high:
+        reason = (
+            f"words_per_minute={words_per_minute:.1f} outside "
+            f"{low:.1f}..{high:.1f}"
+        )
+    report: dict[str, object] = {
+        "chunk_index": manifest.get("chunk_index"),
+        "status": manifest.get("status"),
+        "source_start_ms": start_ms,
+        "source_end_ms": end_ms,
+        "duration_ms": duration_ms_value,
+        "word_count": word_count,
+        "words_per_minute": round(words_per_minute, 2) if words_per_minute is not None else None,
+        "job_words_per_minute": round(job_words_per_minute, 2) if job_words_per_minute is not None else None,
+        "rate_ratio_to_job": (
+            round(words_per_minute / job_words_per_minute, 2)
+            if words_per_minute is not None and job_words_per_minute
+            else None
+        ),
+        "min_words_per_minute": low,
+        "max_words_per_minute": high,
+        "reason": reason,
+        "review_required": reason is not None,
+    }
+    if reason is None:
+        return report, None
+    return report, {
+        "reason": "patch_word_density_out_of_range",
+        "detail": reason,
+        "chunk_index": manifest.get("chunk_index"),
+        "start_ms": max(0, start_ms - 10_000),
+        "end_ms": min(audio_ms, end_ms + 10_000) if audio_ms > 0 else end_ms + 10_000,
+    }
+
+
+def patch_density_reports(
+    job: Path,
+    total_words: int,
+    audio_ms: int,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    reports: list[dict[str, object]] = []
+    plans: list[dict[str, object]] = []
+    for manifest_path in sorted((job / "chunks").glob("chunk-*/manifest.json")):
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(manifest, dict) or manifest.get("role") != "patch":
+            continue
+        try:
+            payload = json.loads(
+                manifest_path.with_name("words.json").read_text(encoding="utf-8")
+            )
+            words = payload.get("words", []) if isinstance(payload, dict) else []
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(words, list):
+            words = []
+        report, plan = patch_word_density(manifest, words, total_words, audio_ms)
+        report["chunk"] = manifest_path.parent.name
+        reports.append(report)
+        if plan is not None:
+            plan["plan_id"] = f"patch-density-{len(plans) + 1:03d}"
+            plans.append(plan)
+    return reports, plans
+
+
 def audible_gap_plan(segments: list[dict[str, object]], audio_ms: int) -> tuple[list[str], list[dict[str, object]], list[dict[str, object]]]:
     errors: list[str] = []
     warnings: list[dict[str, object]] = []
@@ -262,7 +364,12 @@ def main() -> int:
     density, density_plans = density_windows(segments, audio)
     density_failures = [item for item in density if item.get("reason")]
     review_required.extend([f"15-minute character density out of range: window {item['window_index']} ({item['reason']})" for item in density_failures])
-    retry_items = density_plans + gap_plans
+    patch_density, patch_density_plans = patch_density_reports(JOB, len(words), audio)
+    review_required.extend([
+        f"patch word density requires review: {item.get('chunk_index')} ({item.get('detail')})"
+        for item in patch_density_plans
+    ])
+    retry_items = density_plans + gap_plans + patch_density_plans
     atomic(JOB / "density-retry-plan.json", {
         "version": "density-retry-plan-v1",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -320,7 +427,7 @@ def main() -> int:
     else:
         errors.append("missing cleanup-review.json")
     status = "FAIL" if errors else "REVIEW" if review_required else "PASS"
-    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": status, "errors": errors, "warnings": warnings, "review_required": review_required, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.7-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
+    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": status, "errors": errors, "warnings": warnings, "review_required": review_required, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "patch_windows": patch_density, "patch_failure_count": len(patch_density_plans), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.7-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
     atomic(JOB / "qa-report.json", report)
     md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Review required"] + ([f"- {item}" for item in review_required] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
     temporary = JOB / "qa-report.md.tmp"; temporary.write_text("\n".join(md) + "\n", encoding="utf-8"); temporary.replace(JOB / "qa-report.md")

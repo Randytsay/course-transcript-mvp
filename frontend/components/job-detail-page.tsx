@@ -233,7 +233,7 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
         <div style={{ flex: 1 }}>
           <strong style={{ fontSize: "16px", color: "#9a3412" }}>預估辨識費用待確認：US$ {job.estimatedCostUsd ?? "2.68"}</strong>
           <p style={{ fontSize: "14px", color: "#c2410c", marginTop: "4px" }}>
-            本機 Preflight 格式與時長檢查已完成（影音時長 {job.duration}）。確認授權後，系統將自動排入付費轉錄佇列 (Chirp 3 + Gemini 3.6 Flash)。
+            本機 Preflight 格式與時長檢查已完成（影音時長 {job.duration}）。確認授權後，系統將自動排入付費轉錄佇列 (Chirp 3 + Gemini 3.7 Flash)。
           </p>
           <div style={{ marginTop: "12px", display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
             <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "14px", fontWeight: 600, color: "#7c2d12", cursor: "pointer" }}>
