@@ -42,6 +42,33 @@ def _ensure_table(connection: Any) -> None:
     )
 
 
+def _upsert(
+    connection: Any,
+    *,
+    job_id: str,
+    policy: str,
+    actor: str,
+    now: str,
+) -> None:
+    exists = connection.execute(
+        "SELECT id FROM jobs WHERE id = ?",
+        (job_id,),
+    ).fetchone()
+    if exists is None:
+        raise LookupError("Job not found")
+    connection.execute(
+        """
+        INSERT INTO job_correction_policies(
+            job_id, requested_policy, created_by, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(job_id) DO UPDATE SET
+            requested_policy = excluded.requested_policy,
+            updated_at = excluded.updated_at
+        """,
+        (job_id, policy, actor, now, now),
+    )
+
+
 def set_job_correction_policy(
     store: Any,
     *,
@@ -53,22 +80,12 @@ def set_job_correction_policy(
     now = _iso_now()
     with store.transaction() as connection:
         _ensure_table(connection)
-        exists = connection.execute(
-            "SELECT id FROM jobs WHERE id = ?",
-            (job_id,),
-        ).fetchone()
-        if exists is None:
-            raise LookupError("Job not found")
-        connection.execute(
-            """
-            INSERT INTO job_correction_policies(
-                job_id, requested_policy, created_by, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(job_id) DO UPDATE SET
-                requested_policy = excluded.requested_policy,
-                updated_at = excluded.updated_at
-            """,
-            (job_id, normalized, actor, now, now),
+        _upsert(
+            connection,
+            job_id=job_id,
+            policy=normalized,
+            actor=actor,
+            now=now,
         )
     return normalized
 
@@ -81,13 +98,17 @@ def set_batch_correction_policy(
     actor: str,
 ) -> str:
     normalized = normalize_correction_policy(policy)
-    for job_id in job_ids:
-        set_job_correction_policy(
-            store,
-            job_id=job_id,
-            policy=normalized,
-            actor=actor,
-        )
+    now = _iso_now()
+    with store.transaction() as connection:
+        _ensure_table(connection)
+        for job_id in job_ids:
+            _upsert(
+                connection,
+                job_id=job_id,
+                policy=normalized,
+                actor=actor,
+                now=now,
+            )
     return normalized
 
 
