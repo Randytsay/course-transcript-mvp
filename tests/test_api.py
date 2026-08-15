@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.jobs.source import DriveEntry, SourceMetadata
+from app.jobs.costs import CostConfig
 
 
 class ApiTests(unittest.TestCase):
@@ -160,6 +161,28 @@ class ApiTests(unittest.TestCase):
                 },
             )
             self.assertEqual(wrong_origin.status_code, 403)
+
+    def test_twd_budget_starts_from_operator_balance_and_deducts_new_estimates(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "COURSE_TRANSCRIPT_BUDGET_REMAINING_TWD": "1200",
+                "COURSE_TRANSCRIPT_USD_TO_TWD": "32",
+                "COURSE_TRANSCRIPT_BUDGET_BASELINE_COMMITTED_USD": "132.6374",
+            },
+        ):
+            config = CostConfig.from_env()
+            initial = config.budget_summary(Decimal("132.6374"))
+            after_new_estimate = config.budget_summary(Decimal("132.8874"))
+            api_costs = self.client.get("/api/v1/costs").json()
+
+        self.assertEqual(config.project_limit_usd, Decimal("170.1374"))
+        self.assertEqual(initial["budget_currency"], "TWD")
+        self.assertEqual(initial["remaining_estimated_budget_twd"], "1200.00")
+        self.assertEqual(after_new_estimate["committed_estimated_cost_twd"], "8.00")
+        self.assertEqual(after_new_estimate["remaining_estimated_budget_twd"], "1192.00")
+        self.assertEqual(api_costs["budget_currency"], "TWD")
+        self.assertEqual(api_costs["remaining_estimated_budget_twd"], "1200.00")
 
     def test_term_decision_preserves_original_transcript(self) -> None:
         original = (self.data / "jobs" / "sample-job" / "subtitles.json").read_bytes()

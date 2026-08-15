@@ -61,15 +61,18 @@ def build_performance_summary(
         (_decimal(item.get("estimatedCostUsd")) for item in calls if isinstance(item, dict)),
         Decimal("0"),
     ) if isinstance(calls, list) else Decimal("0")
+    config = base.CostConfig.from_env()
     summary["providerCostBreakdown"] = {
         "chirpEstimatedUsd": str(chirp_cost.quantize(Decimal("0.0001"))),
         "geminiEstimatedUsd": str(gemini_cost.quantize(Decimal("0.0001"))),
+        "chirpEstimatedTwd": str(config.usd_as_twd(chirp_cost)),
+        "geminiEstimatedTwd": str(config.usd_as_twd(gemini_cost)),
         "highestCostProvider": "chirp" if chirp_cost >= gemini_cost else "gemini",
     }
     if chirp_cost or gemini_cost:
         suggestions.append(
             f"預估費用較高的是{'Chirp' if chirp_cost >= gemini_cost else 'Gemini'}："
-            f"Chirp US${chirp_cost:.4f}，Gemini US${gemini_cost:.4f}。"
+            f"Chirp {config.usd_as_twd(chirp_cost)} 元，Gemini {config.usd_as_twd(gemini_cost)} 元。"
         )
     if isinstance(calls, list) and len(calls) > 200:
         suggestions.append(

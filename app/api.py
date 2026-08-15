@@ -181,6 +181,15 @@ def _cost_config() -> CostConfig:
     return CostConfig.from_env()
 
 
+def _estimated_cost_twd(
+    amount_usd: object,
+    config: CostConfig | None = None,
+) -> str | None:
+    if amount_usd in (None, ""):
+        return None
+    return str((config or _cost_config()).usd_as_twd(amount_usd))
+
+
 def _mutation_actor(request: Request) -> str:
     require_access = os.environ.get(
         "COURSE_TRANSCRIPT_REQUIRE_ACCESS_HEADERS", "false"
@@ -327,6 +336,7 @@ def _job_summary(directory: Path) -> dict[str, Any]:
         ),
         "error": None,
         "estimated_cost_usd": None,
+        "estimated_cost_twd": None,
         "reserved_cost_usd": "0",
         "actual_cost_usd": "0",
         "pricing_version": None,
@@ -361,7 +371,11 @@ def _database_pipeline(record: dict[str, Any]) -> list[dict[str, str]]:
     ]
 
 
-def _database_job_summary(record: dict[str, Any]) -> dict[str, Any]:
+def _database_job_summary(
+    record: dict[str, Any],
+    config: CostConfig | None = None,
+) -> dict[str, Any]:
+    config = config or _cost_config()
     duration_seconds = float(record["duration_seconds"] or 0)
     directory = JOBS_DIR / record["id"]
     qa = _read_json(directory / "qa-report.json") if directory.is_dir() else None
@@ -424,6 +438,7 @@ def _database_job_summary(record: dict[str, Any]) -> dict[str, Any]:
         "drive_published": bool(manifest.get("drive_upload_started")),
         "drive_publication_status": manifest.get("drive_publication_status"),
         "estimated_cost_usd": record["estimated_cost_usd"],
+        "estimated_cost_twd": _estimated_cost_twd(record["estimated_cost_usd"], config),
         "reserved_cost_usd": record["reserved_cost_usd"],
         "actual_cost_usd": record["actual_cost_usd"],
         "pricing_version": record["pricing_version"],
@@ -621,10 +636,15 @@ def get_job_live_cost(job_id: str) -> dict[str, Any]:
     
     return {
         "estimatedTotalUsd": str(total_estimated.quantize(Decimal("0.01"))),
+        "estimatedTotalTwd": str(config.usd_as_twd(total_estimated)),
         "estimatedAccruedUsd": str(accrued.quantize(Decimal("0.01"))),
+        "estimatedAccruedTwd": str(config.usd_as_twd(accrued)),
         "estimatedRemainingUsd": str(remaining.quantize(Decimal("0.01"))),
+        "estimatedRemainingTwd": str(config.usd_as_twd(remaining)),
         "chirpEstimatedUsd": str(chirp_cost.quantize(Decimal("0.01"))),
+        "chirpEstimatedTwd": str(config.usd_as_twd(chirp_cost)),
         "geminiEstimatedUsd": str(gemini_cost.quantize(Decimal("0.01"))),
+        "geminiEstimatedTwd": str(config.usd_as_twd(gemini_cost)),
         "submittedChunkCount": submitted_chunks,
         "completedChunkCount": completed_chunks,
         "patchChunkCount": patch_chunks,
@@ -864,6 +884,9 @@ def get_costs() -> dict[str, Any]:
             "pricing_version": config.pricing_version,
         }
     )
+    result.update(
+        config.budget_summary(Decimal(result["committed_estimated_cost_usd"]))
+    )
     return result
 
 
@@ -1020,6 +1043,7 @@ def get_batch(batch_id: str) -> dict[str, Any]:
         batch = _store().get_batch(batch_id)
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    config = _cost_config()
     return {
         "id": batch["id"],
         "name": batch["name"],
@@ -1030,6 +1054,7 @@ def get_batch(batch_id: str) -> dict[str, Any]:
         "completed_count": batch["completed_count"],
         "failed_count": batch["failed_count"],
         "estimated_cost_usd": batch["estimated_cost_usd"],
+        "estimated_cost_twd": _estimated_cost_twd(batch["estimated_cost_usd"], config),
         "reserved_cost_usd": batch["reserved_cost_usd"],
         "actual_cost_usd": batch["actual_cost_usd"],
         "created_at": batch["created_at"],
@@ -1039,7 +1064,7 @@ def get_batch(batch_id: str) -> dict[str, Any]:
         "total_duration_seconds": sum(
             float(job["duration_seconds"] or 0) for job in batch["jobs"]
         ),
-        "jobs": [_database_job_summary(job) for job in batch["jobs"]],
+        "jobs": [_database_job_summary(job, config) for job in batch["jobs"]],
     }
 
 

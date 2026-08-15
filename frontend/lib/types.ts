@@ -81,6 +81,7 @@ export interface TranscriptJob {
   batchId?: string | null;
   processingStrategy: ProcessingStrategy;
   estimatedCostUsd?: string | null;
+  estimatedCostTwd?: string | null;
   chirpMaxParallelChunks?: number;
   outputFormats: OutputFormat[];
   contentMode?: ContentMode | "legacy_unspecified";
@@ -148,6 +149,11 @@ export interface CostSummary {
   committedEstimatedCostUsd: string;
   recordedActualCostUsd: string;
   remainingEstimatedBudgetUsd: string;
+  budgetCurrency: "TWD";
+  budgetStartingBalanceTwd: string;
+  committedEstimatedCostTwd: string;
+  remainingEstimatedBudgetTwd: string;
+  usdToTwd: string;
   warningThresholdsUsd: string[];
   pricingVersion: string;
   accountingNote: string;
@@ -189,7 +195,12 @@ export interface ChunkTranscript {
 }
 
 export interface LiveCost {
-  estimatedTotalUsd: string;
+  estimatedTotalTwd: string;
+  estimatedAccruedTwd: string;
+  estimatedRemainingTwd: string;
+  chirpEstimatedTwd: string;
+  geminiEstimatedTwd: string;
+ estimatedTotalUsd: string;
   estimatedAccruedUsd: string;
   estimatedRemainingUsd: string;
   chirpEstimatedUsd: string;
@@ -237,6 +248,7 @@ export interface BatchDetail {
   completedCount: number;
   failedCount: number;
   estimatedCostUsd: string | null;
+  estimatedCostTwd: string | null;
   reservedCostUsd: string;
   actualCostUsd: string;
   totalDurationSeconds: number;

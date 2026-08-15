@@ -21,7 +21,7 @@ import type {
 // already-built absolute localhost URL.
 const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
-type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd" | "chirpMaxParallelChunks" | "outputFormats" | "processingStrategy"> & {
+type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd" | "estimatedCostTwd" | "chirpMaxParallelChunks" | "outputFormats" | "processingStrategy"> & {
   source_path: string;
   duration_seconds: number;
   created_at: string;
@@ -33,6 +33,7 @@ type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt"
   revision: number;
   batch_id?: string | null;
   estimated_cost_usd?: string | null;
+  estimated_cost_twd?: string | null;
   chirp_max_parallel_chunks?: number;
   output_formats?: OutputFormat[];
   processing_strategy?: ProcessingStrategy;
@@ -69,6 +70,7 @@ function mapJob(job: ApiJob): TranscriptJob {
     batchId: job.batch_id ?? null,
     processingStrategy: job.processing_strategy ?? "DYNAMIC_BATCHING",
     estimatedCostUsd: job.estimated_cost_usd ?? null,
+    estimatedCostTwd: job.estimated_cost_twd ?? null,
     chirpMaxParallelChunks: job.chirp_max_parallel_chunks ?? 3,
     outputFormats: job.output_formats ?? ["srt", "txt", "csv"],
     contentMode: job.content_mode,
@@ -135,7 +137,12 @@ export interface ChunkTranscript {
 }
 
 export interface LiveCost {
-  estimatedTotalUsd: string;
+  estimatedTotalTwd: string;
+  estimatedAccruedTwd: string;
+  estimatedRemainingTwd: string;
+  chirpEstimatedTwd: string;
+  geminiEstimatedTwd: string;
+ estimatedTotalUsd: string;
   estimatedAccruedUsd: string;
   estimatedRemainingUsd: string;
   chirpEstimatedUsd: string;
@@ -368,6 +375,11 @@ export async function getCosts(): Promise<CostSummary> {
     committed_estimated_cost_usd: string;
     recorded_actual_cost_usd: string;
     remaining_estimated_budget_usd: string;
+    budget_currency: "TWD";
+    budget_starting_balance_twd: string;
+    committed_estimated_cost_twd: string;
+    remaining_estimated_budget_twd: string;
+    usd_to_twd: string;
     warning_thresholds_usd: string[];
     pricing_version: string;
     accounting_note: string;
@@ -377,6 +389,11 @@ export async function getCosts(): Promise<CostSummary> {
     committedEstimatedCostUsd: result.committed_estimated_cost_usd,
     recordedActualCostUsd: result.recorded_actual_cost_usd,
     remainingEstimatedBudgetUsd: result.remaining_estimated_budget_usd,
+    budgetCurrency: result.budget_currency,
+    budgetStartingBalanceTwd: result.budget_starting_balance_twd,
+    committedEstimatedCostTwd: result.committed_estimated_cost_twd,
+    remainingEstimatedBudgetTwd: result.remaining_estimated_budget_twd,
+    usdToTwd: result.usd_to_twd,
     warningThresholdsUsd: result.warning_thresholds_usd,
     pricingVersion: result.pricing_version,
     accountingNote: result.accounting_note,
@@ -394,6 +411,7 @@ export async function getBatch(id: string): Promise<BatchDetail> {
     completed_count: number;
     failed_count: number;
     estimated_cost_usd: string | null;
+    estimated_cost_twd: string | null;
     reserved_cost_usd: string;
     actual_cost_usd: string;
     total_duration_seconds: number;
@@ -413,6 +431,7 @@ export async function getBatch(id: string): Promise<BatchDetail> {
     completedCount: result.completed_count,
     failedCount: result.failed_count,
     estimatedCostUsd: result.estimated_cost_usd,
+    estimatedCostTwd: result.estimated_cost_twd,
     reservedCostUsd: result.reserved_cost_usd,
     actualCostUsd: result.actual_cost_usd,
     totalDurationSeconds: result.total_duration_seconds,

@@ -5,6 +5,7 @@ import styles from "./performance-page.module.css";
 import Link from "next/link";
 import { ArrowLeft, Clock3, Coins, Download, Gauge, RefreshCw, TimerReset, TriangleAlert } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { formatTwd } from "@/lib/currency";
 
 const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 const terminalStatuses = new Set(["awaiting_review", "review", "completed", "failed", "cancelled"]);
@@ -33,6 +34,7 @@ type ChunkMetric = {
   wordCount: number;
   billedAudioSeconds: number;
   estimatedCostUsd: string;
+  estimatedCostTwd: string;
   errorCode?: string | null;
 };
 
@@ -46,7 +48,8 @@ type GeminiCall = {
   attemptCount: number;
   inputTokens: number;
   outputTokens: number;
-  estimatedCostUsd: string;
+ estimatedCostUsd: string;
+  estimatedCostTwd: string;
   cached: boolean;
   promptVersion?: string | null;
 };
@@ -63,7 +66,9 @@ type PerformanceSummary = {
   realTimeFactor?: number | null;
   activeRealTimeFactor?: number | null;
   estimatedAccruedCostUsd: string;
-  estimatedCostPerAudioHourUsd: string;
+  estimatedAccruedCostTwd: string;
+ estimatedCostPerAudioHourUsd: string;
+  estimatedCostPerAudioHourTwd: string;
   stageAttempts: StageAttempt[];
   stageTotals: { stage: string; durationMs: number }[];
   chunks: ChunkMetric[];
@@ -166,7 +171,7 @@ export default function PerformancePage({ jobId }: { jobId: string }) {
             <article className={styles.metric}><Clock3 size={22} /><span>音訊長度</span><strong>{duration(summary.audioDurationMs)}</strong><small>原始課程錄音時長</small></article>
             <article className={styles.metric}><TimerReset size={22} /><span>總經過時間</span><strong>{duration(summary.totalElapsedMs)}</strong><small>排隊 {duration(summary.queueMs)}｜暫停 {duration(summary.pausedMs)}</small></article>
             <article className={styles.metric}><Gauge size={22} /><span>即時倍率 RTF</span><strong>{summary.realTimeFactor == null ? "—" : summary.realTimeFactor.toFixed(3)}</strong><small>{summary.realTimeFactor != null && summary.realTimeFactor < 1 ? "快於即時播放" : "越低越快"}</small></article>
-            <article className={styles.metric}><Coins size={22} /><span>目前預估費用</span><strong>US${summary.estimatedAccruedCostUsd}</strong><small>每音訊小時 US${summary.estimatedCostPerAudioHourUsd}</small></article>
+            <article className={styles.metric}><Coins size={22} /><span>目前預估費用</span><strong>{formatTwd(summary.estimatedAccruedCostTwd)}</strong><small>每音訊小時 {formatTwd(summary.estimatedCostPerAudioHourTwd)}</small></article>
           </section>
 
           <section className={styles.notice}>
@@ -193,7 +198,7 @@ export default function PerformancePage({ jobId }: { jobId: string }) {
             <header><div><h2>Chirp 分段明細</h2><p>語音辨識沒有 LLM token；以音訊秒數、雲端處理時間、回收延遲與費用評估。</p></div></header>
             <div className={styles.tableWrap}>
               <table><thead><tr><th>分段</th><th>音訊範圍</th><th>狀態</th><th>雲端處理</th><th>回收延遲</th><th>總牆鐘</th><th>字數</th><th>嘗試</th><th>費用</th></tr></thead><tbody>
-                {summary.chunks.map((item) => <tr key={item.chunkIndex}><td>第 {item.chunkIndex + 1} 段</td><td>{range(item.startMs, item.endMs)}</td><td>{item.status}</td><td>{duration(item.providerProcessingMs)}</td><td>{duration(item.recoveryDelayMs)}</td><td>{duration(item.totalWallMs)}</td><td>{item.wordCount.toLocaleString()}</td><td>{item.attemptCount}</td><td>US${item.estimatedCostUsd}</td></tr>)}
+                {summary.chunks.map((item) => <tr key={item.chunkIndex}><td>第 {item.chunkIndex + 1} 段</td><td>{range(item.startMs, item.endMs)}</td><td>{item.status}</td><td>{duration(item.providerProcessingMs)}</td><td>{duration(item.recoveryDelayMs)}</td><td>{duration(item.totalWallMs)}</td><td>{item.wordCount.toLocaleString()}</td><td>{item.attemptCount}</td><td>{formatTwd(item.estimatedCostTwd)}</td></tr>)}
                 {summary.chunks.length === 0 && <tr><td colSpan={9}>尚未建立 Chirp 分段計畫。</td></tr>}
               </tbody></table>
             </div>
@@ -203,7 +208,7 @@ export default function PerformancePage({ jobId }: { jobId: string }) {
             <header><div><h2>Gemini 呼叫明細</h2><p>以術語呼叫及每個校正 window 為單位，不把共享上下文錯分到單一字幕段。</p></div></header>
             <div className={styles.tableWrap}>
               <table><thead><tr><th>呼叫</th><th>類型</th><th>字幕範圍</th><th>延遲</th><th>輸入 token</th><th>輸出 token</th><th>嘗試</th><th>費用</th></tr></thead><tbody>
-                {summary.geminiCalls.map((item) => <tr key={`${item.kind}-${item.callId}`}><td>{item.callId}</td><td>{item.kind}</td><td>{range(item.sourceStartMs, item.sourceEndMs)}</td><td>{duration(item.latencyMs)}</td><td>{item.inputTokens.toLocaleString()}</td><td>{item.outputTokens.toLocaleString()}</td><td>{item.attemptCount}</td><td>US${item.estimatedCostUsd}</td></tr>)}
+                {summary.geminiCalls.map((item) => <tr key={`${item.kind}-${item.callId}`}><td>{item.callId}</td><td>{item.kind}</td><td>{range(item.sourceStartMs, item.sourceEndMs)}</td><td>{duration(item.latencyMs)}</td><td>{item.inputTokens.toLocaleString()}</td><td>{item.outputTokens.toLocaleString()}</td><td>{item.attemptCount}</td><td>{formatTwd(item.estimatedCostTwd)}</td></tr>)}
                 {summary.geminiCalls.length === 0 && <tr><td colSpan={8}>尚無 Gemini 呼叫證據，或此任務未啟用校正。</td></tr>}
               </tbody></table>
             </div>

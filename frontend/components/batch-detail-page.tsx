@@ -15,6 +15,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { approveBatch, getBatch } from "@/lib/api-client";
 import type { BatchDetail } from "@/lib/types";
+import { formatTwd } from "@/lib/currency";
 import StatusBadge from "./status-badge";
 
 const IDLE_BATCH_STATUSES = new Set([
@@ -85,7 +86,7 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
           <section className="batch-overview-grid">
             <article className="metric-card"><div className="metric-icon metric-icon--blue"><FileAudio2 size={20} /></div><div className="metric-copy"><span>影音檔案</span><strong>{batch.itemCount}</strong><small>Preflight {preflightDone} / {batch.itemCount}</small></div></article>
             <article className="metric-card"><div className="metric-icon metric-icon--violet"><Clock3 size={20} /></div><div className="metric-copy"><span>總音訊時長</span><strong>{batch.totalDurationSeconds ? duration(batch.totalDurationSeconds) : "檢查中"}</strong><small>由 FFprobe 逐檔確認</small></div></article>
-            <article className="metric-card"><div className="metric-icon metric-icon--amber"><Coins size={20} /></div><div className="metric-copy"><span>整批估計費用</span><strong>{batch.estimatedCostUsd ? `US$${batch.estimatedCostUsd}` : "計算中"}</strong><small>非 Cloud Billing 實際帳務</small></div></article>
+            <article className="metric-card"><div className="metric-icon metric-icon--amber"><Coins size={20} /></div><div className="metric-copy"><span>整批估計費用</span><strong>{batch.estimatedCostTwd ? formatTwd(batch.estimatedCostTwd) : "計算中"}</strong><small>非 Cloud Billing 實際帳務</small></div></article>
             <article className="metric-card"><div className="metric-icon metric-icon--violet"><Clock3 size={20} /></div><div className="metric-copy"><span>辨識模式</span><strong>{batch.processingStrategy === "DYNAMIC_BATCHING" ? "經濟模式" : "快速模式"}</strong><small>{batch.processingStrategy === "DYNAMIC_BATCHING" ? "Google 離峰批次，最多約 24 小時" : "Standard Batch，較快但費用較高"}</small></div></article>
           </section>
 
@@ -112,18 +113,18 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
                 <>
                   <p>
                     這 {batch.itemCount} 個檔案將依序進入<strong>{batch.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}</strong>。
-                    預估總額為 <strong>US${batch.estimatedCostUsd}</strong>。
+                    預估總額為 <strong>{formatTwd(batch.estimatedCostTwd)}</strong>。
                   </p>
                   <button className="button button--primary button--full button--large" disabled={approving} onClick={() => void approve()}>
                     {approving ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />}
-                    確認 US${batch.estimatedCostUsd} 並開始處理
+                    確認 {formatTwd(batch.estimatedCostTwd)} 並開始處理
                   </button>
                   <small>按下此按鈕即代表你確認估計費用並授權此批次進入付費處理佇列，不再要求第二個核取方塊。</small>
                 </>
               )}
               {batch.status === "queued" && <p className="approval-success"><CheckCircle2 size={17} />費用已確認，檔案正在依序等待 Worker。</p>}
               {batch.failedCount > 0 && <p className="approval-warning"><TriangleAlert size={17} />有 {batch.failedCount} 個檔案未通過本機媒體檢查，不會產生辨識費用。</p>}
-              <small>程式上限 US$200；Cloud Billing 才是實際帳務依據。</small>
+              <small>程式預算以台幣估算；Cloud Billing 才是實際帳務依據。</small>
             </aside>
           </section>
         </>

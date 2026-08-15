@@ -8,13 +8,18 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import asdict, dataclass, replace
-from decimal import Decimal, ROUND_UP
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 
 from .strategy import DYNAMIC_BATCHING, normalize_processing_strategy
 
 
 def _money(value: Decimal) -> Decimal:
     return value.quantize(Decimal("0.0001"), rounding=ROUND_UP)
+
+
+def _twd_money(value: Decimal) -> Decimal:
+    """Format an application estimate as TWD without changing USD accounting."""
+    return value.quantize(Decimal("0.01"), rounding=ROUND_UP)
 
 
 def _env_true(name: str, default: bool = False) -> bool:
@@ -42,6 +47,9 @@ class CostConfig:
     contingency_multiplier: Decimal = Decimal("1.25")
     gcs_job_buffer_usd: Decimal = Decimal("0.05")
     pricing_version: str = "google-cloud-public-pricing-2026-07-31"
+    usd_to_twd: Decimal = Decimal("32")
+    budget_remaining_twd: Decimal | None = None
+    budget_baseline_committed_usd: Decimal = Decimal("0")
 
     @classmethod
     def from_env(cls) -> "CostConfig":
@@ -60,10 +68,33 @@ class CostConfig:
             if dynamic_batching
             else "google-cloud-public-pricing-2026-07-31"
         )
+        usd_to_twd = Decimal(
+            os.environ.get("COURSE_TRANSCRIPT_USD_TO_TWD", "32")
+        )
+        if usd_to_twd <= 0:
+            raise ValueError("COURSE_TRANSCRIPT_USD_TO_TWD must be positive")
+        budget_remaining_raw = os.environ.get("COURSE_TRANSCRIPT_BUDGET_REMAINING_TWD")
+        budget_remaining_twd = (
+            Decimal(budget_remaining_raw) if budget_remaining_raw else None
+        )
+        if budget_remaining_twd is not None and budget_remaining_twd < 0:
+            raise ValueError("COURSE_TRANSCRIPT_BUDGET_REMAINING_TWD cannot be negative")
+        budget_baseline_committed_usd = Decimal(
+            os.environ.get("COURSE_TRANSCRIPT_BUDGET_BASELINE_COMMITTED_USD", "0")
+        )
+        if budget_baseline_committed_usd < 0:
+            raise ValueError(
+                "COURSE_TRANSCRIPT_BUDGET_BASELINE_COMMITTED_USD cannot be negative"
+            )
+        project_limit_usd = Decimal(
+            os.environ.get("COURSE_TRANSCRIPT_COST_LIMIT_USD", "200")
+        )
+        if budget_remaining_twd is not None:
+            project_limit_usd = _money(
+                budget_baseline_committed_usd + budget_remaining_twd / usd_to_twd
+            )
         return cls(
-            project_limit_usd=Decimal(
-                os.environ.get("COURSE_TRANSCRIPT_COST_LIMIT_USD", "200")
-            ),
+            project_limit_usd=project_limit_usd,
             warning_thresholds_usd=thresholds,
             chirp_usd_per_minute=Decimal(
                 os.environ.get(
@@ -96,7 +127,43 @@ class CostConfig:
                 "COURSE_TRANSCRIPT_PRICING_VERSION",
                 default_pricing_version,
             ),
+            usd_to_twd=usd_to_twd,
+            budget_remaining_twd=budget_remaining_twd,
+            budget_baseline_committed_usd=budget_baseline_committed_usd,
         )
+
+    def usd_as_twd(self, amount_usd: Decimal | str | int | float) -> Decimal:
+        return _twd_money(Decimal(str(amount_usd)) * self.usd_to_twd)
+
+    def budget_summary(self, committed_estimated_cost_usd: Decimal) -> dict[str, str]:
+        """Return the user-facing TWD budget while preserving USD source data.
+
+        A production budget can start from a new operator-defined balance while
+        keeping historical USD reservations as a baseline. New reservations are
+        therefore the only amounts deducted from that balance.
+        """
+        committed = Decimal(str(committed_estimated_cost_usd))
+        if self.budget_remaining_twd is None:
+            starting_exact = self.project_limit_usd * self.usd_to_twd
+            spent_exact = committed * self.usd_to_twd
+        else:
+            starting_exact = self.budget_remaining_twd
+            spent_usd = max(
+                Decimal("0"), committed - self.budget_baseline_committed_usd
+            )
+            spent_exact = spent_usd * self.usd_to_twd
+        starting = _twd_money(starting_exact)
+        spent = _twd_money(spent_exact)
+        remaining = max(Decimal("0"), starting_exact - spent_exact).quantize(
+            Decimal("0.01"), rounding=ROUND_DOWN
+        )
+        return {
+            "budget_currency": "TWD",
+            "budget_starting_balance_twd": str(starting),
+            "committed_estimated_cost_twd": str(spent),
+            "remaining_estimated_budget_twd": str(remaining),
+            "usd_to_twd": str(self.usd_to_twd),
+        }
 
     def for_processing_strategy(self, strategy: object) -> "CostConfig":
         """Use the rate and pricing label for one immutable job choice.

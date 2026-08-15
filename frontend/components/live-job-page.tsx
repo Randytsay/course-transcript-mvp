@@ -17,6 +17,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { formatTwd } from "@/lib/currency";
 
 const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 const terminalJobStatuses = new Set([
@@ -64,7 +65,12 @@ type ChunkResponse = {
 };
 
 type LiveCost = {
-  estimatedTotalUsd: string;
+  estimatedTotalTwd: string;
+  estimatedAccruedTwd: string;
+  estimatedRemainingTwd: string;
+  chirpEstimatedTwd: string;
+  geminiEstimatedTwd: string;
+ estimatedTotalUsd: string;
   estimatedAccruedUsd: string;
   estimatedRemainingUsd: string;
   chirpEstimatedUsd: string;
@@ -401,8 +407,8 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
         </article>
         <article className={styles.card}>
           <span className={styles.cardLabel}>本任務即時預估費用</span>
-          <strong className={styles.cardValue}>US${cost?.estimatedAccruedUsd ?? "—"}</strong>
-          <span className={styles.cardDetail}>完整預估 US${cost?.estimatedTotalUsd ?? "—"}；剩餘 US${cost?.estimatedRemainingUsd ?? "—"}</span>
+          <strong className={styles.cardValue}>{formatTwd(cost?.estimatedAccruedTwd)}</strong>
+          <span className={styles.cardDetail}>完整預估 {formatTwd(cost?.estimatedTotalTwd)}；剩餘 {formatTwd(cost?.estimatedRemainingTwd)}</span>
         </article>
         <article className={styles.card}>
           <span className={styles.cardLabel}>最後畫面更新</span>
