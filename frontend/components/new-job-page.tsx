@@ -4,6 +4,7 @@ import AppShell from "./app-shell";
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
   ChevronRight,
   FileAudio,
   Folder,
@@ -14,22 +15,26 @@ import {
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
+  SlidersHorizontal,
+  Sparkles,
   Square,
   SquareCheckBig,
   TriangleAlert,
 } from "lucide-react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
   browseDrive,
-  createBatch,
   getCosts,
   previewBatch,
 } from "@/lib/api-client";
+import {
+  createBatchWithPolicy,
+  getCorrectionProviderStatus,
+  type CorrectionPolicy,
+} from "@/lib/correction-policy-client";
 import type {
-  BatchPreview,
   CostSummary,
-  CreatedBatch,
   DriveDirectory,
   DriveEntry,
   OutputFormat,
@@ -38,14 +43,20 @@ import type {
 
 type SelectionMode = "files" | "folder";
 
+type SavedDefaults = {
+  processingStrategy?: ProcessingStrategy;
+  correctionPolicy?: CorrectionPolicy;
+  outputFormats?: OutputFormat[];
+  chirpMaxParallelChunks?: number;
+};
+
+const DEFAULTS_KEY = "course-transcript-new-job-defaults-v2";
 const DEFAULT_OUTPUT_FORMATS: OutputFormat[] = ["srt", "txt", "csv"];
-const PRIMARY_OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string; detail: string }> = [
+const ALL_OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string; detail: string }> = [
   { value: "srt", label: ".srt", detail: "通用字幕" },
   { value: "txt", label: ".txt", detail: "可讀逐字稿" },
   { value: "csv", label: ".csv", detail: "校正與詞彙資料" },
   { value: "json", label: ".json", detail: "Chirp 原始時間軸" },
-];
-const ADVANCED_OUTPUT_FORMATS: Array<{ value: OutputFormat; label: string; detail: string }> = [
   { value: "vtt", label: ".vtt", detail: "網頁字幕" },
   { value: "ass", label: ".ass", detail: "樣式字幕" },
   { value: "docx", label: ".docx", detail: "Word 文件" },
@@ -63,30 +74,40 @@ function displayPath(path: string) {
   return path.replace(/^gdrive:/, "我的雲端硬碟 / ").replaceAll("/", " / ");
 }
 
+function readSavedDefaults(): SavedDefaults {
+  try {
+    const raw = window.localStorage.getItem(DEFAULTS_KEY);
+    return raw ? JSON.parse(raw) as SavedDefaults : {};
+  } catch {
+    return {};
+  }
+}
+
 export default function NewJobPage() {
+  const router = useRouter();
   const [directory, setDirectory] = useState<DriveDirectory | null>(null);
   const [pathInput, setPathInput] = useState("gdrive:");
   const [selectionMode, setSelectionMode] = useState<SelectionMode>("files");
   const [selected, setSelected] = useState<Map<string, DriveEntry>>(new Map());
-  const [preview, setPreview] = useState<BatchPreview | null>(null);
-  const [created, setCreated] = useState<CreatedBatch | null>(null);
   const [costs, setCosts] = useState<CostSummary | null>(null);
-  const [busy, setBusy] = useState<"browse" | "preview" | "create" | null>(null);
+  const [busy, setBusy] = useState<"browse" | "prepare" | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [advanced, setAdvanced] = useState(false);
+  const [defaultsLoaded, setDefaultsLoaded] = useState(false);
   const [chirpMaxParallelChunks, setChirpMaxParallelChunks] = useState(3);
   const [processingStrategy, setProcessingStrategy] = useState<ProcessingStrategy>("DYNAMIC_BATCHING");
+  const [correctionPolicy, setCorrectionPolicy] = useState<CorrectionPolicy>("GEMINI_FIRST");
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>(DEFAULT_OUTPUT_FORMATS);
+  const [m3Enabled, setM3Enabled] = useState(false);
 
   const selectedEntries = useMemo(() => Array.from(selected.values()), [selected]);
   const selectedSize = selectedEntries.reduce((sum, item) => sum + item.sizeBytes, 0);
   const folderReady = selectionMode === "folder" && Boolean(directory) && directory?.currentPath !== "gdrive:";
-  const canPreview = selectionMode === "files" ? selected.size > 0 : folderReady;
+  const canPrepare = selectionMode === "files" ? selected.size > 0 : folderReady;
 
   async function openDirectory(path: string) {
     setBusy("browse");
     setError(null);
-    setPreview(null);
-    setCreated(null);
     try {
       const result = await browseDrive(path);
       setDirectory(result);
@@ -99,13 +120,47 @@ export default function NewJobPage() {
   }
 
   useEffect(() => {
+    const saved = readSavedDefaults();
+    if (saved.processingStrategy) setProcessingStrategy(saved.processingStrategy);
+    if (saved.correctionPolicy) setCorrectionPolicy(saved.correctionPolicy);
+    if (Array.isArray(saved.outputFormats) && saved.outputFormats.length > 0) {
+      setOutputFormats(saved.outputFormats);
+    }
+    if (Number.isInteger(saved.chirpMaxParallelChunks)) {
+      setChirpMaxParallelChunks(Math.min(5, Math.max(1, saved.chirpMaxParallelChunks ?? 3)));
+    }
+    setDefaultsLoaded(true);
     void openDirectory("gdrive:");
     getCosts().then(setCosts).catch(() => null);
+    getCorrectionProviderStatus()
+      .then((status) => {
+        setM3Enabled(status.m3Enabled);
+        if (!status.m3Enabled && saved.correctionPolicy === "M3_FIRST") {
+          setCorrectionPolicy("GEMINI_FIRST");
+        }
+      })
+      .catch(() => setM3Enabled(false));
+    // Initial page setup runs once; openDirectory intentionally stays local.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!defaultsLoaded) return;
+    const saved: SavedDefaults = {
+      processingStrategy,
+      correctionPolicy,
+      outputFormats,
+      chirpMaxParallelChunks,
+    };
+    window.localStorage.setItem(DEFAULTS_KEY, JSON.stringify(saved));
+  }, [defaultsLoaded, processingStrategy, correctionPolicy, outputFormats, chirpMaxParallelChunks]);
+
+  function resetPreparedState() {
+    setError(null);
+  }
+
   function toggleFile(entry: DriveEntry) {
-    setPreview(null);
-    setCreated(null);
+    resetPreparedState();
     setSelected((current) => {
       const next = new Map(current);
       if (next.has(entry.sourcePath)) next.delete(entry.sourcePath);
@@ -123,33 +178,25 @@ export default function NewJobPage() {
     });
   }
 
-  async function inspectSelection() {
-    if (!directory || !canPreview) return;
-    setBusy("preview");
+  async function prepareAndCreateBatch() {
+    if (!directory || !canPrepare) return;
+    setBusy("prepare");
     setError(null);
-    setPreview(null);
-    setCreated(null);
     try {
       const paths = selectionMode === "folder"
         ? [directory.currentPath]
         : selectedEntries.map((entry) => entry.sourcePath);
-      setPreview(await previewBatch(selectionMode, paths));
+      const preview = await previewBatch(selectionMode, paths);
+      const created = await createBatchWithPolicy(
+        preview.batchPreviewId,
+        correctionPolicy,
+        chirpMaxParallelChunks,
+        outputFormats,
+        processingStrategy,
+      );
+      router.push(`/batches/${created.batchId}`);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "無法建立批次預覽");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function createPreflightBatch() {
-    if (!preview) return;
-    setBusy("create");
-    setError(null);
-    try {
-      setCreated(await createBatch(preview.batchPreviewId, chirpMaxParallelChunks, outputFormats, processingStrategy));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "無法建立批次");
-    } finally {
+      setError(cause instanceof Error ? cause.message : "無法檢查檔案並建立批次");
       setBusy(null);
     }
   }
@@ -157,7 +204,7 @@ export default function NewJobPage() {
   return (
     <AppShell
       title="新增轉錄任務"
-      description="從私人 Google Drive 選取一個、多個或整個資料夾的影音檔。"
+      description="選檔後一次完成唯讀檢查與 Preflight；取得估價後只需一次付費確認。"
     >
       <div className="new-job-layout">
         <section className="form-panel">
@@ -165,43 +212,35 @@ export default function NewJobPage() {
             <div className="section-heading">
               <span className="step-number">1</span>
               <div>
-                <h2>選擇批次方式</h2>
-                <p>所有來源保持唯讀；資料夾只在你操作時列舉，不會啟用排程掃描。</p>
+                <h2>選擇影音</h2>
+                <p>可選一個、多個檔案，或直接處理目前整個資料夾。</p>
               </div>
             </div>
             <div className="selection-mode-grid">
               <button
                 type="button"
                 className={`selection-mode-card ${selectionMode === "files" ? "selection-mode-card--active" : ""}`}
-                onClick={() => { setSelectionMode("files"); setPreview(null); setCreated(null); }}
+                onClick={() => { setSelectionMode("files"); resetPreparedState(); }}
               >
                 <SquareCheckBig size={21} />
-                <span><strong>選取一個或多個檔案</strong><small>可跨資料夾保留已勾選檔案</small></span>
+                <span><strong>選取檔案</strong><small>可跨資料夾保留已勾選檔案</small></span>
                 {selectionMode === "files" && <Check size={17} />}
               </button>
               <button
                 type="button"
                 className={`selection-mode-card ${selectionMode === "folder" ? "selection-mode-card--active" : ""}`}
-                onClick={() => { setSelectionMode("folder"); setPreview(null); setCreated(null); }}
+                onClick={() => { setSelectionMode("folder"); resetPreparedState(); }}
               >
                 <FolderOpen size={21} />
                 <span><strong>目前整個資料夾</strong><small>遞迴包含子資料夾內影音檔</small></span>
                 {selectionMode === "folder" && <Check size={17} />}
               </button>
             </div>
-          </div>
 
-          <div className="form-section">
-            <div className="section-heading">
-              <span className="step-number">2</span>
-              <div>
-                <h2>瀏覽 Google Drive</h2>
-                <p>只顯示資料夾與支援的影音格式；其他檔案不會加入批次。</p>
-              </div>
-            </div>
             <form
               className="drive-path-bar"
               onSubmit={(event) => { event.preventDefault(); void openDirectory(pathInput); }}
+              style={{ marginTop: 16 }}
             >
               <HardDrive size={17} />
               <input
@@ -229,7 +268,7 @@ export default function NewJobPage() {
                 <span>{directory ? displayPath(directory.currentPath) : "正在連線…"}</span>
                 {selectionMode === "folder" && directory && (
                   <span className={`folder-choice-pill ${folderReady ? "" : "folder-choice-pill--disabled"}`}>
-                    <Folder size={13} />{folderReady ? "將選取此資料夾" : "請先進入課程資料夾"}
+                    <Folder size={13} />{folderReady ? "將處理此資料夾" : "請先進入課程資料夾"}
                   </span>
                 )}
               </div>
@@ -273,147 +312,137 @@ export default function NewJobPage() {
               <div className="selected-files-strip">
                 <strong>已選 {selectedEntries.length} 個影音檔</strong>
                 <span>{formatBytes(selectedSize)}</span>
-                <button type="button" className="button button--ghost button--small" onClick={() => { setSelected(new Map()); setPreview(null); }}>清除</button>
+                <button type="button" className="button button--ghost button--small" onClick={() => setSelected(new Map())}>清除</button>
               </div>
             )}
           </div>
 
           <div className="form-section">
             <div className="section-heading">
-              <span className="step-number">3</span>
+              <span className="step-number">2</span>
               <div>
-                <h2>高準確度管線</h2>
-                <p>每個檔案會依序執行；同時間只處理一個來源，避免磁碟與成本失控。</p>
+                <h2>處理方式</h2>
+                <p>日常只需決定速度與文字校正模型；其他技術參數使用已保存的預設值。</p>
               </div>
-            </div>
-            <div className="workflow-choice workflow-choice--selected">
-              <div className="workflow-choice__check"><Check size={13} /></div>
-              <div className="workflow-choice__icon"><Layers3 size={22} /></div>
-              <div>
-                <strong>Chirp 3 時間軸 + Gemini 3.7 Flash 固定段落校正</strong>
-                <span>輸出原始稿、校正版、字幕與 QA；Gemini 不改動字幕時間。</span>
-              </div>
-              <span className="recommended-tag">固定模式</span>
             </div>
 
-            <div style={{ marginTop: "16px", padding: "16px", border: "1px solid var(--border)", borderRadius: "10px", background: "#f8fafc" }}>
-              <label style={{ display: "block", marginBottom: "8px", fontWeight: 700, fontSize: "14px", color: "#334155" }}>選擇辨識處理模式</label>
-              <div className="selection-mode-grid">
-                <button type="button" className={`selection-mode-card ${processingStrategy === "DYNAMIC_BATCHING" ? "selection-mode-card--active" : ""}`} onClick={() => setProcessingStrategy("DYNAMIC_BATCHING")}>
-                  <Layers3 size={21} />
-                  <span><strong>經濟模式（Dynamic Batch）</strong><small>交由 Google 離峰處理，最多等待約 24 小時；費用較低</small></span>
-                  {processingStrategy === "DYNAMIC_BATCHING" && <Check size={17} />}
-                </button>
-                <button type="button" className={`selection-mode-card ${processingStrategy === "STANDARD_BATCH" ? "selection-mode-card--active" : ""}`} onClick={() => setProcessingStrategy("STANDARD_BATCH")}>
-                  <LoaderCircle size={21} />
-                  <span><strong>快速模式（Standard Batch）</strong><small>優先較快完成；費用較高，適合急件</small></span>
-                  {processingStrategy === "STANDARD_BATCH" && <Check size={17} />}
-                </button>
-              </div>
-              <p style={{ marginTop: "8px", fontSize: "13px", color: "#64748b", lineHeight: 1.5 }}>模式會寫入每個任務並在付費前反映到預估費用；送出付費辨識後不能切換。</p>
+            <label style={{ display: "block", marginBottom: 8, fontWeight: 700 }}>辨識速度</label>
+            <div className="selection-mode-grid">
+              <button type="button" className={`selection-mode-card ${processingStrategy === "DYNAMIC_BATCHING" ? "selection-mode-card--active" : ""}`} onClick={() => setProcessingStrategy("DYNAMIC_BATCHING")}>
+                <Layers3 size={21} />
+                <span><strong>經濟模式</strong><small>Dynamic Batch；較省費用，可能等待較久</small></span>
+                {processingStrategy === "DYNAMIC_BATCHING" && <Check size={17} />}
+              </button>
+              <button type="button" className={`selection-mode-card ${processingStrategy === "STANDARD_BATCH" ? "selection-mode-card--active" : ""}`} onClick={() => setProcessingStrategy("STANDARD_BATCH")}>
+                <LoaderCircle size={21} />
+                <span><strong>快速模式</strong><small>Standard Batch；較快完成，費用較高</small></span>
+                {processingStrategy === "STANDARD_BATCH" && <Check size={17} />}
+              </button>
             </div>
 
-            <div style={{ marginTop: "16px", padding: "16px", border: "1px solid var(--border)", borderRadius: "10px", background: "#f8fafc" }}>
-              <label style={{ display: "block", marginBottom: "8px", fontWeight: 700, fontSize: "14px", color: "#334155" }}>
-                Chirp 同時辨識分段數
-              </label>
-              <select 
-                value={chirpMaxParallelChunks} 
-                onChange={(e) => setChirpMaxParallelChunks(parseInt(e.target.value, 10))}
-                style={{ width: "100%", padding: "10px", borderRadius: "8px", border: "1px solid var(--border-strong)", fontSize: "15px", background: "#fff" }}
+            <label style={{ display: "block", margin: "18px 0 8px", fontWeight: 700 }}>AI 文字校正</label>
+            <div className="selection-mode-grid">
+              <button
+                type="button"
+                className={`selection-mode-card ${correctionPolicy === "GEMINI_FIRST" ? "selection-mode-card--active" : ""}`}
+                onClick={() => setCorrectionPolicy("GEMINI_FIRST")}
               >
-                <option value={1}>1</option>
-                <option value={2}>2</option>
-                <option value={3}>3（建議）</option>
-                <option value={4}>4</option>
-                <option value={5}>5</option>
-              </select>
-              <p style={{ marginTop: "8px", fontSize: "13px", color: "#64748b", lineHeight: 1.5 }}>
-                第一段會先單獨驗證。第一段成功後，其餘音訊分段最多同時執行此數量。提高數量可能縮短等待時間，但會增加 API 併發與配額壓力。<br/>
-                <strong style={{ color: "#475569" }}>註：這是「同一支音檔內的分段併發數」，不同來源音檔仍然一次只處理一支。</strong>
-              </p>
+                <ShieldCheck size={21} />
+                <span><strong>Gemini 3.7 優先</strong><small>正式品質基準；全程優先使用 Gemini 3.7 Flash</small></span>
+                {correctionPolicy === "GEMINI_FIRST" && <Check size={17} />}
+              </button>
+              <button
+                type="button"
+                disabled={!m3Enabled}
+                className={`selection-mode-card ${correctionPolicy === "M3_FIRST" ? "selection-mode-card--active" : ""}`}
+                onClick={() => m3Enabled && setCorrectionPolicy("M3_FIRST")}
+                title={!m3Enabled ? "MiniMax M3 尚未完成正式環境驗證" : undefined}
+              >
+                <Sparkles size={21} />
+                <span>
+                  <strong>M3 優先{!m3Enabled ? "（待啟用）" : ""}</strong>
+                  <small>額度可用時先用 M3；額度不足自動轉 Gemini 3.7</small>
+                </span>
+                {correctionPolicy === "M3_FIRST" && <Check size={17} />}
+              </button>
             </div>
 
-            <div className="output-format-section">
-              <div className="section-heading">
-                <span className="step-number">4</span>
-                <div>
-                  <h2>選擇輸出附件</h2>
-                  <p>預設只選 SRT、TXT、CSV；設定會隨每個任務保存，未來發布時只取這些附件。</p>
-                </div>
-              </div>
-              <div className="output-format-grid" role="group" aria-label="輸出附件格式">
-                {[...PRIMARY_OUTPUT_FORMATS, ...ADVANCED_OUTPUT_FORMATS].map((format) => {
-                  const checked = outputFormats.includes(format.value);
-                  return <label className={`output-format-option ${checked ? "output-format-option--selected" : ""}`} key={format.value}>
-                    <input type="checkbox" checked={checked} onChange={() => toggleOutputFormat(format.value)} />
-                    <span><strong>{format.label}</strong><small>{format.detail}</small></span>
-                  </label>;
-                })}
-              </div>
-              <p className="output-format-note"><Info size={15} />JSON、原始模型回應、時間軸與 QA 證據會安全留在 VPS，不會因為未勾選而被刪除，也不會列為預設 Drive 附件。</p>
-            </div>
+            <button
+              type="button"
+              className="button button--ghost"
+              style={{ marginTop: 18 }}
+              onClick={() => setAdvanced((value) => !value)}
+            >
+              <SlidersHorizontal size={15} />進階設定<ChevronDown size={15} />
+            </button>
 
-            {preview && (
-              <div className="batch-preview">
-                <div className="batch-preview__heading">
-                  <div><ShieldCheck size={19} /><span><strong>唯讀預覽完成</strong><small>尚未開始任何付費辨識</small></span></div>
-                  <strong>{preview.itemCount} 個檔案 · {formatBytes(preview.totalSizeBytes)}</strong>
-                </div>
-                <div className="batch-preview__items">
-                  {preview.items.map((item) => (
-                    <div key={item.previewId}><FileAudio size={14} /><span>{item.name}</span><small>{formatBytes(item.sizeBytes)}</small></div>
-                  ))}
-                </div>
-              </div>
-            )}
+            {advanced && (
+              <div style={{ marginTop: 12, padding: 16, border: "1px solid var(--border)", borderRadius: 10, background: "#f8fafc" }}>
+                <label style={{ display: "block", marginBottom: 8, fontWeight: 700 }}>Chirp 同時辨識分段數</label>
+                <select
+                  value={chirpMaxParallelChunks}
+                  onChange={(event) => setChirpMaxParallelChunks(parseInt(event.target.value, 10))}
+                  style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid var(--border-strong)", fontSize: 15, background: "#fff" }}
+                >
+                  <option value={1}>1</option>
+                  <option value={2}>2</option>
+                  <option value={3}>3（建議）</option>
+                  <option value={4}>4</option>
+                  <option value={5}>5</option>
+                </select>
 
-            {error && <div className="form-error"><TriangleAlert size={17} /><span>{error}</span></div>}
-            {created && (
-              <div className="success-banner">
-                <ShieldCheck size={20} />
-                <div>
-                  <strong>已建立 {created.itemCount} 個 preflight 任務</strong>
-                  <span>批次 {created.batchId} 尚未產生 Chirp 或 Gemini 費用；模式：{created.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}。</span>
+                <div className="output-format-section" style={{ marginTop: 18 }}>
+                  <strong>輸出附件</strong>
+                  <div className="output-format-grid" role="group" aria-label="輸出附件格式" style={{ marginTop: 8 }}>
+                    {ALL_OUTPUT_FORMATS.map((format) => {
+                      const checked = outputFormats.includes(format.value);
+                      return (
+                        <label className={`output-format-option ${checked ? "output-format-option--selected" : ""}`} key={format.value}>
+                          <input type="checkbox" checked={checked} onChange={() => toggleOutputFormat(format.value)} />
+                          <span><strong>{format.label}</strong><small>{format.detail}</small></span>
+                        </label>
+                      );
+                    })}
+                  </div>
                 </div>
-                <Link href={`/batches/${created.batchId}`}>查看批次 <ChevronRight size={14} /></Link>
+                <p className="output-format-note"><Info size={15} />這些設定會保存在此瀏覽器，下次自動沿用。</p>
               </div>
             )}
           </div>
 
+          {error && <div className="form-error"><TriangleAlert size={17} /><span>{error}</span></div>}
+
           <div className="form-actions">
-            <span><Info size={16} />建立批次只做本機媒體檢查；取得總預估費用後仍需你再次確認。</span>
-            {!preview ? (
-              <button className="button button--primary button--large" type="button" disabled={!canPreview || busy !== null} onClick={() => void inspectSelection()}>
-                {busy === "preview" && <LoaderCircle className="spin" size={16} />}
-                預覽批次
-              </button>
-            ) : (
-              <button className="button button--primary button--large" type="button" disabled={busy !== null || Boolean(created)} onClick={() => void createPreflightBatch()}>
-                {busy === "create" && <LoaderCircle className="spin" size={16} />}
-                建立 Preflight 批次
-              </button>
-            )}
+            <span><Info size={16} />按下後會自動完成唯讀預覽與 Preflight，不會開始付費辨識；估價完成後下一頁只需一次確認。</span>
+            <button
+              className="button button--primary button--large"
+              type="button"
+              disabled={!canPrepare || busy !== null}
+              onClick={() => void prepareAndCreateBatch()}
+            >
+              {busy === "prepare" && <LoaderCircle className="spin" size={16} />}
+              檢查檔案與估價
+            </button>
           </div>
         </section>
 
         <aside className="panel sticky-card">
-          <h2>批次摘要</h2>
+          <h2>本次設定</h2>
           <div className="summary-list">
-            <div><span>選取模式</span><strong>{selectionMode === "files" ? "一個或多個檔案" : "整個資料夾"}</strong></div>
-            <div><span>目前選取</span><strong>{preview?.itemCount ?? (selectionMode === "files" ? selected.size : folderReady ? "1 個資料夾" : "尚未選取")}</strong></div>
-            <div><span>處理方式</span><strong>依序，一次一檔</strong></div>
-            <div><span>預設附件</span><strong>{outputFormats.map((format) => `.${format}`).join("、")}</strong></div>
+            <div><span>目前選取</span><strong>{selectionMode === "files" ? `${selected.size} 個檔案` : folderReady ? "目前整個資料夾" : "尚未選取"}</strong></div>
+            <div><span>辨識速度</span><strong>{processingStrategy === "DYNAMIC_BATCHING" ? "經濟" : "快速"}</strong></div>
+            <div><span>文字校正</span><strong>{correctionPolicy === "M3_FIRST" ? "M3 → Gemini 3.7" : "Gemini 3.7"}</strong></div>
+            <div><span>輸出</span><strong>{outputFormats.map((format) => `.${format}`).join("、")}</strong></div>
+            <div><span>Chirp 併發</span><strong>自動 / {chirpMaxParallelChunks}</strong></div>
             <div><span>預估成本上限</span><strong>US${costs?.projectLimitUsd ?? "200"}</strong></div>
-            <div><span>剩餘預估額度</span><strong>US${costs?.remainingEstimatedBudgetUsd ?? "—"}</strong></div>
           </div>
           <div className="cost-note">
             <Info size={17} />
-            <p>檔案時長必須先由 VPS 本機 FFprobe 檢查，才會顯示本批次預估費用。Cloud Billing 才是實際帳務依據。</p>
+            <p>FFprobe 完成後才會產生本批次預估費用。只有你在下一頁確認金額後，Worker 才能進入付費處理。</p>
           </div>
           <div className="privacy-note">
             <ShieldCheck size={17} />
-            <div><strong>私人來源不公開</strong><span>瀏覽器不會取得 rclone、GCP 或 Drive 憑證。</span></div>
+            <div><strong>私人來源不公開</strong><span>瀏覽器不會取得 rclone、GCP 或模型憑證。</span></div>
           </div>
         </aside>
       </div>
