@@ -393,6 +393,7 @@ def _run_module_stage(
     module: str,
     timeout_seconds: int,
     evidence: tuple[str, ...],
+    force: bool = False,
 ) -> None:
     job_dir = data_dir / "jobs" / record["id"]
     _begin(
@@ -404,7 +405,7 @@ def _run_module_stage(
         detail=detail,
         progress=progress_start,
     )
-    if not all((job_dir / item).exists() for item in evidence):
+    if force or not all((job_dir / item).exists() for item in evidence):
         _run_with_heartbeat(
             [sys.executable, "-m", module],
             store=store,

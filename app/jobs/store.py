@@ -1545,7 +1545,17 @@ class JobStore:
             if not force and row["active_stage"] and row["active_stage"] != stage:
                 raise JobConflict("只能重試目前記錄的失敗階段")
 
-            detail = "等待 Worker 重試階段"
+            review_value = str(row["require_human_review"] or "").strip().lower()
+            local_only_qa = (
+                stage in {"qa", "validation"}
+                and chunk_index is None
+                and review_value not in {"", "0", "false", "no", "off"}
+            )
+            detail = (
+                "等待 Worker 只重跑本機 QA/驗證（不重跑付費辨識）"
+                if local_only_qa
+                else "等待 Worker 重試階段"
+            )
             retry_archive: str | None = None
             if chunk_index is not None:
                 if stage != "chirp":
@@ -1596,7 +1606,13 @@ class JobStore:
                 """,
                 (job_id,),
             )
-            next_status = "transcribing" if stage == "chirp" else "queued"
+            next_status = (
+                "transcribing"
+                if stage == "chirp"
+                else "quality_check"
+                if local_only_qa
+                else "queued"
+            )
             connection.execute(
                 """
                 UPDATE jobs
@@ -1617,6 +1633,7 @@ class JobStore:
                     "stage": stage,
                     "chunk_index": chunk_index,
                     "retry_archive": retry_archive,
+                    "local_only": local_only_qa,
                 },
             )
             if row["batch_id"]:

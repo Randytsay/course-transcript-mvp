@@ -5,10 +5,12 @@ import argparse
 from contextlib import closing
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import time
+import uuid
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -175,6 +177,57 @@ def _clear_chunk_retry_request(job_dir: Path) -> None:
     (job_dir / "chirp-retry-request.json").unlink(missing_ok=True)
 
 
+_LOCAL_QA_REPAIR_EVIDENCE = (
+    "normalized.flac",
+    "merged-words.json",
+    "subtitles.json",
+    "subtitles.srt",
+    "subtitles.vtt",
+    "subtitles-corrected.json",
+    "review-terms.json",
+    "subtitles-cleaned.json",
+    "subtitles-cleaned.srt",
+    "transcript-cleaned.txt",
+    "cleanup-review.json",
+    "export-manifest.json",
+)
+_LOCAL_QA_REPAIR_REPORTS = (
+    "qa-report.json",
+    "qa-report.md",
+    "qa_report.json",
+    "qa_report.html",
+    "density-retry-plan.json",
+    "content-qa.json",
+    "export-manifest.json",
+)
+
+
+def _archive_qa_repair_evidence(job_dir: Path) -> str:
+    """Copy prior QA/validation output before a local-only recalculation."""
+    archive = job_dir / "qa-repair-archives" / (
+        time.strftime("repair-%Y%m%dT%H%M%SZ", time.gmtime())
+        + "-"
+        + uuid.uuid4().hex[:8]
+    )
+    archive.mkdir(parents=True, exist_ok=False)
+    copied: list[str] = []
+    for name in _LOCAL_QA_REPAIR_REPORTS:
+        source = job_dir / name
+        if not source.is_file():
+            continue
+        shutil.copy2(source, archive / name)
+        copied.append(name)
+    base._atomic_json(
+        archive / "manifest.json",
+        {
+            "policy": "preserve_previous_qa_before_local_only_repair",
+            "copied": copied,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        },
+    )
+    return str(archive.relative_to(job_dir))
+
+
 def _next_due_waiting(store: JobStore, data_dir: Path) -> dict[str, Any] | None:
     for record in _available_rows(store, ("transcribing",)):
         if str(record.get("active_stage") or "") != "chirp":
@@ -304,6 +357,124 @@ def _submit_job(
             store.fail_job(
                 job_id=leased["id"],
                 stage=current.get("active_stage") or "chirp",
+                error=base._safe_error(str(exc)),
+                worker_id=worker_id,
+            )
+        except JobConflict:
+            pass
+        raise
+
+
+def _repair_qa_only(
+    store: JobStore,
+    record: dict[str, Any],
+    *,
+    data_dir: Path,
+    worker_id: str,
+) -> dict[str, Any]:
+    """Recalculate local QA/validation without calling a paid provider.
+
+    This path is deliberately evidence-gated.  It is used only after Chirp,
+    segmentation, correction, cleanup, and export evidence already exist.  A
+    missing prerequisite fails closed instead of silently falling back to a
+    full paid retry.
+    """
+    leased = store.acquire_lease(record["id"], worker_id, lease_seconds=300)
+    job_dir = data_dir / "jobs" / leased["id"]
+    try:
+        missing = [
+            name
+            for name in _LOCAL_QA_REPAIR_EVIDENCE
+            if not (job_dir / name).is_file()
+        ]
+        if missing:
+            raise base.PipelineError(
+                "QA 本機修復缺少既有證據，已 fail-closed；"
+                f"不會自動重跑付費辨識：{', '.join(missing)}"
+            )
+        archive = _archive_qa_repair_evidence(job_dir)
+        base._run_module_stage(
+            store,
+            leased,
+            data_dir,
+            worker_id,
+            stage="qa",
+            status="quality_check",
+            detail="只重算本機 QA（保留既有辨識與校正證據）",
+            progress_start=95,
+            progress_end=98,
+            module="app.providers.qa_report",
+            timeout_seconds=600,
+            evidence=("qa-report.json", "qa-report.md", "density-retry-plan.json"),
+            force=True,
+        )
+        base._run_module_stage(
+            store,
+            leased,
+            data_dir,
+            worker_id,
+            stage="validation",
+            status="quality_check",
+            detail="只重算本機輸出與結構驗證",
+            progress_start=98,
+            progress_end=99,
+            module="app.providers.validate_outputs_hardened",
+            timeout_seconds=600,
+            evidence=("qa-report.json", "export-manifest.json", "content-qa.json"),
+            force=True,
+        )
+        base._record_usage_evidence(store, leased, data_dir, worker_id)
+        manifest = {
+            "job_id": leased["id"],
+            "status": "AWAITING_HUMAN_REVIEW",
+            "chirp_model": "chirp_3",
+            "correction_model": (
+                "gemini-3.7-flash" if leased["enable_gemini_correction"] else None
+            ),
+            "drive_upload_started": False,
+            "drive_publication_status": "awaiting_human_review",
+            "drive_publication_error": None,
+            "source_media_preserved_in_drive": True,
+            "human_review_blocking": True,
+            "subtitle_review_status": "pending",
+            "qa_repair_policy": "local_only_no_provider_calls",
+            "qa_repair_archive": archive,
+            "artifacts": base._artifact_evidence(job_dir),
+        }
+        base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
+        base._atomic_json(job_dir / "processing_manifest.json", manifest)
+        base.cleanup_completed_audio(job_dir)
+        result = store.finish_for_review(
+            job_id=leased["id"],
+            worker_id=worker_id,
+            drive_published=False,
+            drive_publication_error=None,
+        )
+        store.append_audit_event(
+            job_id=leased["id"],
+            event_type="local_qa_repair_completed",
+            actor=worker_id,
+            payload={
+                "archive": archive,
+                "provider_calls_made": False,
+                "drive_mutations_made": False,
+            },
+        )
+        schedule(job_dir, "awaiting_review", detail="local_qa_repair_completed")
+        observed._write_report_safely(data_dir, leased["id"])
+        return result
+    except base.PipelinePaused:
+        try:
+            store.release_lease(leased["id"], worker_id)
+        except JobConflict:
+            pass
+        return store.get_job(leased["id"])
+    except Exception as exc:
+        try:
+            current = store.get_job(leased["id"])
+            store.fail_job(
+                job_id=leased["id"],
+                stage=current.get("active_stage") or "qa",
                 error=base._safe_error(str(exc)),
                 worker_id=worker_id,
             )
@@ -489,6 +660,17 @@ def _resume_job(
     job_dir = data_dir / "jobs" / record["id"]
     if _chunk_retry_requested(job_dir):
         return _submit_job(store, record, data_dir=data_dir, worker_id=worker_id)
+    review_value = str(record.get("require_human_review") or "").strip().lower()
+    if (
+        str(record.get("active_stage") or "") in {"qa", "validation"}
+        and review_value not in {"", "0", "false", "no", "off"}
+    ):
+        return _repair_qa_only(
+            store,
+            record,
+            data_dir=data_dir,
+            worker_id=worker_id,
+        )
     if (job_dir / "merged-words.json").is_file():
         leased = store.acquire_lease(record["id"], worker_id, lease_seconds=300)
         return _finish_after_chirp(store, leased, data_dir=data_dir, worker_id=worker_id)

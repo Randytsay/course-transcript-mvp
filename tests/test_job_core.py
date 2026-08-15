@@ -247,6 +247,53 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(retried["status"], "queued")
         self.assertIsNotNone(retried["approved_at"])
 
+    def test_review_qa_retry_is_local_only(self) -> None:
+        job = self._create_job()
+        self.store.acquire_lease(job["id"], "pipeline-worker")
+        estimated = self.store.record_preflight_result(
+            job_id=job["id"],
+            duration_seconds=120,
+            source_checksum="c" * 64,
+            media_format="mp3",
+            audio_codec="mp3",
+            estimated_cost_usd=Decimal("0.25"),
+            pricing_version="test",
+            worker_id="pipeline-worker",
+        )
+        approved = self.store.approve_job(
+            job_id=job["id"],
+            expected_revision=estimated["revision"],
+            confirmed_estimated_cost_usd=Decimal("0.25"),
+            project_limit_usd=Decimal("200"),
+            actor="owner@example.test",
+        )
+        self.store.acquire_lease(approved["id"], "pipeline-worker")
+        self.store.begin_stage(
+            job_id=approved["id"],
+            stage="qa",
+            status="quality_check",
+            detail="test",
+            progress=98,
+            input_checksum="c" * 64,
+            worker_id="pipeline-worker",
+        )
+        failed = self.store.fail_job(
+            job_id=approved["id"],
+            stage="qa",
+            error="synthetic QA failure",
+            worker_id="pipeline-worker",
+        )
+        retried = self.store.retry_failed_stage(
+            job_id=approved["id"],
+            expected_revision=failed["revision"],
+            stage="qa",
+            actor="owner@example.test",
+        )
+        self.assertEqual(retried["status"], "quality_check")
+        self.assertEqual(retried["active_stage"], "qa")
+        event = self.store.list_job_events(approved["id"])[0]
+        self.assertTrue(event["payload"]["local_only"])
+
     def test_batch_creates_ordered_preflight_jobs(self) -> None:
         preview = self.store.create_batch_preview(
             selection_mode="files",

@@ -90,9 +90,11 @@ def segment_quality(segments: list[dict[str, object]]) -> tuple[list[str], dict[
     """Detect provider timing/text collapses before publication.
 
     A short interjection is valid, but a cue containing hundreds of provider
-    words or a multi-second cue containing only one/two words is evidence of a
-    malformed Chirp timestamp/merge result.  Keep the offending IDs in the
-    report so a targeted chunk retry can be planned without rerunning a file.
+    words is a hard structural failure.  A multi-second cue containing only
+    one/two words is suspicious, but can also be a legitimate pause or a
+    provider boundary artifact; keep it as an operator review item instead of
+    failing the whole file.  Keep every offending ID in the report so a
+    targeted chunk retry can be planned without rerunning a file.
     """
     max_words = int(os.environ.get("CHIRP_MAX_SEGMENT_WORDS", "120"))
     low_word_limit = int(os.environ.get("CHIRP_LOW_WORD_COUNT", "2"))
@@ -101,6 +103,7 @@ def segment_quality(segments: list[dict[str, object]]) -> tuple[list[str], dict[
     )
     errors: list[str] = []
     abnormal: list[dict[str, object]] = []
+    review_items: list[dict[str, object]] = []
     for item in segments:
         try:
             word_count = int(item.get("word_count", -1))
@@ -118,20 +121,32 @@ def segment_quality(segments: list[dict[str, object]]) -> tuple[list[str], dict[
                 f" with word_count={word_count}"
             )
         if reasons:
-            abnormal.append(
-                {
-                    "segment_id": item.get("segment_id"),
-                    "start_ms": start_ms,
-                    "end_ms": end_ms,
-                    "word_count": word_count,
-                    "duration_ms": duration_ms_value,
-                    "reasons": reasons,
-                }
-            )
-    if abnormal:
+            entry = {
+                "segment_id": item.get("segment_id"),
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "word_count": word_count,
+                "duration_ms": duration_ms_value,
+                "reasons": reasons,
+                "hard_failure": word_count > max_words,
+            }
+            abnormal.append(entry)
+            if (
+                word_count <= max_words
+                and duration_ms_value > low_word_duration_ms
+                and 0 <= word_count <= low_word_limit
+            ):
+                review_items.append(
+                    {
+                        **entry,
+                        "review_reason": "long_low_word_count_segment",
+                    }
+                )
+    hard_abnormal = [item for item in abnormal if item["hard_failure"]]
+    if hard_abnormal:
         preview = ", ".join(
             f"{item['segment_id']}({';'.join(item['reasons'])})"
-            for item in abnormal[:10]
+            for item in hard_abnormal[:10]
         )
         errors.append(f"abnormal subtitle segment quality: {preview}")
     return errors, {
@@ -141,6 +156,8 @@ def segment_quality(segments: list[dict[str, object]]) -> tuple[list[str], dict[
             "low_word_duration_ms": low_word_duration_ms,
         },
         "abnormal_segments": abnormal,
+        "hard_failure_segments": hard_abnormal,
+        "review_segments": review_items,
     }
 
 
@@ -379,6 +396,13 @@ def main() -> int:
     })
     segment_errors, segment_quality_report = segment_quality(segments)
     errors.extend(segment_errors)
+    review_required.extend(
+        [
+            "long low-word-count subtitle segment requires review: "
+            f"{item['segment_id']} ({';'.join(item['reasons'])})"
+            for item in segment_quality_report.get("review_segments", [])
+        ]
+    )
     overrun_limit = int(os.environ.get("CHIRP_MAX_TIMELINE_OVERRUN_MS", "15000"))
     overrun_words = [
         word
@@ -392,9 +416,17 @@ def main() -> int:
         )
     if uncovered > 1000:
         tail_audible = audible_between(end, audio)
+        tail_review_max_ms = int(
+            os.environ.get("CHIRP_TAIL_REVIEW_MAX_MS", "3000")
+        )
         if tail_audible is True and tail_patch_verified(end, audio):
             warnings.append(
                 f"audible audio tail verified by targeted Chirp patch: {uncovered}ms"
+            )
+        elif uncovered <= tail_review_max_ms:
+            review_required.append(
+                f"uncovered audio tail requires review: {uncovered}ms "
+                f"(audible={tail_audible})"
             )
         elif tail_audible is True:
             errors.append(f"audible audio tail uncovered: {uncovered}ms")
@@ -427,7 +459,7 @@ def main() -> int:
     else:
         errors.append("missing cleanup-review.json")
     status = "FAIL" if errors else "REVIEW" if review_required else "PASS"
-    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": status, "errors": errors, "warnings": warnings, "review_required": review_required, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "patch_windows": patch_density, "patch_failure_count": len(patch_density_plans), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.7-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
+    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": status, "errors": errors, "warnings": warnings, "review_required": review_required, "policy": {"long_low_word_count": "review_only", "tail_review_max_ms": int(os.environ.get("CHIRP_TAIL_REVIEW_MAX_MS", "3000")), "paid_retry": "plan_only_no_automatic_paid_retry"}, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "patch_windows": patch_density, "patch_failure_count": len(patch_density_plans), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.7-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
     atomic(JOB / "qa-report.json", report)
     md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Review required"] + ([f"- {item}" for item in review_required] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
     temporary = JOB / "qa-report.md.tmp"; temporary.write_text("\n".join(md) + "\n", encoding="utf-8"); temporary.replace(JOB / "qa-report.md")

@@ -227,6 +227,14 @@ class ProductionHardeningTests(unittest.TestCase):
             [item["segment_id"] for item in report["abnormal_segments"]],
             ["collapsed", "long-short"],
         )
+        self.assertEqual(
+            [item["segment_id"] for item in report["hard_failure_segments"]],
+            ["collapsed"],
+        )
+        self.assertEqual(
+            [item["segment_id"] for item in report["review_segments"]],
+            ["long-short"],
+        )
 
     def test_chunk_timing_repair_preserves_raw_word_and_clamps_derived_time(self) -> None:
         from app.providers.merge_chunks import repair_chunk_timings

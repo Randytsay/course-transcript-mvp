@@ -21,6 +21,7 @@ from app.pipeline import dynamic_worker_hardened as worker
 
 _ORIGINAL_AUTO_PUBLISH = worker.base._auto_publish_to_source
 _ORIGINAL_FINISH_AFTER_CHIRP = worker._finish_after_chirp
+_ORIGINAL_REPAIR_QA_ONLY = worker._repair_qa_only
 
 
 def _review_required(value: object) -> bool:
@@ -124,6 +125,35 @@ def _finish_with_actual_strategy(
             "awaiting_review",
             detail="human_review_required",
         )
+    return result
+
+
+def _repair_qa_only_with_actual_strategy(
+    store: Any,
+    record: dict[str, Any],
+    *,
+    data_dir: Path,
+    worker_id: str,
+) -> dict[str, Any]:
+    """Keep the retained processing strategy visible after local QA repair."""
+    result = _ORIGINAL_REPAIR_QA_ONLY(
+        store,
+        record,
+        data_dir=data_dir,
+        worker_id=worker_id,
+    )
+    job_dir = data_dir / "jobs" / record["id"]
+    strategy = _processing_strategy(record, job_dir)
+    for name in ("pipeline-manifest.json", "processing_manifest.json"):
+        path = job_dir / name
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            payload["chirp_processing_strategy"] = strategy
+            payload["qa_repair_processing_strategy"] = strategy
+            worker.base._atomic_json(path, payload)
     return result
 
 
@@ -269,6 +299,7 @@ def _submit_or_resume_chirp(
 
 worker.base._auto_publish_to_source = _locked_auto_publish
 worker._finish_after_chirp = _finish_with_actual_strategy
+worker._repair_qa_only = _repair_qa_only_with_actual_strategy
 worker._submit_job = _submit_or_resume_chirp
 
 
