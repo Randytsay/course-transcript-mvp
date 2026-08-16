@@ -18,6 +18,7 @@ import {
   SquareCheckBig,
   TriangleAlert,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { getCosts, previewBatch } from "@/lib/api-client";
 import {
@@ -65,6 +66,7 @@ function providerLabel(provider: DriveDirectoryPage["provider"] | null) {
 }
 
 export default function NewJobPageDriveApi() {
+  const router = useRouter();
   const [directory, setDirectory] = useState<DriveDirectoryPage | null>(null);
   const [pathInput, setPathInput] = useState("gdrive:");
   const [searchQuery, setSearchQuery] = useState("");
@@ -80,6 +82,7 @@ export default function NewJobPageDriveApi() {
   const [processingStrategy, setProcessingStrategy] = useState<ProcessingStrategy>("DYNAMIC_BATCHING");
   const [correctionPolicy, setCorrectionPolicy] = useState<CorrectionPolicy>("GEMINI_FIRST");
   const [m3Enabled, setM3Enabled] = useState(false);
+  const [m3Configured, setM3Configured] = useState(false);
   const [m3StatusLoaded, setM3StatusLoaded] = useState(false);
   const [m3Model, setM3Model] = useState("MiniMax-M3");
   const [m3QuotaState, setM3QuotaState] = useState<"available" | "unavailable" | "unknown">("unknown");
@@ -91,6 +94,7 @@ export default function NewJobPageDriveApi() {
   const selectedSize = selectedEntries.reduce((sum, item) => sum + item.sizeBytes, 0);
   const folderReady = selectionMode === "folder" && Boolean(directory) && directory?.currentPath !== "gdrive:" && !activeSearch;
   const canPreview = selectionMode === "files" ? selected.size > 0 : folderReady;
+  const m3Ready = m3Enabled && m3Configured;
 
   async function openDirectory(path: string) {
     setBusy("browse");
@@ -159,9 +163,10 @@ export default function NewJobPageDriveApi() {
     getCorrectionProviderStatus()
       .then((status) => {
         setM3Enabled(status.m3Enabled);
+        setM3Configured(status.minimaxConfigured);
         setM3Model(status.m3Model);
         setM3QuotaState(status.quotaState);
-        if (!status.m3Enabled) setCorrectionPolicy("GEMINI_FIRST");
+        if (!status.m3Enabled || !status.minimaxConfigured) setCorrectionPolicy("GEMINI_FIRST");
       })
       .finally(() => setM3StatusLoaded(true));
   }, []);
@@ -186,41 +191,22 @@ export default function NewJobPageDriveApi() {
     });
   }
 
-  async function inspectSelection() {
+  async function prepareAndCreateBatch() {
     if (!directory || !canPreview) return;
     setBusy("preview");
     setError(null);
     setPreview(null);
     setCreated(null);
     try {
-      const paths = selectionMode === "folder"
-        ? [directory.currentPath]
-        : selectedEntries.map((entry) => entry.sourcePath);
-      setPreview(await previewBatch(selectionMode, paths));
+      const paths = selectionMode === "folder" ? [directory.currentPath] : selectedEntries.map((entry) => entry.sourcePath);
+      const nextPreview = await previewBatch(selectionMode, paths);
+      setPreview(nextPreview);
+      setBusy("create");
+      const nextBatch = await createBatchWithPolicy(nextPreview.batchPreviewId, correctionPolicy, chirpMaxParallelChunks, outputFormats, processingStrategy, contentMode, documentContext);
+      setCreated(nextBatch);
+      router.push(`/batches/${nextBatch.batchId}`);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "無法建立批次預覽");
-    } finally {
-      setBusy(null);
-    }
-  }
-
-  async function createPreflightBatch() {
-    if (!preview) return;
-    setBusy("create");
-    setError(null);
-    try {
-      setCreated(await createBatchWithPolicy(
-        preview.batchPreviewId,
-        correctionPolicy,
-        chirpMaxParallelChunks,
-        outputFormats,
-        processingStrategy,
-        contentMode,
-        documentContext,
-      ));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "無法建立批次");
-    } finally {
+      setError(cause instanceof Error ? cause.message : "無法檢查檔案並建立 preflight 工作");
       setBusy(null);
     }
   }
@@ -333,8 +319,8 @@ export default function NewJobPageDriveApi() {
               <button type="button" className={`selection-mode-card ${correctionPolicy === "GEMINI_FIRST" ? "selection-mode-card--active" : ""}`} onClick={() => setCorrectionPolicy("GEMINI_FIRST")}>
                 <ShieldCheck size={21} /><span><strong>Gemini 3.7 優先</strong><small>正式品質基準；全程優先使用 Gemini 3.7 Flash</small></span>{correctionPolicy === "GEMINI_FIRST" && <Check size={17} />}
               </button>
-              <button type="button" disabled={!m3StatusLoaded || !m3Enabled} className={`selection-mode-card ${correctionPolicy === "M3_FIRST" ? "selection-mode-card--active" : ""}`} onClick={() => m3Enabled && setCorrectionPolicy("M3_FIRST")} title={!m3StatusLoaded ? "正在確認 MiniMax M3 狀態" : !m3Enabled ? "MiniMax M3 尚未在 production 啟用" : undefined}>
-                <Sparkles size={21} /><span><strong>{m3Model} 優先{!m3StatusLoaded ? "（檢查中）" : !m3Enabled ? "（未啟用）" : ""}</strong><small>{m3QuotaState === "available" ? "目前 quota 可用；額度不足或異常時自動轉 Gemini 3.7" : "已啟用後會先檢查 quota；不可用時安全轉 Gemini 3.7"}</small></span>{correctionPolicy === "M3_FIRST" && <Check size={17} />}
+              <button type="button" disabled={!m3StatusLoaded || !m3Ready} className={`selection-mode-card ${correctionPolicy === "M3_FIRST" ? "selection-mode-card--active" : ""}`} onClick={() => m3Ready && setCorrectionPolicy("M3_FIRST")} title={!m3StatusLoaded ? "正在確認 MiniMax M3 狀態" : !m3Configured ? "MiniMax 憑證尚未完成設定" : !m3Enabled ? "MiniMax M3 尚未在 production 啟用" : undefined}>
+                <Sparkles size={21} /><span><strong>{m3Model} 優先{!m3StatusLoaded ? "（檢查中）" : !m3Configured ? "（尚未設定）" : !m3Enabled ? "（未啟用）" : ""}</strong><small>{m3QuotaState === "available" ? "目前 quota 可用；額度不足或異常時自動轉 Gemini 3.7" : "已啟用後會先檢查 quota；不可用時安全轉 Gemini 3.7"}</small></span>{correctionPolicy === "M3_FIRST" && <Check size={17} />}
               </button>
             </div>
           </div>
@@ -363,10 +349,11 @@ export default function NewJobPageDriveApi() {
           </div>
 
           <div className="form-section">
-            <button type="button" className="button button--primary button--large" disabled={!canPreview || busy !== null} onClick={() => void inspectSelection()}>
-              {busy === "preview" ? <LoaderCircle className="spin" size={18} /> : <Check size={18} />}建立唯讀批次預覽
+            <button type="button" className="button button--primary button--large" disabled={!canPreview || busy !== null} onClick={() => void prepareAndCreateBatch()}>
+              {busy === "preview" || busy === "create" ? <LoaderCircle className="spin" size={18} /> : <Check size={18} />}
+              {busy === "preview" ? "檢查檔案中…" : busy === "create" ? "建立 preflight 中…" : "檢查檔案與估價"}
             </button>
-            {preview && <div className="empty-state" style={{ marginTop: 14 }}>已預覽 {preview.itemCount} 個檔案，共 {formatBytes(preview.totalSizeBytes)}。<button type="button" className="button button--primary" disabled={busy !== null} onClick={() => void createPreflightBatch()}>{busy === "create" ? "建立中…" : "建立 preflight 工作"}</button></div>}
+            {preview && busy === "create" && <div className="empty-state" style={{ marginTop: 14 }}>已檢查 {preview.itemCount} 個檔案，共 {formatBytes(preview.totalSizeBytes)}；正在建立 preflight 工作。</div>}
             {created && <div className="empty-state" style={{ marginTop: 14 }}>批次已建立：{created.batchId}。模型：{correctionPolicy === "M3_FIRST" ? `${m3Model} → Gemini 3.7` : "Gemini 3.7"}；模式：{created.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}；尚未啟動付費辨識。</div>}
           </div>
         </section>

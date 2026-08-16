@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from app.providers.correct_text import atomic_text, timestamp, write_review_terms
+from app.providers.terminology_consistency import run_terminology_consistency
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ["JOB_NAME"]
@@ -96,6 +97,7 @@ def main() -> int:
         + "\n",
     )
     write_review_terms(segments, [])
+    run_terminology_consistency(JOB)
     print(f"FAKE_CORRECTION=PASS segments={len(segments)} paid_operation=false")
     return 0
 

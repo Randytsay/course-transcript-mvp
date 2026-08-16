@@ -1,6 +1,8 @@
 """Runtime orchestration for the opt-in MiniMax-first correction path."""
 from __future__ import annotations
 
+import csv
+import hashlib
 import json
 import os
 import threading
@@ -18,6 +20,7 @@ from app.providers.correction_routing import (
 )
 from app.providers.minimax_provider import MiniMaxCorrectionClient, MiniMaxProviderError
 from app.providers.minimax_quota import MiniMaxQuotaClient, MiniMaxQuotaSnapshot
+from app.providers.correction_evidence import summarize_routing
 
 
 def _true(name: str, default: bool = False) -> bool:
@@ -171,38 +174,25 @@ class CorrectionRuntime:
             return result
 
 
-def _empty_terms(raw_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """M3-first avoids an unrequested Gemini glossary call."""
-    from app.providers import correct_text as base
-
-    source = [
-        {"segment_id": item["segment_id"], "text": item["raw_text"]}
-        for item in raw_segments
-    ]
-    import hashlib
-    source_sha256 = hashlib.sha256(
-        json.dumps(source, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()
-    glossary = base.JOB / "glossary"
-    glossary.mkdir(parents=True, exist_ok=True)
-    _atomic_json(
-        glossary / "global-terms.json",
-        {
-            "provider": "minimax",
-            "model": os.getenv("MINIMAX_M3_MODEL", "MiniMax-M3"),
-            "prompt_version": "no-gemini-glossary-m3-first-v1",
-            "source_sha256": source_sha256,
-            "usage_metadata": {"request_count": 0, "billing_mode": "token_plan"},
-            "terms": [],
-            "raw_response": None,
-            "cache_hit": False,
-        },
-    )
-    (glossary / "global-terms.csv").write_text(
-        "canonical,variants,confidence\n", encoding="utf-8"
-    )
-    return []
-
+def _m3_terms_generator(client: MiniMaxCorrectionClient, *, context: str):
+    def generate(raw_segments):
+        from app.providers import correct_text as base
+        source=[{"segment_id":x["segment_id"],"text":x["raw_text"]} for x in raw_segments]
+        sha=hashlib.sha256(json.dumps(source,ensure_ascii=False,separators=(",",":")).encode()).hexdigest(); out=base.JOB/"glossary"; out.mkdir(parents=True,exist_ok=True); cache=out/"global-terms.json"
+        try: cached=json.loads(cache.read_text()) if cache.exists() else None
+        except (OSError,json.JSONDecodeError): cached=None
+        if isinstance(cached,dict) and cached.get("provider")=="minimax" and cached.get("source_sha256")==sha: return cached.get("terms",[]) if isinstance(cached.get("terms",[]),list) else []
+        try:
+            record=client.extract_terms(raw_segments,context=context); terms=record.get("terms",[]) if isinstance(record.get("terms",[]),list) else []; record={**record,"source_sha256":sha,"cache_hit":False,"error_type":None,"safe_error":None}
+        except Exception as exc:
+            terms=[]; record={"provider":"minimax","model":os.getenv("MINIMAX_M3_MODEL","MiniMax-M3"),"prompt_version":"terminology-v1-minimax-m3","source_sha256":sha,"usage_metadata":{"request_count":0,"billing_mode":"token_plan"},"terms":[],"raw_response":None,"cache_hit":False,"error_type":type(exc).__name__,"safe_error":str(exc)[-500:]}
+        _atomic_json(cache,record)
+        with (out/"global-terms.csv").open("w",encoding="utf-8",newline="") as stream:
+            writer=csv.DictWriter(stream,fieldnames=["canonical","variants","confidence"]); writer.writeheader()
+            for term in terms:
+                if isinstance(term,dict): writer.writerow({"canonical":term.get("canonical",""),"variants":" | ".join(str(v) for v in term.get("variants",[])),"confidence":term.get("confidence","")})
+        return terms
+    return generate
 
 def main() -> int:
     from app.providers import correct_text as base
@@ -236,7 +226,7 @@ def main() -> int:
     original_prompt = base.PROMPT_VERSION
     try:
         if runtime.decision.provider is CorrectionProvider.MINIMAX_M3:
-            base.generate_terms = _empty_terms
+            base.generate_terms = _m3_terms_generator(m3_client, context=runtime.context)
         base.correct_window = runtime.correct_window
         base.PROMPT_VERSION = "fixed-segments-v1-routed-correction"
         result = base.main()
@@ -250,15 +240,7 @@ def main() -> int:
             payload = json.loads(output_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, OSError, json.JSONDecodeError):
             return 1
-        routing = json.loads(
-            (base.JOB / "correction-routing.json").read_text(encoding="utf-8")
-        )
-        initial_provider = str(routing.get("initial_provider") or CorrectionProvider.GEMINI.value)
-        provider_route = (
-            "minimax-m3 -> gemini-3.7-flash"
-            if initial_provider == CorrectionProvider.MINIMAX_M3.value
-            else "gemini-3.7-flash"
-        )
+        provider_route = str(summarize_routing(base.JOB)["correction_route"])
         payload.update(
             {
                 "source": "chirp_3_merged + routed text-only correction",

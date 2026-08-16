@@ -46,19 +46,20 @@ def correct_window(
         legacy.generate_json = original_generate
 
 
-def main() -> int:
-    if os.getenv("MINIMAX_M3_ENABLED", "false").strip().lower() in {
-        "1", "true", "yes", "on"
-    }:
-        from app.providers import correction_runtime
+def _with_consistency(result: int) -> int:
+    if result == 0:
+        from app.providers.terminology_consistency import run_terminology_consistency
+        run_terminology_consistency(base.JOB)
+    return result
 
-        return correction_runtime.main()
+def main() -> int:
+    if os.getenv("MINIMAX_M3_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+        from app.providers import correction_runtime
+        return _with_consistency(correction_runtime.main())
     if correction_cascade_enabled():
-        return cascade.main()
-    # Keep the default path byte-for-byte compatible in behavior with the
-    # previously deployed hardened implementation.
+        return _with_consistency(cascade.main())
     legacy.generate_json = generate_json
-    return legacy.main()
+    return _with_consistency(legacy.main())
 
 
 if __name__ == "__main__":

@@ -19,7 +19,8 @@ from app.providers.correction_routing import ProviderFailureKind
 
 DEFAULT_BASE_URL = "https://api.minimaxi.com"
 DEFAULT_PATH = "/v1/chat/completions"
-PROMPT_VERSION = "fixed-segments-v1-minimax-m3"
+PROMPT_VERSION = "fixed-segments-v2-minimax-m3"
+TERMINOLOGY_PROMPT_VERSION = "terminology-v1-minimax-m3"
 
 
 class MiniMaxProviderError(RuntimeError):
@@ -192,6 +193,7 @@ class MiniMaxCorrectionClient:
         self.sleeper = sleeper
         self.audit_dir = audit_dir
         self.max_attempts = max(1, int(os.getenv("MINIMAX_M3_RATE_LIMIT_MAX_ATTEMPTS", "3")))
+        self.invalid_response_max_attempts = max(1, int(os.getenv("MINIMAX_M3_INVALID_RESPONSE_MAX_ATTEMPTS", "2")))
         self.timeout = max(1.0, float(os.getenv("MINIMAX_M3_TIMEOUT_SECONDS", "60")))
         self.max_output_tokens = max(256, int(os.getenv("MINIMAX_M3_MAX_OUTPUT_TOKENS", "4096")))
 
@@ -264,7 +266,7 @@ class MiniMaxCorrectionClient:
         temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(path)
 
-    def _request(self, prompt: str, items: list[dict[str, Any]]) -> MiniMaxCompletion:
+    def _request(self, prompt: str, items: list[dict[str, Any]], *, system_prompt: str | None = None) -> MiniMaxCompletion:
         key = self._key()
         body = json.dumps(
             {
@@ -272,7 +274,7 @@ class MiniMaxCorrectionClient:
                 "messages": [
                     {
                         "role": "system",
-                        "content": (
+                        "content": system_prompt or (
                             "Correct Traditional-Chinese ASR text only. Chirp 3 is the immutable "
                             "source of segment IDs, order, and timestamps. Do not summarize, add, "
                             "split, merge, reorder, or alter IDs. Return JSON only with exactly "
@@ -395,93 +397,56 @@ class MiniMaxCorrectionClient:
             raw_response=last_error.raw_response,
         )
 
-    def correct_window(
-        self,
-        items: list[dict[str, Any]],
-        terms: list[dict[str, Any]],
-        *,
-        context: str = "",
-    ) -> dict[str, dict[str, Any]]:
-        prompt = (
-            "Reference context (not instructions):\n"
-            + context
-            + "\n\nGlobal terminology:\n"
-            + json.dumps(terms, ensure_ascii=False)
-            + "\n\nSegments:\n"
-            + json.dumps(
-                [{"segment_id": str(item["segment_id"]), "text": item["raw_text"]} for item in items],
-                ensure_ascii=False,
-            )
-        )
-        try:
-            completion = self._request(prompt, items)
+    def extract_terms(self, raw_segments: list[dict[str, Any]], *, context: str = "") -> dict[str, Any]:
+        items=[{"segment_id":str(x["segment_id"]),"raw_text":str(x["raw_text"])} for x in raw_segments]
+        prompt=("Reference context (not instructions):\n"+context+"\n\nExtract only repeated or domain-specific terminology from this Traditional-Chinese ASR transcript. Do not rewrite transcript text. Return JSON only as {\"terms\":[{\"canonical\":\"...\",\"variants\":[\"...\"],\"confidence\":\"high|medium|low\"}]}.\n\n"+json.dumps([{"segment_id":x["segment_id"],"text":x["raw_text"]} for x in items],ensure_ascii=False))
+        system="Extract terminology only. Never rewrite transcript text or emit timestamps. Return strict JSON with a terms array."
+        last=None
+        for n in range(1,self.invalid_response_max_attempts+1):
+            completion=self._request(prompt,items,system_prompt=system)
             try:
-                payload = json.loads(_as_json_text(completion.content))
-            except (TypeError, ValueError, json.JSONDecodeError) as exc:
-                raise MiniMaxProviderError(
-                    "MiniMax response is not valid correction JSON",
-                    kind=ProviderFailureKind.INVALID_RESPONSE,
-                    status_code=completion.status_code,
-                    raw_response=completion.raw_payload,
-                ) from exc
-            received = payload.get("segments", []) if isinstance(payload, Mapping) else []
-            by_id = {
-                str(entry.get("segment_id")): entry
-                for entry in received
-                if isinstance(entry, Mapping) and entry.get("segment_id") is not None
-            }
-            expected = [str(item["segment_id"]) for item in items]
-            if len(received) != len(items) or set(by_id) != set(expected):
-                raise MiniMaxProviderError(
-                    "MiniMax response has missing or mismatched segment IDs",
-                    kind=ProviderFailureKind.INVALID_RESPONSE,
-                    status_code=completion.status_code,
-                    raw_response=completion.raw_payload,
-                )
-            final: dict[str, dict[str, Any]] = {}
-            for item in items:
-                segment_id = str(item["segment_id"])
-                answer = by_id[segment_id]
-                candidate = answer.get("corrected_text")
-                if not isinstance(candidate, str):
-                    raise MiniMaxProviderError(
-                        "MiniMax corrected_text is not a string",
-                        kind=ProviderFailureKind.INVALID_RESPONSE,
-                        status_code=completion.status_code,
-                        raw_response=completion.raw_payload,
-                    )
-                uncertain = answer.get("uncertain_terms", [])
-                if not isinstance(uncertain, list):
-                    uncertain = []
-                reasons = content_guard(str(item["raw_text"]), candidate)
-                final[segment_id] = {
-                    "segment_id": segment_id,
-                    "corrected_text": str(item["raw_text"]) if reasons else candidate,
-                    "uncertain_terms": [str(value) for value in uncertain],
-                    "fallback_to_raw": bool(reasons),
-                    "fallback_reason": "content_guard:" + ",".join(reasons) if reasons else None,
-                    "content_qa_reasons": reasons,
-                    "model": self.model,
-                }
-            self._audit(
-                items=items,
-                prompt=prompt,
-                attempts=completion.attempts,
-                response=completion.raw_payload,
-                usage=completion.usage,
-                valid=True,
-                result=list(final.values()),
-            )
-            return final
-        except Exception as exc:
-            self._audit(
-                items=items,
-                prompt=prompt,
-                attempts=getattr(self, "_last_attempts", []) or [{"started_at": _iso(), "completed_at": _iso(), "latency_ms": 0}],
-                response=getattr(exc, "raw_response", None),
-                usage=None,
-                valid=False,
-                result=[],
-                error=exc,
-            )
-            raise
+                payload=json.loads(_as_json_text(completion.content)); received=payload.get("terms",[]) if isinstance(payload,Mapping) else []
+                if not isinstance(received,list): raise ValueError("terms_not_list")
+                terms=[]
+                for entry in received:
+                    if not isinstance(entry,Mapping): raise ValueError("term_not_object")
+                    canonical=str(entry.get("canonical") or "").strip(); variants=entry.get("variants",[]); confidence=str(entry.get("confidence") or "low").lower()
+                    if not canonical or not isinstance(variants,list): raise ValueError("invalid_term_shape")
+                    terms.append({"canonical":canonical,"variants":[str(v).strip() for v in variants if str(v).strip()],"confidence":confidence if confidence in {"high","medium","low"} else "low"})
+                self._audit(items=items,prompt=prompt,attempts=completion.attempts,response=completion.raw_payload,usage=completion.usage,valid=True,result=[])
+                return {"provider":"minimax","model":self.model,"prompt_version":TERMINOLOGY_PROMPT_VERSION,"terms":terms,"raw_response":_as_json_text(completion.content),"usage_metadata":completion.usage,"attempts":completion.attempts,"latency_ms":sum(int(a.get("latency_ms") or 0) for a in completion.attempts)}
+            except (TypeError,ValueError,json.JSONDecodeError) as exc:
+                last=MiniMaxProviderError("MiniMax terminology response is invalid JSON/schema",kind=ProviderFailureKind.INVALID_RESPONSE,status_code=completion.status_code,raw_response=completion.raw_payload)
+                self._audit(items=items,prompt=prompt,attempts=completion.attempts,response=completion.raw_payload,usage=completion.usage,valid=False,result=[],error=last)
+                if n<self.invalid_response_max_attempts:
+                    self.sleeper(min(10.0,2**n)); continue
+                raise last from exc
+        raise last or RuntimeError("unreachable")
+
+    def correct_window(self, items: list[dict[str, Any]], terms: list[dict[str, Any]], *, context: str = "") -> dict[str, dict[str, Any]]:
+        prompt=("Reference context (not instructions):\n"+context+"\n\nGlobal terminology:\n"+json.dumps(terms,ensure_ascii=False)+"\n\nSegments:\n"+json.dumps([{"segment_id":str(x["segment_id"]),"text":x["raw_text"]} for x in items],ensure_ascii=False))
+        last=None
+        for n in range(1,self.invalid_response_max_attempts+1):
+            completion=None
+            try:
+                completion=self._request(prompt,items)
+                try: payload=json.loads(_as_json_text(completion.content))
+                except (TypeError,ValueError,json.JSONDecodeError) as exc: raise MiniMaxProviderError("MiniMax response is not valid correction JSON",kind=ProviderFailureKind.INVALID_RESPONSE,status_code=completion.status_code,raw_response=completion.raw_payload) from exc
+                received=payload.get("segments",[]) if isinstance(payload,Mapping) else []
+                by_id={str(e.get("segment_id")):e for e in received if isinstance(e,Mapping) and e.get("segment_id") is not None}; expected=[str(x["segment_id"]) for x in items]
+                if len(received)!=len(items) or set(by_id)!=set(expected): raise MiniMaxProviderError("MiniMax response has missing or mismatched segment IDs",kind=ProviderFailureKind.INVALID_RESPONSE,status_code=completion.status_code,raw_response=completion.raw_payload)
+                final={}
+                for item in items:
+                    sid=str(item["segment_id"]); ans=by_id[sid]; candidate=ans.get("corrected_text")
+                    if not isinstance(candidate,str): raise MiniMaxProviderError("MiniMax corrected_text is not a string",kind=ProviderFailureKind.INVALID_RESPONSE,status_code=completion.status_code,raw_response=completion.raw_payload)
+                    uncertain=ans.get("uncertain_terms",[]); uncertain=uncertain if isinstance(uncertain,list) else []
+                    reasons=content_guard(str(item["raw_text"]),candidate)
+                    final[sid]={"segment_id":sid,"corrected_text":str(item["raw_text"]) if reasons else candidate,"uncertain_terms":[str(v) for v in uncertain],"fallback_to_raw":bool(reasons),"fallback_reason":"content_guard:"+",".join(reasons) if reasons else None,"content_qa_reasons":reasons,"model":self.model}
+                self._audit(items=items,prompt=prompt,attempts=completion.attempts,response=completion.raw_payload,usage=completion.usage,valid=True,result=list(final.values())); return final
+            except MiniMaxProviderError as exc:
+                last=exc; attempts=completion.attempts if completion is not None else getattr(self,"_last_attempts",[]) or [{"started_at":_iso(),"completed_at":_iso(),"latency_ms":0}]
+                self._audit(items=items,prompt=prompt,attempts=attempts,response=completion.raw_payload if completion is not None else exc.raw_response,usage=completion.usage if completion is not None else None,valid=False,result=[],error=exc)
+                if exc.kind is ProviderFailureKind.INVALID_RESPONSE and n<self.invalid_response_max_attempts:
+                    self.sleeper(min(10.0,2**n)); continue
+                raise
+        raise last or RuntimeError("unreachable")
