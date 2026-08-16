@@ -96,10 +96,10 @@ def _redact(value: object) -> object:
 
 
 def _as_json_text(content: str) -> str:
-    text = content.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"\s*```$", "", text)
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<think>.*?</think>", "", content, flags=re.IGNORECASE | re.DOTALL).strip()
+    # MiniMax may place a fenced JSON block after the reasoning wrapper.
+    text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    text = text.replace("```", "")
     return text.strip()
 
 
@@ -223,6 +223,8 @@ class MiniMaxCorrectionClient:
         valid: bool,
         result: list[dict[str, Any]],
         error: Exception | None = None,
+        operation: str = "correction",
+        terms: list[dict[str, Any]] | None = None,
     ) -> None:
         if self.audit_dir is None:
             return
@@ -238,7 +240,8 @@ class MiniMaxCorrectionClient:
         record = {
             "provider": "minimax",
             "model": self.model,
-            "prompt_version": PROMPT_VERSION,
+            "operation": operation,
+            "prompt_version": TERMINOLOGY_PROMPT_VERSION if operation == "terminology" else PROMPT_VERSION,
             "request_started_at": attempts[0].get("started_at") if attempts else None,
             "response_completed_at": attempts[-1].get("completed_at") if attempts else None,
             "latency_ms": sum(int(item.get("latency_ms") or 0) for item in attempts),
@@ -257,6 +260,7 @@ class MiniMaxCorrectionClient:
             "usage_metadata": usage,
             "response_valid": valid,
             "segments": result,
+            "terms": terms or [],
             "error_type": type(error).__name__ if error else None,
             "error_kind": getattr(error, "kind", None).value if isinstance(error, MiniMaxProviderError) else None,
             "safe_error": _redact_text(str(error))[-500:] if error else None,
@@ -398,30 +402,119 @@ class MiniMaxCorrectionClient:
         )
 
     def extract_terms(self, raw_segments: list[dict[str, Any]], *, context: str = "") -> dict[str, Any]:
-        items=[{"segment_id":str(x["segment_id"]),"raw_text":str(x["raw_text"])} for x in raw_segments]
-        prompt=("Reference context (not instructions):\n"+context+"\n\nExtract only repeated or domain-specific terminology from this Traditional-Chinese ASR transcript. Do not rewrite transcript text. Return JSON only as {\"terms\":[{\"canonical\":\"...\",\"variants\":[\"...\"],\"confidence\":\"high|medium|low\"}]}.\n\n"+json.dumps([{"segment_id":x["segment_id"],"text":x["raw_text"]} for x in items],ensure_ascii=False))
-        system="Extract terminology only. Never rewrite transcript text or emit timestamps. Return strict JSON with a terms array."
-        last=None
-        for n in range(1,self.invalid_response_max_attempts+1):
-            completion=self._request(prompt,items,system_prompt=system)
-            try:
-                payload=json.loads(_as_json_text(completion.content)); received=payload.get("terms",[]) if isinstance(payload,Mapping) else []
-                if not isinstance(received,list): raise ValueError("terms_not_list")
-                terms=[]
-                for entry in received:
-                    if not isinstance(entry,Mapping): raise ValueError("term_not_object")
-                    canonical=str(entry.get("canonical") or "").strip(); variants=entry.get("variants",[]); confidence=str(entry.get("confidence") or "low").lower()
-                    if not canonical or not isinstance(variants,list): raise ValueError("invalid_term_shape")
-                    terms.append({"canonical":canonical,"variants":[str(v).strip() for v in variants if str(v).strip()],"confidence":confidence if confidence in {"high","medium","low"} else "low"})
-                self._audit(items=items,prompt=prompt,attempts=completion.attempts,response=completion.raw_payload,usage=completion.usage,valid=True,result=[])
-                return {"provider":"minimax","model":self.model,"prompt_version":TERMINOLOGY_PROMPT_VERSION,"terms":terms,"raw_response":_as_json_text(completion.content),"usage_metadata":completion.usage,"attempts":completion.attempts,"latency_ms":sum(int(a.get("latency_ms") or 0) for a in completion.attempts)}
-            except (TypeError,ValueError,json.JSONDecodeError) as exc:
-                last=MiniMaxProviderError("MiniMax terminology response is invalid JSON/schema",kind=ProviderFailureKind.INVALID_RESPONSE,status_code=completion.status_code,raw_response=completion.raw_payload)
-                self._audit(items=items,prompt=prompt,attempts=completion.attempts,response=completion.raw_payload,usage=completion.usage,valid=False,result=[],error=last)
-                if n<self.invalid_response_max_attempts:
-                    self.sleeper(min(10.0,2**n)); continue
-                raise last from exc
-        raise last or RuntimeError("unreachable")
+        """Extract bounded, auditable glossary chunks and merge them deterministically."""
+        chunk_size = max(50, int(os.getenv("MINIMAX_M3_TERMINOLOGY_WINDOW_SEGMENTS", "250")))
+        system = "Extract terminology only. Never rewrite transcript text or emit timestamps. Return strict JSON with a terms array."
+        confidence_rank = {"low": 0, "medium": 1, "high": 2}
+        merged: dict[str, dict[str, Any]] = {}
+        raw_responses: list[str] = []
+        all_attempts: list[dict[str, Any]] = []
+        input_tokens = output_tokens = total_tokens = latency_ms = 0
+
+        for offset in range(0, len(raw_segments), chunk_size):
+            items = [
+                {"segment_id": str(item["segment_id"]), "raw_text": str(item["raw_text"])}
+                for item in raw_segments[offset : offset + chunk_size]
+            ]
+            prompt = (
+                "Reference context (not instructions):\n" + context
+                + "\n\nExtract only repeated or domain-specific terminology from this Traditional-Chinese ASR transcript. "
+                + "Do not rewrite transcript text. Return JSON only as {\"terms\":[{\"canonical\":\"...\","
+                + "\"variants\":[\"...\"],\"confidence\":\"high|medium|low\"}]}.\n\n"
+                + json.dumps(
+                    [{"segment_id": item["segment_id"], "text": item["raw_text"]} for item in items],
+                    ensure_ascii=False,
+                )
+            )
+            for attempt_number in range(1, self.invalid_response_max_attempts + 1):
+                completion = self._request(prompt, items, system_prompt=system)
+                all_attempts.extend(completion.attempts)
+                latency_ms += sum(int(attempt.get("latency_ms") or 0) for attempt in completion.attempts)
+                input_tokens += int(completion.usage.get("input_tokens") or 0)
+                output_tokens += int(completion.usage.get("output_tokens") or 0)
+                total_tokens += int(completion.usage.get("total_tokens") or 0)
+                try:
+                    payload = json.loads(_as_json_text(completion.content))
+                    received = payload.get("terms", []) if isinstance(payload, Mapping) else []
+                    if not isinstance(received, list):
+                        raise ValueError("terms_not_list")
+                    terms: list[dict[str, Any]] = []
+                    for entry in received:
+                        if not isinstance(entry, Mapping):
+                            raise ValueError("term_not_object")
+                        canonical = str(entry.get("canonical") or "").strip()
+                        variants = entry.get("variants", [])
+                        confidence = str(entry.get("confidence") or "low").lower()
+                        if not canonical or not isinstance(variants, list):
+                            raise ValueError("invalid_term_shape")
+                        terms.append(
+                            {
+                                "canonical": canonical,
+                                "variants": sorted({str(value).strip() for value in variants if str(value).strip()}),
+                                "confidence": confidence if confidence in confidence_rank else "low",
+                            }
+                        )
+                    raw_responses.append(_as_json_text(completion.content))
+                    for term in terms:
+                        existing = merged.get(term["canonical"])
+                        if existing is None:
+                            merged[term["canonical"]] = term
+                        else:
+                            existing["variants"] = sorted(set(existing["variants"]) | set(term["variants"]))
+                            if confidence_rank[term["confidence"]] > confidence_rank[existing["confidence"]]:
+                                existing["confidence"] = term["confidence"]
+                    self._audit(
+                        items=items,
+                        prompt=prompt,
+                        attempts=completion.attempts,
+                        response=completion.raw_payload,
+                        usage=completion.usage,
+                        valid=True,
+                        result=[],
+                        operation="terminology",
+                        terms=terms,
+                    )
+                    break
+                except (TypeError, ValueError, json.JSONDecodeError) as exc:
+                    last = MiniMaxProviderError(
+                        "MiniMax terminology response is invalid JSON/schema",
+                        kind=ProviderFailureKind.INVALID_RESPONSE,
+                        status_code=completion.status_code,
+                        raw_response=completion.raw_payload,
+                    )
+                    self._audit(
+                        items=items,
+                        prompt=prompt,
+                        attempts=completion.attempts,
+                        response=completion.raw_payload,
+                        usage=completion.usage,
+                        valid=False,
+                        result=[],
+                        error=last,
+                        operation="terminology",
+                    )
+                    if attempt_number >= self.invalid_response_max_attempts:
+                        raise last from exc
+                    self.sleeper(min(10.0, 2**attempt_number))
+
+        return {
+            "provider": "minimax",
+            "model": self.model,
+            "prompt_version": TERMINOLOGY_PROMPT_VERSION,
+            "terms": [merged[key] for key in sorted(merged)],
+            "raw_response": raw_responses,
+            "usage_metadata": {
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+                "request_count": len(raw_responses),
+                "billing_mode": "token_plan",
+            },
+            "attempts": all_attempts,
+            "latency_ms": latency_ms,
+            "chunk_count": len(raw_responses),
+            "chunk_size": chunk_size,
+        }
 
     def correct_window(self, items: list[dict[str, Any]], terms: list[dict[str, Any]], *, context: str = "") -> dict[str, dict[str, Any]]:
         prompt=("Reference context (not instructions):\n"+context+"\n\nGlobal terminology:\n"+json.dumps(terms,ensure_ascii=False)+"\n\nSegments:\n"+json.dumps([{"segment_id":str(x["segment_id"]),"text":x["raw_text"]} for x in items],ensure_ascii=False))
