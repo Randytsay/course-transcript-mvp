@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.costs import CostConfig, estimate_job_cost
+from app.jobs.rclone_auth import rclone_environment
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 from app.jobs.preflight import PreflightError, _check_disk, _probe, _sha256
 from app.jobs.store import JobConflict, JobStore
@@ -57,6 +58,7 @@ def _copy_source(
         stderr=subprocess.PIPE,
         text=True,
         start_new_session=True,
+        env=rclone_environment(),
     )
     started = time.monotonic()
     while process.poll() is None:

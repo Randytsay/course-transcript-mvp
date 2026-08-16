@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.costs import CostConfig, estimate_job_cost
+from app.jobs.rclone_auth import rclone_environment
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 from app.jobs.store import JobConflict, JobStore
 
@@ -34,6 +35,7 @@ def _run(command: list[str], *, timeout_seconds: int) -> subprocess.CompletedPro
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=rclone_environment() if command and command[0] == "rclone" else None,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise PreflightError("本機媒體檢查命令無法在期限內完成") from exc

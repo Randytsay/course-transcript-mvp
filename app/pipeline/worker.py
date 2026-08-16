@@ -22,6 +22,7 @@ from typing import Any
 from app.jobs.costs import CostConfig, estimate_job_cost
 from app.jobs.artifacts import cleanup_completed_audio
 from app.jobs.drive_publish import DrivePublishError, publish_outputs, source_parent_destination
+from app.jobs.rclone_auth import rclone_environment
 from app.jobs.store import JobConflict, JobStore
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 
@@ -91,12 +92,17 @@ def _run_with_heartbeat(
     timeout_seconds: int,
     env: dict[str, str] | None = None,
 ) -> str:
+    process_env = env
+    if command and command[0] == "rclone":
+        process_env = rclone_environment()
+        if env:
+            process_env.update(env)
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=env,
+        env=process_env,
     )
     started = time.monotonic()
     last_heartbeat = started
