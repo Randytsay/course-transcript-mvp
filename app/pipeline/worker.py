@@ -595,6 +595,8 @@ def _auto_publish_to_source(
     worker_id: str,
 ) -> dict[str, Any] | None:
     """Publish only derived, user-selected files after all local QA succeeds."""
+    if bool(record.get("require_human_review")):
+        return None
     if os.environ.get("COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE", "").lower() not in {
         "1", "true", "yes"
     }:
@@ -791,7 +793,11 @@ def run_paid_job(
             publication_error = _safe_error(str(exc))
         processing_manifest = {
                 "job_id": leased["id"],
-                "status": "AWAITING_HUMAN_REVIEW",
+                "status": (
+                    "AWAITING_HUMAN_REVIEW"
+                    if bool(leased.get("require_human_review"))
+                    else "COMPLETED"
+                ),
                 "chirp_model": "chirp_3",
                 "correction_model": (
                     "gemini-3.7-flash"
