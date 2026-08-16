@@ -17,6 +17,9 @@ type StageAttempt = {
   startedAt?: string | null;
   completedAt?: string | null;
   activeDurationMs: number;
+  observedActiveDurationMs?: number;
+  reportingStatus?: string;
+  excludedFromEffectiveDuration?: boolean;
   error?: string | null;
 };
 
@@ -38,17 +41,19 @@ type ChunkMetric = {
   errorCode?: string | null;
 };
 
-type GeminiCall = {
+type ProviderCall = {
   callId: string;
   kind: string;
   model: string;
+  provider?: string | null;
+  billingMode?: string | null;
   sourceStartMs?: number | null;
   sourceEndMs?: number | null;
   latencyMs: number;
   attemptCount: number;
   inputTokens: number;
   outputTokens: number;
- estimatedCostUsd: string;
+  estimatedCostUsd: string;
   estimatedCostTwd: string;
   cached: boolean;
   promptVersion?: string | null;
@@ -67,12 +72,13 @@ type PerformanceSummary = {
   activeRealTimeFactor?: number | null;
   estimatedAccruedCostUsd: string;
   estimatedAccruedCostTwd: string;
- estimatedCostPerAudioHourUsd: string;
+  estimatedCostPerAudioHourUsd: string;
   estimatedCostPerAudioHourTwd: string;
   stageAttempts: StageAttempt[];
   stageTotals: { stage: string; durationMs: number }[];
   chunks: ChunkMetric[];
-  geminiCalls: GeminiCall[];
+  geminiCalls: ProviderCall[];
+  providerCalls?: ProviderCall[];
   bottleneckSuggestions: string[];
   generatedAt: string;
   accountingNote: string;
@@ -89,6 +95,17 @@ function duration(ms: number): string {
 function range(startMs?: number | null, endMs?: number | null): string {
   if (startMs == null || endMs == null) return "—";
   return `${duration(startMs)}–${duration(endMs)}`;
+}
+
+function providerLabel(item: ProviderCall): string {
+  if (item.provider === "minimax") return "MiniMax M3";
+  if (item.provider === "google-vertex-ai") return "Gemini / Vertex AI";
+  return item.provider || item.model || "—";
+}
+
+function stageDurationLabel(item: StageAttempt): string {
+  if (!item.excludedFromEffectiveDuration) return duration(item.activeDurationMs);
+  return `已排除（原 ${duration(item.observedActiveDurationMs ?? 0)}）`;
 }
 
 async function fetchSummary(jobId: string, signal?: AbortSignal): Promise<PerformanceSummary> {
@@ -150,11 +167,15 @@ export default function PerformancePage({ jobId }: { jobId: string }) {
   }, [jobId, refreshKey]);
 
   const slowestStage = useMemo(() => summary?.stageTotals[0], [summary]);
+  const providerCalls = useMemo(
+    () => summary?.providerCalls ?? summary?.geminiCalls ?? [],
+    [summary],
+  );
 
   return (
     <AppShell
       title="效能與費用分析"
-      description="拆解排隊、暫停、本機處理、Chirp 分段與 Gemini 呼叫，找出可量化的優化空間。"
+      description="拆解排隊、暫停、本機處理、Chirp 分段與 AI 校正呼叫，找出可量化的優化空間。"
       actions={
         <div className={styles.headerActions}>
           <button type="button" className="button button--secondary" onClick={() => setRefreshKey((value) => value + 1)}><RefreshCw size={17} />重新整理</button>
@@ -185,10 +206,10 @@ export default function PerformancePage({ jobId }: { jobId: string }) {
           </section>
 
           <section className={styles.panel}>
-            <header><div><h2>各階段嘗試</h2><p>重試會保留獨立紀錄，不再只覆蓋最後一次開始時間。</p></div></header>
+            <header><div><h2>各階段嘗試</h2><p>重試保留獨立紀錄；被較新同階段嘗試取代的舊 orphan attempt 會保留原始觀測值，但不再污染有效時間。</p></div></header>
             <div className={styles.tableWrap}>
               <table><thead><tr><th>階段</th><th>嘗試</th><th>狀態</th><th>有效時間</th><th>錯誤</th></tr></thead><tbody>
-                {summary.stageAttempts.map((item, index) => <tr key={`${item.stage}-${item.attemptNumber}-${index}`}><td>{item.stage}</td><td>{item.attemptNumber}</td><td>{item.status}</td><td>{duration(item.activeDurationMs)}</td><td>{item.error ?? "—"}</td></tr>)}
+                {summary.stageAttempts.map((item, index) => <tr key={`${item.stage}-${item.attemptNumber}-${index}`}><td>{item.stage}</td><td>{item.attemptNumber}</td><td>{item.reportingStatus ?? item.status}</td><td>{stageDurationLabel(item)}</td><td>{item.error ?? "—"}</td></tr>)}
                 {summary.stageAttempts.length === 0 && <tr><td colSpan={5}>尚未開始付費處理階段。</td></tr>}
               </tbody></table>
             </div>
@@ -205,11 +226,11 @@ export default function PerformancePage({ jobId }: { jobId: string }) {
           </section>
 
           <section className={styles.panel}>
-            <header><div><h2>Gemini 呼叫明細</h2><p>以術語呼叫及每個校正 window 為單位，不把共享上下文錯分到單一字幕段。</p></div></header>
+            <header><div><h2>AI 校正呼叫明細</h2><p>依實際 provider 顯示 MiniMax M3 或 Gemini / Vertex AI；Token Plan 不誤標成 Gemini API 費用。</p></div></header>
             <div className={styles.tableWrap}>
-              <table><thead><tr><th>呼叫</th><th>類型</th><th>字幕範圍</th><th>延遲</th><th>輸入 token</th><th>輸出 token</th><th>嘗試</th><th>費用</th></tr></thead><tbody>
-                {summary.geminiCalls.map((item) => <tr key={`${item.kind}-${item.callId}`}><td>{item.callId}</td><td>{item.kind}</td><td>{range(item.sourceStartMs, item.sourceEndMs)}</td><td>{duration(item.latencyMs)}</td><td>{item.inputTokens.toLocaleString()}</td><td>{item.outputTokens.toLocaleString()}</td><td>{item.attemptCount}</td><td>{formatTwd(item.estimatedCostTwd)}</td></tr>)}
-                {summary.geminiCalls.length === 0 && <tr><td colSpan={8}>尚無 Gemini 呼叫證據，或此任務未啟用校正。</td></tr>}
+              <table><thead><tr><th>Provider</th><th>模型</th><th>呼叫</th><th>類型</th><th>字幕範圍</th><th>延遲</th><th>輸入 token</th><th>輸出 token</th><th>嘗試</th><th>費用</th></tr></thead><tbody>
+                {providerCalls.map((item) => <tr key={`${item.provider ?? item.model}-${item.kind}-${item.callId}`}><td>{providerLabel(item)}</td><td>{item.model}</td><td>{item.callId}</td><td>{item.kind}</td><td>{range(item.sourceStartMs, item.sourceEndMs)}</td><td>{duration(item.latencyMs)}</td><td>{item.inputTokens.toLocaleString()}</td><td>{item.outputTokens.toLocaleString()}</td><td>{item.attemptCount}</td><td>{item.billingMode === "token_plan" ? "Token Plan" : formatTwd(item.estimatedCostTwd)}</td></tr>)}
+                {providerCalls.length === 0 && <tr><td colSpan={10}>尚無 AI 校正呼叫證據，或此任務未啟用校正。</td></tr>}
               </tbody></table>
             </div>
           </section>
