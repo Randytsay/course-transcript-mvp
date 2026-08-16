@@ -58,6 +58,11 @@ class CorrectionRuntime:
         self.gemini_corrector = gemini_corrector
         self.manifest_path = manifest_path
         self.context = context
+        # Routing state and manifest writes are serialized. Provider calls are
+        # intentionally *not* all serialized: M3 remains single-flight so one
+        # failure can atomically switch the rest of the job to Gemini, while
+        # Gemini calls run outside this lock and retain the outer correction
+        # pool's configured parallelism.
         self._lock = threading.RLock()
         self._switches: list[dict[str, Any]] = []
         self._counts = {
@@ -120,6 +125,16 @@ class CorrectionRuntime:
             )
             self._counts[provider] = self._counts.get(provider, 0) + 1
 
+    def _record_result(
+        self,
+        result: dict[str, dict[str, Any]],
+        provider: CorrectionProvider,
+    ) -> None:
+        """Update shared accounting without serializing the provider request."""
+        with self._lock:
+            self._count_result(result, provider)
+            self._write_manifest()
+
     def _switch_to_gemini(self, *, kind: ProviderFailureKind, segment_id: str) -> None:
         self.quota_client.invalidate()
         if self.active_provider is CorrectionProvider.GEMINI:
@@ -141,6 +156,10 @@ class CorrectionRuntime:
         items: list[dict[str, Any]],
         terms: list[dict[str, Any]],
     ) -> dict[str, dict[str, Any]]:
+        # M3 stays single-flight under the routing lock. This guarantees that a
+        # failed M3 request can perform the one-way switch before another window
+        # re-enters M3. Once Gemini is active we leave the lock before making the
+        # provider call, so ThreadPoolExecutor parallelism is preserved.
         with self._lock:
             if self.active_provider is CorrectionProvider.MINIMAX_M3:
                 try:
@@ -168,10 +187,10 @@ class CorrectionRuntime:
                         kind=exc.kind,
                         segment_id=str(items[0]["segment_id"]),
                     )
-            result = self.gemini_corrector(items, terms)
-            self._count_result(result, CorrectionProvider.GEMINI)
-            self._write_manifest()
-            return result
+
+        result = self.gemini_corrector(items, terms)
+        self._record_result(result, CorrectionProvider.GEMINI)
+        return result
 
 
 def _m3_terms_generator(client: MiniMaxCorrectionClient, *, context: str):
