@@ -1179,10 +1179,11 @@ class JobStore:
         with self.transaction() as connection:
             self._require_lease(connection, job_id, worker_id)
             row = connection.execute(
-                "SELECT batch_id FROM jobs WHERE id = ?", (job_id,)
+                "SELECT batch_id, require_human_review FROM jobs WHERE id = ?", (job_id,)
             ).fetchone()
             if row is None:
                 raise JobNotFound("Job not found")
+            review_required = bool(row["require_human_review"])
             detail = (
                 "本機輸出與 QA 已完成，已輸出至原始 Drive 資料夾；仍可審查詞彙"
                 if drive_published
@@ -1192,15 +1193,27 @@ class JobStore:
                     else "本機輸出與 QA 已完成，等待人工審查"
                 )
             )
+            if not review_required:
+                detail = (
+                    "本機輸出與 QA 已完成，已輸出至原始 Drive 資料夾"
+                    if drive_published
+                    else "本機輸出與 QA 已完成；Drive 回寫待重試"
+                    if drive_publication_error
+                    else "本機輸出與 QA 已完成"
+                )
             connection.execute(
                 """
                 UPDATE jobs
-                SET status = 'awaiting_review', active_stage = 'review',
-                    stage_detail = ?,
+                SET status = ?, active_stage = 'review', stage_detail = ?,
                     progress = 100, updated_at = ?, revision = revision + 1
                 WHERE id = ?
                 """,
-                (detail, now, job_id),
+                (
+                    "awaiting_review" if review_required else "completed",
+                    detail,
+                    now,
+                    job_id,
+                ),
             )
             self._clear_lease(connection, job_id, worker_id)
             self._event(

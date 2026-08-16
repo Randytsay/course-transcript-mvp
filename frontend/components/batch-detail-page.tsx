@@ -58,6 +58,16 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
     () => batch?.jobs.filter((job) => ["awaiting_confirmation", "failed", "queued"].includes(job.status)).length ?? 0,
     [batch],
   );
+  const failedCounts = useMemo(() => {
+    const jobs = batch?.jobs ?? [];
+    const preflight = jobs.filter((job) => job.status === "failed" && job.activeStage === "preflight").length;
+    const download = jobs.filter((job) => job.status === "failed" && ["download", "normalize"].includes(job.activeStage ?? "")).length;
+    return {
+      preflight,
+      download,
+      other: Math.max(0, (batch?.failedCount ?? 0) - preflight - download),
+    };
+  }, [batch]);
 
   async function approve() {
     if (!batch?.estimatedCostUsd) return;
@@ -123,7 +133,9 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
                 </>
               )}
               {batch.status === "queued" && <p className="approval-success"><CheckCircle2 size={17} />費用已確認，檔案正在依序等待 Worker。</p>}
-              {batch.failedCount > 0 && <p className="approval-warning"><TriangleAlert size={17} />有 {batch.failedCount} 個檔案未通過本機媒體檢查，不會產生辨識費用。</p>}
+              {failedCounts.preflight > 0 && <p className="approval-warning"><TriangleAlert size={17} />有 {failedCounts.preflight} 個檔案未通過本機媒體檢查，不會產生辨識費用。</p>}
+              {failedCounts.download > 0 && <p className="approval-warning"><TriangleAlert size={17} />有 {failedCounts.download} 個檔案在來源下載或前處理階段失敗，尚未進入付費辨識，不會產生辨識費用。</p>}
+              {failedCounts.other > 0 && <p className="approval-warning"><TriangleAlert size={17} />有 {failedCounts.other} 個檔案在後續處理階段失敗，請查看檔案明細與實際成本紀錄。</p>}
               <small>程式預算以台幣估算；Cloud Billing 才是實際帳務依據。</small>
             </aside>
           </section>

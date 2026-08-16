@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 from typing import Literal
 
+from app.jobs.rclone_auth import rclone_environment
+
 
 MEDIA_EXTENSIONS = frozenset(
     {
@@ -169,6 +171,7 @@ def _run_lsjson(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=rclone_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SourceInspectionError("無法在期限內檢查 Drive 來源") from exc
@@ -417,6 +420,7 @@ def inspect_rclone_source(source_path: str) -> SourceMetadata:
             capture_output=True,
             text=True,
             timeout=30,
+            env=rclone_environment(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SourceInspectionError("無法在期限內檢查 Drive 來源") from exc

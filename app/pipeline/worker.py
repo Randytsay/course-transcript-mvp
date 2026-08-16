@@ -22,6 +22,7 @@ from typing import Any
 from app.jobs.costs import CostConfig, estimate_job_cost
 from app.jobs.artifacts import cleanup_completed_audio
 from app.jobs.drive_publish import DrivePublishError, publish_outputs, source_parent_destination
+from app.jobs.rclone_auth import rclone_environment
 from app.jobs.store import JobConflict, JobStore
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 
@@ -91,12 +92,17 @@ def _run_with_heartbeat(
     timeout_seconds: int,
     env: dict[str, str] | None = None,
 ) -> str:
+    process_env = env
+    if command and command[0] == "rclone":
+        process_env = rclone_environment()
+        if env:
+            process_env.update(env)
     process = subprocess.Popen(
         command,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        env=env,
+        env=process_env,
     )
     started = time.monotonic()
     last_heartbeat = started
@@ -589,6 +595,8 @@ def _auto_publish_to_source(
     worker_id: str,
 ) -> dict[str, Any] | None:
     """Publish only derived, user-selected files after all local QA succeeds."""
+    if bool(record.get("require_human_review")):
+        return None
     if os.environ.get("COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE", "").lower() not in {
         "1", "true", "yes"
     }:
@@ -785,7 +793,11 @@ def run_paid_job(
             publication_error = _safe_error(str(exc))
         processing_manifest = {
                 "job_id": leased["id"],
-                "status": "AWAITING_HUMAN_REVIEW",
+                "status": (
+                    "AWAITING_HUMAN_REVIEW"
+                    if bool(leased.get("require_human_review"))
+                    else "COMPLETED"
+                ),
                 "chirp_model": "chirp_3",
                 "correction_model": (
                     "gemini-3.7-flash"
