@@ -8,6 +8,8 @@ Implemented:
 - M3-first uses MiniMax terminology extraction instead of an empty glossary, with safe empty-glossary fallback and audit evidence;
 - actual correction routing is normalized from `correction-routing.json` and written to pipeline manifests instead of hard-coded Gemini-only metadata;
 - a deterministic, provider-independent `terminology-consistency.json` report is generated without modifying text, segments, or timestamps;
+- the explicit `gemini-3.7-flash` safe-baseline marker remains in the production worker so model-drift regression guards continue to work;
+- the fake-provider test path also emits terminology consistency evidence so isolated pipeline tests keep the same artifact contract;
 - focused regression coverage is added for the above behaviors.
 
 Production defaults remain:
