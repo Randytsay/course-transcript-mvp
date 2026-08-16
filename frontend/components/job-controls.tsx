@@ -195,7 +195,8 @@ export default function JobControls({ jobId }: { jobId: string }) {
   }
 
   return (
-    <div className={styles.wrapper} aria-live="polite">
+    <>
+      <div className={styles.wrapper} aria-live="polite">
       <div className={styles.statusCopy}>
         <div>
           <strong>任務控制</strong>
@@ -261,6 +262,8 @@ export default function JobControls({ jobId }: { jobId: string }) {
         {job.status === "cancelled" && <span className={styles.cancelled}>任務已取消</span>}
       </div>
 
+      </div>
+
       {dialogOpen && (
         <div className={styles.scrim} role="presentation">
           <div className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="cancel-title">
@@ -285,6 +288,6 @@ export default function JobControls({ jobId }: { jobId: string }) {
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }
