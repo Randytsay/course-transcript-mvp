@@ -25,7 +25,10 @@ class ProductionHealthTests(unittest.TestCase):
                 active_stage TEXT,
                 stage_detail TEXT,
                 error TEXT,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                lease_expires_at TEXT,
+                last_heartbeat_at TEXT,
+                locked_by TEXT
             )
             """
         )
@@ -48,7 +51,7 @@ class ProductionHealthTests(unittest.TestCase):
     ) -> None:
         connection = sqlite3.connect(self.database)
         connection.execute(
-            "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO jobs (id, status, active_stage, stage_detail, error, updated_at, lease_expires_at, last_heartbeat_at, locked_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 job_id,
                 status,
@@ -56,6 +59,9 @@ class ProductionHealthTests(unittest.TestCase):
                 detail,
                 error,
                 (self.now - timedelta(hours=age_hours)).isoformat(),
+                None,
+                None,
+                None,
             ),
         )
         connection.commit()
@@ -97,6 +103,27 @@ class ProductionHealthTests(unittest.TestCase):
         report = build_report(self.data_dir, now=self.now)
         self.assertEqual(report["status"], "critical")
         self.assertEqual(report["findings"][0]["code"], "dynamic_batch_sla_breach")
+
+    def test_awaiting_confirmation_does_not_require_worker_heartbeat(self) -> None:
+        self.insert_job(
+            "approval",
+            status="awaiting_confirmation",
+            active_stage="cost_confirmation",
+            age_hours=30,
+        )
+        connection = sqlite3.connect(self.database)
+        connection.execute(
+            "UPDATE jobs SET last_heartbeat_at = ? WHERE id = 'approval'",
+            ((self.now - timedelta(hours=30)).isoformat(),),
+        )
+        connection.commit()
+        connection.close()
+
+        report = build_report(self.data_dir, now=self.now)
+
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["counts"]["active"], 1)
+        self.assertEqual(report["counts"]["stale_heartbeats"], 0)
 
     def test_machine_strategy_works_without_chinese_stage_detail(self) -> None:
         self.insert_job(
