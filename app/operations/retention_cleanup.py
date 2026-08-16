@@ -14,6 +14,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from app.jobs.rclone_auth import rclone_environment
+
 
 def _read(path: Path) -> dict[str, Any] | None:
     try:
@@ -112,7 +114,14 @@ def build_report(data_dir: Path, *, now: datetime | None = None, gcs_days: int =
             report["drive_backups"]["candidates"].append(entry)
             if apply:
                 try:
-                    subprocess.run(["rclone", "deletefile", remote], check=True, capture_output=True, text=True, timeout=120)
+                    subprocess.run(
+                        ["rclone", "deletefile", remote],
+                        check=True,
+                        capture_output=True,
+                        text=True,
+                        timeout=120,
+                        env=rclone_environment(),
+                    )
                     report["drive_backups"]["deleted"].append(remote)
                 except Exception as exc:  # pragma: no cover - host-specific
                     report["drive_backups"]["errors"].append({"path": remote, "error": type(exc).__name__})

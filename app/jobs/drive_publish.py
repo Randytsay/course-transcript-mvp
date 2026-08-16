@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from .exports import production_output_formats
+from .rclone_auth import rclone_environment
 
 RETRY_DELAYS_SECONDS = (30.0, 60.0, 120.0)
 MINIMUM_DRIVE_REQUEST_INTERVAL_SECONDS = 1.0
@@ -141,7 +142,13 @@ def _is_not_found(result: subprocess.CompletedProcess[str]) -> bool:
 
 
 def _run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, text=True, capture_output=True, check=False)
+    return subprocess.run(
+        command,
+        text=True,
+        capture_output=True,
+        check=False,
+        env=rclone_environment(),
+    )
 
 
 def _remote_size(
