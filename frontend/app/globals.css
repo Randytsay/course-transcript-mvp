@@ -321,6 +321,10 @@ kbd { padding: 2px 6px; border: 1px solid var(--border); border-bottom-width: 2p
 .model-route-card__copy p { margin: 6px 0 7px; color: var(--text-soft); font-size: 9px; line-height: 1.5; }
 .model-route-card__status { display: flex; align-items: flex-start; gap: 5px; color: var(--text-muted); font-size: 8px; line-height: 1.45; }
 .model-route-card__status svg { flex: 0 0 auto; color: var(--brand); }
+.model-route-card__control { display: flex; align-items: center; gap: 10px; }
+.model-route-card__control-label { min-width: 104px; display: grid; gap: 3px; text-align: right; }
+.model-route-card__control-label strong { color: var(--text); font-size: 9px; line-height: 1.3; }
+.model-route-card__control-label small { color: var(--text-muted); font-size: 8px; line-height: 1.3; }
 .model-toggle { width: 52px; height: 30px; padding: 3px; border: 0; border-radius: 999px; display: flex; align-items: center; flex: 0 0 auto; cursor: pointer; background: #cbd5e1; transition: .18s ease; }
 .model-toggle:focus-visible { outline: 3px solid rgba(99,102,241,.28); outline-offset: 3px; }
 .model-toggle:disabled { cursor: not-allowed; opacity: .55; }
@@ -451,6 +455,8 @@ kbd { padding: 2px 6px; border: 1px solid var(--border); border-bottom-width: 2p
   .model-route-card { grid-template-columns: 36px minmax(0, 1fr) auto; gap: 10px; padding: 14px; }
   .model-route-card__icon { width: 36px; height: 36px; border-radius: 10px; }
   .model-route-card__heading strong { font-size: 11px; }
+  .model-route-card__control { gap: 7px; }
+  .model-route-card__control-label { min-width: 0; }
   .model-route-card__copy p, .model-route-card__status, .model-route-note { font-size: 9px; }
   .drive-browser__header, .drive-entry { grid-template-columns: 40px minmax(140px, 1fr) 70px; }
   .drive-browser__header span:nth-child(4), .drive-entry > span:nth-child(4) { display: none; }

@@ -342,21 +342,27 @@ export default function NewJobPageDriveApi() {
                 <p>{correctionPolicy === "M3_FIRST" ? `${m3Model} 先處理；quota、回應格式或服務異常時，本批次只會轉到 Gemini 3.7。` : "全程優先使用 Google Vertex AI Gemini 3.7 Flash。"}</p>
                 <small className="model-route-card__status"><Zap size={14} />{describeM3Status()}</small>
               </div>
-              <button
-                type="button"
-                role="switch"
-                aria-checked={correctionPolicy === "M3_FIRST"}
-                aria-label={`切換 ${m3Model} 人工抽查模式`}
-                className={`model-toggle ${correctionPolicy === "M3_FIRST" ? "model-toggle--on" : ""}`}
-                disabled={!m3StatusLoaded || !m3SelectionAvailable}
-                onClick={() => setM3Selection(correctionPolicy !== "M3_FIRST")}
-                title={!m3StatusLoaded ? "正在確認 MiniMax M3 狀態" : !m3SelectionAvailable ? describeM3Status() : undefined}
-              >
-                <span className="model-toggle__thumb" />
-                <span className="sr-only">{correctionPolicy === "M3_FIRST" ? "已開啟" : "未開啟"}</span>
-              </button>
+              <div className="model-route-card__control">
+                <span className="model-route-card__control-label">
+                  <strong>{correctionPolicy === "M3_FIRST" ? `目前：${m3Model}` : `可切換：${m3Model}`}</strong>
+                  <small>{m3SelectionAvailable ? "只套用本批次" : "目前不可用"}</small>
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={correctionPolicy === "M3_FIRST"}
+                  aria-label={`切換 ${m3Model} 人工抽查模式`}
+                  className={`model-toggle ${correctionPolicy === "M3_FIRST" ? "model-toggle--on" : ""}`}
+                  disabled={!m3StatusLoaded || !m3SelectionAvailable}
+                  onClick={() => setM3Selection(correctionPolicy !== "M3_FIRST")}
+                  title={!m3StatusLoaded ? "正在確認 MiniMax M3 狀態" : !m3SelectionAvailable ? describeM3Status() : undefined}
+                >
+                  <span className="model-toggle__thumb" />
+                  <span className="sr-only">{correctionPolicy === "M3_FIRST" ? "已開啟" : "未開啟"}</span>
+                </button>
+              </div>
             </div>
-            <div className="model-route-note"><ShieldCheck size={15} /><span>關閉開關就是 Gemini 3.7；開啟只影響這一批任務，建立後會把實際請求路由與 fallback 記錄在任務稽核檔。</span></div>
+            <div className="model-route-note"><ShieldCheck size={15} /><span>開關可選 MiniMax M3 人工抽查模式；關閉就是 Gemini 3.7。設定只影響這一批任務，建立後會把實際請求路由與 fallback 記錄在任務稽核檔。</span></div>
           </div>
 
           <div className="form-section">
