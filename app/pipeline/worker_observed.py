@@ -134,7 +134,18 @@ def _begin(
     data_dir = _CURRENT_DATA_DIR.get(
         record["id"], Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
     )
-    record_stage_started(_database_path(data_dir), record["id"], stage)
+    database_path = _database_path(data_dir)
+    # A worker restart can leave the prior attempt in `running` forever. Before
+    # opening a newer attempt for the same stage, durably close that orphan so
+    # future reports cannot extend it all the way to the job's final timestamp.
+    record_stage_stopped(
+        database_path,
+        record["id"],
+        stage,
+        status="superseded",
+        error="Superseded by a newer attempt for the same stage",
+    )
+    record_stage_started(database_path, record["id"], stage)
 
 
 def _complete(
