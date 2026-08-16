@@ -33,6 +33,10 @@ install_completion_patch(JobStore)
 install_artifact_patch(base)
 observed.build_performance_summary = enhanced_performance_summary
 
+# Explicit safe baseline marker used by configuration drift guards; actual per-job
+# routing is recorded separately from correction-routing.json.
+GEMINI_CORRECTION_BASELINE_MODEL = "gemini-3.7-flash"
+
 _ORIGINAL_MODULE_ENV = base._module_env
 _ACTIVE_RESUMABLE = (
     "downloading",
