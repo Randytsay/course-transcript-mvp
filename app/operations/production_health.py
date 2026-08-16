@@ -254,11 +254,15 @@ def build_report(
             if lease and lease < now:
                 counts["expired_leases"] += 1
                 findings.append(Finding("critical", "expired_lease", "工作 lease 已過期，可能造成任務卡住或重複處理。", job_id, round((now - lease).total_seconds() / 3600, 2)))
-            heartbeat = _parse_time(row["last_heartbeat_at"])
-            max_hours = _env_float("HEALTH_HEARTBEAT_MAX_HOURS", 1)
-            if heartbeat and (now - heartbeat).total_seconds() / 3600 > max_hours:
-                counts["stale_heartbeats"] += 1
-                findings.append(Finding("critical", "stale_heartbeat", f"Worker heartbeat 超過 {max_hours:g} 小時未更新。", job_id, round((now - heartbeat).total_seconds() / 3600, 2)))
+            # Awaiting confirmation is a human approval boundary, not a worker
+            # execution stage. Its preflight heartbeat is expected to become
+            # stale while the operator decides whether to reserve cost.
+            if row["status"] != "awaiting_confirmation":
+                heartbeat = _parse_time(row["last_heartbeat_at"])
+                max_hours = _env_float("HEALTH_HEARTBEAT_MAX_HOURS", 1)
+                if heartbeat and (now - heartbeat).total_seconds() / 3600 > max_hours:
+                    counts["stale_heartbeats"] += 1
+                    findings.append(Finding("critical", "stale_heartbeat", f"Worker heartbeat 超過 {max_hours:g} 小時未更新。", job_id, round((now - heartbeat).total_seconds() / 3600, 2)))
         if row["status"] == "failed":
             counts["failed"] += 1
             age_hours = _hours_since(row["updated_at"], now=now)
