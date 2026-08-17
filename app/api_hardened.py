@@ -6,6 +6,7 @@ from typing import Any
 
 from app.api_observed import app
 from app.drive_api_routes import router as drive_api_router
+from app.review.auth import router as review_auth_router
 from app.subtitles.editor_hardened import import_srt
 from app.subtitles.publish_status import get_publish_status
 from app.subtitles.review_publish import publish_reviewed
@@ -135,6 +136,9 @@ app.post("/api/v1/subtitles/import", status_code=201)(import_srt)
 app.post(_PUBLISH_PATH)(publish_reviewed)
 app.get(_PUBLISH_STATUS_PATH)(get_publish_status)
 app.include_router(drive_api_router)
+# Reviewer auth is deliberately independent from the Cloudflare Access operator
+# identity. Edge policy must allow these paths on the reviewer-facing origin.
+app.include_router(review_auth_router)
 app.openapi_schema = None
 _assert_publish_route()
 _assert_publish_status_route()
