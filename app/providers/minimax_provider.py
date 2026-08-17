@@ -262,7 +262,7 @@ class MiniMaxCorrectionClient:
             "source_segments": source,
             "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             "raw_response": (
-                response
+                _redact_text(response)
                 if isinstance(response, str)
                 else json.dumps(_redact(response), ensure_ascii=False)
                 if response is not None
@@ -456,7 +456,7 @@ class MiniMaxCorrectionClient:
         merged: dict[str, dict[str, Any]] = {}
         raw_responses: list[str] = []
         all_attempts: list[dict[str, Any]] = []
-        input_tokens = output_tokens = total_tokens = latency_ms = 0
+        input_tokens = output_tokens = reasoning_tokens = total_tokens = latency_ms = 0
 
         for offset in range(0, len(raw_segments), chunk_size):
             items = [
@@ -479,6 +479,7 @@ class MiniMaxCorrectionClient:
                 latency_ms += sum(int(attempt.get("latency_ms") or 0) for attempt in completion.attempts)
                 input_tokens += int(completion.usage.get("input_tokens") or 0)
                 output_tokens += int(completion.usage.get("output_tokens") or 0)
+                reasoning_tokens += int(completion.usage.get("reasoning_tokens") or 0)
                 total_tokens += int(completion.usage.get("total_tokens") or 0)
                 try:
                     payload = json.loads(_as_json_text(completion.content))
@@ -553,6 +554,7 @@ class MiniMaxCorrectionClient:
             "usage_metadata": {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "reasoning_tokens": reasoning_tokens,
                 "total_tokens": total_tokens,
                 "request_count": len(raw_responses),
                 "billing_mode": "token_plan",

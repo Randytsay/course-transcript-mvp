@@ -125,6 +125,58 @@ class MiniMaxProviderTests(unittest.TestCase):
             result = client.correct_window(ITEMS, [])
             self.assertEqual(result["s1"]["corrected_text"], "這是一段課程內容。")
 
+    def test_terminology_aggregates_reasoning_tokens(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "key"
+            key.write_text("test-secret", encoding="utf-8")
+
+            def http_post(url: str, headers: object, body: bytes, timeout: float) -> tuple[int, dict[str, str], bytes]:
+                payload = {
+                    "choices": [{
+                        "message": {
+                            "content": json.dumps({
+                                "terms": [{
+                                    "canonical": "MiniMax",
+                                    "variants": ["minimax"],
+                                    "confidence": "high",
+                                }]
+                            })
+                        }
+                    }],
+                    "usage": {
+                        "prompt_tokens": 20,
+                        "completion_tokens": 9,
+                        "completion_tokens_details": {"reasoning_tokens": 6},
+                    },
+                }
+                return 200, {}, json.dumps(payload).encode()
+
+            client = MiniMaxCorrectionClient(key_file=key, http_post=http_post, sleeper=lambda _: None)
+            result = client.extract_terms(ITEMS)
+            self.assertEqual(result["usage_metadata"]["reasoning_tokens"], 6)
+
+    def test_string_raw_provider_error_is_redacted_in_audit(self) -> None:
+        calls = 0
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "key"
+            key.write_text("test-secret", encoding="utf-8")
+            audit = Path(directory) / "audit"
+
+            def http_post(url: str, headers: object, body: bytes, timeout: float) -> tuple[int, dict[str, str], bytes]:
+                nonlocal calls
+                calls += 1
+                raise HTTPError(url, 500, "Server Error", {}, io.BytesIO(b"bearer sk-super-secret upstream unavailable"))
+
+            client = MiniMaxCorrectionClient(
+                key_file=key, http_post=http_post, sleeper=lambda _: None, audit_dir=audit
+            )
+            with self.assertRaises(MiniMaxProviderError):
+                client.correct_window(ITEMS, [])
+            self.assertEqual(calls, 3)
+            record = json.loads(next(audit.glob("*.json")).read_text(encoding="utf-8"))
+            self.assertNotIn("sk-super-secret", json.dumps(record))
+            self.assertIn("[REDACTED]", record["raw_response"])
+
     def test_content_guard_falls_back_to_raw(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             key = Path(directory) / "key"
