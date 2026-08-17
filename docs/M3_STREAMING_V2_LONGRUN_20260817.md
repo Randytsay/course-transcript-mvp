@@ -13,8 +13,8 @@ PRODUCTION_CUTOVER_COMPLETED=NO
 ```
 
 The code-side checks passed, but the live long-course gate did not meet the
-required 95% native M3 threshold. Production therefore remains on the safe
-Gemini-first baseline with M3 and M3 streaming disabled.
+required 95% native M3 route-coverage threshold. Production therefore remains
+on the safe Gemini-first baseline with M3 and M3 streaming disabled.
 
 ## Reproducibility and isolation
 
@@ -67,7 +67,7 @@ All runs used the required source job IDs, source hashes, segmentation windows,
 and the PR #50 adapter. Latencies below are for accepted native M3 windows
 only.
 
-| Course | Windows | Native M3 | Native rate | Final safe completion | Usage accepted | P50/P95/max | Result |
+| Course | Windows | Native M3 accepted | Route coverage | Final safe completion | Usage accepted | P50/P95/max | Result |
 |---|---:|---:|---:|---:|---:|---:|---|
 | `260801-1934-20260801-205446-9e6ecc` | 205 | 205 | 100.00% | 205/205 | 205/205 | 5050 / 10692 / 44346 ms | pass |
 | `09-20260510-20260808-154719-24752c` | 154 | 15 | 9.74% | 154/154* | 15/15 | 5198 / 19936 / 19936 ms | **fail** |
@@ -78,6 +78,35 @@ only.
 raw fallback stub. It proves bounded one-way completion and invariant safety;
 it does **not** claim that Gemini was called. Actual Gemini calls during this
 long run: `0`.
+
+### Metric interpretation correction
+
+The `414/553 = 74.86%` figure above is **M3 route coverage under the required
+one-way source fallback policy**, not an independent per-request MiniMax
+success rate. Course B stopped attempting M3 immediately after its first failed
+window, so the remaining 139 Course-B windows were never sent to MiniMax.
+
+Observed M3 request-level evidence from this run is therefore:
+
+```text
+course_a_m3_attempted=205
+course_a_m3_accepted=205
+course_b_m3_attempted=16
+course_b_m3_accepted=15
+course_c_m3_attempted=194
+course_c_m3_accepted=194
+aggregate_m3_attempted=415
+aggregate_m3_accepted=414
+aggregate_observed_attempt_acceptance=414/415=99.76%
+course_b_observed_attempt_acceptance=15/16=93.75%
+aggregate_route_coverage=414/553=74.86%
+```
+
+This distinction does **not** change the gate decision: the validated routing
+contract intentionally switches the rest of a source away from M3 after a
+non-retryable failure, so Course B still fails the production-readiness route
+coverage requirement. It does prevent the 74.86% figure from being misread as
+139 additional MiniMax request failures.
 
 ### Course B failure detail
 
@@ -103,6 +132,13 @@ fallback rows' inherited metadata as additional M3 failures. There were no
 authentication, quota, deadline, output-limit, timestamp, or segment-ID
 invariant failures. Content-guard rejections were 0 for this course; the 2950
 raw fallback segments are reported separately.
+
+The original PR #50 code under test only retained the HTTP 422 wrapper status
+for this failure. A subsequent reviewer diagnostic patch on the same Draft PR
+adds safe MiniMax provider-error-code, trace-ID, and error-fingerprint evidence
+so the next exact-window reproduction can distinguish retryable provider/system
+errors from permanent parameter/content/token-plan failures without retaining
+transcript, prompt, or response-body text.
 
 ## Production safety recheck
 
@@ -138,7 +174,8 @@ sanitized for review and is not a production transcript export.
 ## Required next gate
 
 Do not mark PR #50 ready, merge it, or create a production cutover PR from this
-run. The next run must first reproduce and explain the HTTP 422 at `seg-0338`,
-then rerun the exact 11-window and three-course gates. Production flags should
-remain unchanged until every course and the aggregate reach at least 95% native
-M3 validity with accepted usage and stop finish reasons.
+run. The next run must first reproduce and explain the HTTP 422 at `seg-0338`
+using the diagnostic-capable current PR head, then rerun the exact 11-window and
+three-course gates. Production flags should remain unchanged until every course
+and the aggregate reach at least 95% M3 route coverage with accepted usage and
+stop finish reasons.
