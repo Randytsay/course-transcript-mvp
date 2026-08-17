@@ -125,27 +125,33 @@ def _streaming_child(
             raw = exc.read()
         except OSError:
             raw = b""
-        connection.send(
-            {
-                "ok": False,
-                "status_code": int(exc.code),
-                "latency_ms": round((time.monotonic() - started) * 1000),
-                "first_event_ms": first_event_ms,
-                "error_type": "http_error",
-                "error_payload": _safe_error_body(raw),
-            }
-        )
+        try:
+            connection.send(
+                {
+                    "ok": False,
+                    "status_code": int(exc.code),
+                    "latency_ms": round((time.monotonic() - started) * 1000),
+                    "first_event_ms": first_event_ms,
+                    "error_type": "http_error",
+                    "error_payload": _safe_error_body(raw),
+                }
+            )
+        except (BrokenPipeError, EOFError, OSError):
+            pass
     except (URLError, TimeoutError, OSError, UnicodeError, ValueError) as exc:
-        connection.send(
-            {
-                "ok": False,
-                "status_code": None,
-                "latency_ms": round((time.monotonic() - started) * 1000),
-                "first_event_ms": first_event_ms,
-                "error_type": type(exc).__name__,
-                "error_payload": str(exc)[-500:],
-            }
-        )
+        try:
+            connection.send(
+                {
+                    "ok": False,
+                    "status_code": None,
+                    "latency_ms": round((time.monotonic() - started) * 1000),
+                    "first_event_ms": first_event_ms,
+                    "error_type": type(exc).__name__,
+                    "error_payload": str(exc)[-500:],
+                }
+            )
+        except (BrokenPipeError, EOFError, OSError):
+            pass
     finally:
         connection.close()
 
@@ -161,18 +167,27 @@ def run_strict_stream(
 ) -> dict[str, Any]:
     """Run one SSE request with a true parent-enforced wall-clock deadline."""
     deadline_seconds = max(1.0, float(deadline_seconds))
-    # The parent is authoritative. Keep the child's socket timeout slightly beyond
-    # the total deadline so a socket-idle timeout cannot masquerade as the deadline.
     socket_timeout = deadline_seconds + 5.0
-    context = mp.get_context(start_method)
-    parent, child = context.Pipe(duplex=False)
-    process = context.Process(
-        target=worker,
-        args=(child, url, dict(headers), body, socket_timeout),
-        daemon=True,
-    )
-    started = time.monotonic()
-    process.start()
+    try:
+        context = mp.get_context(start_method)
+        parent, child = context.Pipe(duplex=False)
+        process = context.Process(
+            target=worker,
+            args=(child, url, dict(headers), body, socket_timeout),
+            daemon=True,
+        )
+        started = time.monotonic()
+        process.start()
+    except (OSError, RuntimeError, ValueError) as exc:
+        return {
+            "ok": False,
+            "status_code": None,
+            "deadline_exceeded": False,
+            "latency_ms": 0,
+            "error_type": "process_start_failure",
+            "error_payload": str(exc)[-500:],
+        }
+
     child.close()
     result: dict[str, Any] | None = None
     try:
@@ -182,7 +197,10 @@ def run_strict_stream(
             if remaining <= 0:
                 break
             if parent.poll(min(0.1, remaining)):
-                received = parent.recv()
+                try:
+                    received = parent.recv()
+                except EOFError:
+                    received = {"ok": False, "error_type": "child_pipe_eof"}
                 if isinstance(received, Mapping):
                     result = dict(received)
                 else:
@@ -191,16 +209,16 @@ def run_strict_stream(
             if not process.is_alive():
                 break
         if result is None:
+            deadline_exceeded = time.monotonic() >= absolute_deadline
             if process.is_alive():
                 process.terminate()
             process.join(timeout=1.0)
             return {
                 "ok": False,
                 "status_code": None,
-                "deadline_exceeded": True,
+                "deadline_exceeded": deadline_exceeded,
                 "latency_ms": round((time.monotonic() - started) * 1000),
-                "error_type": "wall_clock_deadline",
-                # Deliberately no content/usage fields: partial child output is discarded.
+                "error_type": "wall_clock_deadline" if deadline_exceeded else "child_exit_without_result",
             }
         process.join(timeout=1.0)
         result.setdefault("deadline_exceeded", False)
