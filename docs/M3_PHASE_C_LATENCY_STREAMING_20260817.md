@@ -1,8 +1,8 @@
 # MiniMax M3 Phase C — latency and streaming reliability
 
-Date: 2026-08-17  
-Repository baseline: `dee0d083befc7ac4ca694808f2b5d9970fc655e0`  
-Source: existing immutable Chirp job `260815-20260816-152635-39ffbc`  
+Date: 2026-08-17
+Repository baseline: `dee0d083befc7ac4ca694808f2b5d9970fc655e0`
+Source: existing immutable Chirp job `260815-20260816-152635-39ffbc`
 Scope: provider correction diagnostics only; no Chirp rerun, Drive mutation, or production transcript overwrite.
 
 This report is sanitized. It contains no transcript text, credentials, authorization headers, or private source names. Detailed evidence is retained on the VPS under `/opt/course-transcript-source/data/m3-validation/`.
