@@ -16,6 +16,7 @@ It remains stacked on M1; caption publishing back to YouTube is still deferred.
   -> optionally acquire an edit seat
   -> submit or revise subtitle suggestions
   -> progress persists independently of edit-seat ownership
+  -> /review/contributions shows immediate contribution credit
 ```
 
 Watching never consumes an edit seat. A reviewer must explicitly select
@@ -48,6 +49,8 @@ Read routes:
 
 - `GET /api/v1/review/videos`
 - `GET /api/v1/review/videos/{youtube_video_id}`
+- `GET /api/v1/review/contributions`
+- `GET /api/v1/review/contributions/me`
 
 Mutation routes:
 
@@ -102,6 +105,22 @@ contribution accounting contract.
 
 M2 still does **not** change `working_text` directly. Owner approval remains a
 later milestone.
+
+## Contribution board
+
+The reviewer can open `/review/contributions` from the video library.
+
+The page shows:
+
+- suggestions submitted;
+- changed-character count;
+- videos contributed to;
+- completed review count;
+- per-video contribution detail;
+- a shared leaderboard with the current reviewer highlighted.
+
+The leaderboard is a read-only projection of M0 accounting. It never changes
+approval state or working subtitles.
 
 ## Owner-only YouTube import
 
@@ -195,6 +214,13 @@ use a versioned reconciliation flow.
 - configured-language/manual-track selection;
 - malformed SRT rejection without partial rows.
 
+`tests/test_review_contributions.py` covers:
+
+- current reviewer highlighting in the leaderboard;
+- immediate suggestion/changed-character accounting;
+- completed-review totals;
+- per-video contribution detail.
+
 The existing M0/M1 tests remain part of the full repository suite.
 
 ## Still deferred
@@ -203,5 +229,5 @@ Real provider smoke requires a channel-owner refresh token authorized for the
 YouTube caption scope and the production playlist ID. Repository CI uses mocks
 and never calls YouTube.
 
-Versioned owner approval, batch replacement, contribution-board UI, and YouTube
-caption publish/rollback remain later milestones.
+Versioned owner approval, batch replacement, and YouTube caption publish/rollback
+remain later milestones.
