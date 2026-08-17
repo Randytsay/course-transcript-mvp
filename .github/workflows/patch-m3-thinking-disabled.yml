@@ -1,0 +1,38 @@
+name: Patch M3 thinking-disabled hardening
+
+on:
+  push:
+    branches:
+      - agent/m3-disable-thinking-hardening
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: agent/m3-disable-thinking-hardening
+          fetch-depth: 0
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Apply M3 hardening
+        run: python scripts/patch_m3_thinking_disabled.py
+      - name: Install Python dependencies
+        run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Focused regression tests
+        run: |
+          python -m unittest tests.test_minimax_provider tests.test_correction_routing tests.test_correction_runtime tests.test_performance_enhanced_regressions -v
+          python -m compileall -q app tests
+          git diff --check
+      - name: Commit M3 hardening
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .env.example app/providers/correction_routing.py app/providers/minimax_provider.py app/providers/correction_runtime.py app/jobs/performance_enhanced.py tests/test_minimax_provider.py tests/test_correction_routing.py tests/test_correction_runtime.py tests/test_performance_enhanced_regressions.py
+          git commit -m "fix: disable M3 thinking for deterministic correction"
+          git push origin HEAD:agent/m3-disable-thinking-hardening
