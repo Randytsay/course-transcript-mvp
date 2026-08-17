@@ -1,6 +1,7 @@
 """Cloudflare-Access protected owner workflow for subtitle review decisions."""
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -80,6 +81,49 @@ def _handle_admin_error(exc: Exception) -> HTTPException:
     return HTTPException(status_code=500, detail="Review admin operation failed")
 
 
+def _version_summary(version: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in version.items()
+        if key not in {"snapshot_json", "srt_text", "youtube_response_json"}
+    }
+
+
+def _decorate_suggestions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+    ids = [str(item["id"]) for item in rows]
+    placeholders = ",".join("?" for _ in ids)
+    with _store().connect() as connection:
+        audit_rows = connection.execute(
+            f"""
+            SELECT entity_id, actor, action, payload_json, created_at
+            FROM review_admin_audit
+            WHERE entity_type = 'suggestion'
+              AND action IN ('suggestion_approved', 'suggestion_rejected')
+              AND entity_id IN ({placeholders})
+            ORDER BY id DESC
+            """,
+            tuple(ids),
+        ).fetchall()
+    latest: dict[str, dict[str, Any]] = {}
+    for audit in audit_rows:
+        entity_id = str(audit["entity_id"])
+        if entity_id in latest:
+            continue
+        try:
+            payload = json.loads(audit["payload_json"] or "{}")
+        except json.JSONDecodeError:
+            payload = {}
+        latest[entity_id] = {
+            "reviewed_by_actor": audit["actor"],
+            "review_action": audit["action"],
+            "review_payload": payload,
+            "review_audit_at": audit["created_at"],
+        }
+    return [{**item, **latest.get(str(item["id"]), {})} for item in rows]
+
+
 @router.get("/overview")
 def overview(request: Request) -> dict[str, Any]:
     _admin_read_actor(request)
@@ -101,7 +145,9 @@ def overview(request: Request) -> dict[str, Any]:
                 if item["publish_status"] == "published"
             }
         ),
-        "latest_versions": list(latest_by_video.values())[:100],
+        "latest_versions": [
+            _version_summary(item) for item in list(latest_by_video.values())[:100]
+        ],
     }
 
 
@@ -120,7 +166,7 @@ def suggestions(
         )
     except (ValueError, ReviewNotFound, ReviewConflict) as exc:
         raise _handle_admin_error(exc) from exc
-    return {"suggestions": rows}
+    return {"suggestions": _decorate_suggestions(rows)}
 
 
 @router.post("/suggestions/{suggestion_id}/approve")
@@ -132,9 +178,13 @@ def approve_suggestion(
     _confirmed(payload.confirm)
     actor = _admin_mutation_actor(request)
     try:
-        return _store().approve_suggestion(suggestion_id=suggestion_id, actor=actor)
+        result = _store().approve_suggestion(suggestion_id=suggestion_id, actor=actor)
     except (ValueError, ReviewNotFound, ReviewConflict) as exc:
         raise _handle_admin_error(exc) from exc
+    return {
+        "suggestion": result["suggestion"],
+        "version": _version_summary(result["version"]),
+    }
 
 
 @router.post("/suggestions/{suggestion_id}/reject")
@@ -187,13 +237,17 @@ def apply_batch(
     _confirmed(payload.confirm)
     actor = _admin_mutation_actor(request)
     try:
-        return _store().apply_batch(
+        result = _store().apply_batch(
             batch_id=batch_id,
             actor=actor,
             item_ids=payload.item_ids,
         )
     except (ValueError, ReviewNotFound, ReviewConflict) as exc:
         raise _handle_admin_error(exc) from exc
+    return {
+        **result,
+        "versions": [_version_summary(item) for item in result["versions"]],
+    }
 
 
 @router.get("/versions")
@@ -203,7 +257,7 @@ def versions(request: Request, youtube_video_id: str | None = None) -> dict[str,
         rows = _store().list_versions(youtube_video_id=youtube_video_id, limit=2000)
     except (ValueError, ReviewNotFound, ReviewConflict) as exc:
         raise _handle_admin_error(exc) from exc
-    return {"versions": rows}
+    return {"versions": [_version_summary(item) for item in rows]}
 
 
 @router.get("/versions/{version_id}")
@@ -224,9 +278,13 @@ def restore_version(
     _confirmed(payload.confirm)
     actor = _admin_mutation_actor(request)
     try:
-        return _store().restore_version(version_id=version_id, actor=actor)
+        result = _store().restore_version(version_id=version_id, actor=actor)
     except (ValueError, ReviewNotFound, ReviewConflict) as exc:
         raise _handle_admin_error(exc) from exc
+    return {
+        **result,
+        "version": _version_summary(result["version"]),
+    }
 
 
 @router.post("/versions/{version_id}/publish")
@@ -251,7 +309,7 @@ def publish_version(
     if not caption_track_id:
         raise HTTPException(status_code=409, detail="Video has no imported YouTube caption track ID")
     if version["publish_status"] == "published" and version.get("youtube_caption_track_id") == caption_track_id:
-        return {"version": version, "already_published": True}
+        return {"version": _version_summary(version), "already_published": True}
 
     try:
         response = publish_caption_version(
@@ -264,7 +322,11 @@ def publish_version(
             actor=actor,
             youtube_response=response,
         )
-        return {"version": published, "already_published": False, "youtube": response}
+        return {
+            "version": _version_summary(published),
+            "already_published": False,
+            "youtube": response,
+        }
     except YouTubePublishError as exc:
         store.mark_publish_failed(version_id=version_id, actor=actor, error=str(exc))
         raise HTTPException(status_code=502, detail=str(exc)) from exc
