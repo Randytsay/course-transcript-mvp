@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -68,6 +70,61 @@ class RuntimeRoutingTests(unittest.TestCase):
             manifest = json.loads((Path(directory) / "correction-routing.json").read_text(encoding="utf-8"))
             self.assertEqual(len(manifest["provider_switches"]), 1)
             self.assertEqual(manifest["segment_counts"]["gemini-3.7-flash"], 2)
+
+    def test_gemini_fallback_keeps_outer_window_parallelism(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            quota = FakeQuota()
+            m3 = FakeM3()
+            parallel_phase = threading.Event()
+            both_inside = threading.Event()
+            state_lock = threading.Lock()
+            active = 0
+            max_active = 0
+
+            def gemini(items: list[dict[str, object]], terms: list[dict[str, object]]) -> dict[str, dict[str, object]]:
+                nonlocal active, max_active
+                if parallel_phase.is_set():
+                    with state_lock:
+                        active += 1
+                        max_active = max(max_active, active)
+                        if active >= 2:
+                            both_inside.set()
+                    try:
+                        both_inside.wait(timeout=0.5)
+                    finally:
+                        with state_lock:
+                            active -= 1
+                return {str(items[0]["segment_id"]): {"segment_id": str(items[0]["segment_id"]), "corrected_text": "Gemini文字"}}
+
+            runtime = CorrectionRuntime(
+                requested_policy=M3_FIRST,
+                m3_feature_enabled=True,
+                quota_check_enabled=True,
+                quota_client=quota,  # type: ignore[arg-type]
+                m3_client=m3,  # type: ignore[arg-type]
+                gemini_corrector=gemini,
+                manifest_path=Path(directory) / "correction-routing.json",
+            )
+
+            # First M3 request succeeds; the second one fails and performs the
+            # one-way switch. Only calls made after that switch are measured.
+            runtime.correct_window([ITEM], [])
+            runtime.correct_window([ITEM], [])
+            self.assertEqual(runtime.active_provider, CorrectionProvider.GEMINI)
+            parallel_phase.set()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [
+                    pool.submit(runtime.correct_window, [ITEM], []),
+                    pool.submit(runtime.correct_window, [ITEM], []),
+                ]
+                for future in futures:
+                    future.result(timeout=2)
+
+            self.assertEqual(max_active, 2)
+            self.assertEqual(m3.calls, 2)
+            manifest = json.loads((Path(directory) / "correction-routing.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["segment_counts"]["gemini-3.7-flash"], 3)
 
 
 if __name__ == "__main__":
