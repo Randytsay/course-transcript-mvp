@@ -138,6 +138,15 @@ class CorrectionRoutingTests(unittest.TestCase):
         self.assertTrue(decision.retry_same_provider)
         self.assertFalse(decision.switch_to_gemini_for_rest_of_job)
 
+    def test_output_limit_switches_rest_of_job_to_gemini_without_same_provider_retry(self) -> None:
+        decision = decide_provider_failure(
+            CorrectionProvider.MINIMAX_M3,
+            ProviderFailureKind.OUTPUT_LIMIT,
+        )
+        self.assertTrue(decision.switch_to_gemini_for_rest_of_job)
+        self.assertFalse(decision.retry_same_provider)
+        self.assertFalse(decision.fail_closed)
+
     def test_auth_failure_is_not_silently_hidden(self) -> None:
         decision = decide_provider_failure(
             CorrectionProvider.MINIMAX_M3,

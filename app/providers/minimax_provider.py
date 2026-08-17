@@ -50,6 +50,7 @@ class MiniMaxCompletion:
     raw_payload: object
     status_code: int
     attempts: list[dict[str, Any]]
+    finish_reason: str | None
 
 
 HttpPost = Callable[
@@ -157,6 +158,17 @@ def _failure_kind(status: int, payload: object) -> ProviderFailureKind:
     return ProviderFailureKind.INVALID_RESPONSE
 
 
+def _finish_reason(payload: object) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices or not isinstance(choices[0], Mapping):
+        return None
+    value = choices[0].get("finish_reason")
+    text = str(value or "").strip().lower()
+    return text or None
+
+
 def _response_content(payload: object) -> str:
     if not isinstance(payload, Mapping):
         raise ValueError("response_not_object")
@@ -200,6 +212,8 @@ class MiniMaxCorrectionClient:
         self.invalid_response_max_attempts = max(1, int(os.getenv("MINIMAX_M3_INVALID_RESPONSE_MAX_ATTEMPTS", "2")))
         self.timeout = max(1.0, float(os.getenv("MINIMAX_M3_TIMEOUT_SECONDS", "60")))
         self.max_output_tokens = max(256, int(os.getenv("MINIMAX_M3_MAX_OUTPUT_TOKENS", "4096")))
+        raw_thinking_mode = os.getenv("MINIMAX_M3_THINKING_MODE", "disabled").strip().lower()
+        self.thinking_mode = raw_thinking_mode if raw_thinking_mode in {"disabled", "adaptive"} else "disabled"
         self.reasoning_split = os.getenv("MINIMAX_M3_REASONING_SPLIT", "true").strip().lower() in {
             "1",
             "true",
@@ -301,7 +315,13 @@ class MiniMaxCorrectionClient:
                 ],
                 "stream": False,
                 "temperature": 0,
-                "max_tokens": self.max_output_tokens,
+                # MiniMax-M3 officially supports disabling thinking. These
+                # deterministic text-only tasks do not need agentic reasoning.
+                "thinking": {"type": self.thinking_mode},
+                # max_tokens is legacy for M3; use the current generation-limit field.
+                "max_completion_tokens": self.max_output_tokens,
+                # reasoning_split remains useful if adaptive thinking is selected
+                # for a bounded experiment. It does not itself disable thinking.
                 # The live CN MiniMax-M3 capability probe confirmed that this
                 # separates reasoning from the final structured content and
                 # prevents reasoning from consuming the JSON output budget.
@@ -344,6 +364,14 @@ class MiniMaxCorrectionClient:
                         status_code=status,
                         raw_response=response_payload,
                     )
+                finish_reason = _finish_reason(response_payload)
+                if finish_reason == "length":
+                    raise MiniMaxProviderError(
+                        "MiniMax generation reached the configured output limit",
+                        kind=ProviderFailureKind.OUTPUT_LIMIT,
+                        status_code=status,
+                        raw_response=response_payload,
+                    )
                 try:
                     content = _response_content(response_payload)
                 except (TypeError, ValueError) as exc:
@@ -361,11 +389,12 @@ class MiniMaxCorrectionClient:
                         "completed_at": _iso(),
                         "latency_ms": round((time.monotonic() - started) * 1000),
                         "status_code": status,
+                        "finish_reason": finish_reason,
                         "failure_kind": None,
                     }
                 )
                 self._last_attempts = attempts
-                return MiniMaxCompletion(content, usage, response_payload, status, attempts)
+                return MiniMaxCompletion(content, usage, response_payload, status, attempts, finish_reason)
             except MiniMaxProviderError as exc:
                 last_error = exc
                 completed_at = _iso()
@@ -380,7 +409,12 @@ class MiniMaxCorrectionClient:
                     }
                 )
                 self._last_attempts = attempts
-                if exc.kind in {ProviderFailureKind.AUTHENTICATION, ProviderFailureKind.USAGE_LIMIT}:
+                if exc.kind in {
+                    ProviderFailureKind.AUTHENTICATION,
+                    ProviderFailureKind.USAGE_LIMIT,
+                    ProviderFailureKind.INVALID_RESPONSE,
+                    ProviderFailureKind.OUTPUT_LIMIT,
+                }:
                     raise
                 if attempt < self.max_attempts:
                     self.sleeper(min(30.0, 2**attempt))
