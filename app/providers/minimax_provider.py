@@ -109,6 +109,9 @@ def _usage(payload: Mapping[str, Any]) -> dict[str, Any]:
         usage = {}
     input_tokens = usage.get("prompt_tokens", usage.get("input_tokens", usage.get("input_token_count", 0)))
     output_tokens = usage.get("completion_tokens", usage.get("output_tokens", usage.get("output_token_count", 0)))
+    completion_details = usage.get("completion_tokens_details")
+    completion_details = completion_details if isinstance(completion_details, Mapping) else {}
+    reasoning_tokens = completion_details.get("reasoning_tokens", usage.get("reasoning_tokens", 0))
     def integer(value: object) -> int:
         try:
             return max(0, int(value or 0))
@@ -117,6 +120,7 @@ def _usage(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "input_tokens": integer(input_tokens),
         "output_tokens": integer(output_tokens),
+        "reasoning_tokens": integer(reasoning_tokens),
         "total_tokens": integer(usage.get("total_tokens", 0)),
         "request_count": 1,
         "billing_mode": "token_plan",
@@ -380,12 +384,22 @@ class MiniMaxCorrectionClient:
                     raise
                 if attempt < self.max_attempts:
                     self.sleeper(min(30.0, 2**attempt))
-            except (HTTPError, URLError, TimeoutError, OSError) as exc:
-                kind = ProviderFailureKind.RATE_LIMIT if isinstance(exc, HTTPError) and exc.code == 429 else ProviderFailureKind.TRANSIENT_EXHAUSTED
+            except HTTPError as exc:
+                status_code = int(exc.code)
+                try:
+                    raw_error = exc.read()
+                except OSError:
+                    raw_error = b""
+                try:
+                    error_payload: object = json.loads(raw_error.decode("utf-8")) if raw_error else {}
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    error_payload = raw_error[:2000].decode("utf-8", "replace")
+                kind = _failure_kind(status_code, error_payload)
                 last_error = MiniMaxProviderError(
-                    "MiniMax transport failed",
+                    "MiniMax HTTP request failed",
                     kind=kind,
-                    status_code=int(exc.code) if isinstance(exc, HTTPError) else None,
+                    status_code=status_code,
+                    raw_response=error_payload,
                 )
                 attempts.append(
                     {
@@ -393,10 +407,32 @@ class MiniMaxCorrectionClient:
                         "started_at": started_at,
                         "completed_at": _iso(),
                         "latency_ms": round((time.monotonic() - started) * 1000),
-                        "status_code": last_error.status_code,
+                        "status_code": status_code,
                         "failure_kind": kind.value,
                     }
                 )
+                self._last_attempts = attempts
+                if kind in {ProviderFailureKind.AUTHENTICATION, ProviderFailureKind.USAGE_LIMIT}:
+                    raise last_error
+                if attempt < self.max_attempts:
+                    self.sleeper(min(30.0, 2**attempt))
+            except (URLError, TimeoutError, OSError) as exc:
+                kind = ProviderFailureKind.TRANSIENT_EXHAUSTED
+                last_error = MiniMaxProviderError(
+                    "MiniMax transport failed",
+                    kind=kind,
+                )
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "started_at": started_at,
+                        "completed_at": _iso(),
+                        "latency_ms": round((time.monotonic() - started) * 1000),
+                        "status_code": None,
+                        "failure_kind": kind.value,
+                    }
+                )
+                self._last_attempts = attempts
                 if attempt < self.max_attempts:
                     self.sleeper(min(30.0, 2**attempt))
         self._last_attempts = attempts

@@ -130,6 +130,7 @@ class EnhancedPerformanceRegressionTests(unittest.TestCase):
                     "usage_metadata": {
                         "input_tokens": 500,
                         "output_tokens": 150,
+                        "reasoning_tokens": 321,
                         "billing_mode": "token_plan",
                     },
                 }
@@ -172,6 +173,8 @@ class EnhancedPerformanceRegressionTests(unittest.TestCase):
         self.assertEqual(summary["providerCallBreakdown"]["googleVertexAi"]["callCount"], 1)
         self.assertEqual(summary["providerCallBreakdown"]["minimax"]["callCount"], 1)
         self.assertEqual(summary["providerCallBreakdown"]["minimax"]["retryCount"], 1)
+        self.assertEqual(summary["providerCallBreakdown"]["minimax"]["reasoningTokens"], 321)
+        self.assertEqual(summary["observability"]["minimaxReasoningTokens"], 321)
         self.assertEqual(summary["correctionRouting"]["requestedPolicy"], "M3_FIRST")
         self.assertEqual(
             summary["correctionRouting"]["providerSwitches"][0]["reason"],

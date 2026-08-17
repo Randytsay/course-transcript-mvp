@@ -77,6 +77,7 @@ def _provider_breakdown(calls: list[dict[str, Any]], provider: str) -> dict[str,
         "retryCount": sum(max(0, int(item.get("retryCount") or 0)) for item in selected),
         "inputTokens": sum(max(0, int(item.get("inputTokens") or 0)) for item in selected),
         "outputTokens": sum(max(0, int(item.get("outputTokens") or 0)) for item in selected),
+        "reasoningTokens": sum(max(0, int(item.get("reasoningTokens") or 0)) for item in selected),
         "latencyMs": sum(max(0, int(item.get("latencyMs") or 0)) for item in selected),
     }
 
@@ -246,6 +247,7 @@ def build_performance_summary(
         "effectiveGeminiConcurrency": routing.get("effective_gemini_concurrency") if isinstance(routing, dict) else None,
         "effectiveM3Concurrency": routing.get("effective_m3_concurrency") if isinstance(routing, dict) else None,
         "m3ReasoningSplit": routing.get("m3_reasoning_split") if isinstance(routing, dict) else None,
+        "minimaxReasoningTokens": summary["providerCallBreakdown"]["minimax"]["reasoningTokens"],
         "minimaxInvalidResponseCount": len(invalid_minimax),
         "m3OutputTokenLimit": m3_output_limit,
         "m3OutputLimitEvidenceAvailable": m3_output_limit is not None,
