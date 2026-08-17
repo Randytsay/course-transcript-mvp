@@ -23,10 +23,59 @@ from app.providers.minimax_streaming import run_strict_stream
 StreamRequest = Callable[[str, Mapping[str, str], bytes, float], dict[str, Any]]
 _ALLOWED_CORRECTION_FIELDS = {"segment_id", "corrected_text", "uncertain_terms"}
 
+# MiniMax provider-level codes documented by the CN error-code reference.
+# HTTP status remains authoritative for 401/403/429/payment-style responses;
+# these mappings disambiguate responses such as HTTP 422 that still carry a
+# provider code telling us whether the failure is transient or permanent.
+_PROVIDER_AUTH_CODES = {1004, 2049}
+_PROVIDER_RATE_LIMIT_CODES = {1002, 1041, 2045}
+_PROVIDER_USAGE_LIMIT_CODES = {1008, 2056}
+_PROVIDER_TRANSIENT_CODES = {1000, 1001, 1013, 1024, 1033}
+_PROVIDER_OUTPUT_LIMIT_CODES = {1039}
+_PROVIDER_INVALID_CODES = {1026, 1027, 1042, 2013}
+
 
 def _true(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _provider_error_code(result: Mapping[str, Any]) -> int | None:
+    value = result.get("provider_error_code")
+    try:
+        code = int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+    return code if code not in (None, 0) else None
+
+
+def _provider_code_failure_kind(code: int | None) -> ProviderFailureKind | None:
+    if code in _PROVIDER_AUTH_CODES:
+        return ProviderFailureKind.AUTHENTICATION
+    if code in _PROVIDER_RATE_LIMIT_CODES:
+        return ProviderFailureKind.RATE_LIMIT
+    if code in _PROVIDER_USAGE_LIMIT_CODES:
+        return ProviderFailureKind.USAGE_LIMIT
+    if code in _PROVIDER_TRANSIENT_CODES:
+        return ProviderFailureKind.TRANSIENT_EXHAUSTED
+    if code in _PROVIDER_OUTPUT_LIMIT_CODES:
+        return ProviderFailureKind.OUTPUT_LIMIT
+    if code in _PROVIDER_INVALID_CODES:
+        return ProviderFailureKind.INVALID_RESPONSE
+    return None
+
+
+def _safe_failure_metadata(result: Mapping[str, Any]) -> dict[str, Any]:
+    """Keep diagnostic metadata without retaining provider response text."""
+    return {
+        "streaming_v2": True,
+        "deadline_exceeded": bool(result.get("deadline_exceeded")),
+        "error_type": str(result.get("error_type") or ""),
+        "provider_error_code": _provider_error_code(result),
+        "provider_trace_id": result.get("provider_trace_id"),
+        "provider_error_fingerprint": result.get("provider_error_fingerprint"),
+        "provider_error_bytes": result.get("provider_error_bytes"),
+    }
 
 
 def _validate_streamed_correction_shape(content: str, items: list[dict[str, Any]]) -> None:
@@ -125,6 +174,18 @@ class MiniMaxStreamingCorrectionClient(MiniMaxCorrectionClient):
             status_code = 0
         error_type = str(result.get("error_type") or "").strip()
         error_payload = result.get("error_payload")
+
+        # Preserve HTTP-layer fail-closed semantics first. Provider-level codes
+        # then disambiguate HTTP 422 and similar wrapper statuses.
+        if status_code in {401, 403}:
+            return ProviderFailureKind.AUTHENTICATION
+        if status_code == 429:
+            return ProviderFailureKind.RATE_LIMIT
+        if status_code in {402, 409, 413}:
+            return ProviderFailureKind.USAGE_LIMIT
+        provider_kind = _provider_code_failure_kind(_provider_error_code(result))
+        if provider_kind is not None:
+            return provider_kind
         if error_type == "http_error":
             return _failure_kind(status_code, error_payload)
         if error_type in {"ValueError", "UnicodeError"}:
@@ -204,12 +265,7 @@ class MiniMaxStreamingCorrectionClient(MiniMaxCorrectionClient):
                         "MiniMax streaming transport failed",
                         kind=kind,
                         status_code=status or None,
-                        raw_response={
-                            "streaming_v2": True,
-                            "deadline_exceeded": bool(result.get("deadline_exceeded")),
-                            "error_type": str(result.get("error_type") or ""),
-                            "error_payload": result.get("error_payload"),
-                        },
+                        raw_response=_safe_failure_metadata(result),
                     )
 
                 finish_reason = str(result.get("finish_reason") or "").strip().lower() or None
@@ -260,6 +316,8 @@ class MiniMaxStreamingCorrectionClient(MiniMaxCorrectionClient):
                     "stream_done_seen": bool(result.get("done_seen")),
                     "stream_deadline_seconds": self.stream_deadline_seconds,
                     "stream_usage_available": True,
+                    "provider_error_code": None,
+                    "provider_trace_id": None,
                 }
                 attempts.append(attempt_record)
                 self._last_attempts = attempts
@@ -292,6 +350,10 @@ class MiniMaxStreamingCorrectionClient(MiniMaxCorrectionClient):
                         "stream_deadline_seconds": self.stream_deadline_seconds,
                         "stream_deadline_exceeded": bool(result.get("deadline_exceeded")),
                         "stream_usage_available": isinstance(result.get("usage"), Mapping),
+                        "provider_error_code": _provider_error_code(result),
+                        "provider_trace_id": result.get("provider_trace_id"),
+                        "provider_error_fingerprint": result.get("provider_error_fingerprint"),
+                        "provider_error_bytes": result.get("provider_error_bytes"),
                     }
                 )
                 self._last_attempts = attempts
