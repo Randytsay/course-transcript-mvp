@@ -54,8 +54,11 @@ def _with_consistency(result: int) -> int:
 
 def main() -> int:
     if os.getenv("MINIMAX_M3_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
-        from app.providers import correction_runtime
-        return _with_consistency(correction_runtime.main())
+        # The streaming-aware runtime preserves the legacy non-stream path unless
+        # MINIMAX_M3_STREAMING_ENABLED is explicitly enabled. M3 itself remains
+        # feature-gated and Gemini-first remains the global safe default.
+        from app.providers import correction_runtime_streaming
+        return _with_consistency(correction_runtime_streaming.main())
     if correction_cascade_enabled():
         return _with_consistency(cascade.main())
     legacy.generate_json = generate_json
