@@ -1,0 +1,240 @@
+"""Opt-in strict Streaming 2.0 transport for MiniMax correction windows."""
+from __future__ import annotations
+
+import json
+import os
+import time
+from collections.abc import Mapping
+from typing import Any, Callable
+
+from app.providers.correction_routing import ProviderFailureKind
+from app.providers.minimax_provider import (
+    MiniMaxCompletion,
+    MiniMaxCorrectionClient,
+    MiniMaxProviderError,
+    _failure_kind,
+    _iso,
+    _usage,
+)
+from app.providers.minimax_streaming import run_strict_stream
+
+
+StreamRequest = Callable[[str, Mapping[str, str], bytes, float], dict[str, Any]]
+
+
+def _true(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+class MiniMaxStreamingCorrectionClient(MiniMaxCorrectionClient):
+    """MiniMax client that keeps terminology non-stream and streams correction only."""
+
+    def __init__(self, *args: Any, stream_request: StreamRequest | None = None, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.streaming_enabled = _true("MINIMAX_M3_STREAMING_ENABLED", False)
+        self.stream_deadline_seconds = max(
+            1.0,
+            float(os.getenv("MINIMAX_M3_STREAM_DEADLINE_SECONDS", "75")),
+        )
+        self.stream_request = stream_request or run_strict_stream
+
+    def _stream_failure_kind(self, result: Mapping[str, Any]) -> ProviderFailureKind:
+        status = result.get("status_code")
+        try:
+            status_code = int(status) if status is not None else 0
+        except (TypeError, ValueError):
+            status_code = 0
+        error_type = str(result.get("error_type") or "").strip()
+        error_payload = result.get("error_payload")
+        if error_type == "http_error":
+            return _failure_kind(status_code, error_payload)
+        if error_type in {"ValueError", "UnicodeError"}:
+            return ProviderFailureKind.INVALID_RESPONSE
+        return ProviderFailureKind.TRANSIENT_EXHAUSTED
+
+    def _request(
+        self,
+        prompt: str,
+        items: list[dict[str, Any]],
+        *,
+        system_prompt: str | None = None,
+        thinking_mode: str | None = None,
+    ) -> MiniMaxCompletion:
+        # extract_terms() always supplies an explicit thinking_mode; preserve the
+        # already-validated non-stream terminology path. Streaming 2.0 is correction-only.
+        if not self.streaming_enabled or thinking_mode is not None:
+            return super()._request(
+                prompt,
+                items,
+                system_prompt=system_prompt,
+                thinking_mode=thinking_mode,
+            )
+
+        key = self._key()
+        request_payload = {
+            "model": self.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt or (
+                        "Correct Traditional-Chinese ASR text only. Chirp 3 is the immutable "
+                        "source of segment IDs, order, and timestamps. Do not summarize, add, "
+                        "split, merge, reorder, or alter IDs. Return JSON only with exactly "
+                        '{"segments":[{"segment_id":"...","corrected_text":"...",'
+                        '"uncertain_terms":[...]}]}.'
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ],
+            "stream": True,
+            "stream_options": {"include_usage": True},
+            "temperature": 0,
+            "thinking": {"type": self.correction_thinking_mode},
+            "max_completion_tokens": self.max_output_tokens,
+            "reasoning_split": self.reasoning_split,
+        }
+        body = json.dumps(request_payload, ensure_ascii=False).encode("utf-8")
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "x-api-key": key,
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+
+        attempts: list[dict[str, Any]] = []
+        last_error: MiniMaxProviderError | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            started = time.monotonic()
+            started_at = _iso()
+            result: dict[str, Any] = {}
+            try:
+                result = self.stream_request(
+                    self.url,
+                    headers,
+                    body,
+                    self.stream_deadline_seconds,
+                )
+                status_value = result.get("status_code")
+                try:
+                    status = int(status_value) if status_value is not None else 0
+                except (TypeError, ValueError):
+                    status = 0
+                if not bool(result.get("ok")):
+                    kind = self._stream_failure_kind(result)
+                    raise MiniMaxProviderError(
+                        "MiniMax streaming transport failed",
+                        kind=kind,
+                        status_code=status or None,
+                        raw_response={
+                            "streaming_v2": True,
+                            "deadline_exceeded": bool(result.get("deadline_exceeded")),
+                            "error_type": str(result.get("error_type") or ""),
+                            "error_payload": result.get("error_payload"),
+                        },
+                    )
+
+                finish_reason = str(result.get("finish_reason") or "").strip().lower() or None
+                if finish_reason == "length":
+                    raise MiniMaxProviderError(
+                        "MiniMax streaming generation reached the configured output limit",
+                        kind=ProviderFailureKind.OUTPUT_LIMIT,
+                        status_code=status or 200,
+                        raw_response={"streaming_v2": True, "finish_reason": finish_reason},
+                    )
+                if finish_reason != "stop":
+                    raise MiniMaxProviderError(
+                        "MiniMax streaming response did not finish with stop",
+                        kind=ProviderFailureKind.INVALID_RESPONSE,
+                        status_code=status or 200,
+                        raw_response={"streaming_v2": True, "finish_reason": finish_reason},
+                    )
+                raw_usage = result.get("usage")
+                if not isinstance(raw_usage, Mapping) or not raw_usage:
+                    raise MiniMaxProviderError(
+                        "MiniMax streaming response is missing usage metadata",
+                        kind=ProviderFailureKind.INVALID_RESPONSE,
+                        status_code=status or 200,
+                        raw_response={"streaming_v2": True, "usage_available": False},
+                    )
+                content = result.get("content")
+                if not isinstance(content, str) or not content.strip():
+                    raise MiniMaxProviderError(
+                        "MiniMax streaming response is missing final content",
+                        kind=ProviderFailureKind.INVALID_RESPONSE,
+                        status_code=status or 200,
+                        raw_response={"streaming_v2": True, "finish_reason": finish_reason},
+                    )
+
+                latency_ms = int(result.get("latency_ms") or round((time.monotonic() - started) * 1000))
+                attempt_record = {
+                    "attempt": attempt,
+                    "started_at": started_at,
+                    "completed_at": _iso(),
+                    "latency_ms": latency_ms,
+                    "status_code": status or 200,
+                    "finish_reason": finish_reason,
+                    "failure_kind": None,
+                    "transport": "streaming_v2",
+                    "stream_first_event_ms": result.get("first_event_ms"),
+                    "stream_event_count": int(result.get("event_count") or 0),
+                    "stream_done_seen": bool(result.get("done_seen")),
+                    "stream_deadline_seconds": self.stream_deadline_seconds,
+                    "stream_usage_available": True,
+                }
+                attempts.append(attempt_record)
+                self._last_attempts = attempts
+                usage = _usage({"usage": dict(raw_usage)})
+                raw_payload = {
+                    "streaming_v2": True,
+                    "finish_reason": finish_reason,
+                    "usage_available": True,
+                    "first_event_ms": result.get("first_event_ms"),
+                    "event_count": int(result.get("event_count") or 0),
+                    "done_seen": bool(result.get("done_seen")),
+                    "deadline_seconds": self.stream_deadline_seconds,
+                }
+                return MiniMaxCompletion(content, usage, raw_payload, status or 200, attempts, finish_reason)
+            except MiniMaxProviderError as exc:
+                last_error = exc
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "started_at": started_at,
+                        "completed_at": _iso(),
+                        "latency_ms": int(result.get("latency_ms") or round((time.monotonic() - started) * 1000)),
+                        "status_code": result.get("status_code") or exc.status_code,
+                        "finish_reason": result.get("finish_reason"),
+                        "failure_kind": exc.kind.value,
+                        "transport": "streaming_v2",
+                        "stream_first_event_ms": result.get("first_event_ms"),
+                        "stream_event_count": int(result.get("event_count") or 0),
+                        "stream_done_seen": bool(result.get("done_seen")),
+                        "stream_deadline_seconds": self.stream_deadline_seconds,
+                        "stream_deadline_exceeded": bool(result.get("deadline_exceeded")),
+                        "stream_usage_available": isinstance(result.get("usage"), Mapping),
+                    }
+                )
+                self._last_attempts = attempts
+                if exc.kind in {
+                    ProviderFailureKind.AUTHENTICATION,
+                    ProviderFailureKind.USAGE_LIMIT,
+                    ProviderFailureKind.INVALID_RESPONSE,
+                    ProviderFailureKind.OUTPUT_LIMIT,
+                }:
+                    raise
+                if attempt < self.max_attempts:
+                    self.sleeper(min(30.0, 2**attempt))
+
+        self._last_attempts = attempts
+        assert last_error is not None
+        raise MiniMaxProviderError(
+            "MiniMax streaming request failed after bounded retries",
+            kind=(
+                ProviderFailureKind.TRANSIENT_EXHAUSTED
+                if last_error.kind in {ProviderFailureKind.RATE_LIMIT, ProviderFailureKind.TRANSIENT_EXHAUSTED}
+                else last_error.kind
+            ),
+            status_code=last_error.status_code,
+            raw_response=last_error.raw_response,
+        )
