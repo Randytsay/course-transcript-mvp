@@ -1,8 +1,8 @@
 # MiniMax M3 Phase D — disabled-thinking correction validation
 
-Date: 2026-08-17  
-Repository: `Randytsay/course-transcript-mvp`  
-PR head: `d392030a5a4e762190b1fab9a1c0362be9e89884`  
+Date: 2026-08-17
+Repository: `Randytsay/course-transcript-mvp`
+PR head: `d392030a5a4e762190b1fab9a1c0362be9e89884`
 Production baseline: `dda66f4f019409ee415a30ec89cdb482bda1c729`
 
 This report is sanitized. It contains no transcript text, provider response
