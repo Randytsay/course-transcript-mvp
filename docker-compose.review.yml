@@ -14,7 +14,9 @@ services:
       YOUTUBE_OWNER_CLIENT_SECRET: ${YOUTUBE_OWNER_CLIENT_SECRET:-}
       YOUTUBE_OWNER_REFRESH_TOKEN_FILE: /run/secrets/youtube-owner-refresh-token
     volumes:
-      - ${YOUTUBE_OWNER_REFRESH_TOKEN_HOST_PATH:-/opt/course-transcript/secrets/youtube-owner-refresh-token}:/run/secrets/youtube-owner-refresh-token:ro
+      # CI/default compose validation stays secretless. Production must set this
+      # to a real root-readable file before any YouTube owner operation.
+      - ${YOUTUBE_OWNER_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/youtube-owner-refresh-token:ro
 
   frontend:
     environment:
