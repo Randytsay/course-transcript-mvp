@@ -101,6 +101,9 @@ class MiniMaxProviderTests(unittest.TestCase):
             def http_post(url: str, headers: object, body: bytes, timeout: float) -> tuple[int, dict[str, str], bytes]:
                 request = json.loads(body.decode("utf-8"))
                 self.assertTrue(request["reasoning_split"])
+                self.assertEqual(request["thinking"], {"type": "disabled"})
+                self.assertEqual(request["max_completion_tokens"], 4096)
+                self.assertNotIn("max_tokens", request)
                 payload = {
                     "model": "MiniMax-M3",
                     "choices": [{
@@ -125,12 +128,58 @@ class MiniMaxProviderTests(unittest.TestCase):
             result = client.correct_window(ITEMS, [])
             self.assertEqual(result["s1"]["corrected_text"], "這是一段課程內容。")
 
+    def test_finish_reason_length_is_output_limit_without_transport_retry(self) -> None:
+        calls = 0
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "key"
+            key.write_text("test-secret", encoding="utf-8")
+
+            def http_post(url: str, headers: object, body: bytes, timeout: float) -> tuple[int, dict[str, str], bytes]:
+                nonlocal calls
+                calls += 1
+                payload = {
+                    "choices": [{
+                        "finish_reason": "length",
+                        "message": {"content": "{\"segments\":["},
+                    }],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 4096},
+                }
+                return 200, {}, json.dumps(payload).encode()
+
+            client = MiniMaxCorrectionClient(key_file=key, http_post=http_post, sleeper=lambda _: None)
+            with self.assertRaises(MiniMaxProviderError) as context:
+                client.correct_window(ITEMS, [])
+            self.assertEqual(calls, 1)
+            self.assertEqual(context.exception.kind, ProviderFailureKind.OUTPUT_LIMIT)
+
+    def test_invalid_structured_response_retries_only_at_structured_layer(self) -> None:
+        calls = 0
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "key"
+            key.write_text("test-secret", encoding="utf-8")
+
+            def http_post(url: str, headers: object, body: bytes, timeout: float) -> tuple[int, dict[str, str], bytes]:
+                nonlocal calls
+                calls += 1
+                payload = {
+                    "choices": [{"finish_reason": "stop", "message": {"content": "not-json"}}],
+                }
+                return 200, {}, json.dumps(payload).encode()
+
+            client = MiniMaxCorrectionClient(key_file=key, http_post=http_post, sleeper=lambda _: None)
+            with self.assertRaises(MiniMaxProviderError) as context:
+                client.correct_window(ITEMS, [])
+            self.assertEqual(calls, 2)
+            self.assertEqual(context.exception.kind, ProviderFailureKind.INVALID_RESPONSE)
+
     def test_terminology_aggregates_reasoning_tokens(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             key = Path(directory) / "key"
             key.write_text("test-secret", encoding="utf-8")
 
             def http_post(url: str, headers: object, body: bytes, timeout: float) -> tuple[int, dict[str, str], bytes]:
+                request = json.loads(body.decode("utf-8"))
+                self.assertEqual(request["thinking"], {"type": "adaptive"})
                 payload = {
                     "choices": [{
                         "message": {

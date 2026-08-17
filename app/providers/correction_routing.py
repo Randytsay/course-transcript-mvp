@@ -30,6 +30,7 @@ class ProviderFailureKind(StrEnum):
     AUTHENTICATION = "authentication"
     TRANSIENT_EXHAUSTED = "transient_exhausted"
     INVALID_RESPONSE = "invalid_response"
+    OUTPUT_LIMIT = "output_limit"
     UNKNOWN = "unknown"
 
 
@@ -125,6 +126,7 @@ def decide_provider_failure(
         ProviderFailureKind.USAGE_LIMIT,
         ProviderFailureKind.TRANSIENT_EXHAUSTED,
         ProviderFailureKind.INVALID_RESPONSE,
+        ProviderFailureKind.OUTPUT_LIMIT,
     }:
         return FailureDecision(
             retry_same_provider=False,

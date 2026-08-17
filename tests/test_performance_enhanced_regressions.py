@@ -207,6 +207,7 @@ class EnhancedPerformanceRegressionTests(unittest.TestCase):
                 "runtime_git_sha": "a" * 40,
                 "docker_image_revision": "b" * 40,
                 "m3_max_output_tokens": 4096,
+                "m3_thinking_mode": "disabled",
             }),
             encoding="utf-8",
         )
@@ -238,6 +239,7 @@ class EnhancedPerformanceRegressionTests(unittest.TestCase):
         self.assertEqual(observed["effectiveM3Concurrency"], 1)
         self.assertEqual(observed["minimaxInvalidResponseCount"], 1)
         self.assertEqual(observed["m3OutputTokenLimit"], 4096)
+        self.assertEqual(observed["m3ThinkingMode"], "disabled")
         self.assertTrue(observed["m3OutputLimitEvidenceAvailable"])
         self.assertEqual(observed["minimaxOutputLimitHitCount"], 1)
         self.assertNotIn("api_key", json.dumps(summary, ensure_ascii=False).lower())
