@@ -245,6 +245,7 @@ def build_performance_summary(
         "minimaxRetryCount": minimax_retry_count,
         "effectiveGeminiConcurrency": routing.get("effective_gemini_concurrency") if isinstance(routing, dict) else None,
         "effectiveM3Concurrency": routing.get("effective_m3_concurrency") if isinstance(routing, dict) else None,
+        "m3ReasoningSplit": routing.get("m3_reasoning_split") if isinstance(routing, dict) else None,
         "minimaxInvalidResponseCount": len(invalid_minimax),
         "m3OutputTokenLimit": m3_output_limit,
         "m3OutputLimitEvidenceAvailable": m3_output_limit is not None,

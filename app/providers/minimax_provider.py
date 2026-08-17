@@ -196,6 +196,12 @@ class MiniMaxCorrectionClient:
         self.invalid_response_max_attempts = max(1, int(os.getenv("MINIMAX_M3_INVALID_RESPONSE_MAX_ATTEMPTS", "2")))
         self.timeout = max(1.0, float(os.getenv("MINIMAX_M3_TIMEOUT_SECONDS", "60")))
         self.max_output_tokens = max(256, int(os.getenv("MINIMAX_M3_MAX_OUTPUT_TOKENS", "4096")))
+        self.reasoning_split = os.getenv("MINIMAX_M3_REASONING_SPLIT", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     @property
     def url(self) -> str:
@@ -241,6 +247,7 @@ class MiniMaxCorrectionClient:
             "provider": "minimax",
             "model": self.model,
             "operation": operation,
+            "reasoning_split": self.reasoning_split,
             "prompt_version": TERMINOLOGY_PROMPT_VERSION if operation == "terminology" else PROMPT_VERSION,
             "request_started_at": attempts[0].get("started_at") if attempts else None,
             "response_completed_at": attempts[-1].get("completed_at") if attempts else None,
@@ -291,6 +298,10 @@ class MiniMaxCorrectionClient:
                 "stream": False,
                 "temperature": 0,
                 "max_tokens": self.max_output_tokens,
+                # The live CN MiniMax-M3 capability probe confirmed that this
+                # separates reasoning from the final structured content and
+                # prevents reasoning from consuming the JSON output budget.
+                "reasoning_split": self.reasoning_split,
             },
             ensure_ascii=False,
         ).encode("utf-8")

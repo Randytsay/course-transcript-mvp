@@ -56,6 +56,7 @@ class MiniMaxProviderTests(unittest.TestCase):
             self.assertNotIn("start_ms", result["s1"])
             record = json.loads(next(audit.glob("*.json")).read_text(encoding="utf-8"))
             self.assertEqual(record["usage_metadata"]["input_tokens"], 11)
+            self.assertTrue(record["reasoning_split"])
             self.assertNotIn("sk-test-secret", json.dumps(record, ensure_ascii=False))
 
     def test_reasoning_wrapper_is_removed_before_structured_validation(self) -> None:
@@ -80,6 +81,38 @@ class MiniMaxProviderTests(unittest.TestCase):
                     )
                 )
                 return 200, {}, json.dumps({"choices": [{"message": {"content": content}}]}).encode()
+
+            client = MiniMaxCorrectionClient(key_file=key, http_post=http_post, sleeper=lambda _: None)
+            result = client.correct_window(ITEMS, [])
+            self.assertEqual(result["s1"]["corrected_text"], "這是一段課程內容。")
+
+    def test_live_m3_reasoning_split_is_requested_and_final_content_is_parsed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            key = Path(directory) / "key"
+            key.write_text("test-secret", encoding="utf-8")
+
+            def http_post(url: str, headers: object, body: bytes, timeout: float) -> tuple[int, dict[str, str], bytes]:
+                request = json.loads(body.decode("utf-8"))
+                self.assertTrue(request["reasoning_split"])
+                payload = {
+                    "model": "MiniMax-M3",
+                    "choices": [{
+                        "finish_reason": "stop",
+                        "message": {
+                            "content": json.dumps({
+                                "segments": [{
+                                    "segment_id": "s1",
+                                    "corrected_text": "這是一段課程內容。",
+                                    "uncertain_terms": [],
+                                }]
+                            }, ensure_ascii=False),
+                            "reasoning": "provider reasoning",
+                            "reasoning_content": "provider reasoning",
+                        },
+                    }],
+                    "usage": {"prompt_tokens": 11, "completion_tokens": 7},
+                }
+                return 200, {}, json.dumps(payload, ensure_ascii=False).encode()
 
             client = MiniMaxCorrectionClient(key_file=key, http_post=http_post, sleeper=lambda _: None)
             result = client.correct_window(ITEMS, [])
