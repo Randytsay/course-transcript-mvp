@@ -1,0 +1,277 @@
+from __future__ import annotations
+
+import os
+import tempfile
+import unittest
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest.mock import patch
+
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+import app.review.auth as auth
+import app.review.portal as portal
+from app.review.auth_store import ReviewAuthStore
+from app.review.lease_store import ReviewLeaseStore
+from app.review.store import ReviewConflict, ReviewStore
+
+
+class ReviewLeaseStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.database = Path(temporary.name) / "course-transcript.db"
+        self.review = ReviewStore(self.database)
+        self.review.upsert_video(
+            youtube_video_id="video-1",
+            playlist_id="playlist-1",
+            title="彌勒大成佛經 第 1 集",
+            duration_ms=60000,
+        )
+        self.users = [
+            self.review.get_or_create_user_for_identity(
+                provider="google",
+                provider_subject=f"google-{index}",
+                display_name=f"校訂者 {index}",
+            )
+            for index in range(1, 4)
+        ]
+        self.leases = ReviewLeaseStore(self.database, max_editors_per_video=2)
+
+    def test_only_two_reviewers_can_hold_active_video_lease(self) -> None:
+        first = self.leases.acquire(user_id=self.users[0]["id"], youtube_video_id="video-1")
+        second = self.leases.acquire(user_id=self.users[1]["id"], youtube_video_id="video-1")
+        self.assertTrue(first["lease_token"])
+        self.assertTrue(second["lease_token"])
+        with self.assertRaises(ReviewConflict):
+            self.leases.acquire(user_id=self.users[2]["id"], youtube_video_id="video-1")
+
+        self.assertTrue(
+            self.leases.release(
+                user_id=self.users[0]["id"],
+                youtube_video_id="video-1",
+                lease_token=first["lease_token"],
+            )
+        )
+        third = self.leases.acquire(user_id=self.users[2]["id"], youtube_video_id="video-1")
+        self.assertTrue(third["lease_token"])
+
+    def test_expired_lease_does_not_block_next_reviewer(self) -> None:
+        first = self.leases.acquire(user_id=self.users[0]["id"], youtube_video_id="video-1")
+        self.leases.acquire(user_id=self.users[1]["id"], youtube_video_id="video-1")
+        with self.leases.transaction() as connection:
+            connection.execute(
+                "UPDATE review_edit_leases SET expires_at = ? WHERE token_hash IS NOT NULL AND user_id = ?",
+                ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(), self.users[0]["id"]),
+            )
+        self.assertFalse(
+            self.leases.validate(
+                user_id=self.users[0]["id"],
+                youtube_video_id="video-1",
+                lease_token=first["lease_token"],
+            )
+        )
+        third = self.leases.acquire(user_id=self.users[2]["id"], youtube_video_id="video-1")
+        self.assertTrue(third["lease_token"])
+
+
+class ReviewPortalApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.data_dir = Path(temporary.name)
+        self.env = patch.dict(
+            os.environ,
+            {
+                "REVIEW_PUBLIC_ORIGIN": "https://review.example.test",
+                "REVIEW_MAX_EDITORS_PER_VIDEO": "2",
+            },
+            clear=False,
+        )
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+        self.original_auth_data_dir = auth.DATA_DIR
+        self.original_portal_data_dir = portal.DATA_DIR
+        auth.DATA_DIR = self.data_dir
+        portal.DATA_DIR = self.data_dir
+        auth._review_store_cache = None
+        auth._auth_store_cache = None
+        portal._review_store_cache = None
+        portal._lease_store_cache = None
+        self.addCleanup(self._restore_globals)
+
+        self.review = ReviewStore(self.data_dir / "course-transcript.db")
+        self.review.upsert_video(
+            youtube_video_id="video-1",
+            playlist_id="playlist-1",
+            title="彌勒大成佛經 第 1 集",
+            duration_ms=60000,
+            caption_track_id="caption-1",
+        )
+        self.segments = self.review.import_subtitle_segments(
+            youtube_video_id="video-1",
+            segments=[
+                {"segment_index": 1, "start_ms": 0, "end_ms": 5000, "text": "佛告阿難"},
+                {"segment_index": 2, "start_ms": 5000, "end_ms": 10000, "text": "彌勒大成佛今"},
+            ],
+        )
+        self.user = self.review.get_or_create_user_for_identity(
+            provider="google",
+            provider_subject="google-primary",
+            display_name="法專師姐",
+        )
+        session = ReviewAuthStore(self.data_dir / "course-transcript.db").create_session(
+            user_id=self.user["id"]
+        )
+        self.session_token = session["token"]
+        self.csrf = auth._csrf_for_token(self.session_token)
+
+        app = FastAPI()
+        app.include_router(auth.router)
+        app.include_router(portal.router)
+        self.client = TestClient(app, base_url="https://review.example.test")
+        self.client.cookies.set(auth.COOKIE_NAME, self.session_token)
+
+    def _restore_globals(self) -> None:
+        auth.DATA_DIR = self.original_auth_data_dir
+        portal.DATA_DIR = self.original_portal_data_dir
+        auth._review_store_cache = None
+        auth._auth_store_cache = None
+        portal._review_store_cache = None
+        portal._lease_store_cache = None
+
+    def _mutation_headers(self, **extra: str) -> dict[str, str]:
+        return {
+            "Origin": "https://review.example.test",
+            "X-Review-CSRF": self.csrf,
+            **extra,
+        }
+
+    def test_video_list_and_detail_include_resume_and_fixed_segments(self) -> None:
+        listing = self.client.get("/api/v1/review/videos")
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(listing.json()["videos"][0]["segment_count"], 2)
+        self.assertEqual(listing.json()["max_editors_per_video"], 2)
+
+        detail = self.client.get("/api/v1/review/videos/video-1")
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.json()["video"]["youtube_video_id"], "video-1")
+        self.assertEqual(detail.json()["segments"][1]["working_text"], "彌勒大成佛今")
+        self.assertEqual(detail.json()["segments"][1]["start_ms"], 5000)
+
+    def test_progress_is_saved_without_consuming_editor_slot(self) -> None:
+        response = self.client.post(
+            "/api/v1/review/videos/video-1/progress",
+            headers=self._mutation_headers(),
+            json={
+                "last_playback_ms": 8500,
+                "reviewed_until_ms": 5000,
+                "last_segment_index": 2,
+                "completed": False,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["progress"]["last_playback_ms"], 8500)
+        listing = self.client.get("/api/v1/review/videos").json()
+        self.assertEqual(listing["resume"]["last_playback_ms"], 8500)
+        self.assertEqual(listing["videos"][0]["active_editor_count"], 0)
+
+    def test_suggestion_requires_lease_and_revises_same_pending_record(self) -> None:
+        segment_id = self.segments[1]["id"]
+        rejected = self.client.post(
+            f"/api/v1/review/videos/video-1/segments/{segment_id}/suggestion",
+            headers=self._mutation_headers(),
+            json={"text": "彌勒大成佛經"},
+        )
+        self.assertEqual(rejected.status_code, 409)
+
+        lease = self.client.post(
+            "/api/v1/review/videos/video-1/lease",
+            headers=self._mutation_headers(),
+        )
+        self.assertEqual(lease.status_code, 200)
+        lease_token = lease.json()["lease_token"]
+
+        created = self.client.post(
+            f"/api/v1/review/videos/video-1/segments/{segment_id}/suggestion",
+            headers=self._mutation_headers(**{"X-Review-Lease": lease_token}),
+            json={"text": "彌勒大成佛經"},
+        )
+        self.assertEqual(created.status_code, 200)
+        self.assertTrue(created.json()["created"])
+
+        revised = self.client.post(
+            f"/api/v1/review/videos/video-1/segments/{segment_id}/suggestion",
+            headers=self._mutation_headers(**{"X-Review-Lease": lease_token}),
+            json={"text": "彌勒大成佛經。"},
+        )
+        self.assertEqual(revised.status_code, 200)
+        self.assertFalse(revised.json()["created"])
+
+        leaderboard = self.review.contribution_leaderboard()
+        self.assertEqual(leaderboard[0]["suggestions_sent"], 1)
+        self.assertEqual(leaderboard[0]["changed_chars"], 2)
+        detail = self.client.get("/api/v1/review/videos/video-1").json()
+        self.assertEqual(detail["segments"][1]["my_suggested_text"], "彌勒大成佛經。")
+
+    def test_third_reviewer_gets_conflict_until_slot_is_released(self) -> None:
+        first = self.client.post(
+            "/api/v1/review/videos/video-1/lease",
+            headers=self._mutation_headers(),
+        ).json()
+
+        other_tokens: list[tuple[str, str]] = []
+        for index in (2, 3):
+            user = self.review.get_or_create_user_for_identity(
+                provider="google",
+                provider_subject=f"google-{index}",
+                display_name=f"校訂者 {index}",
+            )
+            session = ReviewAuthStore(self.data_dir / "course-transcript.db").create_session(
+                user_id=user["id"]
+            )
+            other_tokens.append((session["token"], auth._csrf_for_token(session["token"])))
+
+        second_client = TestClient(self.client.app, base_url="https://review.example.test")
+        second_client.cookies.set(auth.COOKIE_NAME, other_tokens[0][0])
+        second = second_client.post(
+            "/api/v1/review/videos/video-1/lease",
+            headers={
+                "Origin": "https://review.example.test",
+                "X-Review-CSRF": other_tokens[0][1],
+            },
+        )
+        self.assertEqual(second.status_code, 200)
+
+        third_client = TestClient(self.client.app, base_url="https://review.example.test")
+        third_client.cookies.set(auth.COOKIE_NAME, other_tokens[1][0])
+        blocked = third_client.post(
+            "/api/v1/review/videos/video-1/lease",
+            headers={
+                "Origin": "https://review.example.test",
+                "X-Review-CSRF": other_tokens[1][1],
+            },
+        )
+        self.assertEqual(blocked.status_code, 409)
+
+        released = self.client.post(
+            "/api/v1/review/videos/video-1/lease/release",
+            headers=self._mutation_headers(),
+            json={"lease_token": first["lease_token"]},
+        )
+        self.assertEqual(released.status_code, 200)
+        self.assertTrue(released.json()["released"])
+        allowed = third_client.post(
+            "/api/v1/review/videos/video-1/lease",
+            headers={
+                "Origin": "https://review.example.test",
+                "X-Review-CSRF": other_tokens[1][1],
+            },
+        )
+        self.assertEqual(allowed.status_code, 200)
+
+
+if __name__ == "__main__":
+    unittest.main()

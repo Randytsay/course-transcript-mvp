@@ -1,0 +1,245 @@
+.page {
+  min-height: 100vh;
+  padding: 34px 18px 60px;
+  background: linear-gradient(180deg, #f7f3eb 0%, #f2eee5 100%);
+  color: #2a2925;
+}
+
+.shell {
+  width: min(100%, 1120px);
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: flex-start;
+  margin-bottom: 26px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #866b43;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: clamp(30px, 5vw, 44px);
+  line-height: 1.15;
+  letter-spacing: -0.035em;
+}
+
+.subhead {
+  margin: 12px 0 0;
+  color: #6c675f;
+  line-height: 1.7;
+}
+
+.headerActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.accountLink {
+  flex: 0 0 auto;
+  padding: 10px 15px;
+  border: 1px solid #d7d0c5;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.75);
+  color: #575047;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.stateCard,
+.errorCard {
+  margin-top: 18px;
+  padding: 22px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.86);
+  border: 1px solid #e2ddd4;
+}
+
+.errorCard {
+  color: #963e35;
+  background: #fff0ed;
+}
+
+.resumeCard {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+  margin: 10px 0 28px;
+  padding: 18px 20px;
+  border-radius: 20px;
+  background: #4e5b4a;
+  color: #fff;
+  text-decoration: none;
+  box-shadow: 0 16px 34px rgba(52, 66, 49, 0.16);
+}
+
+.resumeCard span,
+.resumeCard strong {
+  display: block;
+}
+
+.resumeCard span {
+  margin-bottom: 5px;
+  color: #dce5d7;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.resumeCard strong {
+  font-size: 17px;
+}
+
+.resumeCard b {
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.library {
+  margin-top: 12px;
+}
+
+.libraryHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.libraryHeading h2 {
+  margin: 0;
+  font-size: 20px;
+}
+
+.libraryHeading span {
+  color: #817a70;
+  font-size: 13px;
+}
+
+.videoGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.videoCard {
+  overflow: hidden;
+  border: 1px solid #ded8cf;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.92);
+  color: inherit;
+  text-decoration: none;
+  box-shadow: 0 14px 34px rgba(58, 49, 36, 0.07);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.videoCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 42px rgba(58, 49, 36, 0.11);
+}
+
+.thumbnail {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  background: #ddd7cd;
+}
+
+.thumbnail img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.thumbnail span {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  padding: 4px 7px;
+  border-radius: 7px;
+  background: rgba(25, 24, 22, 0.82);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.videoBody {
+  padding: 16px 17px 17px;
+}
+
+.videoBody h3 {
+  margin: 0 0 12px;
+  font-size: 17px;
+  line-height: 1.45;
+}
+
+.metaRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: #7b756d;
+  font-size: 12px;
+}
+
+.metaRow strong {
+  color: #735c3d;
+}
+
+.progressTrack {
+  height: 5px;
+  margin: 12px 0 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #eae5dd;
+}
+
+.progressTrack i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #8f7450;
+}
+
+@media (max-width: 760px) {
+  .page {
+    padding: 26px 13px 44px;
+  }
+
+  .header {
+    gap: 12px;
+  }
+
+  .headerActions {
+    flex-direction: column;
+  }
+
+  .accountLink {
+    padding: 8px 12px;
+    font-size: 12px;
+    text-align: center;
+  }
+
+  .subhead {
+    font-size: 14px;
+  }
+
+  .videoGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .resumeCard {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}
