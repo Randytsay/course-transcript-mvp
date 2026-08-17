@@ -9,7 +9,7 @@ milestones.
 Run the focused module with the same standard-library test runner used by CI:
 
 ```bash
-python -m unittest tests.test_review_store -v
+python -m unittest discover -s tests -p 'test_review_store.py' -v
 ```
 
 The repository CI runs the complete suite with:
