@@ -17,6 +17,7 @@ import {
   Square,
   SquareCheckBig,
   TriangleAlert,
+  Zap,
 } from "lucide-react";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { getCosts, previewBatch } from "@/lib/api-client";
@@ -82,6 +83,8 @@ export default function NewJobPageDriveApi() {
   const [m3Enabled, setM3Enabled] = useState(false);
   const [m3StatusLoaded, setM3StatusLoaded] = useState(false);
   const [m3Model, setM3Model] = useState("MiniMax-M3");
+  const [m3Configured, setM3Configured] = useState(false);
+  const [m3QuotaLiveCheck, setM3QuotaLiveCheck] = useState(false);
   const [m3QuotaState, setM3QuotaState] = useState<"available" | "unavailable" | "unknown">("unknown");
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>(DEFAULT_OUTPUT_FORMATS);
   const [contentMode, setContentMode] = useState<ContentMode>("general");
@@ -160,6 +163,8 @@ export default function NewJobPageDriveApi() {
       .then((status) => {
         setM3Enabled(status.m3Enabled);
         setM3Model(status.m3Model);
+        setM3Configured(status.minimaxConfigured);
+        setM3QuotaLiveCheck(status.quotaLiveCheck);
         setM3QuotaState(status.quotaState);
         if (!status.m3Enabled) setCorrectionPolicy("GEMINI_FIRST");
       })
@@ -184,6 +189,23 @@ export default function NewJobPageDriveApi() {
       }
       return [...current, format];
     });
+  }
+
+  const m3SelectionAvailable = m3StatusLoaded && m3Enabled && m3Configured && m3QuotaLiveCheck;
+
+  function describeM3Status() {
+    if (!m3StatusLoaded) return "正在確認 M3 服務與 quota 狀態…";
+    if (!m3Enabled) return "伺服器尚未開放 M3；目前所有任務仍會使用 Gemini 3.7。";
+    if (!m3Configured) return "MiniMax key 尚未掛載；開啟前請先完成服務設定。";
+    if (!m3QuotaLiveCheck) return "M3 quota 檢查尚未開啟；為安全起見會使用 Gemini 3.7。";
+    if (m3QuotaState === "available") return "可手動啟用；目前 quota 可用，異常時本課程會單向轉 Gemini 3.7。";
+    if (m3QuotaState === "unavailable") return "目前 quota 不可用；即使選取 M3，本課程也會安全從 Gemini 3.7 開始。";
+    return "可手動啟用；quota 尚未確認時會安全從 Gemini 3.7 開始。";
+  }
+
+  function setM3Selection(enabled: boolean) {
+    if (enabled && !m3SelectionAvailable) return;
+    setCorrectionPolicy(enabled ? "M3_FIRST" : "GEMINI_FIRST");
   }
 
   async function inspectSelection() {
@@ -328,15 +350,37 @@ export default function NewJobPageDriveApi() {
           </div>
 
           <div className="form-section">
-            <div className="section-heading"><span className="step-number">4</span><div><h2>AI 文字校正模型</h2><p>選擇本批次的文字校正路由；原始 Chirp 文字、時間碼與分段永遠保留。</p></div></div>
-            <div className="selection-mode-grid">
-              <button type="button" className={`selection-mode-card ${correctionPolicy === "GEMINI_FIRST" ? "selection-mode-card--active" : ""}`} onClick={() => setCorrectionPolicy("GEMINI_FIRST")}>
-                <ShieldCheck size={21} /><span><strong>Gemini 3.7 優先</strong><small>正式品質基準；全程優先使用 Gemini 3.7 Flash</small></span>{correctionPolicy === "GEMINI_FIRST" && <Check size={17} />}
-              </button>
-              <button type="button" disabled={!m3StatusLoaded || !m3Enabled} className={`selection-mode-card ${correctionPolicy === "M3_FIRST" ? "selection-mode-card--active" : ""}`} onClick={() => m3Enabled && setCorrectionPolicy("M3_FIRST")} title={!m3StatusLoaded ? "正在確認 MiniMax M3 狀態" : !m3Enabled ? "MiniMax M3 尚未在 production 啟用" : undefined}>
-                <Sparkles size={21} /><span><strong>{m3Model} 優先{!m3StatusLoaded ? "（檢查中）" : !m3Enabled ? "（未啟用）" : ""}</strong><small>{m3QuotaState === "available" ? "目前 quota 可用；額度不足或異常時自動轉 Gemini 3.7" : "已啟用後會先檢查 quota；不可用時安全轉 Gemini 3.7"}</small></span>{correctionPolicy === "M3_FIRST" && <Check size={17} />}
-              </button>
+            <div className="section-heading"><span className="step-number">4</span><div><h2>AI 文字校正模型</h2><p>這是本批次的選擇，不會改變全域預設；原始 Chirp 文字、時間碼與分段永遠保留。</p></div></div>
+            <div className={`model-route-card ${correctionPolicy === "M3_FIRST" ? "model-route-card--m3" : ""}`}>
+              <div className="model-route-card__icon" aria-hidden="true">
+                {correctionPolicy === "M3_FIRST" ? <Sparkles size={21} /> : <ShieldCheck size={21} />}
+              </div>
+              <div className="model-route-card__copy">
+                <div className="model-route-card__heading"><strong>{correctionPolicy === "M3_FIRST" ? `${m3Model} 優先` : "Gemini 3.7 優先"}</strong><span className="model-route-card__badge">{correctionPolicy === "M3_FIRST" ? "人工抽查模式" : "安全預設"}</span></div>
+                <p>{correctionPolicy === "M3_FIRST" ? `${m3Model} 先處理；quota、回應格式或服務異常時，本批次只會轉到 Gemini 3.7。` : "全程優先使用 Google Vertex AI Gemini 3.7 Flash。"}</p>
+                <small className="model-route-card__status"><Zap size={14} />{describeM3Status()}</small>
+              </div>
+              <div className="model-route-card__control">
+                <span className="model-route-card__control-label">
+                  <strong>{correctionPolicy === "M3_FIRST" ? `目前：${m3Model}` : `可切換：${m3Model}`}</strong>
+                  <small>{m3SelectionAvailable ? "只套用本批次" : "目前不可用"}</small>
+                </span>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={correctionPolicy === "M3_FIRST"}
+                  aria-label={`切換 ${m3Model} 人工抽查模式`}
+                  className={`model-toggle ${correctionPolicy === "M3_FIRST" ? "model-toggle--on" : ""}`}
+                  disabled={!m3StatusLoaded || !m3SelectionAvailable}
+                  onClick={() => setM3Selection(correctionPolicy !== "M3_FIRST")}
+                  title={!m3StatusLoaded ? "正在確認 MiniMax M3 狀態" : !m3SelectionAvailable ? describeM3Status() : undefined}
+                >
+                  <span className="model-toggle__thumb" />
+                  <span className="sr-only">{correctionPolicy === "M3_FIRST" ? "已開啟" : "未開啟"}</span>
+                </button>
+              </div>
             </div>
+            <div className="model-route-note"><ShieldCheck size={15} /><span>開關可選 MiniMax M3 人工抽查模式；關閉就是 Gemini 3.7。設定只影響這一批任務，建立後會把實際請求路由與 fallback 記錄在任務稽核檔。</span></div>
           </div>
 
           <div className="form-section">
