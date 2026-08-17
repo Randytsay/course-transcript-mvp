@@ -147,6 +147,11 @@ export default function ReviewPortalPage() {
               </div>
             </div>
 
+            <a className={styles.enterReviewButton} href="/review/videos">
+              <span>進入影片校訂</span>
+              <strong>選影片、同步觀看字幕、接續上次進度 →</strong>
+            </a>
+
             <div className={styles.linkedSection}>
               <p className={styles.sectionLabel}>已綁定登入方式</p>
               <div className={styles.providerChips}>
@@ -185,11 +190,6 @@ export default function ReviewPortalPage() {
               >
                 {busy === "logout" ? "登出中…" : "登出"}
               </button>
-            </div>
-
-            <div className={styles.nextCard}>
-              <span>下一階段</span>
-              <strong>登入完成後，這裡會直接接到影片＋同步字幕校訂頁。</strong>
             </div>
           </div>
         ) : (
