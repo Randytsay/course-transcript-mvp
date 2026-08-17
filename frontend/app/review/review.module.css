@@ -134,7 +134,8 @@
 
 .googleButton:not(:disabled):hover,
 .lineButton:not(:disabled):hover,
-.secondaryButton:not(:disabled):hover {
+.secondaryButton:not(:disabled):hover,
+.enterReviewButton:hover {
   transform: translateY(-1px);
   box-shadow: 0 10px 22px rgba(56, 48, 36, 0.1);
 }
@@ -184,6 +185,35 @@
 .identityRow h2 {
   margin: 4px 0 0;
   font-size: 22px;
+}
+
+.enterReviewButton {
+  display: block;
+  margin-top: 22px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: #56634f;
+  color: #ffffff;
+  text-decoration: none;
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.enterReviewButton span,
+.enterReviewButton strong {
+  display: block;
+}
+
+.enterReviewButton span {
+  margin-bottom: 5px;
+  color: #e1e8dd;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.enterReviewButton strong {
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .linkedSection {
@@ -240,32 +270,6 @@
   padding: 0 12px;
   background: transparent;
   color: #777169;
-}
-
-.nextCard {
-  margin-top: 24px;
-  padding: 16px 18px;
-  border-radius: 16px;
-  background: #f1eadc;
-  color: #5d503d;
-}
-
-.nextCard span,
-.nextCard strong {
-  display: block;
-}
-
-.nextCard span {
-  margin-bottom: 5px;
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.nextCard strong {
-  font-size: 14px;
-  line-height: 1.55;
 }
 
 .errorMessage {
