@@ -6,8 +6,10 @@ correction text into the caller.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import multiprocessing as mp
+import re
 import time
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any
@@ -92,6 +94,67 @@ def _safe_error_body(raw: bytes) -> str:
     return text
 
 
+def _integer(value: object) -> int | None:
+    try:
+        result = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return result if result >= 0 else None
+
+
+def extract_provider_error_code(raw: bytes | str | Mapping[str, Any] | None) -> int | None:
+    """Extract MiniMax's provider-level error code without retaining response text."""
+    payload: object = raw
+    if isinstance(raw, bytes):
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return None
+    elif isinstance(raw, str):
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(payload, Mapping):
+        return None
+
+    candidates: list[object] = []
+    base = payload.get("base_resp")
+    if isinstance(base, Mapping):
+        candidates.extend((base.get("status_code"), base.get("code")))
+    error = payload.get("error")
+    if isinstance(error, Mapping):
+        candidates.extend((error.get("status_code"), error.get("code")))
+    candidates.extend((payload.get("status_code"), payload.get("code")))
+    for candidate in candidates:
+        code = _integer(candidate)
+        if code not in (None, 0):
+            return code
+    return None
+
+
+def safe_trace_id(headers: Mapping[str, Any] | None) -> str | None:
+    """Keep only a bounded, printable request/trace identifier for provider support."""
+    if not isinstance(headers, Mapping):
+        return None
+    lowered = {str(key).lower(): value for key, value in headers.items()}
+    for key in ("trace_id", "trace-id", "x-trace-id", "x-request-id", "request-id"):
+        value = lowered.get(key)
+        text = str(value or "").strip()
+        if not text or len(text) > 200:
+            continue
+        if re.fullmatch(r"[A-Za-z0-9._:/=-]+", text):
+            return text
+    return None
+
+
+def error_fingerprint(raw: bytes) -> str | None:
+    """Fingerprint an error body so repeated failures can be correlated without storing it."""
+    if not raw:
+        return None
+    return hashlib.sha256(raw).hexdigest()[:24]
+
+
 def _streaming_child(
     connection: Any,
     url: str,
@@ -125,6 +188,7 @@ def _streaming_child(
             raw = exc.read()
         except OSError:
             raw = b""
+        response_headers = dict(exc.headers.items()) if exc.headers is not None else {}
         try:
             connection.send(
                 {
@@ -134,6 +198,10 @@ def _streaming_child(
                     "first_event_ms": first_event_ms,
                     "error_type": "http_error",
                     "error_payload": _safe_error_body(raw),
+                    "provider_error_code": extract_provider_error_code(raw),
+                    "provider_trace_id": safe_trace_id(response_headers),
+                    "provider_error_fingerprint": error_fingerprint(raw),
+                    "provider_error_bytes": len(raw),
                 }
             )
         except (BrokenPipeError, EOFError, OSError):
