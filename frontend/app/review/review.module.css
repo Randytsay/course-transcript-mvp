@@ -1,0 +1,320 @@
+.page {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 40px 20px;
+  background:
+    radial-gradient(circle at top left, rgba(194, 154, 92, 0.14), transparent 34%),
+    linear-gradient(180deg, #f7f3eb 0%, #f2eee5 100%);
+  color: #2a2925;
+}
+
+.shell {
+  width: min(100%, 680px);
+  text-align: center;
+}
+
+.brandMark {
+  width: 68px;
+  height: 68px;
+  margin: 0 auto 18px;
+  border: 1px solid rgba(87, 71, 44, 0.2);
+  border-radius: 22px;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 14px 35px rgba(69, 57, 37, 0.08);
+  color: #725a37;
+  font-size: 29px;
+  font-weight: 700;
+}
+
+.eyebrow {
+  margin: 0 0 8px;
+  color: #866b43;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+
+.shell h1 {
+  margin: 0;
+  font-size: clamp(30px, 7vw, 46px);
+  line-height: 1.16;
+  letter-spacing: -0.035em;
+}
+
+.lead {
+  max-width: 570px;
+  margin: 18px auto 28px;
+  color: #625f58;
+  font-size: 16px;
+  line-height: 1.8;
+}
+
+.statusCard,
+.loginCard,
+.accountCard {
+  border: 1px solid rgba(83, 69, 48, 0.11);
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 20px 55px rgba(66, 55, 38, 0.08);
+}
+
+.statusCard {
+  padding: 34px;
+  color: #6a665e;
+}
+
+.loginCard,
+.accountCard {
+  padding: 28px;
+  text-align: left;
+}
+
+.sectionLabel,
+.signedIn {
+  margin: 0;
+  color: #7f7464;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.loginButtons {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.googleButton,
+.lineButton,
+.secondaryButton,
+.textButton {
+  min-height: 50px;
+  border-radius: 14px;
+  border: 1px solid transparent;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 140ms ease, box-shadow 140ms ease, opacity 140ms ease;
+}
+
+.googleButton,
+.lineButton {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 0 18px;
+}
+
+.googleButton {
+  border-color: #dedbd3;
+  background: #ffffff;
+  color: #30302e;
+}
+
+.lineButton {
+  background: #06c755;
+  color: #ffffff;
+}
+
+.providerInitial {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(255, 255, 255, 0.92);
+  color: #49453f;
+  font-size: 13px;
+}
+
+.googleButton:not(:disabled):hover,
+.lineButton:not(:disabled):hover,
+.secondaryButton:not(:disabled):hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 22px rgba(56, 48, 36, 0.1);
+}
+
+.googleButton:disabled,
+.lineButton:disabled,
+.secondaryButton:disabled,
+.textButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.privacyNote {
+  margin: 18px 2px 0;
+  color: #77736b;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.identityRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.avatar,
+.avatarFallback {
+  width: 54px;
+  height: 54px;
+  border-radius: 18px;
+  flex: 0 0 auto;
+}
+
+.avatar {
+  object-fit: cover;
+}
+
+.avatarFallback {
+  display: grid;
+  place-items: center;
+  background: #efe6d4;
+  color: #755c36;
+  font-size: 22px;
+  font-weight: 800;
+}
+
+.identityRow h2 {
+  margin: 4px 0 0;
+  font-size: 22px;
+}
+
+.linkedSection {
+  margin-top: 24px;
+  padding-top: 22px;
+  border-top: 1px solid #ece7de;
+}
+
+.providerChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.providerChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: #f5f2ec;
+  color: #4d4942;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.providerChip small {
+  color: #7f7a72;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.check {
+  color: #328458;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 22px;
+}
+
+.secondaryButton {
+  padding: 0 16px;
+  border-color: #d8d2c7;
+  background: #fff;
+  color: #514b42;
+}
+
+.textButton {
+  padding: 0 12px;
+  background: transparent;
+  color: #777169;
+}
+
+.nextCard {
+  margin-top: 24px;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: #f1eadc;
+  color: #5d503d;
+}
+
+.nextCard span,
+.nextCard strong {
+  display: block;
+}
+
+.nextCard span {
+  margin-bottom: 5px;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.nextCard strong {
+  font-size: 14px;
+  line-height: 1.55;
+}
+
+.errorMessage {
+  margin: 14px 0 0;
+  padding: 11px 14px;
+  border-radius: 12px;
+  background: #fff0ed;
+  color: #9a3f35;
+  font-size: 14px;
+}
+
+.footer {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 10px 18px;
+  margin-top: 22px;
+  color: #847e74;
+  font-size: 12px;
+}
+
+.footer span::before {
+  content: "•";
+  margin-right: 7px;
+  color: #b69664;
+}
+
+@media (max-width: 560px) {
+  .page {
+    align-items: start;
+    padding: 28px 14px;
+  }
+
+  .loginCard,
+  .accountCard {
+    padding: 20px;
+    border-radius: 22px;
+  }
+
+  .providerChip small {
+    display: none;
+  }
+
+  .actions {
+    flex-direction: column;
+  }
+
+  .secondaryButton,
+  .textButton {
+    width: 100%;
+  }
+}
