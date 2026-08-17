@@ -12,6 +12,7 @@ from app.providers.minimax_provider import (
     MiniMaxCompletion,
     MiniMaxCorrectionClient,
     MiniMaxProviderError,
+    _as_json_text,
     _failure_kind,
     _iso,
     _usage,
@@ -20,11 +21,88 @@ from app.providers.minimax_streaming import run_strict_stream
 
 
 StreamRequest = Callable[[str, Mapping[str, str], bytes, float], dict[str, Any]]
+_ALLOWED_CORRECTION_FIELDS = {"segment_id", "corrected_text", "uncertain_terms"}
 
 
 def _true(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _validate_streamed_correction_shape(content: str, items: list[dict[str, Any]]) -> None:
+    """Reject reordered IDs and any model-emitted immutable/extra fields before acceptance."""
+    try:
+        payload = json.loads(_as_json_text(content))
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise MiniMaxProviderError(
+            "MiniMax streaming response is not valid correction JSON",
+            kind=ProviderFailureKind.INVALID_RESPONSE,
+            raw_response={"streaming_v2": True, "shape_error": "invalid_json"},
+        ) from exc
+    if not isinstance(payload, Mapping) or set(payload) != {"segments"}:
+        raise MiniMaxProviderError(
+            "MiniMax streaming correction has unexpected top-level fields",
+            kind=ProviderFailureKind.INVALID_RESPONSE,
+            raw_response={"streaming_v2": True, "shape_error": "unexpected_top_level_fields"},
+        )
+    received = payload.get("segments")
+    if not isinstance(received, list) or len(received) != len(items):
+        raise MiniMaxProviderError(
+            "MiniMax streaming correction has the wrong segment count",
+            kind=ProviderFailureKind.INVALID_RESPONSE,
+            raw_response={"streaming_v2": True, "shape_error": "segment_count"},
+        )
+    expected_ids = [str(item["segment_id"]) for item in items]
+    observed_ids: list[str] = []
+    for entry in received:
+        if not isinstance(entry, Mapping):
+            raise MiniMaxProviderError(
+                "MiniMax streaming correction segment is not an object",
+                kind=ProviderFailureKind.INVALID_RESPONSE,
+                raw_response={"streaming_v2": True, "shape_error": "segment_not_object"},
+            )
+        keys = {str(key) for key in entry}
+        unexpected = sorted(keys - _ALLOWED_CORRECTION_FIELDS)
+        if unexpected:
+            raise MiniMaxProviderError(
+                "MiniMax streaming correction emitted forbidden/immutable fields",
+                kind=ProviderFailureKind.INVALID_RESPONSE,
+                raw_response={
+                    "streaming_v2": True,
+                    "shape_error": "forbidden_fields",
+                    "forbidden_fields": unexpected,
+                },
+            )
+        if "segment_id" not in entry or "corrected_text" not in entry:
+            raise MiniMaxProviderError(
+                "MiniMax streaming correction is missing required fields",
+                kind=ProviderFailureKind.INVALID_RESPONSE,
+                raw_response={"streaming_v2": True, "shape_error": "missing_required_fields"},
+            )
+        observed_ids.append(str(entry.get("segment_id")))
+        if not isinstance(entry.get("corrected_text"), str):
+            raise MiniMaxProviderError(
+                "MiniMax streaming corrected_text is not a string",
+                kind=ProviderFailureKind.INVALID_RESPONSE,
+                raw_response={"streaming_v2": True, "shape_error": "corrected_text_type"},
+            )
+        if "uncertain_terms" in entry and not isinstance(entry.get("uncertain_terms"), list):
+            raise MiniMaxProviderError(
+                "MiniMax streaming uncertain_terms is not a list",
+                kind=ProviderFailureKind.INVALID_RESPONSE,
+                raw_response={"streaming_v2": True, "shape_error": "uncertain_terms_type"},
+            )
+    if observed_ids != expected_ids:
+        raise MiniMaxProviderError(
+            "MiniMax streaming correction changed or reordered segment IDs",
+            kind=ProviderFailureKind.INVALID_RESPONSE,
+            raw_response={
+                "streaming_v2": True,
+                "shape_error": "segment_id_order",
+                "expected_count": len(expected_ids),
+                "observed_count": len(observed_ids),
+            },
+        )
 
 
 class MiniMaxStreamingCorrectionClient(MiniMaxCorrectionClient):
@@ -165,6 +243,7 @@ class MiniMaxStreamingCorrectionClient(MiniMaxCorrectionClient):
                         status_code=status or 200,
                         raw_response={"streaming_v2": True, "finish_reason": finish_reason},
                     )
+                _validate_streamed_correction_shape(content, items)
 
                 latency_ms = int(result.get("latency_ms") or round((time.monotonic() - started) * 1000))
                 attempt_record = {
