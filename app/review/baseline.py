@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from .admin_store import ReviewAdminStore, render_srt
@@ -61,7 +62,7 @@ def ensure_import_baseline(
         srt_text = render_srt(segments)
         content_sha256 = hashlib.sha256(srt_text.encode("utf-8")).hexdigest()
         version_id = uuid.uuid4().hex
-        now = __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat()
+        now = datetime.now(UTC).isoformat()
         connection.execute(
             """
             INSERT INTO review_subtitle_versions(
