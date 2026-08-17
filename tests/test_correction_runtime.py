@@ -36,7 +36,7 @@ class FakeM3:
         self.calls = 0
         self.max_output_tokens = 3072
         self.reasoning_split = True
-        self.thinking_mode = "disabled"
+        self.correction_thinking_mode = "disabled"
 
     def correct_window(self, items: list[dict[str, object]], terms: list[dict[str, object]], *, context: str) -> dict[str, dict[str, object]]:
         self.calls += 1

@@ -212,8 +212,14 @@ class MiniMaxCorrectionClient:
         self.invalid_response_max_attempts = max(1, int(os.getenv("MINIMAX_M3_INVALID_RESPONSE_MAX_ATTEMPTS", "2")))
         self.timeout = max(1.0, float(os.getenv("MINIMAX_M3_TIMEOUT_SECONDS", "60")))
         self.max_output_tokens = max(256, int(os.getenv("MINIMAX_M3_MAX_OUTPUT_TOKENS", "4096")))
-        raw_thinking_mode = os.getenv("MINIMAX_M3_THINKING_MODE", "disabled").strip().lower()
-        self.thinking_mode = raw_thinking_mode if raw_thinking_mode in {"disabled", "adaptive"} else "disabled"
+        raw_correction_thinking = os.getenv("MINIMAX_M3_CORRECTION_THINKING_MODE", "disabled").strip().lower()
+        self.correction_thinking_mode = (
+            raw_correction_thinking if raw_correction_thinking in {"disabled", "adaptive"} else "disabled"
+        )
+        raw_terminology_thinking = os.getenv("MINIMAX_M3_TERMINOLOGY_THINKING_MODE", "adaptive").strip().lower()
+        self.terminology_thinking_mode = (
+            raw_terminology_thinking if raw_terminology_thinking in {"disabled", "adaptive"} else "adaptive"
+        )
         self.reasoning_split = os.getenv("MINIMAX_M3_REASONING_SPLIT", "true").strip().lower() in {
             "1",
             "true",
@@ -266,6 +272,9 @@ class MiniMaxCorrectionClient:
             "model": self.model,
             "operation": operation,
             "reasoning_split": self.reasoning_split,
+            "thinking_mode": (
+                self.terminology_thinking_mode if operation == "terminology" else self.correction_thinking_mode
+            ),
             "prompt_version": TERMINOLOGY_PROMPT_VERSION if operation == "terminology" else PROMPT_VERSION,
             "request_started_at": attempts[0].get("started_at") if attempts else None,
             "response_completed_at": attempts[-1].get("completed_at") if attempts else None,
@@ -295,8 +304,16 @@ class MiniMaxCorrectionClient:
         temporary.write_text(json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         temporary.replace(path)
 
-    def _request(self, prompt: str, items: list[dict[str, Any]], *, system_prompt: str | None = None) -> MiniMaxCompletion:
+    def _request(
+        self,
+        prompt: str,
+        items: list[dict[str, Any]],
+        *,
+        system_prompt: str | None = None,
+        thinking_mode: str | None = None,
+    ) -> MiniMaxCompletion:
         key = self._key()
+        selected_thinking_mode = thinking_mode or self.correction_thinking_mode
         body = json.dumps(
             {
                 "model": self.model,
@@ -317,7 +334,7 @@ class MiniMaxCorrectionClient:
                 "temperature": 0,
                 # MiniMax-M3 officially supports disabling thinking. These
                 # deterministic text-only tasks do not need agentic reasoning.
-                "thinking": {"type": self.thinking_mode},
+                "thinking": {"type": selected_thinking_mode},
                 # max_tokens is legacy for M3; use the current generation-limit field.
                 "max_completion_tokens": self.max_output_tokens,
                 # reasoning_split remains useful if adaptive thinking is selected
@@ -508,7 +525,12 @@ class MiniMaxCorrectionClient:
                 )
             )
             for attempt_number in range(1, self.invalid_response_max_attempts + 1):
-                completion = self._request(prompt, items, system_prompt=system)
+                completion = self._request(
+                    prompt,
+                    items,
+                    system_prompt=system,
+                    thinking_mode=self.terminology_thinking_mode,
+                )
                 all_attempts.extend(completion.attempts)
                 latency_ms += sum(int(attempt.get("latency_ms") or 0) for attempt in completion.attempts)
                 input_tokens += int(completion.usage.get("input_tokens") or 0)

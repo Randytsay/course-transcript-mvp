@@ -178,6 +178,8 @@ class MiniMaxProviderTests(unittest.TestCase):
             key.write_text("test-secret", encoding="utf-8")
 
             def http_post(url: str, headers: object, body: bytes, timeout: float) -> tuple[int, dict[str, str], bytes]:
+                request = json.loads(body.decode("utf-8"))
+                self.assertEqual(request["thinking"], {"type": "adaptive"})
                 payload = {
                     "choices": [{
                         "message": {
