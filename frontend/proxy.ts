@@ -8,9 +8,12 @@ const REVIEW_PUBLIC_HOSTNAME =
   "review.randy88.ccwu.cc";
 
 export function proxy(request: NextRequest) {
+  // Prefer the actual HTTP Host. A client-controlled X-Forwarded-Host must not
+  // be able to make the public reviewer hostname look like the protected admin
+  // hostname. The forwarded value is only a fallback for unusual local proxies.
   const hostname =
-    request.headers.get("x-forwarded-host") ||
     request.headers.get("host") ||
+    request.headers.get("x-forwarded-host") ||
     request.nextUrl.hostname;
   const action = classifyReviewHostRequest(
     hostname,
