@@ -1,12 +1,10 @@
 from __future__ import annotations
 
-import io
 import json
 import unittest
 from unittest.mock import patch
 
 from app.review.youtube_publish import (
-    MAX_CAPTION_BYTES,
     YouTubePublishError,
     _multipart_body,
     _send_caption_update,
@@ -69,13 +67,13 @@ class YouTubeCaptionPublishTests(unittest.TestCase):
         self.assertIn(b"caption-123", captured["data"])
 
     def test_rejects_caption_larger_than_youtube_limit_before_network(self) -> None:
-        huge = "x" * (MAX_CAPTION_BYTES + 1)
-        with self.assertRaises(YouTubePublishError):
-            _multipart_body(
-                caption_track_id="caption-123",
-                srt_text=huge,
-                boundary="boundary-test",
-            )
+        with patch("app.review.youtube_publish.MAX_CAPTION_BYTES", 10):
+            with self.assertRaises(YouTubePublishError):
+                _multipart_body(
+                    caption_track_id="caption-123",
+                    srt_text="x" * 11,
+                    boundary="boundary-test",
+                )
 
     def test_unexpected_track_response_fails_closed(self) -> None:
         with patch(
