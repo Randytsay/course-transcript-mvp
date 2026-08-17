@@ -35,6 +35,7 @@ class FakeM3:
     def __init__(self) -> None:
         self.calls = 0
         self.max_output_tokens = 3072
+        self.reasoning_split = True
 
     def correct_window(self, items: list[dict[str, object]], terms: list[dict[str, object]], *, context: str) -> dict[str, dict[str, object]]:
         self.calls += 1
@@ -86,6 +87,7 @@ class RuntimeRoutingTests(unittest.TestCase):
             self.assertEqual(manifest["runtime_git_sha"], "a" * 40)
             self.assertEqual(manifest["docker_image_revision"], "b" * 40)
             self.assertEqual(manifest["m3_max_output_tokens"], 3072)
+            self.assertTrue(manifest["m3_reasoning_split"])
 
     def test_gemini_fallback_keeps_outer_window_parallelism(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

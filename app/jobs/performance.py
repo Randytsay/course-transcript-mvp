@@ -534,6 +534,10 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
                 "outputTokenCount",
             ),
         )
+        reasoning_tokens = _token_value(
+            usage,
+            ("reasoning_tokens", "reasoningTokenCount"),
+        )
         provider = "minimax" if payload.get("provider") == "minimax" or kind == "correction-m3" else "google-vertex-ai"
         cost = Decimal("0") if provider == "minimax" else (
             Decimal(input_tokens)
@@ -565,6 +569,7 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
                 "retryCount": max(0, int(payload.get("attempt_count") or 1) - 1),
                 "inputTokens": input_tokens,
                 "outputTokens": output_tokens,
+                "reasoningTokens": reasoning_tokens,
                 "estimatedCostUsd": _money(cost),
                 "billingMode": "token_plan" if provider == "minimax" else "vertex_estimate",
                 "cached": bool(payload.get("cache_hit")),

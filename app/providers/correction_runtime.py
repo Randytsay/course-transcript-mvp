@@ -84,6 +84,7 @@ class CorrectionRuntime:
         self.m3_max_output_tokens = (
             parsed_output_limit if parsed_output_limit is not None and parsed_output_limit > 0 else None
         )
+        self.m3_reasoning_split = bool(getattr(self.m3_client, "reasoning_split", False))
         # Routing state and manifest writes are serialized. Provider calls are
         # intentionally *not* all serialized: M3 remains single-flight so one
         # failure can atomically switch the rest of the job to Gemini, while
@@ -142,6 +143,7 @@ class CorrectionRuntime:
                 "runtime_git_sha": self.runtime_git_sha,
                 "docker_image_revision": self.docker_image_revision,
                 "m3_max_output_tokens": self.m3_max_output_tokens,
+                "m3_reasoning_split": self.m3_reasoning_split,
                 "chirp_raw_immutable": True,
                 "timestamps_immutable": True,
             },

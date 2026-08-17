@@ -109,6 +109,9 @@ def _usage(payload: Mapping[str, Any]) -> dict[str, Any]:
         usage = {}
     input_tokens = usage.get("prompt_tokens", usage.get("input_tokens", usage.get("input_token_count", 0)))
     output_tokens = usage.get("completion_tokens", usage.get("output_tokens", usage.get("output_token_count", 0)))
+    completion_details = usage.get("completion_tokens_details")
+    completion_details = completion_details if isinstance(completion_details, Mapping) else {}
+    reasoning_tokens = completion_details.get("reasoning_tokens", usage.get("reasoning_tokens", 0))
     def integer(value: object) -> int:
         try:
             return max(0, int(value or 0))
@@ -117,6 +120,7 @@ def _usage(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "input_tokens": integer(input_tokens),
         "output_tokens": integer(output_tokens),
+        "reasoning_tokens": integer(reasoning_tokens),
         "total_tokens": integer(usage.get("total_tokens", 0)),
         "request_count": 1,
         "billing_mode": "token_plan",
@@ -196,6 +200,12 @@ class MiniMaxCorrectionClient:
         self.invalid_response_max_attempts = max(1, int(os.getenv("MINIMAX_M3_INVALID_RESPONSE_MAX_ATTEMPTS", "2")))
         self.timeout = max(1.0, float(os.getenv("MINIMAX_M3_TIMEOUT_SECONDS", "60")))
         self.max_output_tokens = max(256, int(os.getenv("MINIMAX_M3_MAX_OUTPUT_TOKENS", "4096")))
+        self.reasoning_split = os.getenv("MINIMAX_M3_REASONING_SPLIT", "true").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
 
     @property
     def url(self) -> str:
@@ -241,6 +251,7 @@ class MiniMaxCorrectionClient:
             "provider": "minimax",
             "model": self.model,
             "operation": operation,
+            "reasoning_split": self.reasoning_split,
             "prompt_version": TERMINOLOGY_PROMPT_VERSION if operation == "terminology" else PROMPT_VERSION,
             "request_started_at": attempts[0].get("started_at") if attempts else None,
             "response_completed_at": attempts[-1].get("completed_at") if attempts else None,
@@ -251,7 +262,7 @@ class MiniMaxCorrectionClient:
             "source_segments": source,
             "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
             "raw_response": (
-                response
+                _redact_text(response)
                 if isinstance(response, str)
                 else json.dumps(_redact(response), ensure_ascii=False)
                 if response is not None
@@ -291,6 +302,10 @@ class MiniMaxCorrectionClient:
                 "stream": False,
                 "temperature": 0,
                 "max_tokens": self.max_output_tokens,
+                # The live CN MiniMax-M3 capability probe confirmed that this
+                # separates reasoning from the final structured content and
+                # prevents reasoning from consuming the JSON output budget.
+                "reasoning_split": self.reasoning_split,
             },
             ensure_ascii=False,
         ).encode("utf-8")
@@ -369,12 +384,22 @@ class MiniMaxCorrectionClient:
                     raise
                 if attempt < self.max_attempts:
                     self.sleeper(min(30.0, 2**attempt))
-            except (HTTPError, URLError, TimeoutError, OSError) as exc:
-                kind = ProviderFailureKind.RATE_LIMIT if isinstance(exc, HTTPError) and exc.code == 429 else ProviderFailureKind.TRANSIENT_EXHAUSTED
+            except HTTPError as exc:
+                status_code = int(exc.code)
+                try:
+                    raw_error = exc.read()
+                except OSError:
+                    raw_error = b""
+                try:
+                    error_payload: object = json.loads(raw_error.decode("utf-8")) if raw_error else {}
+                except (UnicodeDecodeError, json.JSONDecodeError):
+                    error_payload = raw_error[:2000].decode("utf-8", "replace")
+                kind = _failure_kind(status_code, error_payload)
                 last_error = MiniMaxProviderError(
-                    "MiniMax transport failed",
+                    "MiniMax HTTP request failed",
                     kind=kind,
-                    status_code=int(exc.code) if isinstance(exc, HTTPError) else None,
+                    status_code=status_code,
+                    raw_response=error_payload,
                 )
                 attempts.append(
                     {
@@ -382,10 +407,32 @@ class MiniMaxCorrectionClient:
                         "started_at": started_at,
                         "completed_at": _iso(),
                         "latency_ms": round((time.monotonic() - started) * 1000),
-                        "status_code": last_error.status_code,
+                        "status_code": status_code,
                         "failure_kind": kind.value,
                     }
                 )
+                self._last_attempts = attempts
+                if kind in {ProviderFailureKind.AUTHENTICATION, ProviderFailureKind.USAGE_LIMIT}:
+                    raise last_error
+                if attempt < self.max_attempts:
+                    self.sleeper(min(30.0, 2**attempt))
+            except (URLError, TimeoutError, OSError) as exc:
+                kind = ProviderFailureKind.TRANSIENT_EXHAUSTED
+                last_error = MiniMaxProviderError(
+                    "MiniMax transport failed",
+                    kind=kind,
+                )
+                attempts.append(
+                    {
+                        "attempt": attempt,
+                        "started_at": started_at,
+                        "completed_at": _iso(),
+                        "latency_ms": round((time.monotonic() - started) * 1000),
+                        "status_code": None,
+                        "failure_kind": kind.value,
+                    }
+                )
+                self._last_attempts = attempts
                 if attempt < self.max_attempts:
                     self.sleeper(min(30.0, 2**attempt))
         self._last_attempts = attempts
@@ -409,7 +456,7 @@ class MiniMaxCorrectionClient:
         merged: dict[str, dict[str, Any]] = {}
         raw_responses: list[str] = []
         all_attempts: list[dict[str, Any]] = []
-        input_tokens = output_tokens = total_tokens = latency_ms = 0
+        input_tokens = output_tokens = reasoning_tokens = total_tokens = latency_ms = 0
 
         for offset in range(0, len(raw_segments), chunk_size):
             items = [
@@ -432,6 +479,7 @@ class MiniMaxCorrectionClient:
                 latency_ms += sum(int(attempt.get("latency_ms") or 0) for attempt in completion.attempts)
                 input_tokens += int(completion.usage.get("input_tokens") or 0)
                 output_tokens += int(completion.usage.get("output_tokens") or 0)
+                reasoning_tokens += int(completion.usage.get("reasoning_tokens") or 0)
                 total_tokens += int(completion.usage.get("total_tokens") or 0)
                 try:
                     payload = json.loads(_as_json_text(completion.content))
@@ -506,6 +554,7 @@ class MiniMaxCorrectionClient:
             "usage_metadata": {
                 "input_tokens": input_tokens,
                 "output_tokens": output_tokens,
+                "reasoning_tokens": reasoning_tokens,
                 "total_tokens": total_tokens,
                 "request_count": len(raw_responses),
                 "billing_mode": "token_plan",
