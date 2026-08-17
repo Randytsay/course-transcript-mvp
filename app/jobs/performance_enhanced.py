@@ -81,6 +81,14 @@ def _provider_breakdown(calls: list[dict[str, Any]], provider: str) -> dict[str,
     }
 
 
+def _safe_runtime_ref(value: object) -> str | None:
+    """Keep provenance fields bounded and free of arbitrary environment text."""
+    text = str(value or "").strip()
+    if not text or len(text) > 200 or any(ord(char) < 32 for char in text):
+        return None
+    return text
+
+
 def build_performance_summary(
     database_path: Path,
     data_dir: Path,
@@ -191,6 +199,57 @@ def build_performance_summary(
             "segmentCounts": routing.get("segment_counts", {}),
             "m3QuotaStateAtStart": routing.get("m3_quota_state_at_start"),
         }
+
+    switches = routing.get("provider_switches", []) if isinstance(routing, dict) else []
+    switches = [item for item in switches if isinstance(item, dict)]
+    last_switch = switches[-1] if switches else {}
+    initial_provider = routing.get("initial_provider") if isinstance(routing, dict) else None
+    final_provider = last_switch.get("to") or initial_provider
+    invalid_minimax = [
+        item
+        for item in calls
+        if item.get("provider") == "minimax" and bool(item.get("responseValid") is False)
+    ]
+    raw_output_limit = routing.get("m3_max_output_tokens") if isinstance(routing, dict) else None
+    try:
+        m3_output_limit = int(raw_output_limit) if raw_output_limit is not None else None
+    except (TypeError, ValueError):
+        m3_output_limit = None
+    if m3_output_limit is not None and m3_output_limit <= 0:
+        m3_output_limit = None
+    output_limit_hits = (
+        [
+            item
+            for item in calls
+            if item.get("provider") == "minimax"
+            and int(item.get("outputTokens") or 0) >= m3_output_limit
+        ]
+        if m3_output_limit is not None
+        else []
+    )
+    summary["observability"] = {
+        "runtimeGitSha": _safe_runtime_ref(
+            routing.get("runtime_git_sha") if isinstance(routing, dict) else None
+        ),
+        "dockerImageRevision": _safe_runtime_ref(
+            routing.get("docker_image_revision") if isinstance(routing, dict) else None
+        ),
+        "requestedCorrectionPolicy": routing.get("requested_policy") if isinstance(routing, dict) else None,
+        "initialProvider": initial_provider,
+        "finalProvider": final_provider,
+        "providerSwitchReason": last_switch.get("reason") or None,
+        "providerSwitchAtSegment": last_switch.get("at_segment_id") or None,
+        "geminiCallCount": summary["providerCallBreakdown"]["googleVertexAi"]["callCount"],
+        "minimaxCallCount": summary["providerCallBreakdown"]["minimax"]["callCount"],
+        "geminiRetryCount": google_retry_count,
+        "minimaxRetryCount": minimax_retry_count,
+        "effectiveGeminiConcurrency": routing.get("effective_gemini_concurrency") if isinstance(routing, dict) else None,
+        "effectiveM3Concurrency": routing.get("effective_m3_concurrency") if isinstance(routing, dict) else None,
+        "minimaxInvalidResponseCount": len(invalid_minimax),
+        "m3OutputTokenLimit": m3_output_limit,
+        "m3OutputLimitEvidenceAvailable": m3_output_limit is not None,
+        "minimaxOutputLimitHitCount": len(output_limit_hits) if m3_output_limit is not None else None,
+    }
 
     if chirp_cost or gemini_cost:
         suggestions.append(

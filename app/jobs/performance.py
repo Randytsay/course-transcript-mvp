@@ -569,6 +569,13 @@ def _gemini_calls(job_dir: Path, config: CostConfig) -> list[dict[str, Any]]:
                 "billingMode": "token_plan" if provider == "minimax" else "vertex_estimate",
                 "cached": bool(payload.get("cache_hit")),
                 "promptVersion": payload.get("prompt_version"),
+                "responseValid": payload.get("response_valid"),
+                "errorType": payload.get("error_type"),
+                "errorKind": payload.get("error_kind"),
+                # Output-limit classification needs execution-time evidence.
+                # Enhanced reporting derives it from correction-routing.json,
+                # which is captured when the source job actually runs.
+                "outputLimitHit": None,
             }
         )
     for item in calls:
