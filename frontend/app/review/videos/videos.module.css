@@ -39,6 +39,12 @@
   line-height: 1.7;
 }
 
+.headerActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
 .accountLink {
   flex: 0 0 auto;
   padding: 10px 15px;
@@ -212,6 +218,16 @@
 
   .header {
     gap: 12px;
+  }
+
+  .headerActions {
+    flex-direction: column;
+  }
+
+  .accountLink {
+    padding: 8px 12px;
+    font-size: 12px;
+    text-align: center;
   }
 
   .subhead {
