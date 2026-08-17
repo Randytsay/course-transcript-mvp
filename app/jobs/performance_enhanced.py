@@ -199,6 +199,9 @@ def build_performance_summary(
             "providerSwitches": routing.get("provider_switches", []),
             "segmentCounts": routing.get("segment_counts", {}),
             "m3QuotaStateAtStart": routing.get("m3_quota_state_at_start"),
+            "m3Transport": routing.get("m3_transport"),
+            "m3StreamingEnabled": routing.get("m3_streaming_enabled"),
+            "m3StreamDeadlineSeconds": routing.get("m3_stream_deadline_seconds"),
         }
 
     switches = routing.get("provider_switches", []) if isinstance(routing, dict) else []
@@ -248,6 +251,9 @@ def build_performance_summary(
         "effectiveM3Concurrency": routing.get("effective_m3_concurrency") if isinstance(routing, dict) else None,
         "m3ReasoningSplit": routing.get("m3_reasoning_split") if isinstance(routing, dict) else None,
         "m3ThinkingMode": routing.get("m3_thinking_mode") if isinstance(routing, dict) else None,
+        "m3Transport": routing.get("m3_transport") if isinstance(routing, dict) else None,
+        "m3StreamingEnabled": routing.get("m3_streaming_enabled") if isinstance(routing, dict) else None,
+        "m3StreamDeadlineSeconds": routing.get("m3_stream_deadline_seconds") if isinstance(routing, dict) else None,
         "minimaxReasoningTokens": summary["providerCallBreakdown"]["minimax"]["reasoningTokens"],
         "minimaxInvalidResponseCount": len(invalid_minimax),
         "m3OutputTokenLimit": m3_output_limit,
