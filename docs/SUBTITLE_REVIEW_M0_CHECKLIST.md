@@ -6,13 +6,19 @@ milestones.
 
 ## Automated tests
 
-Run:
+Run the focused module with the same standard-library test runner used by CI:
 
 ```bash
-pytest -q tests/test_review_store.py
+python -m unittest tests.test_review_store -v
 ```
 
-The test module verifies:
+The repository CI runs the complete suite with:
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+The review-store tests verify:
 
 - human-oriented changed-character counting;
 - first login auto-creates an active reviewer;
@@ -40,5 +46,5 @@ route authentication.
 
 ## CI expectation
 
-The repository's normal CI should run after a draft PR is opened. Until CI has
-completed, M0 should be treated as implemented but not yet validated for merge.
+The repository's normal CI should run after a draft PR is opened. M0 is ready for
+merge only after the updated branch completes CI successfully.
