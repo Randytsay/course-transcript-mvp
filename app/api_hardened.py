@@ -7,6 +7,7 @@ from typing import Any
 from app.api_observed import app
 from app.drive_api_routes import router as drive_api_router
 from app.review.auth import router as review_auth_router
+from app.review.contributions import router as review_contributions_router
 from app.review.portal import router as review_portal_router
 from app.review.youtube_import import router as review_youtube_import_router
 from app.subtitles.editor_hardened import import_srt
@@ -142,6 +143,7 @@ app.include_router(drive_api_router)
 # identity. Edge policy must allow these paths on the reviewer-facing origin.
 app.include_router(review_auth_router)
 app.include_router(review_portal_router)
+app.include_router(review_contributions_router)
 # YouTube owner import stays on a separate review-admin path and therefore keeps
 # the existing Cloudflare Access mutation boundary rather than reviewer auth.
 app.include_router(review_youtube_import_router)
