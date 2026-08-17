@@ -128,6 +128,74 @@ class MiniMaxStreamingProviderTests(unittest.TestCase):
             self.assertEqual(calls, 2)
             self.assertEqual(context.exception.kind, ProviderFailureKind.INVALID_RESPONSE)
 
+    def test_streamed_timestamp_fields_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            calls = 0
+
+            def stream_request(url, headers, body, deadline):
+                nonlocal calls
+                calls += 1
+                return {
+                    "ok": True,
+                    "status_code": 200,
+                    "finish_reason": "stop",
+                    "content": json.dumps({
+                        "segments": [{
+                            "segment_id": "s1",
+                            "corrected_text": "這是一段課程內容。",
+                            "uncertain_terms": [],
+                            "start_ms": 999,
+                        }]
+                    }, ensure_ascii=False),
+                    "usage": {"prompt_tokens": 11, "completion_tokens": 9},
+                }
+
+            client = MiniMaxStreamingCorrectionClient(
+                key_file=self._key(directory),
+                stream_request=stream_request,
+                sleeper=lambda _: None,
+            )
+            with self.assertRaises(MiniMaxProviderError) as context:
+                client.correct_window(ITEMS, [])
+            self.assertEqual(calls, 2)
+            self.assertEqual(context.exception.kind, ProviderFailureKind.INVALID_RESPONSE)
+            self.assertEqual(context.exception.raw_response["shape_error"], "forbidden_fields")
+
+    def test_streamed_segment_order_must_match_source_exactly(self) -> None:
+        items = [
+            {"segment_id": "s1", "raw_text": "第一段"},
+            {"segment_id": "s2", "raw_text": "第二段"},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            calls = 0
+
+            def stream_request(url, headers, body, deadline):
+                nonlocal calls
+                calls += 1
+                return {
+                    "ok": True,
+                    "status_code": 200,
+                    "finish_reason": "stop",
+                    "content": json.dumps({
+                        "segments": [
+                            {"segment_id": "s2", "corrected_text": "第二段。", "uncertain_terms": []},
+                            {"segment_id": "s1", "corrected_text": "第一段。", "uncertain_terms": []},
+                        ]
+                    }, ensure_ascii=False),
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 12},
+                }
+
+            client = MiniMaxStreamingCorrectionClient(
+                key_file=self._key(directory),
+                stream_request=stream_request,
+                sleeper=lambda _: None,
+            )
+            with self.assertRaises(MiniMaxProviderError) as context:
+                client.correct_window(items, [])
+            self.assertEqual(calls, 2)
+            self.assertEqual(context.exception.kind, ProviderFailureKind.INVALID_RESPONSE)
+            self.assertEqual(context.exception.raw_response["shape_error"], "segment_id_order")
+
     def test_deadline_failure_is_bounded_transient_and_contains_no_partial_text(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             calls = 0
