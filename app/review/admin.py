@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api import _mutation_actor
 
 from .admin_store import ReviewAdminStore
+from .baseline import ensure_batch_baselines, ensure_suggestion_baseline
 from .store import ReviewConflict, ReviewNotFound
 from .youtube_publish import YouTubePublishError, publish_caption_version
 
@@ -177,8 +178,14 @@ def approve_suggestion(
 ) -> dict[str, Any]:
     _confirmed(payload.confirm)
     actor = _admin_mutation_actor(request)
+    store = _store()
     try:
-        result = _store().approve_suggestion(suggestion_id=suggestion_id, actor=actor)
+        ensure_suggestion_baseline(
+            store,
+            suggestion_id=suggestion_id,
+            triggered_by=actor,
+        )
+        result = store.approve_suggestion(suggestion_id=suggestion_id, actor=actor)
     except (ValueError, ReviewNotFound, ReviewConflict) as exc:
         raise _handle_admin_error(exc) from exc
     return {
@@ -236,8 +243,15 @@ def apply_batch(
 ) -> dict[str, Any]:
     _confirmed(payload.confirm)
     actor = _admin_mutation_actor(request)
+    store = _store()
     try:
-        result = _store().apply_batch(
+        ensure_batch_baselines(
+            store,
+            batch_id=batch_id,
+            item_ids=payload.item_ids,
+            triggered_by=actor,
+        )
+        result = store.apply_batch(
             batch_id=batch_id,
             actor=actor,
             item_ids=payload.item_ids,
