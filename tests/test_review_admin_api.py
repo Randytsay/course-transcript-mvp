@@ -71,7 +71,9 @@ class ReviewAdminApiTests(unittest.TestCase):
         self.assertEqual(approved.status_code, 200)
         body = approved.json()
         self.assertEqual(body["suggestion"]["status"], "approved")
-        self.assertEqual(body["version"]["version_number"], 1)
+        # v1 is always the immutable imported-original baseline.
+        self.assertEqual(body["version"]["version_number"], 2)
+        self.assertEqual(body["version"]["source"], "suggestion_approval")
         self.assertNotIn("srt_text", body["version"])
         self.assertNotIn("snapshot_json", body["version"])
 
@@ -80,7 +82,7 @@ class ReviewAdminApiTests(unittest.TestCase):
         self.assertEqual(reviewed["reviewed_by_actor"], "local-development")
         self.assertEqual(reviewed["review_action"], "suggestion_approved")
 
-    def test_versions_list_is_compact_but_detail_contains_immutable_srt(self) -> None:
+    def test_versions_keep_import_baseline_and_full_approved_srt(self) -> None:
         approved = self.client.post(
             f"/api/v1/review-admin/suggestions/{self.suggestion['id']}/approve",
             json={"confirm": True},
@@ -88,7 +90,18 @@ class ReviewAdminApiTests(unittest.TestCase):
         version_id = approved["version"]["id"]
         listing = self.client.get("/api/v1/review-admin/versions")
         self.assertEqual(listing.status_code, 200)
-        self.assertNotIn("srt_text", listing.json()["versions"][0])
+        versions = listing.json()["versions"]
+        self.assertEqual(len(versions), 2)
+        self.assertNotIn("srt_text", versions[0])
+        baseline = next(item for item in versions if item["source"] == "import_baseline")
+        self.assertEqual(baseline["version_number"], 1)
+
+        baseline_detail = self.client.get(
+            f"/api/v1/review-admin/versions/{baseline['id']}"
+        )
+        self.assertEqual(baseline_detail.status_code, 200)
+        self.assertIn("彌勒大成佛今", baseline_detail.json()["version"]["srt_text"])
+
         detail = self.client.get(f"/api/v1/review-admin/versions/{version_id}")
         self.assertEqual(detail.status_code, 200)
         self.assertIn("彌勒大成佛經", detail.json()["version"]["srt_text"])
