@@ -21,7 +21,7 @@ approved `main` SHA without a separate review and approval.
 ## Reviewer portal deployment
 
 The 2026-08-18 reviewer auth-only cutover replaced only `api` and `frontend`
-with exact-SHA ARM64 images. Both services are healthy and use the approved
+with exact-SHA ARM64 images. Both services were healthy and use the approved
 SHA. The frontend remains loopback-only at `127.0.0.1:3300`.
 
 The following services were checked before and after cutover and their
@@ -50,11 +50,32 @@ Non-paid evidence passed:
 No Chirp/Gemini provider call, Drive mutation, YouTube caption publish, or
 worker restart was part of this cutover.
 
-## YouTube reviewer state
+## YouTube owner OAuth and read-only acceptance
 
-The configured reviewer playlist ID is present in the production environment,
-but the live `review_videos` table currently contains zero rows. Therefore no
-playlist import has run yet.
+Post-snapshot production acceptance was completed by the operator on
+2026-08-18. Treat the following as the latest operator-confirmed production
+state unless fresh VPS evidence contradicts it:
+
+- YouTube owner OAuth client ID/secret are configured in protected production env;
+- refresh token is stored outside the repo at
+  `/opt/course-transcript/secrets/youtube-owner-refresh-token`;
+- token file permissions were confirmed `600 root:root`;
+- the API container sees the owner OAuth variables and the read-only token mount;
+- refresh-token exchange succeeded;
+- authorized YouTube channel identity was confirmed as:
+  - title: `耀文Randy`
+  - channel ID: `UCrGCs1F2hj3uIF8f5Yzbyfg`;
+- reviewer playlist preview ran with `apply=false`, `max_videos=1`;
+- preview result was `ready` for:
+  - video ID: `Y365547A-MA`
+  - title: `20260308 佛說彌勒大成佛經-1 | 八相成道`
+  - caption language: `zh-Hant`;
+- `review_videos` remained `0` before and after preview;
+- no SRT download/import, full-playlist sync, caption update, or other YouTube
+  write occurred;
+- `worker`, `pipeline-worker`, `delivery-worker`, `frontend`, `health-monitor`,
+  `retention-monitor`, and `cloudflared` container IDs remained unchanged during
+  the API credential refresh/recreate work.
 
 The import route is owner-only:
 
@@ -62,19 +83,38 @@ The import route is owner-only:
 POST /api/v1/review-admin/youtube/sync
 ```
 
-It is not authorized by reviewer Google/LINE login. It requires a separate
-YouTube channel-owner OAuth client and refresh token, and is intended to run
-behind the Cloudflare Access-protected admin origin. Current production is
-deliberately fail-closed for this capability:
+It is not authorized by reviewer Google/LINE login. Owner/admin operations must
+remain behind the Cloudflare Access-protected admin origin.
 
-- owner OAuth client ID/secret are not configured;
-- the owner refresh-token mount is `/dev/null`;
-- no YouTube playlist/caption read or write has been performed.
+## Current reviewer smoke-test gate
 
-The next operator must use the Google account that owns/manages the YouTube
-videos and playlist. Configure that separate OAuth flow first, then use a
-preview/read-only import before any apply/import mutation. Do not publish or
-update YouTube captions as part of playlist onboarding.
+The next controlled milestone is Phase 2. Do not skip directly to YouTube
+publishing.
+
+Required sequence:
+
+1. Reconfirm live SHA and service health; do not build, pull, or recreate services.
+2. Make a verified SQLite backup using SQLite backup semantics, not a raw WAL-unsafe copy.
+3. Repeat `apply=false`, `max_videos=1`; require the same video `Y365547A-MA`,
+   `zh-Hant`, `ready`.
+4. Run the single allowed `apply=true`, `max_videos=1` import for that same item.
+5. Verify exactly one `review_videos` row, valid caption metadata, non-empty
+   fixed subtitle segments, and no unrelated reviewer rows.
+6. Perform real reviewer login and workspace smoke; acquire one edit lease.
+7. Submit exactly one minimal, safe, reversible suggestion; do not alter timing.
+8. In the Cloudflare Access-protected owner UI, verify the suggestion and approve
+   only that suggestion.
+9. Verify imported-original baseline preservation and creation of a new immutable
+   version, including JSON/SRT/SHA/diff and unchanged timing.
+10. Use read-only YouTube checks to confirm the remote caption track still exists
+    and was not modified by local approval.
+11. Reconfirm all non-target container IDs are unchanged and API health is 200.
+12. Stop. `captions.update`, publish, republish, rollback-publish, full-playlist
+    import, and scheduled sync require a separate explicit owner authorization.
+
+If any mutation request times out or loses its response, inspect DB state before
+retrying. Never blindly re-run `apply=true` or approval after an ambiguous
+failure.
 
 ## Safe continuation rules
 
@@ -92,6 +132,8 @@ update YouTube captions as part of playlist onboarding.
    service container IDs.
 6. A health endpoint alone is not acceptance; verify the real client path,
    protected service identity, database state, and downstream artifact.
+7. The YouTube reviewer smoke must remain isolated from the paid transcription
+   pipeline and from unrelated MiniMax/M3 experimentation.
 
 ## Handoff contents
 
@@ -106,5 +148,6 @@ time. The following local artifacts were intentionally excluded from GitHub:
 - runtime secrets, databases, backups, and provider credentials.
 
 Historical reports may describe earlier gates or older production SHAs. The
-live production facts in this document and the immutable `main` SHA above are
-the current deployment boundary.
+approved production boundary remains the immutable `main` SHA above; the
+post-snapshot OAuth/read-only state in this handoff supersedes the earlier
+pre-OAuth snapshot notes for reviewer onboarding.
