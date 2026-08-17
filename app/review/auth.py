@@ -174,7 +174,7 @@ def _authorization_url(provider: str, flow: dict[str, Any]) -> str:
         common.update({"scope": "openid email profile", "prompt": "select_account"})
     elif provider == "line":
         endpoint = "https://access.line.me/oauth2/v2.1/authorize"
-        common.update({"scope": "openid profile email"})
+        common.update({"scope": "openid profile"})
     else:
         raise HTTPException(status_code=404, detail="Unknown login provider")
     return f"{endpoint}?{urllib.parse.urlencode(common)}"

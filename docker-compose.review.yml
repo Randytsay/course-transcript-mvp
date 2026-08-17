@@ -1,0 +1,23 @@
+services:
+  api:
+    environment:
+      REVIEW_PUBLIC_ORIGIN: ${REVIEW_PUBLIC_ORIGIN:-https://review.randy88.ccwu.cc}
+      REVIEW_GOOGLE_CLIENT_ID: ${REVIEW_GOOGLE_CLIENT_ID:-}
+      REVIEW_GOOGLE_CLIENT_SECRET: ${REVIEW_GOOGLE_CLIENT_SECRET:-}
+      REVIEW_LINE_CHANNEL_ID: ${REVIEW_LINE_CHANNEL_ID:-}
+      REVIEW_LINE_CHANNEL_SECRET: ${REVIEW_LINE_CHANNEL_SECRET:-}
+      REVIEW_SESSION_TTL_DAYS: ${REVIEW_SESSION_TTL_DAYS:-30}
+      REVIEW_MAX_EDITORS_PER_VIDEO: ${REVIEW_MAX_EDITORS_PER_VIDEO:-2}
+      YOUTUBE_REVIEW_PLAYLIST_ID: ${YOUTUBE_REVIEW_PLAYLIST_ID:-PL9bFsGt4TAeUxZhzEhoxmY16ek2I5cOhQ}
+      YOUTUBE_REVIEW_CAPTION_LANGUAGES: ${YOUTUBE_REVIEW_CAPTION_LANGUAGES:-zh-TW,zh-Hant,zh}
+      YOUTUBE_OWNER_CLIENT_ID: ${YOUTUBE_OWNER_CLIENT_ID:-}
+      YOUTUBE_OWNER_CLIENT_SECRET: ${YOUTUBE_OWNER_CLIENT_SECRET:-}
+      YOUTUBE_OWNER_REFRESH_TOKEN_FILE: /run/secrets/youtube-owner-refresh-token
+    volumes:
+      # CI/default compose validation stays secretless. Production must set this
+      # to a real root-readable file before any YouTube owner operation.
+      - ${YOUTUBE_OWNER_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/youtube-owner-refresh-token:ro
+
+  frontend:
+    environment:
+      REVIEW_PUBLIC_HOSTNAME: ${REVIEW_PUBLIC_HOSTNAME:-review.randy88.ccwu.cc}
