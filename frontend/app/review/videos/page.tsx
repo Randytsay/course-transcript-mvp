@@ -96,7 +96,10 @@ export default function ReviewVideosPage() {
               {name ? `${name}，` : ""}觀看不佔校訂名額；開始修改時才會取得席位。
             </p>
           </div>
-          <Link href="/review" className={styles.accountLink}>帳號</Link>
+          <div className={styles.headerActions}>
+            <Link href="/review/contributions" className={styles.accountLink}>功德榜</Link>
+            <Link href="/review" className={styles.accountLink}>帳號</Link>
+          </div>
         </header>
 
         {loading ? <div className={styles.stateCard}>正在整理影片…</div> : null}
@@ -123,7 +126,7 @@ export default function ReviewVideosPage() {
             </div>
             {data.videos.length === 0 ? (
               <div className={styles.stateCard}>
-                還沒有匯入可校訂的 YouTube 字幕。M2 的匯入流程接好後，影片會直接出現在這裡。
+                還沒有匯入可校訂的 YouTube 字幕；管理員完成第一次 playlist 同步後，影片會直接出現在這裡。
               </div>
             ) : (
               <div className={styles.videoGrid}>
