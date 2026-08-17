@@ -205,7 +205,7 @@ mapfile -t MAIN_DRIFT_PATHS < <(
 for path in "${MAIN_DRIFT_PATHS[@]:-}"; do
   [[ -z "$path" ]] && continue
   case "$path" in
-    .github/workflows/deploy-script.yml|docs/PRODUCTION_CUTOVER.md|scripts/deploy_release.sh|scripts/deploy_release_lib.sh)
+    .github/workflows/deploy-script.yml|docs/PRODUCTION_CUTOVER.md|docs/PHASE2D_CREDENTIAL_SCAN_INCIDENT.md|scripts/deploy_release.sh|scripts/deploy_release_lib.sh|scripts/deploy_release_safe.sh|scripts/scan_evidence_credentials.py|tests/test_deploy_release_safe.sh)
       ;;
     *)
       fail "origin/main contains non-deployment changes after approved release: $path"
@@ -395,9 +395,9 @@ for service in api worker pipeline-worker delivery-worker frontend; do
   [[ "$count" == "0" ]] || fail "final log scan failed for $service"
 done
 
-credential_markers="$(grep -ERic \
-  '-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----|"refresh_token"[[:space:]]*:|"client_secret"[[:space:]]*:|Authorization: Bearer|Cf-Access-Jwt-Assertion' \
-  "$EVIDENCE_ROOT" || true)"
+if ! credential_markers="$(python3 "$SCRIPT_DIR/scan_evidence_credentials.py" "$EVIDENCE_ROOT")"; then
+  fail "credential scan execution failed"
+fi
 printf 'evidence_raw_credential_marker_count=%s\n' "$credential_markers" >> "$EVIDENCE_ROOT/final-log-scan.txt"
 [[ "$credential_markers" == "0" ]] || fail "possible credential content in evidence"
 

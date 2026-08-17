@@ -13,6 +13,13 @@ for path in "$SOURCE_DEPLOY" "$SOURCE_LIB" "$SOURCE_SCANNER"; do
   }
 done
 
+# New releases run the deterministic scanner directly. Keep this entrypoint
+# usable for both those releases and older releases that still need the
+# reviewed temporary compatibility patch below.
+if grep -Fq 'scan_evidence_credentials.py' "$SOURCE_DEPLOY"; then
+  exec bash "$SOURCE_DEPLOY" "$@"
+fi
+
 PATCH_DIR="$(mktemp -d)"
 cleanup() { rm -rf -- "$PATCH_DIR"; }
 trap cleanup EXIT
