@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from decimal import Decimal
@@ -177,6 +178,66 @@ class EnhancedPerformanceRegressionTests(unittest.TestCase):
             "invalid_response",
         )
         self.assertEqual(summary["providerCostBreakdown"]["minimaxBillingMode"], "token_plan")
+
+    def test_observability_is_backward_compatible_and_secret_free(self) -> None:
+        job = self._approved_job(duration_seconds=600)
+        job_dir = self.data_dir / "jobs" / job["id"]
+        (job_dir / "correction-m3-v1").mkdir(parents=True)
+        (job_dir / "correction-m3-v1" / "m3-invalid.json").write_text(
+            json.dumps({
+                "provider": "minimax",
+                "model": "MiniMax-M3",
+                "attempt_count": 1,
+                "response_valid": False,
+                "error_type": "MiniMaxProviderError",
+                "usage_metadata": {"input_tokens": 10, "output_tokens": 4096},
+            }),
+            encoding="utf-8",
+        )
+        (job_dir / "correction-routing.json").write_text(
+            json.dumps({
+                "requested_policy": "M3_FIRST",
+                "initial_provider": "minimax-m3",
+                "provider_switches": [{"to": "gemini-3.7-flash", "reason": "invalid_response", "at_segment_id": "seg-2"}],
+                "effective_gemini_concurrency": 2,
+                "effective_m3_concurrency": 1,
+                "runtime_git_sha": "a" * 40,
+                "docker_image_revision": "b" * 40,
+                "m3_max_output_tokens": 4096,
+            }),
+            encoding="utf-8",
+        )
+        old_sha = os.environ.get("COURSE_TRANSCRIPT_RUNTIME_GIT_SHA")
+        old_image = os.environ.get("COURSE_TRANSCRIPT_DOCKER_IMAGE_REVISION")
+        old_limit = os.environ.get("MINIMAX_M3_MAX_OUTPUT_TOKENS")
+        os.environ["COURSE_TRANSCRIPT_RUNTIME_GIT_SHA"] = "c" * 40
+        os.environ["COURSE_TRANSCRIPT_DOCKER_IMAGE_REVISION"] = "d" * 40
+        os.environ["MINIMAX_M3_MAX_OUTPUT_TOKENS"] = "8192"
+        try:
+            summary = build_performance_summary(self.database_path, self.data_dir, job["id"])
+        finally:
+            for key, old in (
+                ("COURSE_TRANSCRIPT_RUNTIME_GIT_SHA", old_sha),
+                ("COURSE_TRANSCRIPT_DOCKER_IMAGE_REVISION", old_image),
+                ("MINIMAX_M3_MAX_OUTPUT_TOKENS", old_limit),
+            ):
+                if old is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = old
+        observed = summary["observability"]
+        self.assertEqual(observed["runtimeGitSha"], "a" * 40)
+        self.assertEqual(observed["dockerImageRevision"], "b" * 40)
+        self.assertEqual(observed["finalProvider"], "gemini-3.7-flash")
+        self.assertEqual(observed["providerSwitchReason"], "invalid_response")
+        self.assertEqual(observed["providerSwitchAtSegment"], "seg-2")
+        self.assertEqual(observed["effectiveGeminiConcurrency"], 2)
+        self.assertEqual(observed["effectiveM3Concurrency"], 1)
+        self.assertEqual(observed["minimaxInvalidResponseCount"], 1)
+        self.assertEqual(observed["m3OutputTokenLimit"], 4096)
+        self.assertTrue(observed["m3OutputLimitEvidenceAvailable"])
+        self.assertEqual(observed["minimaxOutputLimitHitCount"], 1)
+        self.assertNotIn("api_key", json.dumps(summary, ensure_ascii=False).lower())
 
 
 if __name__ == "__main__":

@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import os
 import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from app.jobs.correction_policy import M3_FIRST
 from app.providers.correction_routing import CorrectionProvider, M3QuotaState, ProviderFailureKind
@@ -32,6 +34,7 @@ class FakeQuota:
 class FakeM3:
     def __init__(self) -> None:
         self.calls = 0
+        self.max_output_tokens = 3072
 
     def correct_window(self, items: list[dict[str, object]], terms: list[dict[str, object]], *, context: str) -> dict[str, dict[str, object]]:
         self.calls += 1
@@ -51,15 +54,23 @@ class RuntimeRoutingTests(unittest.TestCase):
                 gemini_calls.append(1)
                 return {str(items[0]["segment_id"]): {"segment_id": str(items[0]["segment_id"]), "corrected_text": "Gemini文字"}}
 
-            runtime = CorrectionRuntime(
-                requested_policy=M3_FIRST,
-                m3_feature_enabled=True,
-                quota_check_enabled=True,
-                quota_client=quota,  # type: ignore[arg-type]
-                m3_client=m3,  # type: ignore[arg-type]
-                gemini_corrector=gemini,
-                manifest_path=Path(directory) / "correction-routing.json",
-            )
+            with patch.dict(
+                os.environ,
+                {
+                    "COURSE_TRANSCRIPT_RUNTIME_GIT_SHA": "a" * 40,
+                    "COURSE_TRANSCRIPT_DOCKER_IMAGE_REVISION": "b" * 40,
+                },
+                clear=False,
+            ):
+                runtime = CorrectionRuntime(
+                    requested_policy=M3_FIRST,
+                    m3_feature_enabled=True,
+                    quota_check_enabled=True,
+                    quota_client=quota,  # type: ignore[arg-type]
+                    m3_client=m3,  # type: ignore[arg-type]
+                    gemini_corrector=gemini,
+                    manifest_path=Path(directory) / "correction-routing.json",
+                )
             self.assertEqual(runtime.active_provider, CorrectionProvider.MINIMAX_M3)
             runtime.correct_window([ITEM], [])
             runtime.correct_window([ITEM], [])
@@ -70,6 +81,11 @@ class RuntimeRoutingTests(unittest.TestCase):
             manifest = json.loads((Path(directory) / "correction-routing.json").read_text(encoding="utf-8"))
             self.assertEqual(len(manifest["provider_switches"]), 1)
             self.assertEqual(manifest["segment_counts"]["gemini-3.7-flash"], 2)
+            self.assertEqual(manifest["effective_m3_concurrency"], 1)
+            self.assertEqual(manifest["effective_gemini_concurrency"], 1)
+            self.assertEqual(manifest["runtime_git_sha"], "a" * 40)
+            self.assertEqual(manifest["docker_image_revision"], "b" * 40)
+            self.assertEqual(manifest["m3_max_output_tokens"], 3072)
 
     def test_gemini_fallback_keeps_outer_window_parallelism(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -125,6 +141,8 @@ class RuntimeRoutingTests(unittest.TestCase):
             self.assertEqual(m3.calls, 2)
             manifest = json.loads((Path(directory) / "correction-routing.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["segment_counts"]["gemini-3.7-flash"], 3)
+            self.assertEqual(manifest["effective_m3_concurrency"], 1)
+            self.assertEqual(manifest["effective_gemini_concurrency"], 2)
 
 
 if __name__ == "__main__":

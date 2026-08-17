@@ -28,6 +28,13 @@ def _true(name: str, default: bool = False) -> bool:
     return default if value is None else value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _safe_runtime_ref(value: object) -> str | None:
+    text = str(value or "").strip()
+    if not text or len(text) > 200 or any(ord(char) < 32 for char in text):
+        return None
+    return text
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -58,6 +65,25 @@ class CorrectionRuntime:
         self.gemini_corrector = gemini_corrector
         self.manifest_path = manifest_path
         self.context = context
+        # Capture provenance once at source-job runtime initialization so later
+        # report regeneration cannot misattribute historical jobs to a newer
+        # container revision or a changed provider output-token limit.
+        self.runtime_git_sha = _safe_runtime_ref(
+            os.getenv("COURSE_TRANSCRIPT_RUNTIME_GIT_SHA")
+            or os.getenv("COURSE_TRANSCRIPT_RELEASE_TAG")
+        )
+        self.docker_image_revision = _safe_runtime_ref(
+            os.getenv("COURSE_TRANSCRIPT_DOCKER_IMAGE_REVISION")
+            or os.getenv("COURSE_TRANSCRIPT_RELEASE_TAG")
+        )
+        raw_output_limit = getattr(self.m3_client, "max_output_tokens", None)
+        try:
+            parsed_output_limit = int(raw_output_limit) if raw_output_limit is not None else None
+        except (TypeError, ValueError):
+            parsed_output_limit = None
+        self.m3_max_output_tokens = (
+            parsed_output_limit if parsed_output_limit is not None and parsed_output_limit > 0 else None
+        )
         # Routing state and manifest writes are serialized. Provider calls are
         # intentionally *not* all serialized: M3 remains single-flight so one
         # failure can atomically switch the rest of the job to Gemini, while
@@ -65,6 +91,10 @@ class CorrectionRuntime:
         # pool's configured parallelism.
         self._lock = threading.RLock()
         self._switches: list[dict[str, Any]] = []
+        self._gemini_inflight = 0
+        self._effective_gemini_concurrency = 0
+        self._m3_inflight = 0
+        self._effective_m3_concurrency = 0
         self._counts = {
             CorrectionProvider.MINIMAX_M3.value: 0,
             CorrectionProvider.GEMINI.value: 0,
@@ -107,6 +137,11 @@ class CorrectionRuntime:
                 "m3_quota_reason": self.quota.reason,
                 "provider_switches": list(self._switches),
                 "segment_counts": dict(self._counts),
+                "effective_gemini_concurrency": self._effective_gemini_concurrency,
+                "effective_m3_concurrency": self._effective_m3_concurrency,
+                "runtime_git_sha": self.runtime_git_sha,
+                "docker_image_revision": self.docker_image_revision,
+                "m3_max_output_tokens": self.m3_max_output_tokens,
                 "chirp_raw_immutable": True,
                 "timestamps_immutable": True,
             },
@@ -162,6 +197,11 @@ class CorrectionRuntime:
         # provider call, so ThreadPoolExecutor parallelism is preserved.
         with self._lock:
             if self.active_provider is CorrectionProvider.MINIMAX_M3:
+                self._m3_inflight += 1
+                self._effective_m3_concurrency = max(
+                    self._effective_m3_concurrency,
+                    self._m3_inflight,
+                )
                 try:
                     result = self.m3_client.correct_window(
                         items,
@@ -187,10 +227,25 @@ class CorrectionRuntime:
                         kind=exc.kind,
                         segment_id=str(items[0]["segment_id"]),
                     )
+                finally:
+                    self._m3_inflight -= 1
+                    self._write_manifest()
 
-        result = self.gemini_corrector(items, terms)
-        self._record_result(result, CorrectionProvider.GEMINI)
-        return result
+        with self._lock:
+            self._gemini_inflight += 1
+            self._effective_gemini_concurrency = max(
+                self._effective_gemini_concurrency,
+                self._gemini_inflight,
+            )
+            self._write_manifest()
+        try:
+            result = self.gemini_corrector(items, terms)
+            self._record_result(result, CorrectionProvider.GEMINI)
+            return result
+        finally:
+            with self._lock:
+                self._gemini_inflight -= 1
+                self._write_manifest()
 
 
 def _m3_terms_generator(client: MiniMaxCorrectionClient, *, context: str):
