@@ -84,8 +84,8 @@ YOUTUBE_REVIEW_CAPTION_LANGUAGES=zh-TW,zh-Hant,zh
 ```
 
 The playlist is the canonical source of reviewer videos. Initial production
-acceptance should still use preview mode and one controlled video before a
-full-playlist import.
+acceptance should still use preview mode and one controlled video before any
+broader import.
 
 ## Secrets that must be created before deployment
 
@@ -143,9 +143,9 @@ Callback URL:
 https://review.randy88.ccwu.cc/api/v1/review/auth/line/callback
 ```
 
-The application requests `openid profile email`. Email availability depends on
-the LINE channel/account configuration; account identity itself uses the LINE
-subject, not email.
+The application requests the minimal LINE Login scopes `openid profile`.
+Reviewer account identity uses the LINE subject; LINE email is not required by
+the production reviewer flow.
 
 ## YouTube channel-owner OAuth
 
@@ -161,6 +161,34 @@ https://www.googleapis.com/auth/youtube.force-ssl
 Reviewer Google Login credentials must never be reused as YouTube owner
 credentials.
 
+## Playlist preview and selected import
+
+Owner playlist onboarding remains explicitly two-stage.
+
+Read-only preview:
+
+```json
+{
+  "apply": false,
+  "max_videos": 10
+}
+```
+
+A UI or operator may then import only explicitly selected preview results:
+
+```json
+{
+  "apply": true,
+  "max_videos": 2,
+  "youtube_video_ids": ["video-id-1", "video-id-2"]
+}
+```
+
+Selected import downloads only those matching caption tracks and creates local
+reviewer rows after strict SRT validation. It never modifies YouTube. Existing
+review segments are still non-destructive and are never overwritten by initial
+sync.
+
 ## Pre-deployment checks
 
 Before changing the live containers:
@@ -174,12 +202,12 @@ Before changing the live containers:
 6. LINE callback URL is registered exactly;
 7. YouTube owner token file exists with restrictive permissions;
 8. `docker compose ... config` with `docker-compose.review.yml` succeeds;
-9. build/test CI for this deployment-prep PR is green.
+9. build/test CI for the approved deployment SHA is green.
 
 ## Deployment hold point
 
-Do not perform a live deployment merely because this preparation PR is green.
-Deployment should be a separate explicitly authorized step using an exact
+Do not perform a live deployment merely because a reviewer change is green.
+Deployment must remain a separate explicitly authorized step using an exact
 approved Git SHA and the existing immutable release process.
 
 The first live deployment should bring up the reviewer UI/auth boundary while
@@ -211,7 +239,7 @@ Recommended order after deployment:
 15. verify historical-version rollback on the controlled video
 ```
 
-## Deferred until the first smoke passes
+## Deferred until the controlled smoke passes
 
 Do not enable these before the controlled end-to-end test succeeds:
 

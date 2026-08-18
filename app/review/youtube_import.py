@@ -38,6 +38,7 @@ class YouTubeSyncRequest(BaseModel):
     playlist_id: str | None = Field(default=None, min_length=1, max_length=128)
     apply: bool = False
     max_videos: int = Field(default=50, ge=1, le=50)
+    youtube_video_ids: list[str] | None = Field(default=None, max_length=50)
 
 
 def _store() -> ReviewStore:
@@ -158,19 +159,44 @@ def _get_json(path: str, params: dict[str, str], *, access_token: str) -> dict[s
     return payload
 
 
+def _normalize_video_ids(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    unique: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        video_id = str(value).strip()
+        if not video_id or video_id in seen:
+            continue
+        seen.add(video_id)
+        unique.append(video_id)
+    return unique
+
+
 def _playlist_items(
     *,
     playlist_id: str,
     access_token: str,
     max_videos: int,
+    youtube_video_ids: list[str] | None = None,
 ) -> list[dict[str, str]]:
+    requested = _normalize_video_ids(youtube_video_ids)
+    requested_set = set(requested)
+    if requested and len(requested) > max_videos:
+        raise ValueError("youtube_video_ids cannot contain more items than max_videos")
+
     items: list[dict[str, str]] = []
+    found_ids: set[str] = set()
     page_token = ""
-    while len(items) < max_videos:
+    while True:
+        if requested_set and requested_set.issubset(found_ids):
+            break
+        if not requested_set and len(items) >= max_videos:
+            break
         params = {
             "part": "snippet,contentDetails,status",
             "playlistId": playlist_id,
-            "maxResults": str(min(50, max_videos - len(items))),
+            "maxResults": "50" if requested_set else str(min(50, max_videos - len(items))),
         }
         if page_token:
             params["pageToken"] = page_token
@@ -188,15 +214,20 @@ def _playlist_items(
             video_id = str(details.get("videoId") or "").strip()
             title = str(snippet.get("title") or "").strip()
             if not video_id or not title or status.get("privacyStatus") == "private":
-                # Private items may still be owner-visible, but reviewer embedding
-                # cannot reliably use them. Skip them from the public reviewer set.
+                continue
+            if requested_set and video_id not in requested_set:
                 continue
             items.append({"youtube_video_id": video_id, "title": title})
-            if len(items) >= max_videos:
+            found_ids.add(video_id)
+            if not requested_set and len(items) >= max_videos:
                 break
         page_token = str(payload.get("nextPageToken") or "")
         if not page_token:
             break
+
+    if requested:
+        by_id = {item["youtube_video_id"]: item for item in items}
+        return [by_id[video_id] for video_id in requested if video_id in by_id]
     return items
 
 
@@ -250,8 +281,6 @@ def _select_caption(video_id: str, *, access_token: str) -> dict[str, Any] | Non
     candidates.sort(key=lambda item: _caption_score(item, preferences))
     selected = candidates[0]
     snippet = selected["snippet"]
-    language = str(snippet.get("language") or "")
-    # Do not silently import an unrelated translation/language track.
     if preferences and _caption_score(selected, preferences)[0] > len(preferences):
         return None
     return selected
@@ -288,13 +317,21 @@ def sync_playlist(
     max_videos: int,
     apply: bool,
     actor: str,
+    youtube_video_ids: list[str] | None = None,
 ) -> dict[str, Any]:
+    requested = _normalize_video_ids(youtube_video_ids)
+    if requested and len(requested) > max_videos:
+        raise ValueError("youtube_video_ids cannot contain more items than max_videos")
     store = _store()
     playlist = _playlist_items(
         playlist_id=playlist_id,
         access_token=access_token,
         max_videos=max_videos,
+        youtube_video_ids=requested or None,
     )
+    returned_ids = {item["youtube_video_id"] for item in playlist}
+    missing_requested = [video_id for video_id in requested if video_id not in returned_ids]
+
     results: list[dict[str, Any]] = []
     imported = 0
     skipped_existing = 0
@@ -382,6 +419,8 @@ def sync_playlist(
         "apply": apply,
         "actor": actor,
         "playlist_items": len(playlist),
+        "requested_video_ids": requested,
+        "missing_requested_video_ids": missing_requested,
         "imported": imported,
         "skipped_existing": skipped_existing,
         "missing_caption": missing_caption,
@@ -399,6 +438,12 @@ def sync_youtube_playlist(payload: YouTubeSyncRequest, request: Request) -> dict
     )
     if not playlist_id:
         raise HTTPException(status_code=422, detail="YouTube review playlist ID is required")
+    requested = _normalize_video_ids(payload.youtube_video_ids)
+    if requested and len(requested) > payload.max_videos:
+        raise HTTPException(
+            status_code=422,
+            detail="Selected video count cannot exceed max_videos",
+        )
     try:
         access_token = _owner_access_token()
         return sync_playlist(
@@ -407,6 +452,9 @@ def sync_youtube_playlist(payload: YouTubeSyncRequest, request: Request) -> dict
             max_videos=payload.max_videos,
             apply=payload.apply,
             actor=actor,
+            youtube_video_ids=requested or None,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except YouTubeImportError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

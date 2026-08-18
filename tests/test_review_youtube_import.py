@@ -68,6 +68,7 @@ class YouTubeReviewImportTests(unittest.TestCase):
 
         self.assertEqual(result["playlist_items"], 2)
         self.assertEqual([item["status"] for item in result["results"]], ["ready", "ready"])
+        self.assertEqual(result["requested_video_ids"], [])
         download.assert_not_called()
         store = ReviewStore(youtube_import.DATA_DIR / "course-transcript.db")
         with store.connect() as connection:
@@ -196,6 +197,78 @@ class YouTubeReviewImportTests(unittest.TestCase):
         with store.connect() as connection:
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM review_videos").fetchone()[0], 0)
             self.assertEqual(connection.execute("SELECT COUNT(*) FROM review_subtitle_segments").fetchone()[0], 0)
+
+    def test_selected_playlist_items_scan_pages_and_preserve_requested_order(self) -> None:
+        first_page = {
+            "items": [
+                {
+                    "snippet": {"title": "彌勒大成佛經 第 1 集"},
+                    "contentDetails": {"videoId": "video-1"},
+                    "status": {"privacyStatus": "public"},
+                }
+            ],
+            "nextPageToken": "page-2",
+        }
+        second_page = {
+            "items": [
+                {
+                    "snippet": {"title": "彌勒大成佛經 第 2 集"},
+                    "contentDetails": {"videoId": "video-2"},
+                    "status": {"privacyStatus": "public"},
+                }
+            ]
+        }
+
+        def get_json(_path: str, params: dict[str, str], **_kwargs):
+            return second_page if params.get("pageToken") == "page-2" else first_page
+
+        with patch.object(youtube_import, "_get_json", side_effect=get_json) as request:
+            rows = youtube_import._playlist_items(
+                playlist_id="playlist-1",
+                access_token="token",
+                max_videos=2,
+                youtube_video_ids=["video-2", "video-1"],
+            )
+
+        self.assertEqual([row["youtube_video_id"] for row in rows], ["video-2", "video-1"])
+        self.assertEqual(request.call_count, 2)
+
+    def test_selected_preview_only_processes_requested_video(self) -> None:
+        def selected_playlist(**kwargs):
+            requested = kwargs.get("youtube_video_ids") or []
+            return [row for row in self._playlist() if row["youtube_video_id"] in requested]
+
+        with (
+            patch.object(youtube_import, "_playlist_items", side_effect=selected_playlist),
+            patch.object(youtube_import, "_select_caption", side_effect=lambda video_id, **_: self._caption(video_id)),
+            patch.object(youtube_import, "_download_srt") as download,
+        ):
+            result = youtube_import.sync_playlist(
+                playlist_id="playlist-1",
+                access_token="token",
+                max_videos=1,
+                apply=False,
+                actor="owner@example.test",
+                youtube_video_ids=["video-2"],
+            )
+
+        self.assertEqual(result["requested_video_ids"], ["video-2"])
+        self.assertEqual(result["missing_requested_video_ids"], [])
+        self.assertEqual(result["playlist_items"], 1)
+        self.assertEqual(result["results"][0]["youtube_video_id"], "video-2")
+        self.assertEqual(result["results"][0]["status"], "ready")
+        download.assert_not_called()
+
+    def test_selected_count_cannot_exceed_max_videos(self) -> None:
+        with self.assertRaises(ValueError):
+            youtube_import.sync_playlist(
+                playlist_id="playlist-1",
+                access_token="token",
+                max_videos=1,
+                apply=False,
+                actor="owner@example.test",
+                youtube_video_ids=["video-1", "video-2"],
+            )
 
 
 if __name__ == "__main__":

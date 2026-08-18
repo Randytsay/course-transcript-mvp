@@ -131,7 +131,7 @@
   margin-top: 13px;
   padding: 14px 16px;
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-columns: auto auto auto minmax(0, 1fr);
   align-items: center;
   gap: 22px;
   border: 1px solid #ded7cc;
@@ -139,8 +139,7 @@
   background: rgba(255, 255, 255, 0.9);
 }
 
-.sessionCard > div:first-child,
-.sessionCard > div:nth-child(2) {
+.sessionCard > div:not(.editorNames) {
   display: flex;
   flex-direction: column;
   gap: 3px;
@@ -173,6 +172,36 @@
   font-weight: 700;
 }
 
+.reviewActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 9px;
+  margin-top: 10px;
+}
+
+.reviewActions button {
+  min-height: 42px;
+  border: 1px solid #d7d0c6;
+  border-radius: 12px;
+  background: #fff;
+  color: #5e574e;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.reviewActions button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.reviewActions .completeButton {
+  border-color: #5d735f;
+  background: #5d735f;
+  color: #fff;
+}
+
 .helperText {
   margin: 10px 3px 0;
   color: #7c756c;
@@ -199,7 +228,7 @@
   border-bottom: 1px solid #ece7df;
 }
 
-.subtitleHeader > div {
+.subtitleHeader > div:first-child {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -214,6 +243,25 @@
 .subtitleHeader strong {
   color: #9a9185;
   font-size: 12px;
+}
+
+.subtitleTools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.followButton {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid #d8d1c6;
+  border-radius: 999px;
+  background: #fff;
+  color: #71695f;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .editingBadge,
@@ -231,6 +279,14 @@
 .readonlyBadge {
   background: #eeeae3;
   color: #716b62 !important;
+}
+
+.draftNotice {
+  padding: 8px 14px;
+  border-bottom: 1px solid #eee6d9;
+  background: #fff8e9;
+  color: #7a623e;
+  font-size: 12px;
 }
 
 .segmentList {
@@ -278,6 +334,14 @@
   white-space: pre-wrap;
 }
 
+.originalHint {
+  padding: 8px 10px;
+  border-radius: 9px;
+  background: #f4f0e9;
+  color: #777066 !important;
+  font-size: 12px !important;
+}
+
 .segmentMeta {
   min-height: 24px;
   display: flex;
@@ -286,6 +350,11 @@
   gap: 10px;
   color: #999086;
   font-size: 11px;
+}
+
+.segmentButtons {
+  display: flex;
+  gap: 6px;
 }
 
 .segmentMeta button {
@@ -300,9 +369,38 @@
   cursor: pointer;
 }
 
-.suggested {
-  color: #52734a;
-  font-weight: 700;
+.segmentMeta button:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.suggestionStatus {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.status_pending {
+  background: #fff2d9;
+  color: #8a6529;
+}
+
+.status_approved {
+  background: #e2f0e4;
+  color: #39704a;
+}
+
+.status_rejected {
+  background: #f1ece7;
+  color: #7a6356;
+}
+
+.status_withdrawn {
+  background: #efefef;
+  color: #777;
 }
 
 .segmentBody textarea {
@@ -360,6 +458,17 @@
   color: #6d665d;
 }
 
+@media (max-width: 1100px) {
+  .sessionCard {
+    grid-template-columns: repeat(3, auto);
+  }
+
+  .editorNames {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
 @media (max-width: 980px) {
   .page {
     padding: 12px;
@@ -391,16 +500,11 @@
   }
 
   .sessionCard {
-    grid-template-columns: 1fr 1fr;
-  }
-
-  .editorNames {
-    grid-column: 1 / -1;
-    justify-content: flex-start;
+    grid-template-columns: repeat(3, 1fr);
   }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 620px) {
   .page {
     padding: 8px;
   }
@@ -427,17 +531,35 @@
   .sessionCard {
     margin-top: 8px;
     padding: 11px 12px;
-    gap: 12px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+  }
+
+  .sessionCard strong {
+    font-size: 14px;
   }
 
   .helperText {
-    display: none;
+    font-size: 11px;
+  }
+
+  .reviewActions {
+    grid-template-columns: 1fr;
   }
 
   .subtitlePanel {
-    height: 55vh;
-    min-height: 420px;
+    height: 58vh;
+    min-height: 430px;
     border-radius: 14px;
+  }
+
+  .subtitleHeader {
+    align-items: flex-start;
+  }
+
+  .subtitleTools {
+    align-items: flex-end;
+    flex-direction: column-reverse;
   }
 
   .segment {
@@ -447,5 +569,10 @@
 
   .segmentBody p {
     font-size: 15px;
+  }
+
+  .segmentMeta {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

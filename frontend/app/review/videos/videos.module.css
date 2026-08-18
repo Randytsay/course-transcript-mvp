@@ -117,6 +117,12 @@
   margin-bottom: 14px;
 }
 
+.libraryHeading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
 .libraryHeading h2 {
   margin: 0;
   font-size: 20px;
@@ -125,6 +131,44 @@
 .libraryHeading span {
   color: #817a70;
   font-size: 13px;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(150px, 0.7fr) minmax(150px, 0.7fr);
+  gap: 10px;
+  margin-bottom: 18px;
+  padding: 12px;
+  border: 1px solid #dfd9cf;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.searchBox,
+.selectBox {
+  display: grid;
+  gap: 6px;
+}
+
+.searchBox span,
+.selectBox span {
+  color: #817a70;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+}
+
+.searchBox input,
+.selectBox select {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid #d8d1c7;
+  border-radius: 12px;
+  padding: 0 12px;
+  background: #fff;
+  color: #393630;
+  font: inherit;
+  font-size: 14px;
 }
 
 .videoGrid {
@@ -162,7 +206,7 @@
   object-fit: cover;
 }
 
-.thumbnail span {
+.thumbnail > span {
   position: absolute;
   right: 10px;
   bottom: 10px;
@@ -172,6 +216,17 @@
   color: #fff;
   font-size: 12px;
   font-weight: 700;
+}
+
+.completedBadge {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  padding: 6px 9px;
+  border-radius: 999px;
+  background: rgba(52, 112, 72, 0.92);
+  color: #fff;
+  font-size: 12px;
 }
 
 .videoBody {
@@ -194,21 +249,58 @@
 
 .metaRow strong {
   color: #735c3d;
+  text-align: right;
+}
+
+.progressGroup {
+  margin: 14px 0 12px;
+  padding: 11px 12px;
+  border-radius: 13px;
+  background: #f7f4ee;
+}
+
+.progressLabel {
+  display: flex;
+  justify-content: space-between;
+  color: #736d64;
+  font-size: 11px;
+}
+
+.progressLabel b {
+  color: #4f4a43;
 }
 
 .progressTrack {
   height: 5px;
-  margin: 12px 0 10px;
+  margin: 6px 0 10px;
   overflow: hidden;
   border-radius: 999px;
-  background: #eae5dd;
+  background: #e7e1d8;
 }
 
 .progressTrack i {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: #8f7450;
+  background: #9a805b;
+}
+
+.reviewTrack {
+  margin-bottom: 0;
+}
+
+.reviewTrack i {
+  background: #56705b;
+}
+
+@media (max-width: 860px) {
+  .controls {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .searchBox {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 760px) {
@@ -241,5 +333,24 @@
   .resumeCard {
     align-items: flex-start;
     flex-direction: column;
+  }
+}
+
+@media (max-width: 520px) {
+  .controls {
+    grid-template-columns: 1fr;
+  }
+
+  .searchBox {
+    grid-column: auto;
+  }
+
+  .metaRow {
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .metaRow strong {
+    text-align: left;
   }
 }

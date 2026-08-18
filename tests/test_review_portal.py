@@ -149,17 +149,28 @@ class ReviewPortalApiTests(unittest.TestCase):
             **extra,
         }
 
+    def _acquire_lease(self) -> str:
+        lease = self.client.post(
+            "/api/v1/review/videos/video-1/lease",
+            headers=self._mutation_headers(),
+        )
+        self.assertEqual(lease.status_code, 200)
+        return str(lease.json()["lease_token"])
+
     def test_video_list_and_detail_include_resume_and_fixed_segments(self) -> None:
         listing = self.client.get("/api/v1/review/videos")
         self.assertEqual(listing.status_code, 200)
         self.assertEqual(listing.json()["videos"][0]["segment_count"], 2)
         self.assertEqual(listing.json()["max_editors_per_video"], 2)
+        self.assertEqual(listing.json()["videos"][0]["my_pending_count"], 0)
+        self.assertEqual(listing.json()["videos"][0]["my_approved_count"], 0)
 
         detail = self.client.get("/api/v1/review/videos/video-1")
         self.assertEqual(detail.status_code, 200)
         self.assertEqual(detail.json()["video"]["youtube_video_id"], "video-1")
         self.assertEqual(detail.json()["segments"][1]["working_text"], "彌勒大成佛今")
         self.assertEqual(detail.json()["segments"][1]["start_ms"], 5000)
+        self.assertIsNone(detail.json()["segments"][1]["my_suggestion_status"])
 
     def test_progress_is_saved_without_consuming_editor_slot(self) -> None:
         response = self.client.post(
@@ -176,7 +187,24 @@ class ReviewPortalApiTests(unittest.TestCase):
         self.assertEqual(response.json()["progress"]["last_playback_ms"], 8500)
         listing = self.client.get("/api/v1/review/videos").json()
         self.assertEqual(listing["resume"]["last_playback_ms"], 8500)
+        self.assertEqual(listing["videos"][0]["reviewed_until_ms"], 5000)
         self.assertEqual(listing["videos"][0]["active_editor_count"], 0)
+
+    def test_completed_review_is_visible_in_library(self) -> None:
+        response = self.client.post(
+            "/api/v1/review/videos/video-1/progress",
+            headers=self._mutation_headers(),
+            json={
+                "last_playback_ms": 10000,
+                "reviewed_until_ms": 60000,
+                "last_segment_index": 2,
+                "completed": True,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        listing = self.client.get("/api/v1/review/videos").json()["videos"][0]
+        self.assertTrue(listing["completed"])
+        self.assertEqual(listing["reviewed_until_ms"], 60000)
 
     def test_suggestion_requires_lease_and_revises_same_pending_record(self) -> None:
         segment_id = self.segments[1]["id"]
@@ -187,13 +215,7 @@ class ReviewPortalApiTests(unittest.TestCase):
         )
         self.assertEqual(rejected.status_code, 409)
 
-        lease = self.client.post(
-            "/api/v1/review/videos/video-1/lease",
-            headers=self._mutation_headers(),
-        )
-        self.assertEqual(lease.status_code, 200)
-        lease_token = lease.json()["lease_token"]
-
+        lease_token = self._acquire_lease()
         created = self.client.post(
             f"/api/v1/review/videos/video-1/segments/{segment_id}/suggestion",
             headers=self._mutation_headers(**{"X-Review-Lease": lease_token}),
@@ -215,6 +237,51 @@ class ReviewPortalApiTests(unittest.TestCase):
         self.assertEqual(leaderboard[0]["changed_chars"], 2)
         detail = self.client.get("/api/v1/review/videos/video-1").json()
         self.assertEqual(detail["segments"][1]["my_suggested_text"], "彌勒大成佛經。")
+        self.assertEqual(detail["segments"][1]["my_suggestion_status"], "pending")
+        listing = self.client.get("/api/v1/review/videos").json()["videos"][0]
+        self.assertEqual(listing["my_suggestion_count"], 1)
+        self.assertEqual(listing["my_pending_count"], 1)
+
+    def test_pending_suggestion_can_be_withdrawn_without_delete(self) -> None:
+        segment_id = self.segments[1]["id"]
+        lease_token = self._acquire_lease()
+        created = self.client.post(
+            f"/api/v1/review/videos/video-1/segments/{segment_id}/suggestion",
+            headers=self._mutation_headers(**{"X-Review-Lease": lease_token}),
+            json={"text": "彌勒大成佛經"},
+        )
+        self.assertEqual(created.status_code, 200)
+        suggestion_id = created.json()["suggestion"]["id"]
+
+        history_before = self.client.get("/api/v1/review/suggestions/me")
+        self.assertEqual(history_before.status_code, 200)
+        self.assertEqual(history_before.json()["suggestions"][0]["display_status"], "pending")
+
+        withdrawn = self.client.post(
+            f"/api/v1/review/suggestions/{suggestion_id}/withdraw",
+            headers=self._mutation_headers(),
+        )
+        self.assertEqual(withdrawn.status_code, 200)
+        self.assertTrue(withdrawn.json()["withdrawn"])
+
+        detail = self.client.get("/api/v1/review/videos/video-1").json()
+        self.assertEqual(detail["segments"][1]["my_suggestion_status"], "withdrawn")
+        history_after = self.client.get("/api/v1/review/suggestions/me").json()["suggestions"]
+        self.assertEqual(history_after[0]["display_status"], "withdrawn")
+        listing = self.client.get("/api/v1/review/videos").json()["videos"][0]
+        self.assertEqual(listing["my_suggestion_count"], 0)
+        self.assertEqual(listing["my_pending_count"], 0)
+
+        with self.review.connect() as connection:
+            stored = connection.execute(
+                "SELECT status FROM review_suggestions WHERE id = ?", (suggestion_id,)
+            ).fetchone()
+            event = connection.execute(
+                "SELECT event_type FROM review_suggestion_events WHERE suggestion_id = ? ORDER BY id DESC LIMIT 1",
+                (suggestion_id,),
+            ).fetchone()
+        self.assertEqual(stored["status"], "rejected")
+        self.assertEqual(event["event_type"], "withdrawn")
 
     def test_third_reviewer_gets_conflict_until_slot_is_released(self) -> None:
         first = self.client.post(

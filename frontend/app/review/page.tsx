@@ -58,7 +58,7 @@ export default function ReviewPortalPage() {
         setMe(null);
       }
     } catch {
-      setMessage("目前無法連線到登入服務，請稍後重新整理。 ");
+      setMessage("目前無法連線到登入服務，請稍後重新整理。");
     } finally {
       setLoading(false);
     }
@@ -124,7 +124,17 @@ export default function ReviewPortalPage() {
         <p className={styles.eyebrow}>佛學字幕共修</p>
         <h1 id="review-title">一起把每一句法語校得更準確</h1>
         <p className={styles.lead}>
-          登入後即可保存自己的觀看與校訂進度，手機、平板、電腦都能接著上次的位置繼續。
+          邊聽法語、邊協助找出字幕錯字。系統會保存你的觀看與校閱進度，手機、平板、電腦都能接著上次的位置繼續。
+        </p>
+
+        <section className={styles.howItWorks} aria-label="使用方式">
+          <div><b>1</b><strong>選一支影片</strong><span>從上次的位置繼續也可以</span></div>
+          <div><b>2</b><strong>邊看邊校對</strong><span>發現錯字時再開始修改</span></div>
+          <div><b>3</b><strong>送出修改建議</strong><span>正式字幕由管理員統一審核</span></div>
+        </section>
+
+        <p className={styles.reassurance}>
+          不用調整時間碼，也不會直接改到 YouTube。你的建議會先留下共修紀錄，審核後才成為正式字幕。
         </p>
 
         {loading ? (
@@ -133,7 +143,6 @@ export default function ReviewPortalPage() {
           <div className={styles.accountCard}>
             <div className={styles.identityRow}>
               {me.user.avatar_url ? (
-                // Provider avatar URLs are supplied by verified Google/LINE identity claims.
                 // eslint-disable-next-line @next/next/no-img-element
                 <img src={me.user.avatar_url} alt="" className={styles.avatar} />
               ) : (
@@ -142,18 +151,22 @@ export default function ReviewPortalPage() {
                 </div>
               )}
               <div>
-                <p className={styles.signedIn}>已登入</p>
+                <p className={styles.signedIn}>歡迎回來</p>
                 <h2>{me.user.display_name}</h2>
               </div>
             </div>
 
             <a className={styles.enterReviewButton} href="/review/videos">
-              <span>進入影片校訂</span>
-              <strong>選影片、同步觀看字幕、接續上次進度 →</strong>
+              <span>開始共修</span>
+              <strong>選影片、接續進度、開始校訂 →</strong>
             </a>
 
+            <div className={styles.quickLinks}>
+              <a href="/review/contributions">查看我的共修紀錄</a>
+            </div>
+
             <div className={styles.linkedSection}>
-              <p className={styles.sectionLabel}>已綁定登入方式</p>
+              <p className={styles.sectionLabel}>登入方式</p>
               <div className={styles.providerChips}>
                 {me.identities.map((identity) => (
                   <span className={styles.providerChip} key={identity.provider}>
@@ -178,7 +191,7 @@ export default function ReviewPortalPage() {
                     onClick={() => void startAuth(provider, "link")}
                     type="button"
                   >
-                    {busy === provider ? "連結中…" : `綁定 ${providerLabels[provider]}`}
+                    {busy === provider ? "連結中…" : `加綁 ${providerLabels[provider]} 登入`}
                   </button>
                 );
               })}
@@ -194,7 +207,7 @@ export default function ReviewPortalPage() {
           </div>
         ) : (
           <div className={styles.loginCard}>
-            <p className={styles.sectionLabel}>選擇一種方式登入</p>
+            <p className={styles.sectionLabel}>登入後即可保存自己的共修進度</p>
             <div className={styles.loginButtons}>
               <button
                 className={styles.googleButton}
@@ -216,7 +229,7 @@ export default function ReviewPortalPage() {
               </button>
             </div>
             <p className={styles.privacyNote}>
-              系統只使用登入身分建立校訂帳號，不會把 Google 或 LINE 的存取權杖存進瀏覽器。
+              系統只使用登入身分建立校訂帳號；Google 或 LINE 的登入權杖不會存放在你的瀏覽器裡。
             </p>
           </div>
         )}
@@ -224,9 +237,10 @@ export default function ReviewPortalPage() {
         {message ? <p className={styles.errorMessage} role="alert">{message}</p> : null}
 
         <footer className={styles.footer}>
-          <span>固定時間碼</span>
-          <span>跨裝置進度</span>
-          <span>校訂功德紀錄</span>
+          <span>時間碼固定</span>
+          <span>跨裝置續接</span>
+          <span>修改先審核</span>
+          <span>共修紀錄保留</span>
         </footer>
       </section>
     </main>

@@ -29,7 +29,7 @@ class ReviewAdminApiTests(unittest.TestCase):
             youtube_video_id="video-1",
             playlist_id="playlist-1",
             title="彌勒大成佛經 第 1 集",
-            duration_ms=10000,
+            duration_ms=15000,
             caption_track_id="caption-1",
         )
         segments = self.review.import_subtitle_segments(
@@ -37,6 +37,7 @@ class ReviewAdminApiTests(unittest.TestCase):
             segments=[
                 {"segment_index": 1, "start_ms": 0, "end_ms": 5000, "text": "佛告阿難"},
                 {"segment_index": 2, "start_ms": 5000, "end_ms": 10000, "text": "彌勒大成佛今"},
+                {"segment_index": 3, "start_ms": 10000, "end_ms": 15000, "text": "諸天歡喜"},
             ],
         )
         user = self.review.get_or_create_user_for_identity(
@@ -57,6 +58,27 @@ class ReviewAdminApiTests(unittest.TestCase):
         admin_api.DATA_DIR = self.original_data_dir
         admin_api._store_cache = None
 
+    def test_overview_includes_operational_counts(self) -> None:
+        response = self.client.get("/api/v1/review-admin/overview")
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["video_count"], 1)
+        self.assertEqual(body["reviewer_count"], 1)
+        self.assertEqual(body["pending_suggestions"], 1)
+        self.assertEqual(body["conflicting_suggestions"], 0)
+
+    def test_suggestion_context_returns_adjacent_subtitles(self) -> None:
+        response = self.client.get(
+            f"/api/v1/review-admin/suggestions/{self.suggestion['id']}/context"
+        )
+        self.assertEqual(response.status_code, 200)
+        context = response.json()["context"]
+        self.assertEqual(context["segment_index"], 2)
+        self.assertEqual(context["previous_text"], "佛告阿難")
+        self.assertEqual(context["current_text"], "彌勒大成佛今")
+        self.assertEqual(context["next_text"], "諸天歡喜")
+        self.assertEqual(context["start_ms"], 5000)
+
     def test_approve_requires_confirmation_and_returns_compact_version(self) -> None:
         denied = self.client.post(
             f"/api/v1/review-admin/suggestions/{self.suggestion['id']}/approve",
@@ -71,7 +93,6 @@ class ReviewAdminApiTests(unittest.TestCase):
         self.assertEqual(approved.status_code, 200)
         body = approved.json()
         self.assertEqual(body["suggestion"]["status"], "approved")
-        # v1 is always the immutable imported-original baseline.
         self.assertEqual(body["version"]["version_number"], 2)
         self.assertEqual(body["version"]["source"], "suggestion_approval")
         self.assertNotIn("srt_text", body["version"])
@@ -105,6 +126,49 @@ class ReviewAdminApiTests(unittest.TestCase):
         detail = self.client.get(f"/api/v1/review-admin/versions/{version_id}")
         self.assertEqual(detail.status_code, 200)
         self.assertIn("彌勒大成佛經", detail.json()["version"]["srt_text"])
+
+    def test_publish_preview_is_read_only_and_reports_fixed_timing_diff(self) -> None:
+        approved = self.client.post(
+            f"/api/v1/review-admin/suggestions/{self.suggestion['id']}/approve",
+            json={"confirm": True},
+        ).json()
+        version_id = approved["version"]["id"]
+        before = self.admin.get_version(version_id)
+
+        response = self.client.get(
+            f"/api/v1/review-admin/versions/{version_id}/publish-preview"
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["is_latest"])
+        self.assertTrue(body["caption_track_configured"])
+        self.assertEqual(body["caption_track_id"], "caption-1")
+        self.assertEqual(body["changed_segments"], 1)
+        self.assertEqual(body["changed_characters"], 1)
+        self.assertEqual(body["timing_policy"], "fixed")
+        self.assertEqual(body["reference_version"]["version_number"], 1)
+
+        after = self.admin.get_version(version_id)
+        self.assertEqual(before["publish_status"], after["publish_status"])
+        self.assertIsNone(after["published_at"])
+
+    def test_audit_endpoint_exposes_owner_actions_without_full_version_payload(self) -> None:
+        self.client.post(
+            f"/api/v1/review-admin/suggestions/{self.suggestion['id']}/approve",
+            json={"confirm": True},
+        )
+        response = self.client.get("/api/v1/review-admin/audit?limit=20")
+        self.assertEqual(response.status_code, 200)
+        items = response.json()["audit"]
+        actions = {item["action"] for item in items}
+        self.assertIn("suggestion_approved", actions)
+        self.assertIn("version_created", actions)
+        approved = next(item for item in items if item["action"] == "suggestion_approved")
+        self.assertEqual(approved["actor"], "local-development")
+        self.assertEqual(approved["entity_id"], self.suggestion["id"])
+        self.assertIn("before", approved["payload"])
+        self.assertNotIn("snapshot_json", approved)
+        self.assertNotIn("srt_text", approved)
 
     def test_publish_requires_confirmation_and_is_idempotent_after_success(self) -> None:
         approved = self.client.post(

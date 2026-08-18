@@ -6,7 +6,7 @@
 }
 
 .shell {
-  width: min(100%, 980px);
+  width: min(100%, 1020px);
   margin: 0 auto;
 }
 
@@ -33,7 +33,7 @@
 }
 
 .header p:not(.eyebrow) {
-  max-width: 620px;
+  max-width: 680px;
   margin: 10px 0 0;
   color: #6d675e;
   line-height: 1.7;
@@ -54,7 +54,8 @@
 .stateCard,
 .errorCard,
 .mySection,
-.boardSection {
+.boardSection,
+.historySection {
   border: 1px solid #dfd8ce;
   border-radius: 22px;
   background: rgba(255, 255, 255, 0.92);
@@ -98,7 +99,7 @@
 
 .statsGrid {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(6, 1fr);
   gap: 1px;
   margin-top: 16px;
   background: #e9e2d7;
@@ -107,7 +108,7 @@
 }
 
 .statsGrid > div {
-  padding: 18px 14px;
+  padding: 18px 10px;
   background: #fbf9f5;
   text-align: center;
 }
@@ -159,14 +160,17 @@
   font-size: 11px;
 }
 
+.historySection,
 .boardSection {
+  margin-bottom: 20px;
   padding: 20px;
 }
 
 .boardHeading {
   display: flex;
   justify-content: space-between;
-  align-items: baseline;
+  align-items: flex-end;
+  gap: 16px;
   margin-bottom: 14px;
 }
 
@@ -176,8 +180,118 @@
 }
 
 .boardHeading span {
+  display: block;
+  margin-top: 4px;
   color: #8b8277;
   font-size: 12px;
+  line-height: 1.5;
+}
+
+.boardHeading select {
+  min-height: 40px;
+  padding: 0 11px;
+  border: 1px solid #d9d1c6;
+  border-radius: 11px;
+  background: #fff;
+  color: #5e574f;
+  font: inherit;
+  font-size: 13px;
+}
+
+.historyList {
+  display: grid;
+  gap: 10px;
+}
+
+.historyItem {
+  padding: 14px;
+  border: 1px solid #e8e1d7;
+  border-radius: 15px;
+  background: #fff;
+  color: inherit;
+  text-decoration: none;
+}
+
+.historyItem:hover {
+  border-color: #cfc3b2;
+  background: #fffdf9;
+}
+
+.historyTopline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.historyTopline strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14px;
+}
+
+.historyItem > small {
+  display: block;
+  margin-top: 4px;
+  color: #8e8579;
+  font-size: 11px;
+}
+
+.statusBadge {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.status_pending {
+  background: #fff0d2;
+  color: #886321;
+}
+
+.status_approved {
+  background: #e1f0e3;
+  color: #397047;
+}
+
+.status_rejected {
+  background: #f2ebe6;
+  color: #795e50;
+}
+
+.status_withdrawn {
+  background: #ededed;
+  color: #727272;
+}
+
+.historyDiff {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 11px;
+  background: #f8f5ef;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.historyDiff b {
+  color: #a08d70;
+}
+
+.reason {
+  margin: 9px 0 0;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #fff3ef;
+  color: #815448;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .board {
@@ -276,6 +390,12 @@
   font-size: 10px;
 }
 
+@media (max-width: 800px) {
+  .statsGrid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
 @media (max-width: 620px) {
   .page {
     padding: 26px 12px 44px;
@@ -294,8 +414,23 @@
     gap: 4px;
   }
 
+  .historySection,
   .boardSection {
     padding: 13px;
+  }
+
+  .boardHeading {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .historyDiff {
+    grid-template-columns: 1fr;
+  }
+
+  .historyDiff b {
+    transform: rotate(90deg);
+    justify-self: start;
   }
 
   .boardRow {

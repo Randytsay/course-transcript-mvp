@@ -10,7 +10,7 @@
 }
 
 .shell {
-  width: min(100%, 680px);
+  width: min(100%, 760px);
   text-align: center;
 }
 
@@ -45,11 +45,66 @@
 }
 
 .lead {
-  max-width: 570px;
-  margin: 18px auto 28px;
+  max-width: 620px;
+  margin: 18px auto 24px;
   color: #625f58;
   font-size: 16px;
   line-height: 1.8;
+}
+
+.howItWorks {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: 0 auto 14px;
+  text-align: left;
+}
+
+.howItWorks div {
+  min-height: 112px;
+  padding: 16px;
+  border: 1px solid rgba(83, 69, 48, 0.1);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.howItWorks b {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 10px;
+  border-radius: 50%;
+  background: #efe6d4;
+  color: #765d38;
+  font-size: 13px;
+}
+
+.howItWorks strong,
+.howItWorks span {
+  display: block;
+}
+
+.howItWorks strong {
+  margin-bottom: 5px;
+  color: #3d3933;
+  font-size: 15px;
+}
+
+.howItWorks span {
+  color: #777169;
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.reassurance {
+  margin: 0 auto 24px;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: rgba(86, 99, 79, 0.08);
+  color: #5d6758;
+  font-size: 13px;
+  line-height: 1.65;
 }
 
 .statusCard,
@@ -216,6 +271,22 @@
   line-height: 1.55;
 }
 
+.quickLinks {
+  margin-top: 12px;
+  text-align: center;
+}
+
+.quickLinks a {
+  color: #6d5a3e;
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.quickLinks a:hover {
+  text-decoration: underline;
+}
+
 .linkedSection {
   margin-top: 24px;
   padding-top: 22px;
@@ -295,6 +366,25 @@
   content: "•";
   margin-right: 7px;
   color: #b69664;
+}
+
+@media (max-width: 680px) {
+  .howItWorks {
+    grid-template-columns: 1fr;
+  }
+
+  .howItWorks div {
+    min-height: auto;
+    display: grid;
+    grid-template-columns: 34px 1fr;
+    align-items: center;
+    column-gap: 8px;
+  }
+
+  .howItWorks b {
+    grid-row: 1 / span 2;
+    margin: 0;
+  }
 }
 
 @media (max-width: 560px) {
