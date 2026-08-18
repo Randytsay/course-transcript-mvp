@@ -5,7 +5,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from app.learning.generator import generate_study_pack
+from app.learning.generator import _normalize_pack, generate_study_pack
 from app.learning.source import LearningSourceStore
 from app.learning.store import LearningStore
 from app.review.admin_store import ReviewAdminStore
@@ -48,6 +48,47 @@ class LearningGeneratorTests(unittest.TestCase):
                 youtube_video_id="video-1",
                 actor="owner@example.test",
             )
+
+    def test_normalizer_drops_unsupported_items_and_repairs_stable_ids(self) -> None:
+        segments = [
+            {"segment_index": 1, "start_ms": 0, "end_ms": 5_000, "text": "佛告阿難"},
+            {"segment_index": 2, "start_ms": 5_000, "end_ms": 10_000, "text": "彌勒大成佛經"},
+        ]
+        content, citations = _normalize_pack(
+            {
+                # Missing valid evidence means the overview is retained only as an empty shell.
+                "overview": {"title": "不應採用", "summary": "沒有可驗證來源", "source_segment_indexes": [999]},
+                "detailed_notes": [{"heading": "經名", "points": ["彌勒大成佛經"], "source_segment_indexes": [2]}],
+                "quick_review_10m": [],
+                "quick_review_3m": [],
+                "key_points": [{"text": "佛告阿難", "source_segment_indexes": [1]}],
+                "qa": [
+                    {"question": "沒有答案", "answer": "", "source_segment_indexes": [1]},
+                    {"question": "本堂經名？", "answer": "彌勒大成佛經", "source_segment_indexes": [2]},
+                ],
+                "flashcards": [
+                    {"id": "dup", "front": "經名？", "back": "彌勒大成佛經", "source_segment_indexes": [2]},
+                    {"id": "dup", "front": "開頭？", "back": "佛告阿難", "source_segment_indexes": [1]},
+                    {"front": "空答案", "back": "", "source_segment_indexes": [1]},
+                ],
+                "quiz": [
+                    {"id": "quiz-1", "question": "合法題", "choices": ["甲", "乙"], "answer_index": 1, "source_segment_indexes": [1]},
+                    {"id": "bad", "question": "答案索引錯誤", "choices": ["甲", "乙"], "answer_index": 4, "source_segment_indexes": [1]},
+                    {"id": "bad-2", "question": "選項不足", "choices": ["甲"], "answer_index": 0, "source_segment_indexes": [1]},
+                ],
+                "glossary": [{"term": "彌勒", "explanation": "", "source_segment_indexes": [2]}],
+            },
+            segments,
+        )
+        self.assertEqual(content["overview"]["summary"], "")
+        self.assertEqual(len(content["qa"]), 1)
+        self.assertEqual(len(content["flashcards"]), 2)
+        self.assertEqual(content["flashcards"][0]["id"], "dup")
+        self.assertEqual(content["flashcards"][1]["id"], "card-2")
+        self.assertEqual(len(content["quiz"]), 1)
+        self.assertEqual(content["quiz"][0]["answer_index"], 1)
+        self.assertEqual(content["glossary"], [])
+        self.assertEqual({item["segment_index"] for item in citations}, {1, 2})
 
     @patch("app.learning.generator._vertex_json")
     def test_generation_uses_approved_version_and_server_rebuilds_citations(self, vertex_json) -> None:
