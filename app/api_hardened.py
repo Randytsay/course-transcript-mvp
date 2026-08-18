@@ -6,6 +6,8 @@ from typing import Any
 
 from app.api_observed import app
 from app.drive_api_routes import router as drive_api_router
+from app.learning.admin import router as learning_admin_router
+from app.learning.routes import router as learning_router
 from app.review.admin import router as review_admin_router
 from app.review.auth import router as review_auth_router
 from app.review.contributions import router as review_contributions_router
@@ -145,8 +147,12 @@ app.include_router(drive_api_router)
 app.include_router(review_auth_router)
 app.include_router(review_portal_router)
 app.include_router(review_contributions_router)
+# Learning stays inside the reviewer-auth boundary and never inherits owner
+# capabilities merely because it shares reviewer users/videos.
+app.include_router(learning_router)
 # Owner/admin review routes stay on the Cloudflare Access protected admin origin.
 app.include_router(review_admin_router)
+app.include_router(learning_admin_router)
 # YouTube owner import stays on a separate review-admin path and therefore keeps
 # the existing Cloudflare Access mutation boundary rather than reviewer auth.
 app.include_router(review_youtube_import_router)
