@@ -12,25 +12,42 @@ from app.api import _mutation_actor
 from app.review.store import ReviewConflict, ReviewNotFound
 
 from .generator import LearningGenerationError, generate_study_pack
+from .source import LearningSourceStore
 from .store import LearningStore
 
 router = APIRouter(prefix="/api/v1/review-admin/learning", tags=["learning-admin"])
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 _store_cache: tuple[Path, LearningStore] | None = None
+_source_cache: tuple[Path, LearningSourceStore] | None = None
 
 
-class GenerateRequest(BaseModel):
+class ConfirmRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     confirm: bool = False
+
+
+class GenerateRequest(ConfirmRequest):
     force: bool = False
+
+
+def _database_path() -> Path:
+    return DATA_DIR / "course-transcript.db"
 
 
 def _store() -> LearningStore:
     global _store_cache
-    path = DATA_DIR / "course-transcript.db"
+    path = _database_path()
     if _store_cache is None or _store_cache[0] != path:
         _store_cache = (path, LearningStore(path))
     return _store_cache[1]
+
+
+def _source_store() -> LearningSourceStore:
+    global _source_cache
+    path = _database_path()
+    if _source_cache is None or _source_cache[0] != path:
+        _source_cache = (path, LearningSourceStore(path))
+    return _source_cache[1]
 
 
 def _read_actor(request: Request) -> str:
@@ -58,6 +75,7 @@ def _handle(exc: Exception) -> HTTPException:
 def overview(request: Request) -> dict[str, Any]:
     _read_actor(request)
     store = _store()
+    source_store = _source_store()
     with store.connect() as connection:
         rows = connection.execute(
             """
@@ -90,10 +108,17 @@ def overview(request: Request) -> dict[str, Any]:
     videos: list[dict[str, Any]] = []
     for row in rows:
         item = dict(row)
+        source_status = source_store.status(str(item["youtube_video_id"]))
+        source = source_status["source"]
+        item["learning_source_version_id"] = source["subtitle_version_id"] if source else None
+        item["learning_source_version_number"] = source["version_number"] if source else None
+        item["learning_source_sha256"] = source["source_sha256"] if source else None
+        item["learning_source_approved_at"] = source["approved_at"] if source else None
+        item["learning_source_is_latest"] = source_status["source_is_latest"]
         if item.get("artifact_id"):
             item["artifact_stale"] = (
-                bool(item.get("latest_source_sha256"))
-                and str(item.get("artifact_source_sha256")) != str(item.get("latest_source_sha256"))
+                not source
+                or str(item.get("artifact_source_sha256")) != str(source.get("source_sha256"))
             )
         else:
             item["artifact_stale"] = None
@@ -102,6 +127,25 @@ def overview(request: Request) -> dict[str, Any]:
         "videos": videos,
         "generation_jobs": store.list_generation_jobs(limit=100),
     }
+
+
+@router.post("/videos/{youtube_video_id}/approve-source")
+def approve_source(
+    youtube_video_id: str,
+    payload: ConfirmRequest,
+    request: Request,
+) -> dict[str, Any]:
+    if not payload.confirm:
+        raise HTTPException(status_code=422, detail="Explicit confirmation is required before approving a learning source")
+    actor = _mutation_actor(request)
+    try:
+        source = _source_store().approve_latest(
+            youtube_video_id=youtube_video_id,
+            actor=actor,
+        )
+        return {"source": source}
+    except Exception as exc:
+        raise _handle(exc) from exc
 
 
 @router.get("/videos/{youtube_video_id}/artifact")
