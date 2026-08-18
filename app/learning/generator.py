@@ -15,7 +15,7 @@ from app.review.store import ReviewConflict, ReviewNotFound
 from .source import LearningSourceStore
 from .store import LearningStore
 
-PROMPT_VERSION = "learning-study-pack-v1"
+PROMPT_VERSION = "learning-study-pack-v2"
 ARTIFACT_TYPE = "study_pack"
 
 
@@ -50,7 +50,7 @@ def _vertex_json(prompt: str, *, model: str) -> dict[str, Any]:
     project = os.environ.get("GOOGLE_CLOUD_PROJECT", "").strip()
     location = os.environ.get("GOOGLE_CLOUD_LOCATION", "global").strip() or "global"
     if not project:
-        raise LearningGenerationError("GOOGLE_CLOUD_PROJECT is not configured")
+        raise LearningGenerationError("尚未設定 GOOGLE_CLOUD_PROJECT，無法產生 AI 學習內容")
     try:
         from google import genai
         from google.genai import types
@@ -66,16 +66,16 @@ def _vertex_json(prompt: str, *, model: str) -> dict[str, Any]:
             ),
         )
     except Exception as exc:
-        raise LearningGenerationError("AI learning-content generation failed") from exc
+        raise LearningGenerationError("AI 學習內容產生失敗，正式字幕與既有學習內容均未變更") from exc
     raw = _response_text(response)
     if not raw:
-        raise LearningGenerationError("AI learning-content generation returned no content")
+        raise LearningGenerationError("AI 沒有回傳可用的學習內容")
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise LearningGenerationError("AI learning-content generation returned invalid JSON") from exc
+        raise LearningGenerationError("AI 回傳的學習內容不是有效 JSON") from exc
     if not isinstance(payload, dict):
-        raise LearningGenerationError("AI learning-content generation returned an invalid payload")
+        raise LearningGenerationError("AI 回傳的學習內容格式不正確")
     return payload
 
 
@@ -83,9 +83,9 @@ def _source_segments(version: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         payload = json.loads(str(version["snapshot_json"]))
     except (KeyError, json.JSONDecodeError) as exc:
-        raise LearningGenerationError("Subtitle version snapshot is invalid") from exc
+        raise LearningGenerationError("核定字幕版本的快照格式不正確") from exc
     if not isinstance(payload, list) or not payload:
-        raise LearningGenerationError("Subtitle version contains no segments")
+        raise LearningGenerationError("核定字幕版本沒有可用段落")
     result: list[dict[str, Any]] = []
     for item in payload:
         if not isinstance(item, dict):
@@ -108,7 +108,7 @@ def _source_segments(version: dict[str, Any]) -> list[dict[str, Any]]:
             }
         )
     if not result:
-        raise LearningGenerationError("Subtitle version contains no usable segments")
+        raise LearningGenerationError("核定字幕版本沒有可供 AI 整理的有效段落")
     return result
 
 
@@ -119,7 +119,7 @@ def _prompt(*, title: str, version_number: int, segments: list[dict[str, Any]]) 
 課程：{title}
 正式學習字幕版本：v{version_number}
 
-輸出必須是單一 JSON 物件，不要 Markdown code fence。所有需要來源的項目都必須提供 source_segment_indexes；只能填下方實際存在的段落編號。若來源不足，寧可省略，不要猜。
+輸出必須是單一 JSON 物件，不要 Markdown code fence。所有正式內容都必須提供 source_segment_indexes；只能填下方實際存在的段落編號。若來源不足，寧可省略，不要猜。overview 也必須有來源。flashcards 與 quiz 的 id 必須各自唯一且穩定。
 
 JSON 結構：
 {{
@@ -139,11 +139,12 @@ JSON 結構：
 - quick_review_10m 約可在 10 分鐘內複習完。
 - quick_review_3m 只保留最重要內容。
 - key_points 優先整理 5–12 個真正重要重點。
-- qa 使用學員可能會問的自然問題。
-- flashcards 盡量一張一個概念，避免過長。
-- quiz 以理解為主，不出刁鑽題；answer_index 為 0-based。
-- glossary 只整理字幕中確實出現且適合複習的名詞。
+- qa 使用學員可能會問的自然問題，問題與答案都不可空白。
+- flashcards 一張一個概念，front/back 都不可空白，避免過長。
+- quiz 以理解為主，不出刁鑽題；每題至少 2 個非空選項，answer_index 為合法的 0-based 索引。
+- glossary 只整理字幕中確實出現且適合複習的名詞，term/explanation 都不可空白。
 - 不要把字幕辨識可能有疑義的句子自行延伸成結論。
+- 不要為了湊數產生內容；來源不足就少一點。
 
 已核定字幕：
 {source}
@@ -168,10 +169,24 @@ def _indexes(value: Any, valid: set[int]) -> list[int]:
     return result
 
 
+def _clean_text(value: Any, limit: int = 6000) -> str:
+    return str(value or "").strip()[:limit]
+
+
 def _normalize_pack(payload: dict[str, Any], segments: list[dict[str, Any]]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     valid_map = {int(item["segment_index"]): item for item in segments}
     valid = set(valid_map)
-    allowed_lists = {
+    overview = payload.get("overview") if isinstance(payload.get("overview"), dict) else {}
+    overview_indexes = _indexes(overview.get("source_segment_indexes"), valid)
+    normalized_overview = {
+        "title": _clean_text(overview.get("title"), 300) if overview_indexes else "",
+        "summary": _clean_text(overview.get("summary")) if overview_indexes else "",
+        "source_segment_indexes": overview_indexes,
+    }
+    normalized: dict[str, Any] = {"overview": normalized_overview}
+    all_indexes: set[int] = set(overview_indexes)
+
+    ordered_lists = (
         "detailed_notes",
         "quick_review_10m",
         "quick_review_3m",
@@ -180,46 +195,74 @@ def _normalize_pack(payload: dict[str, Any], segments: list[dict[str, Any]]) -> 
         "flashcards",
         "quiz",
         "glossary",
-    }
-    overview = payload.get("overview") if isinstance(payload.get("overview"), dict) else {}
-    normalized: dict[str, Any] = {
-        "overview": {
-            "title": str(overview.get("title") or "").strip()[:300],
-            "summary": str(overview.get("summary") or "").strip()[:6000],
-            "source_segment_indexes": _indexes(overview.get("source_segment_indexes"), valid),
-        }
-    }
-    all_indexes: set[int] = set(normalized["overview"]["source_segment_indexes"])
-    for key in allowed_lists:
+    )
+    for key in ordered_lists:
         raw_items = payload.get(key)
         items: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
         if isinstance(raw_items, list):
             for raw in raw_items[:100]:
                 if not isinstance(raw, dict):
                     continue
+                indexes = _indexes(raw.get("source_segment_indexes"), valid)
+                if not indexes:
+                    continue
+
                 item: dict[str, Any] = {}
                 for field in (
                     "id", "heading", "text", "summary", "question", "answer",
                     "explanation", "term", "front", "back",
                 ):
                     if field in raw:
-                        item[field] = str(raw.get(field) or "").strip()[:6000]
+                        item[field] = _clean_text(raw.get(field))
                 if isinstance(raw.get("points"), list):
                     item["points"] = [
-                        str(value).strip()[:2000]
+                        _clean_text(value, 2000)
                         for value in raw["points"][:30]
-                        if str(value).strip()
+                        if _clean_text(value, 2000)
                     ]
                 if isinstance(raw.get("choices"), list):
-                    item["choices"] = [str(value).strip()[:1000] for value in raw["choices"][:8]]
-                if "answer_index" in raw:
-                    try:
-                        item["answer_index"] = int(raw["answer_index"])
-                    except (TypeError, ValueError):
-                        item["answer_index"] = 0
-                indexes = _indexes(raw.get("source_segment_indexes"), valid)
-                if not indexes:
+                    item["choices"] = [
+                        _clean_text(value, 1000)
+                        for value in raw["choices"][:8]
+                        if _clean_text(value, 1000)
+                    ]
+
+                if key == "detailed_notes" and not (item.get("heading") or item.get("points")):
                     continue
+                if key == "quick_review_10m" and not (item.get("heading") or item.get("summary")):
+                    continue
+                if key in {"quick_review_3m", "key_points"} and not item.get("text"):
+                    continue
+                if key == "qa" and not (item.get("question") and item.get("answer")):
+                    continue
+                if key == "glossary" and not (item.get("term") and item.get("explanation")):
+                    continue
+                if key == "flashcards":
+                    if not (item.get("front") and item.get("back")):
+                        continue
+                    item_id = _clean_text(item.get("id"), 200) or f"card-{len(items) + 1}"
+                    if item_id in seen_ids:
+                        item_id = f"card-{len(items) + 1}"
+                    item["id"] = item_id
+                    seen_ids.add(item_id)
+                if key == "quiz":
+                    choices = item.get("choices") if isinstance(item.get("choices"), list) else []
+                    if not item.get("question") or len(choices) < 2:
+                        continue
+                    try:
+                        answer_index = int(raw.get("answer_index", -1))
+                    except (TypeError, ValueError):
+                        continue
+                    if answer_index < 0 or answer_index >= len(choices):
+                        continue
+                    item["answer_index"] = answer_index
+                    item_id = _clean_text(item.get("id"), 200) or f"quiz-{len(items) + 1}"
+                    if item_id in seen_ids:
+                        item_id = f"quiz-{len(items) + 1}"
+                    item["id"] = item_id
+                    seen_ids.add(item_id)
+
                 item["source_segment_indexes"] = indexes
                 all_indexes.update(indexes)
                 items.append(item)
@@ -235,7 +278,7 @@ def _normalize_pack(payload: dict[str, Any], segments: list[dict[str, Any]]) -> 
         for index in sorted(all_indexes)
     ]
     if not normalized["key_points"] and not normalized["detailed_notes"]:
-        raise LearningGenerationError("AI learning-content generation did not return supported study notes")
+        raise LearningGenerationError("AI 回傳內容缺少可驗證的重點或詳細筆記")
     return normalized, citations
 
 
@@ -250,9 +293,7 @@ def generate_study_pack(
     source = source_store.require(youtube_video_id)
     source_status = source_store.status(youtube_video_id)
     if not source_status["source_is_latest"]:
-        raise ReviewConflict(
-            "The formal learning source is older than the latest subtitle version; approve the latest version before generating AI learning content"
-        )
+        raise ReviewConflict("正式學習來源不是目前最新字幕版本；請先重新核定最新版本再產生 AI 學習整理")
 
     with store.connect() as connection:
         video = connection.execute(
@@ -260,7 +301,7 @@ def generate_study_pack(
             (youtube_video_id,),
         ).fetchone()
     if video is None:
-        raise ReviewNotFound("Learning video not found")
+        raise ReviewNotFound("找不到這堂學習課程")
 
     version = {
         "id": source["subtitle_version_id"],
@@ -275,7 +316,7 @@ def generate_study_pack(
         and str(existing["source_sha256"]) == str(version["content_sha256"])
         and str(existing["prompt_version"]) == PROMPT_VERSION
     ):
-        return {"artifact": existing, "generated": False, "reason": "current artifact already exists"}
+        return {"artifact": existing, "generated": False, "reason": "目前正式來源已有最新 Study Pack"}
 
     model = _model_name()
     job = store.begin_generation_job(
@@ -321,4 +362,4 @@ def generate_study_pack(
             pass
         if isinstance(exc, (LearningGenerationError, ReviewConflict, ReviewNotFound)):
             raise
-        raise LearningGenerationError("AI learning-content generation failed") from exc
+        raise LearningGenerationError("AI 學習內容產生失敗，正式字幕與既有資料均未變更") from exc
