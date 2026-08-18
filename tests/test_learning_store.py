@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -56,7 +55,9 @@ class LearningStoreTests(unittest.TestCase):
         self.assertEqual(state["learning_status"], "completed")
         dashboard = self.store.dashboard(user_id=self.user["id"])
         self.assertEqual(dashboard["summary"]["completed_count"], 1)
-        self.assertEqual(dashboard["continue_learning"], None)
+        completed_video = dashboard["videos"][0]
+        self.assertEqual(completed_video["learning_status"], "completed")
+        self.assertEqual(completed_video["last_playback_ms"], 42_000)
         with self.review.connect() as connection:
             review_progress = connection.execute(
                 "SELECT * FROM review_video_progress WHERE user_id = ? AND youtube_video_id = ?",
