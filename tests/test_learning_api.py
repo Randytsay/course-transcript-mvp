@@ -129,6 +129,19 @@ class LearningApiTests(unittest.TestCase):
         self.assertEqual(completed_dashboard.json()["summary"]["completed_count"], 1)
         self.assertIsNone(completed_dashboard.json()["continue_learning"])
 
+        # Rewatching after explicit completion updates playback but does not
+        # silently reopen the learner's completion state.
+        rewatch = self.client.post(
+            "/api/v1/review/learning/videos/video-1/watch",
+            headers=self._headers(),
+            json={"last_playback_ms": 30_000},
+        )
+        self.assertEqual(rewatch.status_code, 200)
+        after_rewatch = self.client.get("/api/v1/review/learning/dashboard").json()
+        self.assertEqual(after_rewatch["videos"][0]["learning_status"], "completed")
+        self.assertEqual(after_rewatch["videos"][0]["last_playback_ms"], 30_000)
+        self.assertIsNone(after_rewatch["continue_learning"])
+
     def test_mutations_require_reviewer_csrf_and_reads_require_session(self) -> None:
         bad = self.client.post(
             "/api/v1/review/learning/videos/video-1/state",
