@@ -1,4 +1,4 @@
-"""Generate citation-backed study packs from immutable subtitle versions.
+"""Generate citation-backed study packs from owner-approved immutable subtitles.
 
 Generation is an explicit owner action. Learner reads never trigger a paid model
 request. Source timestamps are reconstructed server-side from the immutable
@@ -10,9 +10,9 @@ import json
 import os
 from typing import Any
 
-from app.review.baseline import ensure_import_baseline
 from app.review.store import ReviewConflict, ReviewNotFound
 
+from .source import LearningSourceStore
 from .store import LearningStore
 
 PROMPT_VERSION = "learning-study-pack-v1"
@@ -113,44 +113,25 @@ def _source_segments(version: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _prompt(*, title: str, version_number: int, segments: list[dict[str, Any]]) -> str:
-    source = "\n".join(
-        f"[{item['segment_index']}] {item['text']}"
-        for item in segments
-    )
-    return f"""你是佛學課程學習整理助手。請只根據下方已核准、不可變的字幕版本整理學習內容，不得補充字幕沒有出現的教義、人物、經典內容或外部知識。
+    source = "\n".join(f"[{item['segment_index']}] {item['text']}" for item in segments)
+    return f"""你是佛學課程學習整理助手。請只根據下方已由管理員核定為正式學習來源、不可變的字幕版本整理內容，不得補充字幕沒有出現的教義、人物、經典內容或外部知識。
 
 課程：{title}
-字幕版本：v{version_number}
+正式學習字幕版本：v{version_number}
 
 輸出必須是單一 JSON 物件，不要 Markdown code fence。所有需要來源的項目都必須提供 source_segment_indexes；只能填下方實際存在的段落編號。若來源不足，寧可省略，不要猜。
 
 JSON 結構：
 {{
   "overview": {{"title": "", "summary": "", "source_segment_indexes": [1]}},
-  "detailed_notes": [
-    {{"heading": "", "points": [""], "source_segment_indexes": [1]}}
-  ],
-  "quick_review_10m": [
-    {{"heading": "", "summary": "", "source_segment_indexes": [1]}}
-  ],
-  "quick_review_3m": [
-    {{"text": "", "source_segment_indexes": [1]}}
-  ],
-  "key_points": [
-    {{"text": "", "source_segment_indexes": [1]}}
-  ],
-  "qa": [
-    {{"question": "", "answer": "", "source_segment_indexes": [1]}}
-  ],
-  "flashcards": [
-    {{"id": "card-1", "front": "", "back": "", "source_segment_indexes": [1]}}
-  ],
-  "quiz": [
-    {{"id": "quiz-1", "question": "", "choices": ["", "", "", ""], "answer_index": 0, "explanation": "", "source_segment_indexes": [1]}}
-  ],
-  "glossary": [
-    {{"term": "", "explanation": "", "source_segment_indexes": [1]}}
-  ]
+  "detailed_notes": [{{"heading": "", "points": [""], "source_segment_indexes": [1]}}],
+  "quick_review_10m": [{{"heading": "", "summary": "", "source_segment_indexes": [1]}}],
+  "quick_review_3m": [{{"text": "", "source_segment_indexes": [1]}}],
+  "key_points": [{{"text": "", "source_segment_indexes": [1]}}],
+  "qa": [{{"question": "", "answer": "", "source_segment_indexes": [1]}}],
+  "flashcards": [{{"id": "card-1", "front": "", "back": "", "source_segment_indexes": [1]}}],
+  "quiz": [{{"id": "quiz-1", "question": "", "choices": ["", "", "", ""], "answer_index": 0, "explanation": "", "source_segment_indexes": [1]}}],
+  "glossary": [{{"term": "", "explanation": "", "source_segment_indexes": [1]}}]
 }}
 
 品質要求：
@@ -164,7 +145,7 @@ JSON 結構：
 - glossary 只整理字幕中確實出現且適合複習的名詞。
 - 不要把字幕辨識可能有疑義的句子自行延伸成結論。
 
-已核准字幕：
+已核定字幕：
 {source}
 """
 
@@ -218,21 +199,17 @@ def _normalize_pack(payload: dict[str, Any], segments: list[dict[str, Any]]) -> 
                     continue
                 item: dict[str, Any] = {}
                 for field in (
-                    "id",
-                    "heading",
-                    "text",
-                    "summary",
-                    "question",
-                    "answer",
-                    "explanation",
-                    "term",
-                    "front",
-                    "back",
+                    "id", "heading", "text", "summary", "question", "answer",
+                    "explanation", "term", "front", "back",
                 ):
                     if field in raw:
                         item[field] = str(raw.get(field) or "").strip()[:6000]
                 if isinstance(raw.get("points"), list):
-                    item["points"] = [str(value).strip()[:2000] for value in raw["points"][:30] if str(value).strip()]
+                    item["points"] = [
+                        str(value).strip()[:2000]
+                        for value in raw["points"][:30]
+                        if str(value).strip()
+                    ]
                 if isinstance(raw.get("choices"), list):
                     item["choices"] = [str(value).strip()[:1000] for value in raw["choices"][:8]]
                 if "answer_index" in raw:
@@ -242,7 +219,6 @@ def _normalize_pack(payload: dict[str, Any], segments: list[dict[str, Any]]) -> 
                         item["answer_index"] = 0
                 indexes = _indexes(raw.get("source_segment_indexes"), valid)
                 if not indexes:
-                    # Formal artifact items must stay traceable; discard unsupported output.
                     continue
                 item["source_segment_indexes"] = indexes
                 all_indexes.update(indexes)
@@ -270,6 +246,8 @@ def generate_study_pack(
     actor: str,
     force: bool = False,
 ) -> dict[str, Any]:
+    source_store = LearningSourceStore(store.database_path)
+    source = source_store.require(youtube_video_id)
     with store.connect() as connection:
         video = connection.execute(
             "SELECT * FROM review_videos WHERE youtube_video_id = ?",
@@ -278,17 +256,12 @@ def generate_study_pack(
     if video is None:
         raise ReviewNotFound("Learning video not found")
 
-    # If the video has not had an owner mutation yet, freeze the imported text as
-    # v1 before any AI artifact can become formal learning content.
-    ensure_import_baseline(
-        store.review_admin,
-        youtube_video_id=youtube_video_id,
-        triggered_by=actor,
-    )
-    version = store.latest_version(youtube_video_id)
-    if version is None:
-        raise ReviewNotFound("No immutable subtitle version is available")
-
+    version = {
+        "id": source["subtitle_version_id"],
+        "version_number": source["version_number"],
+        "content_sha256": source["content_sha256"],
+        "snapshot_json": source["snapshot_json"],
+    }
     existing = store.artifact_for_video(youtube_video_id, artifact_type=ARTIFACT_TYPE)
     if (
         existing
@@ -318,7 +291,7 @@ def generate_study_pack(
             model=model,
         )
         content, citations = _normalize_pack(payload, segments)
-        artifact = store.store_artifact(
+        store.store_artifact(
             youtube_video_id=youtube_video_id,
             subtitle_version_id=str(version["id"]),
             source_sha256=str(version["content_sha256"]),
