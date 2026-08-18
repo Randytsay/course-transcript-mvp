@@ -10,7 +10,7 @@ from app.learning.source import LearningSourceStore
 from app.learning.store import LearningStore
 from app.review.admin_store import ReviewAdminStore
 from app.review.baseline import ensure_import_baseline
-from app.review.store import ReviewNotFound, ReviewStore
+from app.review.store import ReviewConflict, ReviewNotFound, ReviewStore
 
 
 class LearningGeneratorTests(unittest.TestCase):
@@ -110,7 +110,7 @@ class LearningGeneratorTests(unittest.TestCase):
         vertex_json.assert_called_once()
 
     @patch("app.learning.generator._vertex_json")
-    def test_new_subtitle_version_requires_reapproval_before_it_can_become_ai_source(self, vertex_json) -> None:
+    def test_new_subtitle_version_blocks_generation_until_owner_reapproves(self, vertex_json) -> None:
         self.source.approve_latest(
             youtube_video_id="video-1",
             actor="owner@example.test",
@@ -127,9 +127,20 @@ class LearningGeneratorTests(unittest.TestCase):
                 source="test",
                 source_ref=None,
             )
+        with self.assertRaises(ReviewConflict):
+            generate_study_pack(
+                self.store,
+                youtube_video_id="video-1",
+                actor="owner@example.test",
+                force=True,
+            )
+        vertex_json.assert_not_called()
+
+        self.source.approve_latest(youtube_video_id="video-1", actor="owner@example.test")
+        self.assertTrue(self.source.status("video-1")["source_is_latest"])
         vertex_json.return_value = {
-            "overview": {"title": "舊來源", "summary": "舊來源仍可重建", "source_segment_indexes": [1]},
-            "detailed_notes": [{"heading": "經名", "points": ["仍使用核定來源"], "source_segment_indexes": [2]}],
+            "overview": {"title": "新版", "summary": "新版來源", "source_segment_indexes": [1]},
+            "detailed_notes": [{"heading": "經名", "points": ["新版核定來源"], "source_segment_indexes": [2]}],
             "quick_review_10m": [],
             "quick_review_3m": [],
             "key_points": [{"text": "重點", "source_segment_indexes": [2]}],
@@ -141,10 +152,8 @@ class LearningGeneratorTests(unittest.TestCase):
             actor="owner@example.test",
             force=True,
         )
-        self.assertEqual(generated["artifact"]["subtitle_version_id"], self.baseline["id"])
-        self.assertNotEqual(generated["artifact"]["subtitle_version_id"], latest["id"])
-        self.source.approve_latest(youtube_video_id="video-1", actor="owner@example.test")
-        self.assertTrue(self.source.status("video-1")["source_is_latest"])
+        self.assertEqual(generated["artifact"]["subtitle_version_id"], latest["id"])
+        vertex_json.assert_called_once()
 
 
 if __name__ == "__main__":
