@@ -145,11 +145,23 @@ def save_watch_progress(
             last_playback_ms=payload.last_playback_ms,
             completed=False,
         )
-        store.upsert_learning_state(
-            user_id=user_id,
-            youtube_video_id=youtube_video_id,
-            learning_status="in_progress" if payload.last_playback_ms > 0 else None,
-        )
+        with store.connect() as connection:
+            current = connection.execute(
+                """
+                SELECT learning_status FROM learning_video_state
+                WHERE user_id = ? AND youtube_video_id = ?
+                """,
+                (user_id, youtube_video_id),
+            ).fetchone()
+        # Rewatching an explicitly completed lesson must not silently reopen it.
+        if payload.last_playback_ms > 0 and (
+            current is None or str(current["learning_status"]) != "completed"
+        ):
+            store.upsert_learning_state(
+                user_id=user_id,
+                youtube_video_id=youtube_video_id,
+                learning_status="in_progress",
+            )
         return {"progress": progress}
     except Exception as exc:
         raise _raise(exc) from exc
@@ -282,7 +294,12 @@ def quiz_attempt(
     request: Request,
 ) -> dict[str, Any]:
     try:
-        attempt = _store().record_quiz_attempt(
+        store = _store()
+        if payload.artifact_id:
+            artifact = store.artifact_for_video(youtube_video_id)
+            if artifact is None or str(artifact["id"]) != payload.artifact_id:
+                raise ReviewConflict("Quiz artifact does not belong to this lesson")
+        attempt = store.record_quiz_attempt(
             user_id=_user_id(request, mutation=True),
             youtube_video_id=youtube_video_id,
             score=payload.score,
@@ -316,6 +333,24 @@ def search(
     limit: int = Query(default=40, ge=1, le=100),
 ) -> dict[str, Any]:
     try:
-        return _store().search(user_id=_user_id(request), query=q, limit=limit)
+        store = _store()
+        payload = store.search(user_id=_user_id(request), query=q, limit=limit)
+        # Search should not surface superseded/stale AI material as current
+        # knowledge. Subtitle results stay available independently.
+        current_artifacts: dict[str, dict[str, Any] | None] = {}
+        filtered: list[dict[str, Any]] = []
+        for item in payload.get("artifact_results", []):
+            video_id = str(item.get("youtube_video_id") or "")
+            if video_id not in current_artifacts:
+                current_artifacts[video_id] = store.artifact_for_video(video_id)
+            current = current_artifacts[video_id]
+            if (
+                current
+                and not bool(current.get("is_stale"))
+                and str(current.get("id")) == str(item.get("id"))
+            ):
+                filtered.append(item)
+        payload["artifact_results"] = filtered
+        return payload
     except Exception as exc:
         raise _raise(exc) from exc
