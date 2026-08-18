@@ -204,15 +204,45 @@ def get_video(youtube_video_id: str, request: Request) -> dict[str, Any]:
             """,
             (user_id, youtube_video_id),
         ).fetchall()
+        contributors = connection.execute(
+            """
+            SELECT
+                u.id AS user_id,
+                u.display_name,
+                u.avatar_url,
+                COUNT(s.id) AS suggestions_sent,
+                SUM(CASE WHEN s.status = 'approved' THEN 1 ELSE 0 END)
+                    AS approved_suggestions,
+                MAX(s.updated_at) AS last_contributed_at
+            FROM review_suggestions s
+            JOIN review_subtitle_segments seg ON seg.id = s.segment_id
+            JOIN review_users u ON u.id = s.user_id
+            WHERE seg.youtube_video_id = ?
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM review_suggestion_events withdrawn
+                  WHERE withdrawn.suggestion_id = s.id
+                    AND withdrawn.event_type = 'withdrawn'
+              )
+            GROUP BY u.id, u.display_name, u.avatar_url
+            ORDER BY last_contributed_at DESC, u.display_name
+            """,
+            (youtube_video_id,),
+        ).fetchall()
     segment_rows = [dict(row) for row in segments]
     for item in segment_rows:
         if item.get("my_suggestion_withdrawn"):
             item["my_suggestion_status"] = "withdrawn"
+    contributor_rows = [dict(row) for row in contributors]
+    for item in contributor_rows:
+        item["suggestions_sent"] = int(item["suggestions_sent"] or 0)
+        item["approved_suggestions"] = int(item["approved_suggestions"] or 0)
     return {
         "video": video,
         "segments": segment_rows,
         "progress": _serialize_progress(progress),
         "active_editors": _lease_store().active_editors(youtube_video_id),
+        "contributors": contributor_rows,
         "max_editors": _lease_store().max_editors_per_video,
     }
 

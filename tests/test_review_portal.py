@@ -172,6 +172,27 @@ class ReviewPortalApiTests(unittest.TestCase):
         self.assertEqual(detail.json()["segments"][1]["start_ms"], 5000)
         self.assertIsNone(detail.json()["segments"][1]["my_suggestion_status"])
 
+    def test_video_detail_includes_named_contributors_with_avatar(self) -> None:
+        other = self.review.get_or_create_user_for_identity(
+            provider="google",
+            provider_subject="google-contributor",
+            display_name="共修師兄",
+            avatar_url="https://example.test/avatar.png",
+        )
+        self.review.submit_suggestion(
+            segment_id=self.segments[0]["id"],
+            user_id=other["id"],
+            suggested_text="佛告阿難尊者",
+        )
+
+        detail = self.client.get("/api/v1/review/videos/video-1")
+        self.assertEqual(detail.status_code, 200)
+        contributors = detail.json()["contributors"]
+        self.assertEqual(len(contributors), 1)
+        self.assertEqual(contributors[0]["display_name"], "共修師兄")
+        self.assertEqual(contributors[0]["avatar_url"], "https://example.test/avatar.png")
+        self.assertEqual(contributors[0]["suggestions_sent"], 1)
+
     def test_progress_is_saved_without_consuming_editor_slot(self) -> None:
         response = self.client.post(
             "/api/v1/review/videos/video-1/progress",

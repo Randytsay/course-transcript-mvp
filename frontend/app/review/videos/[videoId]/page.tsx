@@ -42,6 +42,14 @@ type VideoDetail = {
     avatar_url: string | null;
     expires_at: string;
   }>;
+  contributors: Array<{
+    user_id: string;
+    display_name: string;
+    avatar_url: string | null;
+    suggestions_sent: number;
+    approved_suggestions: number;
+    last_contributed_at: string;
+  }>;
   max_editors: number;
 };
 
@@ -356,6 +364,37 @@ export default function ReviewVideoPage() {
   const reviewPercent = detail?.progress?.completed
     ? 100
     : percent(detail?.progress?.reviewed_until_ms ?? 0, detail?.video.duration_ms ?? null);
+
+  const contributors = useMemo(() => {
+    if (!detail) return [];
+    const people = new Map<string, {
+      user_id: string;
+      display_name: string;
+      avatar_url: string | null;
+      suggestions_sent: number;
+      approved_suggestions: number;
+      is_active: boolean;
+    }>();
+    detail.contributors.forEach((person) => {
+      people.set(person.user_id, { ...person, is_active: false });
+    });
+    detail.active_editors.forEach((person) => {
+      const existing = people.get(person.user_id);
+      people.set(person.user_id, {
+        user_id: person.user_id,
+        display_name: person.display_name,
+        avatar_url: person.avatar_url,
+        suggestions_sent: existing?.suggestions_sent ?? 0,
+        approved_suggestions: existing?.approved_suggestions ?? 0,
+        is_active: true,
+      });
+    });
+    return Array.from(people.values()).sort(
+      (left, right) => Number(right.is_active) - Number(left.is_active)
+        || right.suggestions_sent - left.suggestions_sent
+        || left.display_name.localeCompare(right.display_name, "zh-Hant"),
+    );
+  }, [detail]);
 
   function updateDraft(segment: Segment, value: string) {
     setDrafts((current) => ({ ...current, [segment.id]: value }));
@@ -701,6 +740,39 @@ export default function ReviewVideoPage() {
               )}
             </div>
           </div>
+
+          <section className={styles.contributorCard} aria-label="本片共修夥伴">
+            <div className={styles.contributorHeading}>
+              <div>
+                <span className={styles.contributorEyebrow}>一起把字幕校準</span>
+                <strong>本片共修夥伴</strong>
+              </div>
+              <span className={styles.contributorCount}>{contributors.length} 位</span>
+            </div>
+            {contributors.length ? (
+              <div className={styles.contributorList}>
+                {contributors.map((person) => (
+                  <div className={styles.contributor} key={person.user_id}>
+                    {person.avatar_url ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img src={person.avatar_url} alt="" className={styles.contributorAvatar} />
+                    ) : (
+                      <span className={styles.contributorAvatarFallback} aria-hidden="true">
+                        {person.display_name.slice(0, 1)}
+                      </span>
+                    )}
+                    <span className={styles.contributorCopy}>
+                      <strong>{person.display_name}</strong>
+                      <small>{person.is_active ? "現在正在校訂" : `已貢獻 ${person.suggestions_sent} 處字幕`}</small>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className={styles.contributorEmpty}>還沒有共修夥伴，歡迎從這支影片開始。</p>
+            )}
+            <p className={styles.contributorNote}>送出字幕修改建議後，就會出現在這裡；頭像只用來辨識共修夥伴。</p>
+          </section>
 
           <div className={styles.reviewActions}>
             <button disabled={progressBusy || Boolean(detail.progress?.completed)} onClick={() => void markReviewedHere()} type="button">

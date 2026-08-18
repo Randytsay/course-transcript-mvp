@@ -34,6 +34,9 @@ test("reviewer workspace separates watched and reviewed progress without seat ja
   assert.match(workspace, /batch-suggestion/);
   assert.match(workspace, /搜尋與取代/);
   assert.match(workspace, /建立 .*待審核建議/);
+  assert.match(workspace, /本片共修夥伴/);
+  assert.match(workspace, /contributors/);
+  assert.match(workspace, /contributorAvatar/);
   assert.match(workspace, /pauseVideo/);
   assert.match(workspace, /playVideo/);
   assert.match(workspaceStyles, /grid-template-columns: minmax\(0, 1\.28fr\) minmax\(0, 0\.72fr\)/);

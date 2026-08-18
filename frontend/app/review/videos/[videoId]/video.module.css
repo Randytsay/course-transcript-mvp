@@ -174,6 +174,126 @@
   font-weight: 700;
 }
 
+.contributorCard {
+  margin-top: 12px;
+  padding: 14px 16px 12px;
+  border: 1px solid #d9dfd4;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #f7faf4 0%, #fffdf8 100%);
+}
+
+.contributorHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.contributorHeading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+}
+
+.contributorEyebrow {
+  color: #77816f;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+}
+
+.contributorHeading strong {
+  color: #3f5144;
+  font-size: 15px;
+}
+
+.contributorCount {
+  padding: 5px 9px;
+  border-radius: 999px;
+  background: #e5efe1;
+  color: #466340;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.contributorList {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 9px;
+  margin-top: 12px;
+}
+
+.contributor {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 9px;
+  border: 1px solid rgba(110, 132, 105, 0.18);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.76);
+}
+
+.contributorAvatar,
+.contributorAvatarFallback {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.contributorAvatar {
+  object-fit: cover;
+}
+
+.contributorAvatarFallback {
+  display: grid;
+  place-items: center;
+  background: #dce8d7;
+  color: #466340;
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.contributorCopy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.contributorCopy strong,
+.contributorCopy small {
+  overflow-wrap: anywhere;
+}
+
+.contributorCopy strong {
+  color: #39463c;
+  font-size: 12px;
+}
+
+.contributorCopy small {
+  color: #768174;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.contributorEmpty,
+.contributorNote {
+  color: #768174;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.contributorEmpty {
+  margin: 12px 0 0;
+}
+
+.contributorNote {
+  margin: 10px 0 0;
+}
+
 .reviewActions {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -745,6 +865,26 @@
 
   .sessionCard strong {
     font-size: 14px;
+  }
+
+  .contributorCard {
+    padding: 13px 12px 11px;
+  }
+
+  .contributorHeading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 7px;
+  }
+
+  .contributorHeading > div {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .contributorList {
+    grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
   }
 
   .helperText {
