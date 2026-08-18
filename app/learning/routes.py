@@ -5,6 +5,7 @@ boundary can expose them without widening access to owner/admin APIs.
 """
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any, Literal
@@ -50,10 +51,12 @@ class NoteRequest(BaseModel):
 
 
 class QuizAttemptRequest(BaseModel):
+    """Client score/total are accepted for compatibility but never trusted."""
+
     model_config = ConfigDict(extra="forbid")
-    score: int = Field(ge=0)
-    total: int = Field(gt=0)
-    artifact_id: str | None = Field(default=None, max_length=128)
+    score: int | None = Field(default=None, ge=0)
+    total: int | None = Field(default=None, gt=0)
+    artifact_id: str = Field(min_length=1, max_length=128)
     answers: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -88,7 +91,124 @@ def _raise(exc: Exception) -> HTTPException:
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, ValueError):
         return HTTPException(status_code=422, detail=str(exc))
-    return HTTPException(status_code=500, detail="Learning operation failed")
+    return HTTPException(status_code=500, detail="學習功能暫時無法完成，請稍後再試")
+
+
+def _artifact_quiz(artifact: dict[str, Any]) -> list[dict[str, Any]]:
+    content = artifact.get("content")
+    if not isinstance(content, dict):
+        return []
+    raw = content.get("quiz")
+    return [item for item in raw if isinstance(item, dict)] if isinstance(raw, list) else []
+
+
+def _artifact_flashcard_keys(artifact: dict[str, Any]) -> set[str]:
+    content = artifact.get("content")
+    if not isinstance(content, dict):
+        return set()
+    raw = content.get("flashcards")
+    if not isinstance(raw, list):
+        return set()
+    keys: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        key = str(item.get("id") or item.get("front") or "").strip()
+        if key:
+            keys.add(key)
+    return keys
+
+
+def _artifact_search_matches(artifact: dict[str, Any], query: str, limit: int) -> list[dict[str, Any]]:
+    """Return human-readable matches whose timestamps come from that exact item."""
+
+    if limit <= 0 or bool(artifact.get("is_stale")):
+        return []
+    content = artifact.get("content")
+    citations = artifact.get("citations")
+    if not isinstance(content, dict) or not isinstance(citations, list):
+        return []
+    citation_map = {
+        int(item["segment_index"]): item
+        for item in citations
+        if isinstance(item, dict) and str(item.get("segment_index", "")).isdigit()
+    }
+    needle = query.casefold()
+    sections: list[tuple[str, list[dict[str, Any]]]] = []
+    overview = content.get("overview")
+    if isinstance(overview, dict):
+        sections.append(("overview", [overview]))
+    for key in (
+        "detailed_notes",
+        "quick_review_10m",
+        "quick_review_3m",
+        "key_points",
+        "qa",
+        "flashcards",
+        "quiz",
+        "glossary",
+    ):
+        value = content.get(key)
+        if isinstance(value, list):
+            sections.append((key, [item for item in value if isinstance(item, dict)]))
+
+    results: list[dict[str, Any]] = []
+    for section, items in sections:
+        for index, item in enumerate(items):
+            human_parts: list[str] = []
+            for field in (
+                "title", "summary", "heading", "text", "question", "answer",
+                "front", "back", "term", "explanation",
+            ):
+                value = item.get(field)
+                if isinstance(value, str) and value.strip():
+                    human_parts.append(value.strip())
+            for field in ("points", "choices"):
+                value = item.get(field)
+                if isinstance(value, list):
+                    human_parts.extend(str(part).strip() for part in value if str(part).strip())
+            searchable = " ｜ ".join(human_parts)
+            if not searchable or needle not in searchable.casefold():
+                continue
+            raw_indexes = item.get("source_segment_indexes")
+            source_indexes: list[int] = []
+            if isinstance(raw_indexes, list):
+                for raw_index in raw_indexes:
+                    try:
+                        source_indexes.append(int(raw_index))
+                    except (TypeError, ValueError):
+                        continue
+            source = next((citation_map[value] for value in source_indexes if value in citation_map), None)
+            if source is None:
+                continue
+            snippet = searchable
+            if len(snippet) > 320:
+                position = snippet.casefold().find(needle)
+                start = max(0, position - 110) if position >= 0 else 0
+                snippet = snippet[start:start + 320]
+                if start > 0:
+                    snippet = f"…{snippet}"
+                if start + 320 < len(searchable):
+                    snippet = f"{snippet}…"
+            results.append(
+                {
+                    "id": f"{artifact.get('id')}:{section}:{index}",
+                    "artifact_id": artifact.get("id"),
+                    "youtube_video_id": artifact.get("youtube_video_id"),
+                    "video_title": artifact.get("video_title"),
+                    "title": artifact.get("title"),
+                    "artifact_type": artifact.get("artifact_type"),
+                    "section": section,
+                    "snippet": snippet,
+                    "start_ms": int(source.get("start_ms") or 0),
+                    "end_ms": int(source.get("end_ms") or 0),
+                    "source_segment_index": int(source.get("segment_index") or 0),
+                    "generated_at": artifact.get("generated_at"),
+                }
+            )
+            if len(results) >= limit:
+                return results
+    return results
 
 
 @router.get("/dashboard")
@@ -138,7 +258,8 @@ def save_watch_progress(
     store = _store()
     try:
         # Playback state remains in the existing review progress row so learning
-        # and subtitle-review surfaces resume from one canonical position.
+        # and subtitle-review surfaces resume from one canonical position. Review
+        # completion is monotonic in ReviewStore.update_progress and is not reset.
         progress = store.review_admin.review.update_progress(
             user_id=user_id,
             youtube_video_id=youtube_video_id,
@@ -293,21 +414,49 @@ def quiz_attempt(
     payload: QuizAttemptRequest,
     request: Request,
 ) -> dict[str, Any]:
+    """Grade on the server; client-provided score/total are display hints only."""
+
     try:
         store = _store()
-        if payload.artifact_id:
-            artifact = store.artifact_for_video(youtube_video_id)
-            if artifact is None or str(artifact["id"]) != payload.artifact_id:
-                raise ReviewConflict("Quiz artifact does not belong to this lesson")
+        artifact = store.artifact_for_video(youtube_video_id)
+        if artifact is None or str(artifact["id"]) != payload.artifact_id:
+            raise ReviewConflict("這份測驗不是目前課程的最新 AI 學習內容")
+        if bool(artifact.get("is_stale")):
+            raise ReviewConflict("這份測驗所依據的字幕已更新，請等待管理員重新產生學習內容")
+        quiz = _artifact_quiz(artifact)
+        if not quiz:
+            raise ReviewConflict("這堂課目前沒有可作答的自我測驗")
+        score = 0
+        graded_total = 0
+        for index, question in enumerate(quiz):
+            choices = question.get("choices")
+            try:
+                answer_index = int(question.get("answer_index"))
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(choices, list) or len(choices) < 2 or answer_index < 0 or answer_index >= len(choices):
+                continue
+            key = str(question.get("id") or question.get("question") or index).strip()
+            if not key:
+                continue
+            graded_total += 1
+            try:
+                selected = int(payload.answers.get(key))
+            except (TypeError, ValueError):
+                selected = -1
+            if selected == answer_index:
+                score += 1
+        if graded_total <= 0:
+            raise ReviewConflict("這堂課的測驗內容目前無法計分")
         attempt = store.record_quiz_attempt(
             user_id=_user_id(request, mutation=True),
             youtube_video_id=youtube_video_id,
-            score=payload.score,
-            total=payload.total,
+            score=score,
+            total=graded_total,
             artifact_id=payload.artifact_id,
             answers=payload.answers,
         )
-        return {"attempt": attempt}
+        return {"attempt": attempt, "score": score, "total": graded_total}
     except Exception as exc:
         raise _raise(exc) from exc
 
@@ -315,7 +464,22 @@ def quiz_attempt(
 @router.post("/flashcards/review")
 def flashcard_review(payload: FlashcardReviewRequest, request: Request) -> dict[str, Any]:
     try:
-        progress = _store().review_flashcard(
+        store = _store()
+        with store.connect() as connection:
+            row = connection.execute(
+                "SELECT youtube_video_id FROM learning_artifacts WHERE id = ?",
+                (payload.artifact_id,),
+            ).fetchone()
+        if row is None:
+            raise ReviewNotFound("找不到這份 Flashcards")
+        artifact = store.artifact_for_video(str(row["youtube_video_id"]))
+        if artifact is None or str(artifact["id"]) != payload.artifact_id:
+            raise ReviewConflict("這組 Flashcards 已不是目前最新的學習內容")
+        if bool(artifact.get("is_stale")):
+            raise ReviewConflict("這組 Flashcards 所依據的字幕已更新，請等待管理員重新產生學習內容")
+        if payload.card_key not in _artifact_flashcard_keys(artifact):
+            raise ReviewConflict("找不到這張 Flashcard，請重新整理課程頁面")
+        progress = store.review_flashcard(
             user_id=_user_id(request, mutation=True),
             artifact_id=payload.artifact_id,
             card_key=payload.card_key,
@@ -335,22 +499,30 @@ def search(
     try:
         store = _store()
         payload = store.search(user_id=_user_id(request), query=q, limit=limit)
-        # Search should not surface superseded/stale AI material as current
-        # knowledge. Subtitle results stay available independently.
-        current_artifacts: dict[str, dict[str, Any] | None] = {}
-        filtered: list[dict[str, Any]] = []
-        for item in payload.get("artifact_results", []):
-            video_id = str(item.get("youtube_video_id") or "")
-            if video_id not in current_artifacts:
-                current_artifacts[video_id] = store.artifact_for_video(video_id)
-            current = current_artifacts[video_id]
-            if (
-                current
-                and not bool(current.get("is_stale"))
-                and str(current.get("id")) == str(item.get("id"))
-            ):
-                filtered.append(item)
-        payload["artifact_results"] = filtered
+        # The store query supplies current subtitle matches. AI search is rebuilt
+        # here from only the current, non-stale artifact so each result can link
+        # to the exact citation belonging to the matched Study Pack item.
+        remaining = min(20, limit)
+        artifact_matches: list[dict[str, Any]] = []
+        with store.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT DISTINCT youtube_video_id
+                FROM learning_artifacts
+                WHERE artifact_type = 'study_pack'
+                ORDER BY generated_at DESC
+                """
+            ).fetchall()
+        for row in rows:
+            artifact = store.artifact_for_video(str(row["youtube_video_id"]))
+            if not artifact or bool(artifact.get("is_stale")):
+                continue
+            matches = _artifact_search_matches(artifact, q.strip(), remaining)
+            artifact_matches.extend(matches)
+            remaining -= len(matches)
+            if remaining <= 0:
+                break
+        payload["artifact_results"] = artifact_matches
         return payload
     except Exception as exc:
         raise _raise(exc) from exc
