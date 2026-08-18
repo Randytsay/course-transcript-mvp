@@ -12,6 +12,7 @@ from app.api import _mutation_actor
 from app.review.store import ReviewConflict, ReviewNotFound
 
 from .generator import LearningGenerationError, generate_study_pack
+from .recovery import recover_stale_generation_jobs
 from .source import LearningSourceStore
 from .store import LearningStore
 
@@ -167,8 +168,13 @@ def generate(
         raise HTTPException(status_code=422, detail="Explicit confirmation is required before paid AI generation")
     actor = _mutation_actor(request)
     try:
+        store = _store()
+        # A process/browser interruption can leave a generation row marked
+        # ``running`` forever. Only old rows are recovered; a recent request keeps
+        # blocking duplicates through the store's existing conflict check.
+        recover_stale_generation_jobs(store, youtube_video_id=youtube_video_id)
         return generate_study_pack(
-            _store(),
+            store,
             youtube_video_id=youtube_video_id,
             actor=actor,
             force=payload.force,
