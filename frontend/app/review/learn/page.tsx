@@ -102,6 +102,7 @@ export default function LearningDashboardPage() {
             <a href="/review/learn/review">複習中心</a>
             <a href="/review/learn/search">知識搜尋</a>
             <a href="/review/contributions">共修紀錄</a>
+            <a href="/review/help">使用說明</a>
           </nav>
         </header>
 
