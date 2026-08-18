@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 
 import app.learning.admin as learning_admin
 from app.learning.source import LearningSourceStore
+from app.learning.store import LearningStore
 from app.review.baseline import ensure_import_baseline
 from app.review.admin_store import ReviewAdminStore
 from app.review.store import ReviewStore
@@ -21,14 +22,15 @@ class LearningAdminApiTests(unittest.TestCase):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         self.data_dir = Path(temporary.name)
+        self.database = self.data_dir / "course-transcript.db"
         self.original_data_dir = learning_admin.DATA_DIR
         learning_admin.DATA_DIR = self.data_dir
         learning_admin._store_cache = None
         learning_admin._source_cache = None
         self.addCleanup(self._restore)
 
-        self.review = ReviewStore(self.data_dir / "course-transcript.db")
-        self.admin = ReviewAdminStore(self.data_dir / "course-transcript.db")
+        self.review = ReviewStore(self.database)
+        self.admin = ReviewAdminStore(self.database)
         self.review.upsert_video(
             youtube_video_id="video-1",
             playlist_id="playlist-1",
@@ -71,7 +73,7 @@ class LearningAdminApiTests(unittest.TestCase):
             json={"confirm": False},
         )
         self.assertEqual(denied.status_code, 422)
-        self.assertIsNone(LearningSourceStore(self.data_dir / "course-transcript.db").get("video-1"))
+        self.assertIsNone(LearningSourceStore(self.database).get("video-1"))
 
         approved = self.client.post(
             "/api/v1/review-admin/learning/videos/video-1/approve-source",
@@ -82,6 +84,42 @@ class LearningAdminApiTests(unittest.TestCase):
         self.assertEqual(source["subtitle_version_id"], self.baseline["id"])
         self.assertEqual(source["source_sha256"], self.baseline["content_sha256"])
         self.assertEqual(source["approved_by_actor"], "local-development")
+
+    def test_overview_never_calls_old_source_artifact_current_after_new_subtitle_version(self) -> None:
+        source_store = LearningSourceStore(self.database)
+        source_store.approve_latest(youtube_video_id="video-1", actor="owner@example.test")
+        store = LearningStore(self.database)
+        store.store_artifact(
+            youtube_video_id="video-1",
+            subtitle_version_id=self.baseline["id"],
+            source_sha256=self.baseline["content_sha256"],
+            artifact_type="study_pack",
+            title="AI 學習整理",
+            content={"key_points": [{"text": "佛告阿難", "source_segment_indexes": [1]}]},
+            citations=[{"segment_index": 1, "start_ms": 0, "end_ms": 5_000, "text": "佛告阿難"}],
+            model="test-model",
+            prompt_version="learning-study-pack-v2",
+            actor="owner@example.test",
+        )
+        first = self.client.get("/api/v1/review-admin/learning/overview").json()["videos"][0]
+        self.assertTrue(first["learning_source_is_latest"])
+        self.assertFalse(first["artifact_stale"])
+
+        with self.admin.transaction() as connection:
+            connection.execute(
+                "UPDATE review_subtitle_segments SET working_text = ?, revision = revision + 1 WHERE youtube_video_id = ? AND segment_index = 2",
+                ("彌勒大成佛經。", "video-1"),
+            )
+            self.admin._snapshot_video(
+                connection,
+                youtube_video_id="video-1",
+                actor="owner@example.test",
+                source="test",
+                source_ref=None,
+            )
+        after = self.client.get("/api/v1/review-admin/learning/overview").json()["videos"][0]
+        self.assertFalse(after["learning_source_is_latest"])
+        self.assertTrue(after["artifact_stale"])
 
     def test_paid_generation_requires_confirmation_and_formal_source(self) -> None:
         denied = self.client.post(
