@@ -1,0 +1,151 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+from app.learning.generator import generate_study_pack
+from app.learning.source import LearningSourceStore
+from app.learning.store import LearningStore
+from app.review.admin_store import ReviewAdminStore
+from app.review.baseline import ensure_import_baseline
+from app.review.store import ReviewNotFound, ReviewStore
+
+
+class LearningGeneratorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.database = Path(temporary.name) / "course-transcript.db"
+        review = ReviewStore(self.database)
+        review.upsert_video(
+            youtube_video_id="video-1",
+            playlist_id="playlist-1",
+            title="彌勒大成佛經 第 1 講",
+            duration_ms=20_000,
+        )
+        review.import_subtitle_segments(
+            youtube_video_id="video-1",
+            segments=[
+                {"segment_index": 1, "start_ms": 0, "end_ms": 5_000, "text": "佛告阿難"},
+                {"segment_index": 2, "start_ms": 5_000, "end_ms": 10_000, "text": "彌勒大成佛經"},
+            ],
+        )
+        self.admin = ReviewAdminStore(self.database)
+        self.baseline = ensure_import_baseline(
+            self.admin,
+            youtube_video_id="video-1",
+            triggered_by="owner@example.test",
+        )
+        self.store = LearningStore(self.database)
+        self.source = LearningSourceStore(self.database)
+
+    def test_generation_fails_closed_until_owner_approves_learning_source(self) -> None:
+        with self.assertRaises(ReviewNotFound):
+            generate_study_pack(
+                self.store,
+                youtube_video_id="video-1",
+                actor="owner@example.test",
+            )
+
+    @patch("app.learning.generator._vertex_json")
+    def test_generation_uses_approved_version_and_server_rebuilds_citations(self, vertex_json) -> None:
+        self.source.approve_latest(
+            youtube_video_id="video-1",
+            actor="owner@example.test",
+        )
+        vertex_json.return_value = {
+            "overview": {
+                "title": "第一講",
+                "summary": "介紹本堂重點",
+                "source_segment_indexes": [1],
+            },
+            "detailed_notes": [
+                {
+                    "heading": "經名",
+                    "points": ["彌勒大成佛經"],
+                    "source_segment_indexes": [2, 999],
+                }
+            ],
+            "quick_review_10m": [],
+            "quick_review_3m": [{"text": "記住經名", "source_segment_indexes": [2]}],
+            "key_points": [{"text": "佛告阿難", "source_segment_indexes": [1]}],
+            "qa": [],
+            "flashcards": [
+                {
+                    "id": "card-1",
+                    "front": "本堂經名？",
+                    "back": "彌勒大成佛經",
+                    "source_segment_indexes": [2],
+                }
+            ],
+            "quiz": [],
+            "glossary": [],
+        }
+        result = generate_study_pack(
+            self.store,
+            youtube_video_id="video-1",
+            actor="owner@example.test",
+        )
+        self.assertTrue(result["generated"])
+        artifact = result["artifact"]
+        self.assertEqual(artifact["subtitle_version_id"], self.baseline["id"])
+        self.assertEqual(artifact["source_sha256"], self.baseline["content_sha256"])
+        self.assertEqual(
+            artifact["content"]["detailed_notes"][0]["source_segment_indexes"],
+            [2],
+        )
+        citation = next(item for item in artifact["citations"] if item["segment_index"] == 2)
+        self.assertEqual(citation["start_ms"], 5_000)
+        self.assertEqual(citation["text"], "彌勒大成佛經")
+
+        # A duplicate request for the same source/prompt must not spend another model call.
+        again = generate_study_pack(
+            self.store,
+            youtube_video_id="video-1",
+            actor="owner@example.test",
+        )
+        self.assertFalse(again["generated"])
+        vertex_json.assert_called_once()
+
+    @patch("app.learning.generator._vertex_json")
+    def test_new_subtitle_version_requires_reapproval_before_it_can_become_ai_source(self, vertex_json) -> None:
+        self.source.approve_latest(
+            youtube_video_id="video-1",
+            actor="owner@example.test",
+        )
+        with self.admin.transaction() as connection:
+            connection.execute(
+                "UPDATE review_subtitle_segments SET working_text = ?, revision = revision + 1 WHERE youtube_video_id = ? AND segment_index = 2",
+                ("彌勒大成佛經。", "video-1"),
+            )
+            latest = self.admin._snapshot_video(
+                connection,
+                youtube_video_id="video-1",
+                actor="owner@example.test",
+                source="test",
+                source_ref=None,
+            )
+        vertex_json.return_value = {
+            "overview": {"title": "舊來源", "summary": "舊來源仍可重建", "source_segment_indexes": [1]},
+            "detailed_notes": [{"heading": "經名", "points": ["仍使用核定來源"], "source_segment_indexes": [2]}],
+            "quick_review_10m": [],
+            "quick_review_3m": [],
+            "key_points": [{"text": "重點", "source_segment_indexes": [2]}],
+            "qa": [], "flashcards": [], "quiz": [], "glossary": [],
+        }
+        generated = generate_study_pack(
+            self.store,
+            youtube_video_id="video-1",
+            actor="owner@example.test",
+            force=True,
+        )
+        self.assertEqual(generated["artifact"]["subtitle_version_id"], self.baseline["id"])
+        self.assertNotEqual(generated["artifact"]["subtitle_version_id"], latest["id"])
+        self.source.approve_latest(youtube_video_id="video-1", actor="owner@example.test")
+        self.assertTrue(self.source.status("video-1")["source_is_latest"])
+
+
+if __name__ == "__main__":
+    unittest.main()
