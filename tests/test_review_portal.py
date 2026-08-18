@@ -265,6 +265,38 @@ class ReviewPortalApiTests(unittest.TestCase):
         self.assertEqual(listing["my_suggestion_count"], 1)
         self.assertEqual(listing["my_pending_count"], 1)
 
+    def test_batch_replace_requires_lease_and_keeps_formal_text_unchanged(self) -> None:
+        with self.review.transaction() as connection:
+            connection.execute(
+                "UPDATE review_subtitle_segments SET working_text = ? WHERE id = ?",
+                ("共同錯誤 佛", self.segments[0]["id"]),
+            )
+            connection.execute(
+                "UPDATE review_subtitle_segments SET working_text = ? WHERE id = ?",
+                ("共同錯誤 佛 彌勒", self.segments[1]["id"]),
+            )
+
+        without_lease = self.client.post(
+            "/api/v1/review/videos/video-1/batch-suggestion",
+            headers=self._mutation_headers(),
+            json={"find_text": "佛", "replace_text": "佛陀"},
+        )
+        self.assertEqual(without_lease.status_code, 409)
+
+        lease_token = self._acquire_lease()
+        response = self.client.post(
+            "/api/v1/review/videos/video-1/batch-suggestion",
+            headers=self._mutation_headers(**{"X-Review-Lease": lease_token}),
+            json={"find_text": "佛", "replace_text": "佛陀"},
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["batch"]["matched_count"], 2)
+        self.assertEqual(response.json()["batch"]["created_count"], 2)
+        detail = self.client.get("/api/v1/review/videos/video-1").json()
+        self.assertEqual(detail["segments"][0]["working_text"], "共同錯誤 佛")
+        self.assertEqual(detail["segments"][0]["my_suggested_text"], "共同錯誤 佛陀")
+        self.assertEqual(detail["segments"][1]["my_suggested_text"], "共同錯誤 佛陀 彌勒")
+
     def test_pending_suggestion_can_be_withdrawn_without_delete(self) -> None:
         segment_id = self.segments[1]["id"]
         lease_token = self._acquire_lease()

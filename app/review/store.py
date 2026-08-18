@@ -625,6 +625,188 @@ class ReviewStore:
             ).fetchone()
         return self._row(row, "Suggestion not found")
 
+    def submit_batch_replace_suggestions(
+        self,
+        *,
+        youtube_video_id: str,
+        user_id: str,
+        find_text: str,
+        replace_text: str,
+    ) -> dict[str, Any]:
+        """Create or revise pending suggestions for an exact text replacement.
+
+        The replacement is scoped to one video and remains in the normal
+        pending-suggestion workflow. A reviewer's existing pending suggestion
+        is treated as the visible source text and revised in place; formal
+        subtitle text is never changed here.
+        """
+        needle = find_text
+        replacement = replace_text
+        if not needle.strip():
+            raise ValueError("find_text is required")
+        if not replacement.strip():
+            raise ValueError("replace_text is required")
+        batch_id = uuid.uuid4().hex
+        now = _iso()
+        suggestions: list[dict[str, Any]] = []
+        with self.transaction() as connection:
+            user = connection.execute(
+                "SELECT status FROM review_users WHERE id = ?", (user_id,)
+            ).fetchone()
+            if user is None:
+                raise ReviewNotFound("Reviewer not found")
+            if user["status"] != "active":
+                raise ReviewConflict("Reviewer account is suspended")
+            video = connection.execute(
+                "SELECT youtube_video_id FROM review_videos WHERE youtube_video_id = ?",
+                (youtube_video_id,),
+            ).fetchone()
+            if video is None:
+                raise ReviewNotFound("Video not found")
+            rows = connection.execute(
+                """
+                SELECT
+                    seg.*,
+                    pending.id AS pending_id,
+                    pending.original_text_snapshot AS pending_original_text,
+                    pending.suggested_text AS pending_suggested_text
+                FROM review_subtitle_segments seg
+                LEFT JOIN review_suggestions pending
+                    ON pending.id = (
+                        SELECT s.id
+                        FROM review_suggestions s
+                        WHERE s.segment_id = seg.id
+                          AND s.user_id = ?
+                          AND s.status = 'pending'
+                        ORDER BY s.updated_at DESC, s.created_at DESC
+                        LIMIT 1
+                    )
+                WHERE seg.youtube_video_id = ?
+                ORDER BY seg.segment_index
+                """,
+                (user_id, youtube_video_id),
+            ).fetchall()
+            for row in rows:
+                before = str(row["pending_suggested_text"] or row["working_text"])
+                if needle not in before:
+                    continue
+                after = before.replace(needle, replacement)
+                if after == before:
+                    continue
+                if not after.strip():
+                    raise ValueError("批次取代後不能留下空白字幕")
+                if len(after) > 4000:
+                    raise ValueError("批次取代後的字幕超過單段 4000 字限制")
+                pending_id = row["pending_id"]
+                if pending_id:
+                    original_snapshot = str(row["pending_original_text"])
+                    if after == original_snapshot:
+                        continue
+                    changed = changed_char_count(original_snapshot, after)
+                    connection.execute(
+                        """
+                        UPDATE review_suggestions
+                        SET suggested_text = ?, changed_chars = ?, updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (after, changed, now, str(pending_id)),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO review_suggestion_events(
+                            suggestion_id, event_type, actor_user_id, payload_json, created_at
+                        ) VALUES (?, 'revised', ?, ?, ?)
+                        """,
+                        (
+                            str(pending_id),
+                            user_id,
+                            json.dumps(
+                                {
+                                    "previous_suggestion": row["pending_suggested_text"],
+                                    "after": after,
+                                    "changed_chars": changed,
+                                    "source": "batch_replace",
+                                    "batch_id": batch_id,
+                                    "find_text": needle,
+                                    "replace_text": replacement,
+                                },
+                                ensure_ascii=False,
+                            ),
+                            now,
+                        ),
+                    )
+                    suggestion_id = str(pending_id)
+                    created = False
+                else:
+                    suggestion_id = uuid.uuid4().hex
+                    original_snapshot = str(row["working_text"])
+                    changed = changed_char_count(original_snapshot, after)
+                    if changed <= 0:
+                        continue
+                    connection.execute(
+                        """
+                        INSERT INTO review_suggestions(
+                            id, segment_id, user_id, base_segment_revision,
+                            original_text_snapshot, suggested_text, changed_chars,
+                            status, created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+                        """,
+                        (
+                            suggestion_id,
+                            int(row["id"]),
+                            user_id,
+                            int(row["revision"]),
+                            original_snapshot,
+                            after,
+                            changed,
+                            now,
+                            now,
+                        ),
+                    )
+                    connection.execute(
+                        """
+                        INSERT INTO review_suggestion_events(
+                            suggestion_id, event_type, actor_user_id, payload_json, created_at
+                        ) VALUES (?, 'submitted', ?, ?, ?)
+                        """,
+                        (
+                            suggestion_id,
+                            user_id,
+                            json.dumps(
+                                {
+                                    "before": original_snapshot,
+                                    "after": after,
+                                    "changed_chars": changed,
+                                    "source": "batch_replace",
+                                    "batch_id": batch_id,
+                                    "find_text": needle,
+                                    "replace_text": replacement,
+                                },
+                                ensure_ascii=False,
+                            ),
+                            now,
+                        ),
+                    )
+                    created = True
+                suggestions.append(
+                    {
+                        "id": suggestion_id,
+                        "segment_id": int(row["id"]),
+                        "segment_index": int(row["segment_index"]),
+                        "suggested_text": after,
+                        "created": created,
+                    }
+                )
+        if not suggestions:
+            raise ReviewConflict("找不到可套用的字幕文字")
+        return {
+            "batch_id": batch_id,
+            "matched_count": len(suggestions),
+            "created_count": sum(1 for item in suggestions if item["created"]),
+            "revised_count": sum(1 for item in suggestions if not item["created"]),
+            "suggestions": suggestions,
+        }
+
     def update_progress(
         self,
         *,

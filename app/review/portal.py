@@ -44,6 +44,12 @@ class SuggestionRequest(BaseModel):
     text: str = Field(min_length=1, max_length=4000)
 
 
+class BatchReplaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    find_text: str = Field(min_length=1, max_length=200)
+    replace_text: str = Field(min_length=1, max_length=4000)
+
+
 def _database_path() -> Path:
     return DATA_DIR / "course-transcript.db"
 
@@ -475,3 +481,32 @@ def save_suggestion(
     except (ReviewConflict, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {"suggestion": suggestion, "created": created}
+
+
+@router.post("/videos/{youtube_video_id}/batch-suggestion")
+def save_batch_suggestions(
+    youtube_video_id: str,
+    payload: BatchReplaceRequest,
+    request: Request,
+    x_review_lease: str = Header(default="", alias="X-Review-Lease"),
+) -> dict[str, Any]:
+    session = require_reviewer_session(request, mutation=True)
+    user_id = str(session["user_id"])
+    if not _lease_store().validate(
+        user_id=user_id,
+        youtube_video_id=youtube_video_id,
+        lease_token=x_review_lease,
+    ):
+        raise HTTPException(status_code=409, detail="Active edit lease required")
+    try:
+        batch = _review_store().submit_batch_replace_suggestions(
+            youtube_video_id=youtube_video_id,
+            user_id=user_id,
+            find_text=payload.find_text,
+            replace_text=payload.replace_text,
+        )
+    except ReviewNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except (ReviewConflict, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"batch": batch}

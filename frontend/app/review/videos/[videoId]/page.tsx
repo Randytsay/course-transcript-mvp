@@ -132,6 +132,9 @@ export default function ReviewVideoPage() {
   const [loading, setLoading] = useState(true);
   const [currentMs, setCurrentMs] = useState(0);
   const [followPlayback, setFollowPlayback] = useState(true);
+  const [batchFindText, setBatchFindText] = useState("");
+  const [batchReplaceText, setBatchReplaceText] = useState("");
+  const [batchBusy, setBatchBusy] = useState(false);
 
   const mutationHeaders = useCallback(
     (extra: Record<string, string> = {}) => ({
@@ -336,6 +339,20 @@ export default function ReviewVideoPage() {
     [activeSegmentId, detail],
   );
 
+  const batchMatches = useMemo(() => {
+    if (!detail || !batchFindText.trim() || !batchReplaceText.trim()) return [];
+    return detail.segments.flatMap((segment) => {
+      const source = segment.my_suggestion_status === "pending" && segment.my_suggested_text
+        ? segment.my_suggested_text
+        : segment.working_text;
+      if (!source.includes(batchFindText)) return [];
+      const replacement = source.split(batchFindText).join(batchReplaceText);
+      return replacement === source
+        ? []
+        : [{ segmentId: segment.id, segmentIndex: segment.segment_index, source, replacement }];
+    });
+  }, [batchFindText, batchReplaceText, detail]);
+
   const reviewPercent = detail?.progress?.completed
     ? 100
     : percent(detail?.progress?.reviewed_until_ms ?? 0, detail?.video.duration_ms ?? null);
@@ -391,7 +408,7 @@ export default function ReviewVideoPage() {
     }
     setLease(body);
     pausePlayback();
-    setMessage("已進入校訂模式。直接點字幕文字即可編輯；點時間可跳到該段。");
+    setMessage("已進入校訂模式。直接點字幕文字即可編輯；點時間可跳到該段。共同錯字可用字幕上方的搜尋與取代。");
     await loadDetail();
   }
 
@@ -546,6 +563,58 @@ export default function ReviewVideoPage() {
     }
   }
 
+  async function batchReplaceSuggestions() {
+    if (!lease || batchBusy) return;
+    if (!batchFindText.trim() || !batchReplaceText.trim()) {
+      setMessage("請輸入要尋找的文字與正確文字。");
+      return;
+    }
+    if (unsavedIds.size) {
+      setMessage("請先送出或取消個別草稿，再使用批次搜尋與取代，避免覆蓋尚未送出的修改。");
+      return;
+    }
+    if (!batchMatches.length) {
+      setMessage("目前找不到可套用的字幕文字。");
+      return;
+    }
+    const findText = batchFindText;
+    const replaceText = batchReplaceText;
+    if (!window.confirm(
+      `確認把「${findText}」取代為「${replaceText}」？\n\n會在這支影片建立 ${batchMatches.length} 段待審核修改建議，正式字幕不會立即改變。`,
+    )) return;
+    setBatchBusy(true);
+    setMessage(null);
+    pausePlayback();
+    try {
+      const response = await fetch(
+        `/api/v1/review/videos/${encodeURIComponent(videoId)}/batch-suggestion`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: mutationHeaders({ "X-Review-Lease": lease.lease_token }),
+          body: JSON.stringify({ find_text: findText, replace_text: replaceText }),
+        },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.detail || "批次修改建議送出失敗");
+      const batch = body.batch ?? {};
+      setBatchFindText("");
+      setBatchReplaceText("");
+      setSelectedSegmentId(null);
+      setFollowPlayback(true);
+      setMessage(
+        `已建立 ${batch.matched_count ?? batchMatches.length} 段待審核建議。${batch.revised_count ? `其中 ${batch.revised_count} 段是更新原有建議。` : ""}`,
+      );
+      await loadDetail();
+      resumePlayback();
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "批次修改建議送出失敗");
+      resumePlayback();
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
   async function withdrawSuggestion(segment: Segment) {
     if (!segment.my_suggestion_id || segment.my_suggestion_status !== "pending") return;
     if (!window.confirm("撤回這筆尚未審核的修改建議？")) return;
@@ -682,6 +751,64 @@ export default function ReviewVideoPage() {
           </div>
           {unsavedIds.size ? (
             <div className={styles.draftNotice}>已自動保存 {unsavedIds.size} 筆尚未送出的草稿。</div>
+          ) : null}
+          {lease ? (
+            <form
+              className={styles.replacePanel}
+              onSubmit={(event) => {
+                event.preventDefault();
+                void batchReplaceSuggestions();
+              }}
+            >
+              <div className={styles.replacePanelHeading}>
+                <div>
+                  <span className={styles.replaceEyebrow}>共同錯字</span>
+                  <strong>搜尋與取代</strong>
+                </div>
+                <span className={styles.replaceSafety}>只建立待審核建議</span>
+              </div>
+              <p className={styles.replaceDescription}>找出這支影片中重複出現的錯字，一次送出多段修改；正式字幕仍由管理員審核。</p>
+              <div className={styles.replaceFields}>
+                <label>
+                  <span>尋找</span>
+                  <input
+                    aria-label="批次尋找文字"
+                    autoComplete="off"
+                    onChange={(event) => setBatchFindText(event.target.value)}
+                    placeholder="例如：彌勒大成佛今"
+                    type="text"
+                    value={batchFindText}
+                  />
+                </label>
+                <span className={styles.replaceArrow} aria-hidden="true">→</span>
+                <label>
+                  <span>取代為</span>
+                  <input
+                    aria-label="批次取代文字"
+                    autoComplete="off"
+                    onChange={(event) => setBatchReplaceText(event.target.value)}
+                    placeholder="正確文字"
+                    type="text"
+                    value={batchReplaceText}
+                  />
+                </label>
+              </div>
+              <div className={styles.replaceSummary} aria-live="polite">
+                {!batchFindText.trim() || !batchReplaceText.trim()
+                  ? "輸入兩欄文字後，這裡會顯示預計修改的段落數。"
+                  : batchMatches.length
+                    ? <>找到 <strong>{batchMatches.length}</strong> 段，送出後會各自成為待審核建議。</>
+                    : "目前找不到可套用的字幕文字。"}
+              </div>
+              {unsavedIds.size ? <p className={styles.replaceWarning}>請先處理上方尚未送出的個別草稿。</p> : null}
+              <button
+                className={styles.replaceButton}
+                disabled={batchBusy || Boolean(unsavedIds.size) || !batchMatches.length}
+                type="submit"
+              >
+                {batchBusy ? "建立中…" : `建立 ${batchMatches.length} 段待審核建議`}
+              </button>
+            </form>
           ) : null}
           <div className={styles.segmentList}>
             {detail.segments.map((segment) => {

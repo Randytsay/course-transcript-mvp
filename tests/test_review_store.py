@@ -158,6 +158,48 @@ class ReviewStoreTests(unittest.TestCase):
         self.assertEqual(leaderboard[0]["suggestions_sent"], 1)
         self.assertEqual(leaderboard[0]["changed_chars"], 2)
 
+    def test_batch_replace_creates_and_revises_pending_suggestions_for_one_video(self):
+        user = self.create_user()
+        segments = self.create_video()
+        with self.store.transaction() as connection:
+            connection.execute(
+                "UPDATE review_subtitle_segments SET working_text = ? WHERE id = ?",
+                ("共同錯誤 佛", segments[0]["id"]),
+            )
+            connection.execute(
+                "UPDATE review_subtitle_segments SET working_text = ? WHERE id = ?",
+                ("共同錯誤 佛 彌勒", segments[1]["id"]),
+            )
+
+        created = self.store.submit_batch_replace_suggestions(
+            youtube_video_id="yt-video-1",
+            user_id=user["id"],
+            find_text="佛",
+            replace_text="佛陀",
+        )
+        self.assertEqual(created["matched_count"], 2)
+        self.assertEqual(created["created_count"], 2)
+        self.assertEqual(created["revised_count"], 0)
+        self.assertEqual(
+            [item["suggested_text"] for item in created["suggestions"]],
+            ["共同錯誤 佛陀", "共同錯誤 佛陀 彌勒"],
+        )
+        self.assertEqual(self.store.list_segments("yt-video-1")[0]["working_text"], "共同錯誤 佛")
+
+        revised = self.store.submit_batch_replace_suggestions(
+            youtube_video_id="yt-video-1",
+            user_id=user["id"],
+            find_text="佛陀",
+            replace_text="佛陀菩薩",
+        )
+        self.assertEqual(revised["matched_count"], 2)
+        self.assertEqual(revised["created_count"], 0)
+        self.assertEqual(revised["revised_count"], 2)
+        self.assertEqual(
+            [item["suggested_text"] for item in revised["suggestions"]],
+            ["共同錯誤 佛陀菩薩", "共同錯誤 佛陀菩薩 彌勒"],
+        )
+
     def test_progress_keeps_reviewed_boundary_but_allows_playback_to_move(self):
         user = self.create_user()
         self.create_video()

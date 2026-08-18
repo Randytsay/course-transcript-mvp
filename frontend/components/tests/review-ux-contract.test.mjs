@@ -31,6 +31,9 @@ test("reviewer workspace separates watched and reviewed progress without seat ja
   assert.match(workspace, /字幕文字<\/b> \{lease \? "點擊編輯" : "開始校訂後可編輯"\}/);
   assert.match(workspace, /點擊編輯這段字幕/);
   assert.match(workspace, /progress\/completion/);
+  assert.match(workspace, /batch-suggestion/);
+  assert.match(workspace, /搜尋與取代/);
+  assert.match(workspace, /建立 .*待審核建議/);
   assert.match(workspace, /pauseVideo/);
   assert.match(workspace, /playVideo/);
   assert.match(workspaceStyles, /grid-template-columns: minmax\(0, 1\.28fr\) minmax\(0, 0\.72fr\)/);
