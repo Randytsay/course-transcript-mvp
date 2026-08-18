@@ -26,6 +26,7 @@ export default function ReviewPortalPage(){
   <p className={styles.lead}>系統會記住你看到哪裡、哪些課已學完、什麼時候該複習；字幕共修完成後，也能把核准內容整理成有影片出處的 AI 筆記、重點、問答與複習卡。</p>
   <section className={styles.howItWorks} aria-label="使用方式"><div><b>1</b><strong>接著上次學習</strong><span>影片會記住你的觀看位置</span></div><div><b>2</b><strong>用重點快速複習</strong><span>AI 筆記可回到影片時間核對</span></div><div><b>3</b><strong>一起把字幕校準</strong><span>發現錯字時再送出修改建議</span></div></section>
   <p className={styles.reassurance}>觀看進度、學習完成、複習與字幕共修分開記錄。AI 正式學習整理只採用已核准的字幕版本，不會因你的學習操作直接修改 YouTube。</p>
+  <p className={styles.reassurance}>想參與字幕共修時也很簡單：選一支影片、邊看邊校對、送出修改建議；不用調整時間碼，也不會直接改到 YouTube，正式字幕仍由管理員統一審核。</p>
   {loading?<div className={styles.statusCard}>正在確認登入狀態…</div>:me?<div className={styles.accountCard}>
     <div className={styles.identityRow}>{me.user.avatar_url?/* eslint-disable-next-line @next/next/no-img-element */<img src={me.user.avatar_url} alt="" className={styles.avatar}/>:<div className={styles.avatarFallback} aria-hidden="true">{me.user.display_name.slice(0,1)}</div>}<div><p className={styles.signedIn}>歡迎回來</p><h2>{me.user.display_name}</h2></div></div>
     <a className={styles.enterReviewButton} href="/review/learn"><span>我的學習中心</span><strong>繼續觀看、查看進度、開始複習 →</strong></a>
