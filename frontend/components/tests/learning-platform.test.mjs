@@ -42,6 +42,19 @@ test("review center and knowledge search stay grounded in learning evidence", ()
   assert.match(search, /回到影片/);
 });
 
+test("learner help explains the whole journey without engineering jargon", () => {
+  const landing = source("app/review/page.tsx");
+  const dashboard = source("app/review/learn/page.tsx");
+  const help = source("app/review/help/page.tsx");
+  assert.match(landing, /完整使用說明/);
+  assert.match(dashboard, /\/review\/help/);
+  for (const label of ["選一堂課開始", "收藏此刻", "AI 筆記", "我已學完", "1、3、7、14、30 天", "協助校字幕"]) {
+    assert.match(help, new RegExp(label));
+  }
+  assert.match(help, /四種進度/);
+  assert.match(help, /不會直接覆蓋正式字幕或 YouTube/);
+});
+
 test("owner AI console requires formal learning-source approval before paid generation", () => {
   const admin = source("app/review-admin/learning/page.tsx");
   assert.match(admin, /核定為正式學習來源/);
@@ -51,4 +64,15 @@ test("owner AI console requires formal learning-source approval before paid gene
   assert.match(admin, /approve-source/);
   assert.match(admin, /generate/);
   assert.match(admin, /confirm:true/);
+});
+
+test("owner help keeps import, review, AI generation and YouTube publish as separate gates", () => {
+  const layout = source("app/review-admin/layout.tsx");
+  const help = source("app/review-admin/help/page.tsx");
+  assert.match(layout, /管理員說明/);
+  for (const label of ["影片同步", "字幕共修", "版本管理", "YouTube 發布", "AI 學習內容", "操作紀錄"]) {
+    assert.match(help, new RegExp(label));
+  }
+  assert.match(help, /先核定來源，再產生/);
+  assert.match(help, /不要因畫面 timeout 就直接重送 mutation/);
 });
