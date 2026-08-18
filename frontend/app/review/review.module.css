@@ -166,7 +166,7 @@
 }
 
 .googleButton {
-  border-color: #dedbd3;
+  border-color: #dadce0;
   background: #ffffff;
   color: #30302e;
 }
@@ -185,6 +185,21 @@
   background: rgba(255, 255, 255, 0.92);
   color: #49453f;
   font-size: 13px;
+}
+
+.providerLogo {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 auto;
+}
+
+.googleButton:focus-visible,
+.lineButton:focus-visible,
+.secondaryButton:focus-visible,
+.textButton:focus-visible,
+.enterReviewButton:focus-visible {
+  outline: 3px solid rgba(49, 92, 75, 0.35);
+  outline-offset: 3px;
 }
 
 .googleButton:not(:disabled):hover,

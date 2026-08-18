@@ -202,6 +202,12 @@
   color: #fff;
 }
 
+.reviewActions .reopenButton {
+  border-color: #a88755;
+  background: #fffaf0;
+  color: #6f5938;
+}
+
 .helperText {
   margin: 10px 3px 0;
   color: #7c756c;
@@ -220,15 +226,23 @@
 }
 
 .subtitleHeader {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   padding: 14px 16px;
   display: flex;
   justify-content: space-between;
   align-items: center;
   gap: 14px;
   border-bottom: 1px solid #ece7df;
+  background: rgba(255, 255, 255, 0.97);
 }
 
-.subtitleHeader > div:first-child {
+.subtitleHeading {
+  min-width: 0;
+}
+
+.subtitleTitle {
   display: flex;
   align-items: baseline;
   gap: 8px;
@@ -243,6 +257,27 @@
 .subtitleHeader strong {
   color: #9a9185;
   font-size: 12px;
+}
+
+.interactionHint {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px 12px;
+  margin-top: 6px;
+  color: #6d756e;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.interactionHint span {
+  color: inherit;
+  font-size: inherit;
+  font-weight: 500;
+}
+
+.interactionHint b {
+  color: #315c4b;
+  font-weight: 800;
 }
 
 .subtitleTools {
@@ -292,6 +327,8 @@
 .segmentList {
   min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
+  scroll-padding-block: 10px;
   scroll-behavior: smooth;
 }
 
@@ -307,6 +344,11 @@
 .activeSegment {
   background: #fbf5e8;
   box-shadow: inset 3px 0 #a88755;
+}
+
+.segmentEditing {
+  scroll-margin-block: 10px;
+  background: #fffaf0;
 }
 
 .timeButton {
@@ -326,12 +368,30 @@
   min-width: 0;
 }
 
-.segmentBody p {
+.segmentTextButton {
+  display: block;
+  width: 100%;
   margin: 2px 0 8px;
-  color: #33312d;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: #1f2937;
+  font: inherit;
   font-size: 16px;
   line-height: 1.65;
+  text-align: left;
   white-space: pre-wrap;
+  cursor: pointer;
+}
+
+.segmentTextButton:hover,
+.segmentTextButton:focus-visible {
+  color: #315c4b;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+  outline: 3px solid rgba(49, 92, 75, 0.18);
+  outline-offset: 4px;
 }
 
 .originalHint {
@@ -358,6 +418,7 @@
 }
 
 .segmentMeta button {
+  min-height: 36px;
   padding: 5px 9px;
   border: 1px solid #d9d1c5;
   border-radius: 9px;
@@ -547,6 +608,11 @@
     grid-template-columns: 1fr;
   }
 
+  .reviewActions button {
+    min-height: 48px;
+    font-size: 14px;
+  }
+
   .subtitlePanel {
     height: 58vh;
     min-height: 430px;
@@ -555,6 +621,11 @@
 
   .subtitleHeader {
     align-items: flex-start;
+  }
+
+  .interactionHint {
+    gap: 4px 9px;
+    font-size: 12px;
   }
 
   .subtitleTools {
@@ -567,8 +638,17 @@
     padding: 11px 10px;
   }
 
-  .segmentBody p {
-    font-size: 15px;
+  .segmentTextButton {
+    color: #172033;
+    font-size: 17px;
+    line-height: 1.85;
+  }
+
+  .segmentBody textarea {
+    min-height: 112px;
+    color: #172033;
+    font-size: 17px;
+    line-height: 1.8;
   }
 
   .segmentMeta {

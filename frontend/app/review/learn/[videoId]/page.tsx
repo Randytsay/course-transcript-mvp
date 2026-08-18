@@ -35,9 +35,7 @@ type Lesson = {
 };
 type Me = {csrf_token:string; user:{display_name:string}};
 type Player = { getCurrentTime:()=>number; seekTo:(seconds:number,allow:boolean)=>void; destroy:()=>void };
-type YTNamespace = { Player:new(element:HTMLElement,config:{videoId:string;playerVars?:Record<string,number>;events?:{onReady?:(event:{target:Player})=>void}})=>Player };
 type TabKey = "transcript"|"notes"|"review"|"qa"|"cards"|"quiz"|"personal";
-declare global { interface Window { YT?:YTNamespace; onYouTubeIframeAPIReady?:()=>void } }
 
 const tabOptions:Array<[TabKey,string]> = [
   ["transcript","影片＋字幕"],

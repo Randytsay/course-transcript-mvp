@@ -673,6 +673,41 @@ class ReviewStore:
             ).fetchone()
         return self._row(row, "Progress not found")
 
+    def set_completion(
+        self,
+        *,
+        user_id: str,
+        youtube_video_id: str,
+        completed: bool,
+    ) -> dict[str, Any]:
+        """Explicitly set review completion without changing playback progress.
+
+        Ordinary playback/progress writes remain monotonic so that background
+        watch updates cannot accidentally reopen a completed review. This
+        method is reserved for the reviewer's explicit status control.
+        """
+        now = _iso()
+        with self.transaction() as connection:
+            connection.execute(
+                """
+                INSERT INTO review_video_progress(
+                    user_id, youtube_video_id, completed, updated_at
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(user_id, youtube_video_id) DO UPDATE SET
+                    completed = excluded.completed,
+                    updated_at = excluded.updated_at
+                """,
+                (user_id, youtube_video_id, 1 if completed else 0, now),
+            )
+            row = connection.execute(
+                """
+                SELECT * FROM review_video_progress
+                WHERE user_id = ? AND youtube_video_id = ?
+                """,
+                (user_id, youtube_video_id),
+            ).fetchone()
+        return self._row(row, "Progress not found")
+
     def get_resume_point(self, user_id: str) -> dict[str, Any] | None:
         with closing(self.connect()) as connection:
             row = connection.execute(

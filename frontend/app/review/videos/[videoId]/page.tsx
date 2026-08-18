@@ -59,27 +59,12 @@ type LeaseResponse = {
 
 type PlayerInstance = {
   getCurrentTime: () => number;
+  getPlayerState?: () => number;
+  pauseVideo?: () => void;
+  playVideo?: () => void;
   seekTo: (seconds: number, allowSeekAhead: boolean) => void;
   destroy: () => void;
 };
-
-type YouTubeNamespace = {
-  Player: new (
-    element: HTMLElement,
-    config: {
-      videoId: string;
-      playerVars?: Record<string, number>;
-      events?: { onReady?: (event: { target: PlayerInstance }) => void };
-    },
-  ) => PlayerInstance;
-};
-
-declare global {
-  interface Window {
-    YT?: YouTubeNamespace;
-    onYouTubeIframeAPIReady?: () => void;
-  }
-}
 
 let youtubeApiPromise: Promise<void> | null = null;
 
@@ -405,7 +390,8 @@ export default function ReviewVideoPage() {
       return;
     }
     setLease(body);
-    setMessage("已進入校訂模式。看到錯字時，點該句的「修改」即可送出建議。");
+    pausePlayback();
+    setMessage("已進入校訂模式。直接點字幕文字即可編輯；點時間可跳到該段。");
     await loadDetail();
   }
 
@@ -426,6 +412,32 @@ export default function ReviewVideoPage() {
   function seek(segment: Segment) {
     playerRef.current?.seekTo(segment.start_ms / 1000, true);
     setActiveSegmentId(segment.id);
+  }
+
+  function pausePlayback() {
+    playerRef.current?.pauseVideo?.();
+  }
+
+  function resumePlayback() {
+    playerRef.current?.playVideo?.();
+  }
+
+  function editSegment(segment: Segment) {
+    pausePlayback();
+    setSelectedSegmentId(segment.id);
+    setFollowPlayback(false);
+    seek(segment);
+    window.requestAnimationFrame(() => {
+      document.getElementById(`review-editor-${segment.id}`)?.focus({ preventScroll: true });
+    });
+  }
+
+  function handleSegmentTextClick(segment: Segment) {
+    if (lease) {
+      editSegment(segment);
+      return;
+    }
+    seek(segment);
   }
 
   async function saveReviewProgress(reviewedUntilMs: number, completed: boolean) {
@@ -474,6 +486,31 @@ export default function ReviewVideoPage() {
     await saveReviewProgress(endMs, true);
   }
 
+  async function reopenReview() {
+    if (!detail || !detail.progress?.completed || progressBusy) return;
+    if (!window.confirm("要重新開放這支影片的校閱狀態嗎？\n\n已記錄的播放位置與校閱進度會保留。")) return;
+    setProgressBusy(true);
+    try {
+      const response = await fetch(
+        `/api/v1/review/videos/${encodeURIComponent(videoId)}/progress/completion`,
+        {
+          method: "POST",
+          credentials: "same-origin",
+          headers: mutationHeaders(),
+          body: JSON.stringify({ completed: false }),
+        },
+      );
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(body.detail || "校閱狀態更新失敗");
+      setMessage("已重新開放校閱；原本的播放位置與校閱進度都已保留。");
+      await loadDetail();
+    } catch (caught) {
+      setMessage(caught instanceof Error ? caught.message : "校閱狀態更新失敗");
+    } finally {
+      setProgressBusy(false);
+    }
+  }
+
   async function saveSuggestion(segment: Segment) {
     if (!lease) return;
     const text = (drafts[segment.id] ?? "").trim();
@@ -501,6 +538,7 @@ export default function ReviewVideoPage() {
       await loadDetail();
       setSelectedSegmentId(null);
       setFollowPlayback(true);
+      resumePlayback();
     } catch (caught) {
       setMessage(caught instanceof Error ? caught.message : "修改建議送出失敗");
     } finally {
@@ -599,21 +637,35 @@ export default function ReviewVideoPage() {
             <button disabled={progressBusy || Boolean(detail.progress?.completed)} onClick={() => void markReviewedHere()} type="button">
               ✓ 我已校閱到這裡
             </button>
-            <button className={styles.completeButton} disabled={progressBusy || Boolean(detail.progress?.completed)} onClick={() => void completeReview()} type="button">
-              {detail.progress?.completed ? "✓ 已完成本片校閱" : "完成本片校閱"}
-            </button>
+            {detail.progress?.completed ? (
+              <button className={styles.reopenButton} disabled={progressBusy} onClick={() => void reopenReview()} type="button">
+                ↶ 重新開放校閱
+              </button>
+            ) : (
+              <button className={styles.completeButton} disabled={progressBusy} onClick={() => void completeReview()} type="button">
+                標記為完成本片校閱
+              </button>
+            )}
           </div>
 
           <p className={styles.helperText}>
-            觀看不限人數。只有要修改字幕時才需按「開始校訂」；字幕時間碼固定，不需要調整。
+            {detail.progress?.completed
+              ? "目前狀態：已完成校閱。若發現漏看或想再檢查，可重新開放校閱；原本進度會保留。"
+              : "觀看不限人數。進入校訂模式後，直接點字幕文字即可編輯；送出建議後影片會接續播放。"}
           </p>
         </section>
 
         <section className={styles.subtitlePanel} aria-label="同步字幕">
           <div className={styles.subtitleHeader}>
-            <div>
-              <span>同步字幕</span>
-              <strong>{detail.segments.length} 段</strong>
+            <div className={styles.subtitleHeading}>
+              <div className={styles.subtitleTitle}>
+                <span>同步字幕</span>
+                <strong>{detail.segments.length} 段</strong>
+              </div>
+              <div className={styles.interactionHint} role="note">
+                <span><b>時間碼</b> 跳到該段</span>
+                <span><b>字幕文字</b> {lease ? "點擊編輯" : "開始校訂後可編輯"}</span>
+              </div>
             </div>
             <div className={styles.subtitleTools}>
               <button
@@ -643,7 +695,7 @@ export default function ReviewVideoPage() {
                 : segment.working_text;
               return (
                 <article
-                  className={`${styles.segment} ${active ? styles.activeSegment : ""}`}
+                  className={`${styles.segment} ${active ? styles.activeSegment : ""} ${selectedForEdit ? styles.segmentEditing : ""}`}
                   id={`review-segment-${segment.id}`}
                   key={segment.id}
                 >
@@ -655,7 +707,9 @@ export default function ReviewVideoPage() {
                       <>
                         <p className={styles.originalHint}>目前字幕：{segment.working_text}</p>
                         <textarea
+                          autoFocus
                           aria-label={`第 ${segment.segment_index} 段字幕修改`}
+                          id={`review-editor-${segment.id}`}
                           value={drafts[segment.id] ?? ""}
                           onChange={(event) => updateDraft(segment, event.target.value)}
                           rows={3}
@@ -683,7 +737,15 @@ export default function ReviewVideoPage() {
                       </>
                     ) : (
                       <>
-                        <p>{shownText}</p>
+                        <button
+                          aria-label={lease ? `編輯第 ${segment.segment_index} 段字幕` : `跳到第 ${segment.segment_index} 段字幕`}
+                          className={styles.segmentTextButton}
+                          onClick={() => handleSegmentTextClick(segment)}
+                          title={lease ? "點擊編輯這段字幕" : "觀看模式：點擊跳到這段；開始校訂後可編輯"}
+                          type="button"
+                        >
+                          {shownText}
+                        </button>
                         <div className={styles.segmentMeta}>
                           <span>
                             {statusText ? (
@@ -698,11 +760,7 @@ export default function ReviewVideoPage() {
                             ) : null}
                             {lease ? (
                               <button
-                                onClick={() => {
-                                  setSelectedSegmentId(segment.id);
-                                  setFollowPlayback(false);
-                                  seek(segment);
-                                }}
+                                onClick={() => editSegment(segment)}
                                 type="button"
                               >
                                 {hasPendingSuggestion ? "調整建議" : "修改"}

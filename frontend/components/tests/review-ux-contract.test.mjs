@@ -25,6 +25,13 @@ test("reviewer workspace separates watched and reviewed progress without seat ja
   assert.match(workspace, /跟隨播放/);
   assert.match(workspace, /review-drafts:/);
   assert.match(workspace, /撤回/);
+  assert.match(workspace, /直接點字幕文字/);
+  assert.match(workspace, /時間碼<\/b> 跳到該段/);
+  assert.match(workspace, /字幕文字<\/b> \{lease \? "點擊編輯" : "開始校訂後可編輯"\}/);
+  assert.match(workspace, /點擊編輯這段字幕/);
+  assert.match(workspace, /progress\/completion/);
+  assert.match(workspace, /pauseVideo/);
+  assert.match(workspace, /playVideo/);
   assert.doesNotMatch(library, /席位/);
   assert.doesNotMatch(workspace, /席位/);
 });

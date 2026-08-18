@@ -206,6 +206,29 @@ class ReviewPortalApiTests(unittest.TestCase):
         self.assertTrue(listing["completed"])
         self.assertEqual(listing["reviewed_until_ms"], 60000)
 
+    def test_explicit_completion_control_can_reopen_without_losing_progress(self) -> None:
+        completed = self.client.post(
+            "/api/v1/review/videos/video-1/progress",
+            headers=self._mutation_headers(),
+            json={
+                "last_playback_ms": 9000,
+                "reviewed_until_ms": 10000,
+                "last_segment_index": 2,
+                "completed": True,
+            },
+        )
+        self.assertEqual(completed.status_code, 200)
+
+        reopened = self.client.post(
+            "/api/v1/review/videos/video-1/progress/completion",
+            headers=self._mutation_headers(),
+            json={"completed": False},
+        )
+        self.assertEqual(reopened.status_code, 200)
+        self.assertEqual(reopened.json()["progress"]["completed"], 0)
+        self.assertEqual(reopened.json()["progress"]["reviewed_until_ms"], 10000)
+        self.assertEqual(reopened.json()["progress"]["last_playback_ms"], 9000)
+
     def test_suggestion_requires_lease_and_revises_same_pending_record(self) -> None:
         segment_id = self.segments[1]["id"]
         rejected = self.client.post(

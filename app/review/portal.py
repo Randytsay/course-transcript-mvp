@@ -29,6 +29,11 @@ class ProgressRequest(BaseModel):
     completed: bool = False
 
 
+class CompletionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    completed: bool
+
+
 class LeaseTokenRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lease_token: str = Field(min_length=20, max_length=256)
@@ -382,6 +387,26 @@ def save_progress(
             last_playback_ms=payload.last_playback_ms,
             reviewed_until_ms=payload.reviewed_until_ms,
             last_segment_index=payload.last_segment_index,
+            completed=payload.completed,
+        )
+    except (ValueError, ReviewNotFound) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"progress": progress}
+
+
+@router.post("/videos/{youtube_video_id}/progress/completion")
+def set_completion(
+    youtube_video_id: str,
+    payload: CompletionRequest,
+    request: Request,
+) -> dict[str, Any]:
+    """Apply an explicit reviewer status change without reopening on playback."""
+    session = require_reviewer_session(request, mutation=True)
+    _video_row(youtube_video_id)
+    try:
+        progress = _review_store().set_completion(
+            user_id=str(session["user_id"]),
+            youtube_video_id=youtube_video_id,
             completed=payload.completed,
         )
     except (ValueError, ReviewNotFound) as exc:
