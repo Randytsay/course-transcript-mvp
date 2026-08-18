@@ -96,6 +96,7 @@ class LearningApiTests(unittest.TestCase):
         dashboard = self.client.get("/api/v1/review/learning/dashboard").json()
         self.assertEqual(dashboard["videos"][0]["learning_status"], "in_progress")
         self.assertEqual(dashboard["videos"][0]["last_playback_ms"], 12_000)
+        self.assertEqual(dashboard["continue_learning"]["youtube_video_id"], "video-1")
 
         bookmark = self.client.post(
             "/api/v1/review/learning/videos/video-1/bookmarks",
@@ -123,6 +124,10 @@ class LearningApiTests(unittest.TestCase):
         )
         self.assertEqual(complete.status_code, 200)
         self.assertEqual(complete.json()["learning_state"]["learning_status"], "completed")
+        completed_dashboard = self.client.get("/api/v1/review/learning/dashboard")
+        self.assertEqual(completed_dashboard.status_code, 200)
+        self.assertEqual(completed_dashboard.json()["summary"]["completed_count"], 1)
+        self.assertIsNone(completed_dashboard.json()["continue_learning"])
 
     def test_mutations_require_reviewer_csrf_and_reads_require_session(self) -> None:
         bad = self.client.post(
