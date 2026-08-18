@@ -8,7 +8,8 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from app.review.admin_store import ReviewAdminStore
-from app.review.store import ReviewConflict, ReviewNotFound
+from app.review.baseline import ensure_import_baseline
+from app.review.store import ReviewNotFound
 
 
 def _iso() -> str:
@@ -63,9 +64,21 @@ class LearningSourceStore:
     def approve_latest(self, *, youtube_video_id: str, actor: str) -> dict[str, Any]:
         latest = self.review_admin.list_versions(youtube_video_id=youtube_video_id, limit=1)
         if not latest:
-            raise ReviewConflict(
-                "No immutable subtitle version exists yet; finish subtitle review and create a version before approving learning content"
+            # A perfectly imported/correct subtitle may never have needed an owner
+            # text mutation. The explicit learning-source approval is therefore a
+            # safe place to freeze the immutable imported-original baseline first.
+            # This does not approve a pending suggestion or publish anything.
+            ensure_import_baseline(
+                self.review_admin,
+                youtube_video_id=youtube_video_id,
+                triggered_by=actor,
             )
+            latest = self.review_admin.list_versions(
+                youtube_video_id=youtube_video_id,
+                limit=1,
+            )
+        if not latest:
+            raise ReviewNotFound("Video has no subtitle evidence to approve for learning")
         version = latest[0]
         now = _iso()
         with self.transaction() as connection:
