@@ -139,6 +139,7 @@ export default function ReviewVideoPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentMs, setCurrentMs] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [followPlayback, setFollowPlayback] = useState(true);
   const [batchFindText, setBatchFindText] = useState("");
   const [batchReplaceText, setBatchReplaceText] = useState("");
@@ -262,6 +263,9 @@ export default function ReviewVideoPage() {
           onReady: ({ target }) => {
             const resumeSeconds = (detail.progress?.last_playback_ms ?? 0) / 1000;
             if (resumeSeconds > 0) target.seekTo(resumeSeconds, true);
+          },
+          onStateChange: ({ data }) => {
+            setIsPlaying(data === 1);
           },
         },
       });
@@ -472,10 +476,24 @@ export default function ReviewVideoPage() {
 
   function pausePlayback() {
     playerRef.current?.pauseVideo?.();
+    setIsPlaying(false);
   }
 
   function resumePlayback() {
     playerRef.current?.playVideo?.();
+    setIsPlaying(true);
+  }
+
+  function toggleTimecode(segment: Segment) {
+    const playerState = playerRef.current?.getPlayerState?.();
+    const playing = playerState === 1 || (playerState == null && isPlaying);
+    if (activeSegmentId === segment.id) {
+      if (playing) pausePlayback();
+      else resumePlayback();
+      return;
+    }
+    seek(segment);
+    resumePlayback();
   }
 
   function editSegment(segment: Segment) {
@@ -804,7 +822,7 @@ export default function ReviewVideoPage() {
                 <strong>{detail.segments.length} 段</strong>
               </div>
               <div className={styles.interactionHint} role="note">
-                <span><b>時間碼</b> 跳到該段</span>
+                <span><b>時間碼</b> 跳到並播放；再按同一時間碼暫停／繼續</span>
                 <span><b>字幕文字</b> {lease ? "點擊編輯" : "開始校訂後可編輯"}</span>
               </div>
             </div>
@@ -898,7 +916,17 @@ export default function ReviewVideoPage() {
                   id={`review-segment-${segment.id}`}
                   key={segment.id}
                 >
-                  <button className={styles.timeButton} onClick={() => seek(segment)} type="button">
+                  <button
+                    aria-label={active
+                      ? (isPlaying ? `暫停第 ${segment.segment_index} 段` : `繼續播放第 ${segment.segment_index} 段`)
+                      : `跳到第 ${segment.segment_index} 段並播放`}
+                    aria-pressed={active}
+                    className={styles.timeButton}
+                    onClick={() => toggleTimecode(segment)}
+                    title={active ? (isPlaying ? "再按一次暫停" : "再按一次繼續播放") : "跳到這段並播放"}
+                    type="button"
+                  >
+                    <span className={styles.timeIcon} aria-hidden="true">{active && isPlaying ? "Ⅱ" : "▶"}</span>
                     {timestamp(segment.start_ms)}
                   </button>
                   <div className={styles.segmentBody}>

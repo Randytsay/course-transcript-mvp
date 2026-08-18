@@ -13,7 +13,10 @@ type ReviewerYouTubeNamespace = {
     config: {
       videoId: string;
       playerVars?: Record<string, number>;
-      events?: { onReady?: (event: { target: ReviewerYouTubePlayer }) => void };
+      events?: {
+        onReady?: (event: { target: ReviewerYouTubePlayer }) => void;
+        onStateChange?: (event: { data: number }) => void;
+      };
     },
   ) => ReviewerYouTubePlayer;
 };

@@ -27,7 +27,7 @@ test("reviewer workspace separates watched and reviewed progress without seat ja
   assert.match(workspace, /review-drafts:/);
   assert.match(workspace, /撤回/);
   assert.match(workspace, /直接點字幕文字/);
-  assert.match(workspace, /時間碼<\/b> 跳到該段/);
+  assert.match(workspace, /時間碼<\/b> 跳到並播放；再按同一時間碼暫停／繼續/);
   assert.match(workspace, /字幕文字<\/b> \{lease \? "點擊編輯" : "開始校訂後可編輯"\}/);
   assert.match(workspace, /點擊編輯這段字幕/);
   assert.match(workspace, /progress\/completion/);
@@ -39,9 +39,13 @@ test("reviewer workspace separates watched and reviewed progress without seat ja
   assert.match(workspace, /contributorAvatar/);
   assert.match(workspace, /pauseVideo/);
   assert.match(workspace, /playVideo/);
-  assert.match(workspaceStyles, /grid-template-columns: minmax\(0, 1\.28fr\) minmax\(0, 0\.72fr\)/);
+  assert.match(workspace, /toggleTimecode/);
+  assert.match(workspace, /onStateChange/);
+  assert.match(workspace, /aria-pressed=\{active\}/);
+  assert.match(workspaceStyles, /grid-template-columns: minmax\(0, 1\.18fr\) minmax\(360px, 0\.82fr\)/);
   assert.match(workspaceStyles, /overflow-wrap: anywhere/);
   assert.match(workspaceStyles, /overflow-x: hidden/);
+  assert.match(workspaceStyles, /@media \(max-width: 1180px\)/);
   assert.doesNotMatch(library, /席位/);
   assert.doesNotMatch(workspace, /席位/);
 });
