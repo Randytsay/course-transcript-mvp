@@ -1,8 +1,10 @@
 """Reviewer portal API: videos, synchronized segments, progress and edit leases."""
 from __future__ import annotations
 
+import json
 import os
 from contextlib import closing
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +76,19 @@ def _serialize_progress(row: Any) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
 
 
+def _withdrawn_ids(connection: Any, user_id: str) -> set[str]:
+    rows = connection.execute(
+        """
+        SELECT DISTINCT e.suggestion_id
+        FROM review_suggestion_events e
+        JOIN review_suggestions s ON s.id = e.suggestion_id
+        WHERE s.user_id = ? AND e.event_type = 'withdrawn'
+        """,
+        (user_id,),
+    ).fetchall()
+    return {str(row["suggestion_id"]) for row in rows}
+
+
 @router.get("/videos")
 def list_videos(request: Request) -> dict[str, Any]:
     session = require_reviewer_session(request)
@@ -96,8 +111,18 @@ def list_videos(request: Request) -> dict[str, Any]:
                 COALESCE(p.completed, 0) AS completed,
                 COUNT(DISTINCT CASE WHEN l.expires_at > {now_expression} THEN l.user_id END)
                     AS active_editor_count,
-                COUNT(DISTINCT CASE WHEN s.user_id = ? THEN s.id END)
-                    AS my_suggestion_count
+                COUNT(DISTINCT CASE
+                    WHEN s.user_id = ?
+                     AND NOT EXISTS (
+                        SELECT 1 FROM review_suggestion_events se
+                        WHERE se.suggestion_id = s.id AND se.event_type = 'withdrawn'
+                     )
+                    THEN s.id END
+                ) AS my_suggestion_count,
+                COUNT(DISTINCT CASE WHEN s.user_id = ? AND s.status = 'approved' THEN s.id END)
+                    AS my_approved_count,
+                COUNT(DISTINCT CASE WHEN s.user_id = ? AND s.status = 'pending' THEN s.id END)
+                    AS my_pending_count
             FROM review_videos v
             LEFT JOIN review_subtitle_segments seg
                 ON seg.youtube_video_id = v.youtube_video_id
@@ -110,7 +135,7 @@ def list_videos(request: Request) -> dict[str, Any]:
             GROUP BY v.youtube_video_id
             ORDER BY v.imported_at DESC, v.title
             """,
-            (user_id, user_id),
+            (user_id, user_id, user_id, user_id),
         ).fetchall()
     videos = [dict(row) for row in rows]
     for item in videos:
@@ -147,24 +172,153 @@ def get_video(youtube_video_id: str, request: Request) -> dict[str, Any]:
                 s.id AS my_suggestion_id,
                 s.suggested_text AS my_suggested_text,
                 s.changed_chars AS my_changed_chars,
-                s.updated_at AS my_suggestion_updated_at
+                s.updated_at AS my_suggestion_updated_at,
+                s.status AS my_suggestion_status,
+                s.reviewed_at AS my_suggestion_reviewed_at,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM review_suggestion_events se
+                    WHERE se.suggestion_id = s.id AND se.event_type = 'withdrawn'
+                ) THEN 1 ELSE 0 END AS my_suggestion_withdrawn
             FROM review_subtitle_segments seg
             LEFT JOIN review_suggestions s
-                ON s.segment_id = seg.id
-               AND s.user_id = ?
-               AND s.status = 'pending'
+                ON s.id = (
+                    SELECT s2.id
+                    FROM review_suggestions s2
+                    WHERE s2.segment_id = seg.id AND s2.user_id = ?
+                    ORDER BY s2.updated_at DESC, s2.created_at DESC
+                    LIMIT 1
+                )
             WHERE seg.youtube_video_id = ?
             ORDER BY seg.segment_index
             """,
             (user_id, youtube_video_id),
         ).fetchall()
+    segment_rows = [dict(row) for row in segments]
+    for item in segment_rows:
+        if item.get("my_suggestion_withdrawn"):
+            item["my_suggestion_status"] = "withdrawn"
     return {
         "video": video,
-        "segments": [dict(row) for row in segments],
+        "segments": segment_rows,
         "progress": _serialize_progress(progress),
         "active_editors": _lease_store().active_editors(youtube_video_id),
         "max_editors": _lease_store().max_editors_per_video,
     }
+
+
+@router.get("/suggestions/me")
+def my_suggestions(request: Request) -> dict[str, Any]:
+    session = require_reviewer_session(request)
+    user_id = str(session["user_id"])
+    with closing(_review_store().connect()) as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                s.id,
+                s.segment_id,
+                s.original_text_snapshot,
+                s.suggested_text,
+                s.changed_chars,
+                s.status,
+                s.created_at,
+                s.updated_at,
+                s.reviewed_at,
+                seg.youtube_video_id,
+                seg.segment_index,
+                seg.start_ms,
+                seg.end_ms,
+                seg.working_text AS current_text,
+                v.title AS video_title,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM review_suggestion_events se
+                    WHERE se.suggestion_id = s.id AND se.event_type = 'withdrawn'
+                ) THEN 1 ELSE 0 END AS withdrawn
+            FROM review_suggestions s
+            JOIN review_subtitle_segments seg ON seg.id = s.segment_id
+            JOIN review_videos v ON v.youtube_video_id = seg.youtube_video_id
+            WHERE s.user_id = ?
+            ORDER BY s.updated_at DESC
+            LIMIT 1000
+            """,
+            (user_id,),
+        ).fetchall()
+        withdrawn = _withdrawn_ids(connection, user_id)
+        rejection_reasons: dict[str, str] = {}
+        try:
+            audit_rows = connection.execute(
+                """
+                SELECT entity_id, payload_json
+                FROM review_admin_audit
+                WHERE entity_type = 'suggestion' AND action = 'suggestion_rejected'
+                ORDER BY id DESC
+                """
+            ).fetchall()
+            for audit in audit_rows:
+                suggestion_id = str(audit["entity_id"])
+                if suggestion_id in rejection_reasons:
+                    continue
+                try:
+                    payload = json.loads(audit["payload_json"] or "{}")
+                except json.JSONDecodeError:
+                    payload = {}
+                reason = str(payload.get("reason") or "").strip()
+                if reason:
+                    rejection_reasons[suggestion_id] = reason
+        except Exception:
+            # review_admin_audit is created lazily by the owner workflow. A
+            # reviewer history read must remain available before the first admin visit.
+            rejection_reasons = {}
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        suggestion_id = str(item["id"])
+        if suggestion_id in withdrawn or item.get("withdrawn"):
+            item["display_status"] = "withdrawn"
+        else:
+            item["display_status"] = str(item["status"])
+        item["review_reason"] = rejection_reasons.get(suggestion_id)
+        result.append(item)
+    return {"suggestions": result}
+
+
+@router.post("/suggestions/{suggestion_id}/withdraw")
+def withdraw_suggestion(suggestion_id: str, request: Request) -> dict[str, Any]:
+    session = require_reviewer_session(request, mutation=True)
+    user_id = str(session["user_id"])
+    now = datetime.now(UTC).isoformat()
+    with _review_store().transaction() as connection:
+        suggestion = connection.execute(
+            "SELECT * FROM review_suggestions WHERE id = ?",
+            (suggestion_id,),
+        ).fetchone()
+        if suggestion is None:
+            raise HTTPException(status_code=404, detail="Suggestion not found")
+        if str(suggestion["user_id"]) != user_id:
+            raise HTTPException(status_code=403, detail="Suggestion belongs to another reviewer")
+        if str(suggestion["status"]) != "pending":
+            raise HTTPException(status_code=409, detail="Only pending suggestions can be withdrawn")
+        connection.execute(
+            """
+            UPDATE review_suggestions
+            SET status = 'rejected', reviewed_by = ?, reviewed_at = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (user_id, now, now, suggestion_id),
+        )
+        connection.execute(
+            """
+            INSERT INTO review_suggestion_events(
+                suggestion_id, event_type, actor_user_id, payload_json, created_at
+            ) VALUES (?, 'withdrawn', ?, '{}', ?)
+            """,
+            (suggestion_id, user_id, now),
+        )
+        row = connection.execute(
+            "SELECT * FROM review_suggestions WHERE id = ?",
+            (suggestion_id,),
+        ).fetchone()
+    return {"suggestion": dict(row), "withdrawn": True}
 
 
 @router.post("/videos/{youtube_video_id}/lease")
