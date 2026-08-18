@@ -31,6 +31,20 @@ test("learning dashboard stays useful for a larger course library", () => {
   assert.doesNotMatch(dashboard, /tab=notes[^\n]*回到這則筆記/);
 });
 
+test("personal notes library supports cross-course search, edit, delete and source jumps", () => {
+  const landing = source("app/review/page.tsx");
+  const notes = source("app/review/learn/notes/page.tsx");
+  assert.match(landing, /\/review\/learn\/notes/);
+  assert.match(landing, /我的筆記與書籤/);
+  assert.match(notes, /搜尋我的筆記與書籤/);
+  assert.match(notes, /method:"PUT"/);
+  assert.match(notes, /儲存修改/);
+  assert.match(notes, /刪除後無法復原/);
+  assert.match(notes, /method:"DELETE"/);
+  assert.match(notes, /tab=personal/);
+  assert.match(notes, /我的書籤/);
+});
+
 test("lesson workspace provides traceable AI notes, review, flashcards, quiz and personal notes", () => {
   const lesson = source("app/review/learn/[videoId]/page.tsx");
   for (const label of ["影片＋字幕", "AI 筆記", "快速複習", "問答", "Flashcards", "自我測驗", "我的筆記"]) {
