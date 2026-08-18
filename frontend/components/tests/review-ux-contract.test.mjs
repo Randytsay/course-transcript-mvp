@@ -18,6 +18,7 @@ test("reviewer onboarding explains the three-step nontechnical flow", () => {
 test("reviewer workspace separates watched and reviewed progress without seat jargon", () => {
   const library = source("app/review/videos/page.tsx");
   const workspace = source("app/review/videos/[videoId]/page.tsx");
+  const workspaceStyles = source("app/review/videos/[videoId]/video.module.css");
   assert.match(library, /觀看進度/);
   assert.match(library, /校閱進度/);
   assert.match(workspace, /我已校閱到這裡/);
@@ -32,6 +33,9 @@ test("reviewer workspace separates watched and reviewed progress without seat ja
   assert.match(workspace, /progress\/completion/);
   assert.match(workspace, /pauseVideo/);
   assert.match(workspace, /playVideo/);
+  assert.match(workspaceStyles, /grid-template-columns: minmax\(0, 1\.28fr\) minmax\(0, 0\.72fr\)/);
+  assert.match(workspaceStyles, /overflow-wrap: anywhere/);
+  assert.match(workspaceStyles, /overflow-x: hidden/);
   assert.doesNotMatch(library, /席位/);
   assert.doesNotMatch(workspace, /席位/);
 });

@@ -96,14 +96,16 @@
   width: min(100%, 1440px);
   height: calc(100vh - 94px);
   min-height: 620px;
+  min-width: 0;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1.28fr) minmax(420px, 0.72fr);
+  grid-template-columns: minmax(0, 1.28fr) minmax(0, 0.72fr);
   gap: 16px;
 }
 
 .playerColumn,
 .subtitlePanel {
+  min-width: 0;
   min-height: 0;
 }
 
@@ -233,12 +235,14 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-wrap: wrap;
   gap: 14px;
   border-bottom: 1px solid #ece7df;
   background: rgba(255, 255, 255, 0.97);
 }
 
 .subtitleHeading {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -281,6 +285,7 @@
 }
 
 .subtitleTools {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -327,12 +332,14 @@
 .segmentList {
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   overscroll-behavior: contain;
   scroll-padding-block: 10px;
   scroll-behavior: smooth;
 }
 
 .segment {
+  min-width: 0;
   display: grid;
   grid-template-columns: 68px minmax(0, 1fr);
   gap: 10px;
@@ -353,6 +360,8 @@
 
 .timeButton {
   align-self: start;
+  min-width: 0;
+  width: 100%;
   padding: 5px 4px;
   border: 0;
   background: transparent;
@@ -381,6 +390,7 @@
   line-height: 1.65;
   text-align: left;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   cursor: pointer;
 }
 
@@ -400,9 +410,11 @@
   background: #f4f0e9;
   color: #777066 !important;
   font-size: 12px !important;
+  overflow-wrap: anywhere;
 }
 
 .segmentMeta {
+  min-width: 0;
   min-height: 24px;
   display: flex;
   justify-content: space-between;
@@ -413,7 +425,9 @@
 }
 
 .segmentButtons {
+  min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
@@ -478,6 +492,7 @@
   font: inherit;
   font-size: 15px;
   line-height: 1.6;
+  overflow-wrap: anywhere;
 }
 
 .segmentBody textarea:focus {
