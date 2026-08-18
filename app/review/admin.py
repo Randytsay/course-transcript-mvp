@@ -13,7 +13,7 @@ from app.api import _mutation_actor
 
 from .admin_store import ReviewAdminStore
 from .baseline import ensure_batch_baselines, ensure_suggestion_baseline
-from .store import ReviewConflict, ReviewNotFound
+from .store import ReviewConflict, ReviewNotFound, changed_char_count
 from .youtube_publish import YouTubePublishError, publish_caption_version
 
 router = APIRouter(prefix="/api/v1/review-admin", tags=["review-admin"])
@@ -135,10 +135,19 @@ def overview(request: Request) -> dict[str, Any]:
     latest_by_video: dict[str, dict[str, Any]] = {}
     for version in versions:
         latest_by_video.setdefault(str(version["youtube_video_id"]), version)
+    with store.connect() as connection:
+        video_count = int(connection.execute("SELECT COUNT(*) FROM review_videos").fetchone()[0])
+        reviewer_count = int(
+            connection.execute(
+                "SELECT COUNT(*) FROM review_users WHERE status = 'active'"
+            ).fetchone()[0]
+        )
     return {
         "pending_suggestions": len(pending),
         "conflicting_suggestions": conflict_count,
         "version_count": len(versions),
+        "video_count": video_count,
+        "reviewer_count": reviewer_count,
         "published_video_count": len(
             {
                 item["youtube_video_id"]
@@ -168,6 +177,70 @@ def suggestions(
     except (ValueError, ReviewNotFound, ReviewConflict) as exc:
         raise _handle_admin_error(exc) from exc
     return {"suggestions": _decorate_suggestions(rows)}
+
+
+@router.get("/suggestions/{suggestion_id}/context")
+def suggestion_context(suggestion_id: str, request: Request) -> dict[str, Any]:
+    _admin_read_actor(request)
+    with _store().connect() as connection:
+        row = connection.execute(
+            """
+            SELECT
+                s.id AS suggestion_id,
+                seg.youtube_video_id,
+                v.title AS video_title,
+                seg.segment_index,
+                seg.start_ms,
+                seg.end_ms,
+                seg.working_text AS current_text,
+                prev.working_text AS previous_text,
+                prev.start_ms AS previous_start_ms,
+                next.working_text AS next_text,
+                next.start_ms AS next_start_ms
+            FROM review_suggestions s
+            JOIN review_subtitle_segments seg ON seg.id = s.segment_id
+            JOIN review_videos v ON v.youtube_video_id = seg.youtube_video_id
+            LEFT JOIN review_subtitle_segments prev
+              ON prev.youtube_video_id = seg.youtube_video_id
+             AND prev.segment_index = seg.segment_index - 1
+            LEFT JOIN review_subtitle_segments next
+              ON next.youtube_video_id = seg.youtube_video_id
+             AND next.segment_index = seg.segment_index + 1
+            WHERE s.id = ?
+            """,
+            (suggestion_id,),
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    return {"context": dict(row)}
+
+
+@router.get("/audit")
+def audit_log(
+    request: Request,
+    limit: int = Query(default=100, ge=1, le=500),
+) -> dict[str, Any]:
+    _admin_read_actor(request)
+    with _store().connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT id, actor, action, entity_type, entity_id, payload_json, created_at
+            FROM review_admin_audit
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    items: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["payload"] = json.loads(item.pop("payload_json") or "{}")
+        except json.JSONDecodeError:
+            item["payload"] = {}
+            item.pop("payload_json", None)
+        items.append(item)
+    return {"audit": items}
 
 
 @router.post("/suggestions/{suggestion_id}/approve")
@@ -281,6 +354,81 @@ def version_detail(version_id: str, request: Request) -> dict[str, Any]:
         return {"version": _store().get_version(version_id)}
     except (ValueError, ReviewNotFound, ReviewConflict) as exc:
         raise _handle_admin_error(exc) from exc
+
+
+@router.get("/versions/{version_id}/publish-preview")
+def publish_preview(version_id: str, request: Request) -> dict[str, Any]:
+    _admin_read_actor(request)
+    store = _store()
+    try:
+        target = store.get_version(version_id)
+        video_versions = store.list_versions(
+            youtube_video_id=str(target["youtube_video_id"]),
+            limit=2000,
+        )
+    except (ValueError, ReviewNotFound, ReviewConflict) as exc:
+        raise _handle_admin_error(exc) from exc
+
+    try:
+        target_snapshot = json.loads(target["snapshot_json"])
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=409, detail="Target version snapshot is invalid") from exc
+
+    published = next(
+        (
+            item
+            for item in video_versions
+            if item["publish_status"] == "published" and item["id"] != version_id
+        ),
+        None,
+    )
+    reference = published
+    if reference is None and target.get("parent_version_id"):
+        try:
+            reference = store.get_version(str(target["parent_version_id"]))
+        except ReviewNotFound:
+            reference = None
+
+    changed_segments = 0
+    changed_characters = 0
+    if reference is not None:
+        try:
+            reference_snapshot = json.loads(reference["snapshot_json"])
+        except json.JSONDecodeError:
+            reference_snapshot = []
+        before_by_index = {
+            int(item["segment_index"]): str(item["working_text"])
+            for item in reference_snapshot
+            if "segment_index" in item
+        }
+        for item in target_snapshot:
+            index = int(item["segment_index"])
+            after = str(item["working_text"])
+            before = before_by_index.get(index, "")
+            if before != after:
+                changed_segments += 1
+                changed_characters += changed_char_count(before, after)
+    else:
+        changed_segments = len(target_snapshot)
+        changed_characters = sum(len(str(item.get("working_text", ""))) for item in target_snapshot)
+
+    latest = max(video_versions, key=lambda item: int(item["version_number"])) if video_versions else target
+    caption_track_id = str(
+        target.get("current_caption_track_id")
+        or target.get("youtube_caption_track_id")
+        or ""
+    ).strip()
+    return {
+        "version": _version_summary(target),
+        "is_latest": str(latest["id"]) == version_id,
+        "is_already_published": target["publish_status"] == "published",
+        "caption_track_configured": bool(caption_track_id),
+        "caption_track_id": caption_track_id or None,
+        "reference_version": _version_summary(reference) if reference else None,
+        "changed_segments": changed_segments,
+        "changed_characters": changed_characters,
+        "timing_policy": "fixed",
+    }
 
 
 @router.post("/versions/{version_id}/restore")
