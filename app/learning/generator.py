@@ -248,6 +248,12 @@ def generate_study_pack(
 ) -> dict[str, Any]:
     source_store = LearningSourceStore(store.database_path)
     source = source_store.require(youtube_video_id)
+    source_status = source_store.status(youtube_video_id)
+    if not source_status["source_is_latest"]:
+        raise ReviewConflict(
+            "The formal learning source is older than the latest subtitle version; approve the latest version before generating AI learning content"
+        )
+
     with store.connect() as connection:
         video = connection.execute(
             "SELECT * FROM review_videos WHERE youtube_video_id = ?",
