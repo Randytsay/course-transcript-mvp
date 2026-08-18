@@ -56,9 +56,12 @@ test("review center and knowledge search stay grounded in learning evidence", ()
   const search = source("app/review/learn/search/page.tsx");
   assert.match(review, /1、3、7、14、30 天/);
   assert.match(review, /開始快速複習/);
-  assert.match(search, /核准字幕與 AI 學習整理/);
-  assert.match(search, /這裡不讓 AI 憑記憶猜答案/);
+  assert.match(search, /課程字幕與目前有效的 AI 學習整理/);
+  assert.match(search, /如果所依據的字幕已更新，就不會被當成目前有效知識顯示/);
+  assert.match(search, /時間點取自實際命中的那一則內容/);
+  assert.match(search, /source_segment_index/);
   assert.match(search, /回到影片/);
+  assert.doesNotMatch(search, /核准字幕裡沒有找到/);
 });
 
 test("learner help is always reachable and explains the whole journey without engineering jargon", () => {
@@ -86,6 +89,9 @@ test("owner AI console requires formal learning-source approval before paid gene
   assert.match(admin, /核定.*為學習版/);
   assert.match(admin, /付費 LLM/);
   assert.match(admin, /不會修改 YouTube/);
+  assert.match(admin, /不要直接重複送出/);
+  assert.match(admin, /待核定來源/);
+  assert.match(admin, /待產生 AI/);
   assert.match(admin, /approve-source/);
   assert.match(admin, /generate/);
   assert.match(admin, /confirm:true/);
