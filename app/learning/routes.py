@@ -93,7 +93,13 @@ def _raise(exc: Exception) -> HTTPException:
 
 @router.get("/dashboard")
 def dashboard(request: Request) -> dict[str, Any]:
-    return _store().dashboard(user_id=_user_id(request))
+    payload = _store().dashboard(user_id=_user_id(request))
+    # A completed lesson may still retain a playback timestamp for intentional
+    # rewatching. Do not present it as the primary "continue learning" card.
+    resume = payload.get("continue_learning")
+    if isinstance(resume, dict) and resume.get("learning_status") == "completed":
+        payload["continue_learning"] = None
+    return payload
 
 
 @router.get("/videos/{youtube_video_id}")
