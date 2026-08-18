@@ -14,9 +14,21 @@ test("learning home exposes continue-learning, explicit completion and four dist
   assert.match(landing, /觀看進度、學習完成、複習與字幕共修分開記錄/);
   assert.match(dashboard, /繼續學習/);
   assert.match(dashboard, /觀看進度不等於學習完成/);
+  assert.match(dashboard, /字幕共修進度/);
   assert.match(lesson, /我已學完/);
   assert.match(lesson, /協助校字幕/);
   assert.match(lesson, /觀看進度、學習完成、複習與字幕共修分開記錄/);
+});
+
+test("learning dashboard stays useful for a larger course library", () => {
+  const dashboard = source("app/review/learn/page.tsx");
+  assert.match(dashboard, /搜尋課程名稱/);
+  assert.match(dashboard, /最近學習/);
+  assert.match(dashboard, /課程名稱/);
+  assert.match(dashboard, /觀看進度/);
+  assert.match(dashboard, /aria-valuenow/);
+  assert.match(dashboard, /tab=personal/);
+  assert.doesNotMatch(dashboard, /tab=notes[^\n]*回到這則筆記/);
 });
 
 test("lesson workspace provides traceable AI notes, review, flashcards, quiz and personal notes", () => {
@@ -30,6 +42,13 @@ test("lesson workspace provides traceable AI notes, review, flashcards, quiz and
   assert.match(lesson, /review-complete/);
   assert.match(lesson, /quiz-attempts/);
   assert.match(lesson, /flashcards\/review/);
+  assert.match(lesson, /role="tab"/);
+  assert.match(lesson, /role="tabpanel"/);
+  assert.match(lesson, /aria-selected/);
+  assert.match(lesson, /還有 \$\{unanswered\} 題尚未作答/);
+  assert.match(lesson, /刪除後無法復原/);
+  assert.match(lesson, /依管理員核定的不可變字幕來源整理/);
+  assert.doesNotMatch(lesson, /依字幕版本 v\{artifact\.latest_subtitle_version\} 整理/);
 });
 
 test("review center and knowledge search stay grounded in learning evidence", () => {
@@ -42,10 +61,13 @@ test("review center and knowledge search stay grounded in learning evidence", ()
   assert.match(search, /回到影片/);
 });
 
-test("learner help explains the whole journey without engineering jargon", () => {
+test("learner help is always reachable and explains the whole journey without engineering jargon", () => {
+  const layout = source("app/review/layout.tsx");
   const landing = source("app/review/page.tsx");
   const dashboard = source("app/review/learn/page.tsx");
   const help = source("app/review/help/page.tsx");
+  assert.match(layout, /href="\/review\/help"/);
+  assert.match(layout, /使用說明/);
   assert.match(landing, /完整使用說明/);
   assert.match(dashboard, /\/review\/help/);
   for (const label of ["選一堂課開始", "收藏此刻", "AI 筆記", "我已學完", "1、3、7、14、30 天", "協助校字幕"]) {
@@ -53,6 +75,9 @@ test("learner help explains the whole journey without engineering jargon", () =>
   }
   assert.match(help, /四種進度/);
   assert.match(help, /不會直接覆蓋正式字幕或 YouTube/);
+  for (const jargon of ["lease", "TTL", "heartbeat", "SQLite", "CSRF"]) {
+    assert.doesNotMatch(help, new RegExp(jargon, "i"));
+  }
 });
 
 test("owner AI console requires formal learning-source approval before paid generation", () => {
