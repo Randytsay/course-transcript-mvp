@@ -78,6 +78,10 @@ def _user_id(request: Request, *, mutation: bool = False) -> str:
 
 
 def _raise(exc: Exception) -> HTTPException:
+    # Authentication/origin/CSRF failures are already deliberately classified by
+    # the reviewer-auth boundary. Never turn those 401/403 responses into a 500.
+    if isinstance(exc, HTTPException):
+        return exc
     if isinstance(exc, ReviewNotFound):
         return HTTPException(status_code=404, detail=str(exc))
     if isinstance(exc, ReviewConflict):
@@ -194,7 +198,11 @@ def update_note(note_id: str, payload: NoteRequest, request: Request) -> dict[st
 @router.delete("/notes/{note_id}")
 def delete_note(note_id: str, request: Request) -> dict[str, bool]:
     try:
-        return {"deleted": _store().delete_note(user_id=_user_id(request, mutation=True), note_id=note_id)}
+        return {
+            "deleted": _store().delete_note(
+                user_id=_user_id(request, mutation=True), note_id=note_id
+            )
+        }
     except Exception as exc:
         raise _raise(exc) from exc
 
