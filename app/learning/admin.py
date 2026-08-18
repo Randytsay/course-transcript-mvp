@@ -111,14 +111,19 @@ def overview(request: Request) -> dict[str, Any]:
         item = dict(row)
         source_status = source_store.status(str(item["youtube_video_id"]))
         source = source_status["source"]
+        source_is_latest = bool(source_status["source_is_latest"])
         item["learning_source_version_id"] = source["subtitle_version_id"] if source else None
         item["learning_source_version_number"] = source["version_number"] if source else None
         item["learning_source_sha256"] = source["source_sha256"] if source else None
         item["learning_source_approved_at"] = source["approved_at"] if source else None
-        item["learning_source_is_latest"] = source_status["source_is_latest"]
+        item["learning_source_is_latest"] = source_is_latest
         if item.get("artifact_id"):
+            # Even if the artifact still matches the pinned formal source, it is
+            # stale for learners when that formal source is no longer the latest
+            # immutable subtitle version.
             item["artifact_stale"] = (
                 not source
+                or not source_is_latest
                 or str(item.get("artifact_source_sha256")) != str(source.get("source_sha256"))
             )
         else:
