@@ -48,6 +48,9 @@ test("reviewer workspace separates watched and reviewed progress without seat ja
 
 test("admin UI keeps import, versioning and YouTube publication as explicit separate stages", () => {
   const page = source("app/review-admin/page.tsx");
+  const layout = source("app/review-admin/layout.tsx");
+  const reviewerLayout = source("app/review/layout.tsx");
+  const reviewerLink = source("app/review/review-admin-link.tsx");
   assert.match(page, />影片同步</);
   assert.match(page, />版本管理</);
   assert.match(page, />YouTube 發布</);
@@ -56,4 +59,10 @@ test("admin UI keeps import, versioning and YouTube publication as explicit sepa
   assert.match(page, /youtube_video_ids: ids/);
   assert.match(page, /publish-preview/);
   assert.match(page, /這一步會真正覆蓋目前 YouTube 字幕軌/);
+  assert.match(layout, /進入校訂入口/);
+  assert.match(layout, /\/review\/videos/);
+  assert.match(reviewerLayout, /ReviewAdminLink/);
+  assert.match(reviewerLink, /ADMIN_ORIGIN = "https:\/\/transcript\.randy88\.ccwu\.cc"/);
+  assert.match(reviewerLink, /\$\{ADMIN_ORIGIN\}\/review-admin/);
+  assert.match(reviewerLink, /管理員入口/);
 });
