@@ -9,3 +9,4 @@ npm-debug.log*
 *.key
 *gcp-sa*.json
 *service-account*.json
+tsconfig.tsbuildinfo

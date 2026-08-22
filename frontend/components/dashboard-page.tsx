@@ -180,7 +180,6 @@ export default function DashboardPage() {
               <div><span className="service-icon service-icon--violet"><Sparkles size={16} /></span><div><strong>Gemini 3.7 Flash</strong><small>由任務記錄反映</small></div><span className="service-state">請查看任務</span></div>
             </div>
           </div>
-          <div className="panel quick-panel"><div className="quick-panel__icon"><Sparkles size={21} /></div><h2>最高精準度模式</h2><p>Chirp 建立時間軸，Gemini 依固定字幕段落進行繁體與術語校正。</p><Link href="/jobs/new" className="button button--secondary">建立精準轉錄 <ArrowRight size={16} /></Link></div>
         </aside>
       </section>
     </AppShell>

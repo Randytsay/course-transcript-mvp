@@ -16,6 +16,7 @@ function statusCopy(health: DriveHealth | null, loading: boolean) {
 export default function DashboardPageDriveHealth() {
   const [health, setHealth] = useState<DriveHealth | null>(null);
   const [loading, setLoading] = useState(true);
+  const [toastOpen, setToastOpen] = useState(true);
 
   async function loadHealth() {
     setLoading(true);
@@ -40,7 +41,7 @@ export default function DashboardPageDriveHealth() {
 
   return (
     <>
-      <div style={{ position: "fixed", zIndex: 50, right: 20, bottom: 20, maxWidth: 420, background: "var(--surface)", border: `1px solid ${abnormal ? "#ef4444" : "var(--border)"}`, borderRadius: 12, boxShadow: "0 12px 30px rgba(15,23,42,.15)", padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
+      {toastOpen && <div style={{ position: "fixed", zIndex: 40, right: 18, bottom: 18, maxWidth: 330, background: "var(--surface)", border: `1px solid ${abnormal ? "#ef4444" : "var(--border)"}`, borderRadius: 12, boxShadow: "0 12px 30px rgba(15,23,42,.15)", padding: "12px 14px", display: "flex", alignItems: "center", gap: 12 }}>
         <span className={`service-icon ${abnormal ? "service-icon--amber" : "service-icon--green"}`}>
           {loading ? <LoaderCircle className="spin" size={16} /> : abnormal ? <TriangleAlert size={16} /> : <HardDrive size={16} />}
         </span>
@@ -56,7 +57,12 @@ export default function DashboardPageDriveHealth() {
         <button type="button" className="icon-button" aria-label="重新檢查 Google Drive" onClick={() => void loadHealth()} disabled={loading}>
           <RefreshCw size={16} className={loading ? "spin" : ""} />
         </button>
-      </div>
+        {!abnormal && (
+          <button type="button" className="icon-button" aria-label="隱藏狀態通知" onClick={() => setToastOpen(false)}>
+            ✕
+          </button>
+        )}
+      </div>}
       <DashboardPage />
     </>
   );
