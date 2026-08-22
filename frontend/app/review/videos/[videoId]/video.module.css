@@ -102,7 +102,7 @@
   min-width: 0;
   margin: 0 auto;
   display: grid;
-  grid-template-columns: minmax(0, 1.18fr) minmax(360px, 0.82fr);
+  grid-template-columns: minmax(0, 1.25fr) minmax(360px, 0.75fr);
   gap: 16px;
 }
 
@@ -597,6 +597,10 @@
   scroll-behavior: smooth;
 }
 
+.segment:nth-child(10n) {
+  border-bottom: 2px solid #e3ede7;
+}
+
 .segment {
   min-width: 0;
   display: grid;
@@ -614,7 +618,8 @@
 
 .segmentEditing {
   scroll-margin-block: 10px;
-  background: #fffaf0;
+  background: #f2faf6;
+  box-shadow: inset 3px 0 #8fb8a8;
 }
 
 .timeButton {
@@ -624,6 +629,8 @@
   padding: 5px 4px;
   border: 0;
   background: transparent;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
   color: #96764a;
   display: inline-flex;
   align-items: center;
@@ -741,8 +748,8 @@
 }
 
 .status_pending {
-  background: #fff2d9;
-  color: #8a6529;
+  background: #fdf0e6;
+  color: #96603c;
 }
 
 .status_approved {

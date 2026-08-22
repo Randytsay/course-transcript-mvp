@@ -15,8 +15,8 @@ export default function LearnerHelpPage() {
       <div className={styles.shell}>
         <header className={styles.topbar}>
           <a className={styles.brand} href="/review/learn">
-            <span className={styles.brandMark}>學</span>
-            <span className={styles.brandText}><strong>佛學共學平台</strong><span>使用說明</span></span>
+            <span className={styles.brandMark}>慈</span>
+            <span className={styles.brandText}><strong>慈聖佛堂・佛學共學平台</strong><span>使用說明</span></span>
           </a>
           <nav className={styles.nav} aria-label="使用說明導覽">
             <a href="/review/learn">學習中心</a>

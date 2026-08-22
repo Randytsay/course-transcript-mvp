@@ -117,8 +117,8 @@ export default function LearningDashboardPage() {
       <div className={styles.shell}>
         <header className={styles.topbar}>
           <a className={styles.brand} href="/review/learn">
-            <span className={styles.brandMark}>學</span>
-            <span className={styles.brandText}><strong>佛學共學平台</strong><span>看課・複習・共修・留下自己的學習歷程</span></span>
+            <span className={styles.brandMark}>慈</span>
+            <span className={styles.brandText}><strong>慈聖佛堂・佛學共學平台</strong><span>看課・複習・共修・留下自己的學習歷程</span></span>
           </a>
           <nav className={styles.nav} aria-label="學習功能">
             <a aria-current="page" href="/review/learn">學習中心</a>
