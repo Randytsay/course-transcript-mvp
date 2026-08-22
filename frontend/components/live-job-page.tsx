@@ -17,7 +17,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { rechunkChunk } from "@/lib/api-client";
+import { rechunkChunk, recalculateChunk } from "@/lib/api-client";
 
 const apiBase = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 const terminalJobStatuses = new Set([
@@ -191,6 +191,8 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
   const [loadingTranscript, setLoadingTranscript] = useState<number | null>(null);
   const [rechunkingChunk, setRechunkingChunk] = useState<number | null>(null);
   const [rechunkResult, setRechunkResult] = useState<Record<number, "ok" | "error">>({});
+  const [recalculatingChunk, setRecalculatingChunk] = useState<number | null>(null);
+  const [recalculateResult, setRecalculateResult] = useState<Record<number, "ok" | "error">>({});
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [manualRefresh, setManualRefresh] = useState(0);
@@ -338,6 +340,23 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
     }
   }
 
+  async function handleRecalculate(chunkIndex: number) {
+    if (!job || recalculatingChunk !== null) return;
+    const revision = job.revision ?? 1;
+    setRecalculatingChunk(chunkIndex);
+    setRecalculateResult((prev) => ({ ...prev, [chunkIndex]: undefined as unknown as "ok" }));
+    try {
+      await recalculateChunk(jobId, chunkIndex, revision);
+      setRecalculateResult((prev) => ({ ...prev, [chunkIndex]: "ok" }));
+      setManualRefresh((n) => n + 1);
+    } catch (cause) {
+      setRecalculateResult((prev) => ({ ...prev, [chunkIndex]: "error" }));
+      setError(cause instanceof Error ? cause.message : "無法計算字數");
+    } finally {
+      setRecalculatingChunk(null);
+    }
+  }
+
 
   return (
     <AppShell
@@ -413,23 +432,42 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
                     {expanded.has(chunk.chunkIndex) ? "收合原始稿" : "展開原始稿"}
                   </button>
                   {rechunkAllowed && (
-                    <button
-                      type="button"
-                      className={styles.actionButton}
-                      disabled={rechunkingChunk !== null}
-                      onClick={() => void handleRechunk(chunk.chunkIndex)}
-                      title={`重新送出第 ${chunk.chunkIndex + 1} 段給 Chirp 辨識，完成後字詞統計與字幕自動更新`}
-                      aria-label={`重新辨識第 ${chunk.chunkIndex + 1} 段`}
-                    >
-                      {rechunkingChunk === chunk.chunkIndex
-                        ? <LoaderCircle size={17} className="spin" />
-                        : <RotateCcw size={17} />}
-                      {rechunkResult[chunk.chunkIndex] === "ok"
-                        ? "已送出"
-                        : rechunkResult[chunk.chunkIndex] === "error"
-                          ? "送出失敗"
-                          : "重新辨識"}
-                    </button>
+                    <>
+                      <button
+                        type="button"
+                        className={styles.actionButton}
+                        disabled={rechunkingChunk !== null}
+                        onClick={() => void handleRechunk(chunk.chunkIndex)}
+                        title={`重新送出第 ${chunk.chunkIndex + 1} 段給 Chirp 辨識，完成後字詞統計與字幕自動更新`}
+                        aria-label={`重新辨識第 ${chunk.chunkIndex + 1} 段`}
+                      >
+                        {rechunkingChunk === chunk.chunkIndex
+                          ? <LoaderCircle size={17} className="spin" />
+                          : <RotateCcw size={17} />}
+                        {rechunkResult[chunk.chunkIndex] === "ok"
+                          ? "已送出"
+                          : rechunkResult[chunk.chunkIndex] === "error"
+                            ? "送出失敗"
+                            : "重新辨識"}
+                      </button>
+                      <button
+                        type="button"
+                        className={styles.actionButton}
+                        disabled={recalculatingChunk !== null}
+                        onClick={() => void handleRecalculate(chunk.chunkIndex)}
+                        title={`重新讀取本機 words.json 計算第 ${chunk.chunkIndex + 1} 段字數，不消耗語音辨識費`}
+                        aria-label={`重新計算第 ${chunk.chunkIndex + 1} 段字詞數`}
+                      >
+                        {recalculatingChunk === chunk.chunkIndex
+                          ? <LoaderCircle size={17} className="spin" />
+                          : <RefreshCw size={17} />}
+                        {recalculateResult[chunk.chunkIndex] === "ok"
+                          ? "已重算"
+                          : recalculateResult[chunk.chunkIndex] === "error"
+                            ? "計算失敗"
+                            : "重新計算"}
+                      </button>
+                    </>
                   )}
                 </div>
                 {chunk.error && <div className={styles.error}>{chunk.error}</div>}

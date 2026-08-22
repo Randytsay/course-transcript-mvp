@@ -116,10 +116,23 @@ def main() -> int:
         print(f"RECHUNK=FAIL chirp_chunk_hardened exited {rc}")
         return 1
 
-    # Verify chunk succeeded
-    manifest_after = _load_json(manifest_path)
-    if manifest_after.get("status") not in {"SUCCEEDED", "EMPTY_SILENCE"}:
-        print(f"RECHUNK=FAIL chunk status after re-run: {manifest_after.get('status')}")
+    # Polling loop using recover_chunk_hardened
+    import time
+    print(f"--- Polling status for chunk-{CHUNK_INDEX:03d} ---")
+    max_attempts = 120  # 10 minutes max
+    for attempt in range(max_attempts):
+        rc = _run_module("app.providers.recover_chunk_hardened", base_env)
+        manifest_after = _load_json(manifest_path)
+        status = manifest_after.get("status")
+        print(f"Poll {attempt+1}: status={status} exit_code={rc}")
+        if status in {"SUCCEEDED", "EMPTY_SILENCE"}:
+            break
+        if status in {"FAILED", "CANCELLED"}:
+            print(f"RECHUNK=FAIL chunk failed with status: {status}")
+            return 1
+        time.sleep(5)
+    else:
+        print("RECHUNK=FAIL polling timed out")
         return 1
 
     word_count = len((_load_json(chunk_dir / "words.json")).get("words", []))

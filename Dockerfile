@@ -15,7 +15,7 @@ RUN apt-get update \
       --output /tmp/rclone.zip \
     && unzip -q /tmp/rclone.zip -d /tmp \
     && install -m 0755 "/tmp/rclone-v${RCLONE_VERSION}-linux-${RCLONE_ARCH}/rclone" /usr/local/bin/rclone \
-    && rclone version \
+    && env -u RCLONE_VERSION rclone version \
     && rm -rf /tmp/rclone.zip "/tmp/rclone-v${RCLONE_VERSION}-linux-${RCLONE_ARCH}" /var/lib/apt/lists/*
 
 WORKDIR /app

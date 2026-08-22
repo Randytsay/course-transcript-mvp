@@ -253,6 +253,17 @@ export async function rechunkChunk(
   );
 }
 
+export async function recalculateChunk(
+  jobId: string,
+  chunkIndex: number,
+  expectedRevision: number,
+): Promise<{ status: string; job_id: string; chunk_index: number; wordCount: number; message: string }> {
+  return postJson(
+    `/jobs/${encodeURIComponent(jobId)}/recalculate/${chunkIndex}`,
+    { expected_revision: expectedRevision },
+  );
+}
+
 export async function browseDrive(sourcePath: string): Promise<DriveDirectory> {
   const result = await postJson<{
     current_path: string;
