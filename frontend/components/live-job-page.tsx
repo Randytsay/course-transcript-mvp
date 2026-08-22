@@ -15,6 +15,7 @@ import {
   LoaderCircle,
   RefreshCw,
   RotateCcw,
+  Sigma,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatTwd } from "@/lib/currency";
@@ -199,6 +200,7 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
   const [manualRefresh, setManualRefresh] = useState(0);
   const [busyRetry, setBusyRetry] = useState(false);
   const [retryingChunk, setRetryingChunk] = useState<number | null>(null);
+  const [recalculatingChunk, setRecalculatingChunk] = useState<number | null>(null);
   const [actionFeedback, setActionFeedback] = useState<{ type: "success" | "error"; message: string } | null>(null);
   const formalLoadedRef = useRef(false);
 
@@ -261,6 +263,37 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
       setActionFeedback({ type: "error", message: `❌ 重試第 ${chunkIndex + 1} 段失敗：${msg}` });
     } finally {
       setRetryingChunk(null);
+    }
+  }
+
+  async function handleRecalculate(chunkIndex: number) {
+    if (!job || recalculatingChunk !== null) return;
+    setRecalculatingChunk(chunkIndex);
+    setError(null);
+    setActionFeedback(null);
+    try {
+      const response = await fetch(`${apiBase}/jobs/${encodeURIComponent(jobId)}/recalculate/${chunkIndex}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ expected_revision: job.revision ?? 1 }),
+      });
+      const payload = await response.json().catch(() => null) as
+        | { detail?: string; wordCount?: number; message?: string }
+        | null;
+      if (!response.ok) {
+        throw new Error(payload?.detail ?? "無法計算字數");
+      }
+      setActionFeedback({
+        type: "success",
+        message: payload?.message ?? `✅ 第 ${chunkIndex + 1} 段字詞統計已重算（${payload?.wordCount ?? "?"} 字詞）。`,
+      });
+      setManualRefresh((value) => value + 1);
+    } catch (cause) {
+      const msg = cause instanceof Error ? cause.message : "無法計算字數";
+      setError(msg);
+      setActionFeedback({ type: "error", message: `❌ 重算第 ${chunkIndex + 1} 段失敗：${msg}` });
+    } finally {
+      setRecalculatingChunk(null);
     }
   }
 
@@ -480,6 +513,16 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
                     >
                       {retryingChunk === chunk.chunkIndex ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}
                       {chunk.status === "FAILED" ? "重試此分段" : "重新辨識"}
+                    </button>
+                    <button
+                      type="button"
+                      className={styles.actionButton}
+                      disabled={recalculatingChunk === chunk.chunkIndex}
+                      onClick={() => void handleRecalculate(chunk.chunkIndex)}
+                      title="從已完成的辨識結果本地重算此分段字詞統計（不會重新呼叫 Chirp，零費用）"
+                    >
+                      {recalculatingChunk === chunk.chunkIndex ? <LoaderCircle className="spin" size={15} /> : <Sigma size={15} />}
+                      重算字數
                     </button>
                     <button
                       type="button"
