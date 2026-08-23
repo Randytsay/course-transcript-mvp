@@ -61,13 +61,7 @@ def build_realtime_windows(
     max_segments: int = MINIMAX_REALTIME_MAX_SEGMENTS,
     max_chars: int = MINIMAX_REALTIME_MAX_CHARS,
 ) -> list[dict[str, Any]]:
-    """Build bounded realtime windows using segment count + text-size proxy.
-
-    We intentionally avoid provider/tokenizer coupling in the orchestration
-    layer. Character count is a conservative, deterministic proxy that keeps
-    Chinese subtitle windows bounded while segment count prevents huge arrays
-    of very short cues.
-    """
+    """Build bounded realtime windows using segment count + text-size proxy."""
     max_segments = max(1, int(max_segments))
     max_chars = max(256, int(max_chars))
     windows: list[dict[str, Any]] = []
@@ -108,14 +102,14 @@ class JobCorrectionSpec:
     provider: str
     provider_profile_id: str
     model: str
-    execution_mode: str          # REALTIME / BATCH
-    fallback_policy: str         # RAW_CHIRP_FALLBACK / <other-provider>
+    execution_mode: str
+    fallback_policy: str
     source_revision: str = ""
     source_sha256: str = ""
 
     @property
     def is_legacy(self) -> bool:
-        return not self.provider  # legacy jobs have empty provider
+        return not self.provider
 
 
 class CorrectionOrchestrator:
@@ -123,10 +117,8 @@ class CorrectionOrchestrator:
                  client_factory: Callable[[str, str], Any],
                  now: Callable[[], str] | None = None):
         self.runs = run_store
-        self.client_factory = client_factory   # (provider, profile_id) -> client
+        self.client_factory = client_factory
         self._now = now or (lambda: "")
-
-    # -- realtime -----------------------------------------------------------
 
     @staticmethod
     def _raw_window_corrections(segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -158,6 +150,21 @@ class CorrectionOrchestrator:
                                   segments: list[dict[str, Any]],
                                   glossary: list[dict[str, Any]]) -> dict[str, Any]:
         client = self.client_factory(spec.provider, spec.provider_profile_id)
+
+        # Preserve the pre-PR65 contract for generic/custom MiniMax-like
+        # clients. Only the hardened provider (or an explicit test double)
+        # advertises that it supports the bounded window/fallback semantics.
+        if not bool(getattr(client, "supports_window_fallback", False)):
+            result = self._correct_one_window(client, segments, glossary)
+            return {
+                "corrections": result["corrections"],
+                "prompt_version": PROMPT_VERSION,
+                "fallback_segment_ids": [],
+                "window_results": [],
+                "provider_circuit_opened": False,
+                "raw_response": result["raw_response"],
+            }
+
         windows = build_realtime_windows(segments)
         all_corrections: list[dict[str, Any]] = []
         fallback_segment_ids: list[str] = []
@@ -209,10 +216,7 @@ class CorrectionOrchestrator:
                     last_error = exc
                     if exc.kind in _FATAL_PROVIDER_KINDS:
                         raise
-                    if (
-                        exc.kind in _WINDOW_RETRYABLE_KINDS
-                        and attempts < MINIMAX_WINDOW_MAX_ATTEMPTS
-                    ):
+                    if exc.kind in _WINDOW_RETRYABLE_KINDS and attempts < MINIMAX_WINDOW_MAX_ATTEMPTS:
                         continue
                     break
 
@@ -239,8 +243,6 @@ class CorrectionOrchestrator:
                 if consecutive_transport_failures >= MINIMAX_CIRCUIT_FAILURES:
                     circuit_open = True
             else:
-                # A malformed/invalid/output-limited window does not prove the
-                # provider is unavailable. Later windows must still get M3.
                 consecutive_transport_failures = 0
 
         expected_ids = [str(s["segment_id"]) for s in segments]
@@ -251,9 +253,6 @@ class CorrectionOrchestrator:
             "fallback_segment_ids": fallback_segment_ids,
             "window_results": window_results,
             "provider_circuit_opened": circuit_open,
-            # Existing audit path persists this object separately from the
-            # derived corrected layer. Failed HTTP response bodies are never
-            # captured here.
             "raw_response": {
                 "window_responses": raw_responses,
                 "window_results": window_results,
@@ -275,15 +274,13 @@ class CorrectionOrchestrator:
         parsed = _parse_json_loose(raw) if isinstance(raw, str) else raw
         corrections = validate_correction_payload(
             parsed, [s["segment_id"] for s in segments])
-        return {"corrections": [c.__dict__ for c in corrections],
-                "prompt_version": PROMPT_VERSION,
-                # Keep the provider response in the job's immutable audit
-                # directory. It is deliberately not returned by the API.
-                "raw_response": raw,
-                "fallback_segment_ids": [],
-                "window_results": []}
-
-    # -- batch lifecycle ------------------------------------------------------
+        return {
+            "corrections": [c.__dict__ for c in corrections],
+            "prompt_version": PROMPT_VERSION,
+            "raw_response": raw,
+            "fallback_segment_ids": [],
+            "window_results": [],
+        }
 
     def submit_batch(self, spec: JobCorrectionSpec,
                      segments: list[dict[str, Any]],
@@ -297,30 +294,31 @@ class CorrectionOrchestrator:
         rh = request_hash({
             "windows": [w["window_id"] for w in windows],
             "glossary_hash": request_hash(glossary),
-            "model": spec.model, "mode": spec.execution_mode,
+            "model": spec.model,
+            "mode": spec.execution_mode,
             "prompt_version": PROMPT_VERSION,
         })
         existing = self.runs.get_existing(
-            job_id=spec.job_id, source_revision=spec.source_revision,
-            request_sha256=rh)
+            job_id=spec.job_id,
+            source_revision=spec.source_revision,
+            request_sha256=rh,
+        )
         if existing is not None:
-            # NEVER resubmit a paid batch. A provider id is missing only for
-            # the crash window covered by the durable submission claim.
             if existing.get("provider_job_id") and existing.get("status") in {
                 "submitted", "processing", "completed"
             }:
-                return {"run_id": int(existing["id"]),
-                        "provider_job_id": existing["provider_job_id"],
-                        "resubmitted": False,
-                        "status": existing["status"]}
+                return {
+                    "run_id": int(existing["id"]),
+                    "provider_job_id": existing["provider_job_id"],
+                    "resubmitted": False,
+                    "status": existing["status"],
+                }
             raise ProviderError(
                 "batch_failed",
                 "AI Batch submission 狀態未明，已阻止自動重送；請先人工核對 provider",
             )
 
         client = self.client_factory(spec.provider, spec.provider_profile_id)
-
-        # OpenRouter model-specific gating — server-side, not trusted from UI
         gate = getattr(client, "model_supports_batch", None)
         if callable(gate):
             ok, reason = gate(spec.model)
@@ -328,10 +326,14 @@ class CorrectionOrchestrator:
                 raise ProviderError("batch_failed", f"BATCH 未啟用：{reason}")
 
         claim = self.runs.claim_submission(
-            job_id=spec.job_id, source_revision=spec.source_revision,
-            source_sha256=spec.source_sha256, provider=spec.provider,
-            provider_profile_id=spec.provider_profile_id, model=spec.model,
-            execution_mode=spec.execution_mode, request_sha256=rh,
+            job_id=spec.job_id,
+            source_revision=spec.source_revision,
+            source_sha256=spec.source_sha256,
+            provider=spec.provider,
+            provider_profile_id=spec.provider_profile_id,
+            model=spec.model,
+            execution_mode=spec.execution_mode,
+            request_sha256=rh,
         )
         if not claim["claimed"]:
             existing = claim["run"]
@@ -353,19 +355,19 @@ class CorrectionOrchestrator:
         try:
             provider_job_id = client.submit_batch(windows, glossary)
         except TypeError as exc:
-            # Vertex's native BatchPrediction adapter uses a GCS input/output
-            # contract and is not the same as the inline-window contract used
-            # by this worker. Never accidentally call it with the wrong
-            # argument shape or silently fall back to realtime.
             raise ProviderError(
                 "batch_failed",
                 "此 provider 的官方 Batch 介面尚未接到目前的 worker contract",
             ) from exc
         run_id = int(claim["run_id"])
         self.runs.finalize_submission(run_id, provider_job_id)
-        return {"run_id": run_id, "provider_job_id": provider_job_id,
-                "resubmitted": True, "status": "submitted",
-                "job_status": "waiting_ai_batch"}
+        return {
+            "run_id": run_id,
+            "provider_job_id": provider_job_id,
+            "resubmitted": True,
+            "status": "submitted",
+            "job_status": "waiting_ai_batch",
+        }
 
     def poll_pending(self, *, providers: list[str] | None = None,
                      finalize: bool = True) -> list[dict[str, Any]]:
@@ -375,26 +377,31 @@ class CorrectionOrchestrator:
         outcomes = []
         for run in self.runs.pending_batches(providers):
             try:
-                client = self.client_factory(run["provider"],
-                                             run["provider_profile_id"])
+                client = self.client_factory(run["provider"], run["provider_profile_id"])
                 state = client.get_batch(run["provider_job_id"])
             except ProviderError as exc:
-                outcomes.append({"run_id": run["id"], "status": "error",
-                                 "error": exc.safe_message})
+                outcomes.append({
+                    "run_id": run["id"],
+                    "status": "error",
+                    "error": exc.safe_message,
+                })
                 continue
             status = state["status"]
             if status == "completed":
-                # A recovery caller may need to persist the raw provider body
-                # before marking the run completed. The default keeps the
-                # original library contract used by tests and admin tooling.
                 if finalize:
                     self.runs.update_status(run["id"], status="completed")
-                outcomes.append({"run_id": run["id"], "status": "completed",
-                                 "body": state.get("body")})
+                outcomes.append({
+                    "run_id": run["id"],
+                    "status": "completed",
+                    "body": state.get("body"),
+                })
             elif status in ("failed", "cancelled", "expired"):
-                self.runs.update_status(run["id"], status=status,
-                                        error_kind=status,
-                                        error_safe_message=f"provider 回報 {status}")
+                self.runs.update_status(
+                    run["id"],
+                    status=status,
+                    error_kind=status,
+                    error_safe_message=f"provider 回報 {status}",
+                )
                 outcomes.append({"run_id": run["id"], "status": status})
             else:
                 outcomes.append({"run_id": run["id"], "status": "processing"})
@@ -416,20 +423,20 @@ class CorrectionOrchestrator:
             custom_id = item.get("custom_id", "")
             segments = segments_by_window.get(custom_id)
             if segments is None:
-                raise ProviderError("invalid_response",
-                                    f"未知 window custom_id: {custom_id}")
+                raise ProviderError("invalid_response", f"未知 window custom_id: {custom_id}")
             body = ((item.get("response") or {}).get("body") or {})
             content = ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
             if not isinstance(content, str):
-                raise ProviderError("invalid_response",
-                                    f"window {custom_id} 缺少回應內容")
+                raise ProviderError("invalid_response", f"window {custom_id} 缺少回應內容")
             parsed = _parse_json_loose(content)
             expected_ids = [s["segment_id"] for s in segments]
             corrections = validate_correction_payload(parsed, expected_ids)
             all_corrections.extend(c.__dict__ for c in corrections)
-        return {"run_id": run_id,
-                "corrections": all_corrections,
-                "prompt_version": PROMPT_VERSION}
+        return {
+            "run_id": run_id,
+            "corrections": all_corrections,
+            "prompt_version": PROMPT_VERSION,
+        }
 
 
 def _parse_json_loose(text: str) -> Any:
@@ -441,5 +448,4 @@ def _parse_json_loose(text: str) -> Any:
     try:
         return json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ProviderError("invalid_response",
-                            "模型輸出不是有效 JSON — 拒絕寫入") from exc
+        raise ProviderError("invalid_response", "模型輸出不是有效 JSON — 拒絕寫入") from exc
