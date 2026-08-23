@@ -167,8 +167,16 @@ def run_module(*, ctx: dict[str, Any]) -> dict[str, Any]:
             "correction_raw_response": result.get("raw_response"),
             "correction_prompt_version": result["prompt_version"],
             "correction_model": model,
+            "correction_fallback_segment_ids": list(result.get("fallback_segment_ids") or []),
+            "correction_window_results": list(result.get("window_results") or []),
+            "correction_provider_circuit_opened": bool(result.get("provider_circuit_opened", False)),
         }
     except ProviderError as exc:
+        # Credential/quota failures are provider-level configuration errors.
+        # They must fail closed instead of being disguised as a successful
+        # raw-Chirp fallback, otherwise operators could miss a broken account.
+        if exc.kind in {"auth", "quota"}:
+            raise
         if str(ctx.get("correction_fallback_policy") or "RAW_CHIRP_FALLBACK") == "RAW_CHIRP_FALLBACK":
             return {
                 **ctx,
@@ -177,6 +185,11 @@ def run_module(*, ctx: dict[str, Any]) -> dict[str, Any]:
                 "correction_error_safe_message": exc.safe_message,
                 "correction_corrections": [],
                 "correction_model": model,
+                "correction_fallback_segment_ids": [
+                    str(item.get("segment_id")) for item in segments if item.get("segment_id")
+                ],
+                "correction_window_results": [],
+                "correction_provider_circuit_opened": False,
             }
         raise
 
@@ -193,8 +206,6 @@ def _write_glossary(job_dir: Path, terms: list[dict[str, Any]], source_sha256: s
         "source_sha256": source_sha256,
         "usage_metadata": previous.get("usage_metadata", {}),
         "terms": terms,
-        # If a prior terminology pass exists, do not erase its raw response
-        # merely because this router reuses the cached terms.
         "raw_response": previous.get("raw_response"),
         "cache_hit": True,
         "note": "Provider Router uses existing glossary only; no separate paid terminology request",
@@ -222,30 +233,48 @@ def _write_corrected_outputs(ctx: dict[str, Any], result: dict[str, Any], *,
 
     job_dir = Path(ctx["data_dir"]) / "jobs" / str(ctx["job_id"])
     raw_segments = list(ctx.get("raw_segments") or ctx.get("segments") or [])
+
+    # run_module uses the explicit correction_* namespace. Keep compatibility
+    # with callers that pass the orchestrator result directly, but never drop
+    # valid routed corrections because of a key-name mismatch.
+    correction_items = result.get("correction_corrections")
+    if correction_items is None:
+        correction_items = result.get("corrections", [])
     corrections = {
         str(item.get("segment_id")): item
-        for item in result.get("corrections", [])
+        for item in correction_items
         if isinstance(item, dict)
     }
+
+    global_fallback = str(result.get("correction_status")) == "fallback_raw_chirp"
+    fallback_ids = {
+        str(value) for value in result.get("correction_fallback_segment_ids", [])
+        if value is not None
+    }
     final: list[dict[str, Any]] = []
-    fallback = str(result.get("correction_status")) == "fallback_raw_chirp"
     for raw in raw_segments:
         segment_id = str(raw["segment_id"])
         raw_text = str(raw.get("raw_text", raw.get("text", "")))
         correction = corrections.get(segment_id, {})
+        segment_fallback = global_fallback or segment_id in fallback_ids
         corrected_text = (
-            str(correction.get("corrected_text") or raw_text)
-            if not fallback else raw_text
+            raw_text
+            if segment_fallback
+            else str(correction.get("corrected_text") or raw_text)
         )
         final.append({
             **raw,
             "corrected_text": corrected_text,
             "text": corrected_text,
-            "uncertain_terms": list(correction.get("uncertain_terms") or []) if not fallback else [],
+            "uncertain_terms": (
+                [] if segment_fallback
+                else list(correction.get("uncertain_terms") or [])
+            ),
             "corrected": corrected_text != raw_text,
-            "correction_fallback": fallback,
-            "fallback_to_raw": fallback,
+            "correction_fallback": segment_fallback,
+            "fallback_to_raw": segment_fallback,
         })
+
     expected = [str(item["segment_id"]) for item in raw_segments]
     if [str(item["segment_id"]) for item in final] != expected:
         raise RuntimeError("校正輸出 segment 順序與原始 subtitles 不一致")
@@ -256,6 +285,8 @@ def _write_corrected_outputs(ctx: dict[str, Any], result: dict[str, Any], *,
     source_sha256 = str(ctx.get("source_sha256") or "")
     _write_glossary(job_dir, terms, source_sha256, model, provider)
 
+    window_results = list(result.get("correction_window_results") or [])
+    circuit_opened = bool(result.get("correction_provider_circuit_opened", False))
     payload = {
         "source": "chirp_3_merged + provider_router text-only correction",
         "provider": provider,
@@ -265,6 +296,9 @@ def _write_corrected_outputs(ctx: dict[str, Any], result: dict[str, Any], *,
         "segment_count": len(final),
         "corrected_count": sum(bool(item["corrected"]) for item in final),
         "fallback_count": sum(bool(item["correction_fallback"]) for item in final),
+        "fallback_segment_ids": sorted(fallback_ids),
+        "window_results": window_results,
+        "provider_circuit_opened": circuit_opened,
         "total_duration_ms": final[-1]["end_ms"],
         "chirp_raw_immutable": True,
         "timestamps_immutable": True,
@@ -285,7 +319,10 @@ def _write_corrected_outputs(ctx: dict[str, Any], result: dict[str, Any], *,
             for item in final
         ) + "\n",
     )
-    _atomic_text(job_dir / "transcript-corrected.txt", "\n".join(item["corrected_text"] for item in final) + "\n")
+    _atomic_text(
+        job_dir / "transcript-corrected.txt",
+        "\n".join(item["corrected_text"] for item in final) + "\n",
+    )
     _atomic_text(
         job_dir / "transcript-corrected.md",
         "# 校正逐字稿\n\n" + "\n".join(
@@ -303,7 +340,10 @@ def _write_corrected_outputs(ctx: dict[str, Any], result: dict[str, Any], *,
     run_terminology_consistency(job_dir)
 
     audit_dir = job_dir / "correction-v2"
-    audit_name = f"router-{str(ctx.get('correction_execution_mode') or 'REALTIME').lower()}-{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.json"
+    audit_name = (
+        f"router-{str(ctx.get('correction_execution_mode') or 'REALTIME').lower()}-"
+        f"{int(time.time() * 1000)}-{uuid.uuid4().hex[:8]}.json"
+    )
     _atomic_json(audit_dir / audit_name, {
         "provider": provider,
         "model": model,
@@ -314,6 +354,9 @@ def _write_corrected_outputs(ctx: dict[str, Any], result: dict[str, Any], *,
         "raw_response": raw_response,
         "error_kind": result.get("correction_error_kind"),
         "safe_error": result.get("correction_error_safe_message"),
+        "fallback_segment_ids": sorted(fallback_ids),
+        "window_results": window_results,
+        "provider_circuit_opened": circuit_opened,
         "segments": final,
         "chirp_raw_immutable": True,
         "timestamps_immutable": True,
