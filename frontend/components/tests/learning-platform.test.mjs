@@ -80,11 +80,12 @@ test("review center and knowledge search stay grounded in learning evidence", ()
 
 test("learner help is always reachable and explains the whole journey without engineering jargon", () => {
   const layout = source("app/review/layout.tsx");
+  const portal = source("app/review/review-portal-dock.tsx");
   const landing = source("app/review/page.tsx");
   const dashboard = source("app/review/learn/page.tsx");
   const help = source("app/review/help/page.tsx");
-  assert.match(layout, /href="\/review\/help"/);
-  assert.match(layout, /使用說明/);
+  assert.match(portal, /href="\/review\/help"/);
+  assert.match(portal, /使用說明/);
   assert.match(landing, /完整使用說明/);
   assert.match(dashboard, /\/review\/help/);
   for (const label of ["選一堂課開始", "收藏此刻", "AI 筆記", "我已學完", "1、3、7、14、30 天", "協助校字幕"]) {

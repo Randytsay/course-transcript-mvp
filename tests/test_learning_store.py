@@ -95,6 +95,24 @@ class LearningStoreTests(unittest.TestCase):
         with self.assertRaises(ReviewConflict):
             self.store.delete_bookmark(user_id=other["id"], bookmark_id=bookmark["id"])
 
+    def test_lesson_includes_only_current_users_pending_subtitle_suggestion(self) -> None:
+        suggestion = self.review.submit_suggestion(
+            segment_id=self.segments[1]["id"],
+            user_id=self.user["id"],
+            suggested_text="彌勒大成佛經。",
+        )
+        lesson = self.store.lesson(user_id=self.user["id"], youtube_video_id="video-1")
+        changed = lesson["segments"][1]
+        self.assertEqual(changed["my_suggestion_id"], suggestion["id"])
+        self.assertEqual(changed["my_suggested_text"], "彌勒大成佛經。")
+        self.assertEqual(changed["my_suggestion_status"], "pending")
+
+        other = self.review.get_or_create_user_for_identity(
+            provider="line", provider_subject="other-lesson", display_name="另一位學員"
+        )
+        other_lesson = self.store.lesson(user_id=other["id"], youtube_video_id="video-1")
+        self.assertIsNone(other_lesson["segments"][1]["my_suggestion_id"])
+
     def test_completed_lesson_enters_spaced_review_queue(self) -> None:
         self.store.upsert_learning_state(
             user_id=self.user["id"],
