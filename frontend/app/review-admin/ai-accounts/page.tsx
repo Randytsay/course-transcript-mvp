@@ -45,6 +45,7 @@ export default function AIAccountsPage() {
   const [name, setName] = useState("");
   const [saText, setSaText] = useState("");
   const [showForm, setShowForm] = useState(false);
+  const [showGuide, setShowGuide] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -168,16 +169,81 @@ export default function AIAccountsPage() {
             <p>
               管理影片處理使用的 Google Vertex AI 服務帳戶。可以預先登記多組帳戶，
               某個帳戶額度用完時一鍵切換；切換後重啟容器即生效。
+              第一次操作請先看{" "}
+              <button
+                className={styles.linkButton}
+                onClick={() => setShowGuide((v) => !v)}
+                type="button"
+              >
+                {showGuide ? "收起操作說明 ▲" : "操作說明 ▼"}
+              </button>
             </p>
           </div>
-          <button
-            className={styles.addButton}
-            onClick={() => setShowForm((v) => !v)}
-            type="button"
-          >
-            {showForm ? "收起表單" : "+ 新增帳戶"}
-          </button>
+          <div className={styles.headerActions}>
+            <button
+              className={styles.addButton}
+              onClick={() => setShowForm((v) => !v)}
+              type="button"
+            >
+              {showForm ? "收起表單" : "+ 新增帳戶"}
+            </button>
+          </div>
         </header>
+
+        {showGuide ? (
+          <section aria-label="操作說明" className={styles.guideCard}>
+            <h2>新增一組新帳戶（一步步來）</h2>
+            <ol className={styles.guideSteps}>
+              <li>
+                <strong>取得新的服務帳戶金鑰</strong>
+                <span>
+                  到 Google Cloud Console →「IAM 與管理」→「服務帳戶」，建立（或挑選）服務帳戶後，
+                  「金鑰」→「新增金鑰」→ 選 JSON → 下載金鑰檔。下載的會是一個 .json 檔。
+                </span>
+              </li>
+              <li>
+                <strong>確認專案已啟用 Vertex AI</strong>
+                <span>
+                  在同一個 GCP 專案中啟用 Vertex AI API，並確認此服務帳戶至少有
+                  「Vertex AI 使用者」(roles/aiplatform.user) 權限。
+                </span>
+              </li>
+              <li>
+                <strong>回到本頁，點右上「+ 新增帳戶」</strong>
+                <span>
+                  幫這組帳戶取一個好認的名字（英文／數字），例如 vertex-account-b。
+                  之後列表就用名字辨認。
+                </span>
+              </li>
+              <li>
+                <strong>上傳剛剛下載的 JSON 金鑰檔</strong>
+                <span>
+                  點「選擇檔案」選 .json 檔即可自動填入內容；也可以直接把檔案內容貼到文字框。
+                  按「儲存帳戶」完成登記。
+                </span>
+              </li>
+              <li>
+                <strong>平時不用動它——等需要時再切換</strong>
+                <span>
+                  登記好的帳戶只是備援。當目前使用的帳戶額度用完（AI 工作開始出現配額錯誤），
+                  再回來這頁點該帳戶的「切換為使用中」。
+                </span>
+              </li>
+              <li>
+                <strong>切換後要重啟容器才生效</strong>
+                <span>
+                  切換完成後，畫面會提示重啟 api 與 pipeline-worker 容器（系統管理者執行：
+                  docker compose restart api pipeline-worker）。
+                  重啟完成後，之後所有 AI 工作就會使用新帳戶的額度。
+                </span>
+              </li>
+            </ol>
+            <p className={styles.hint}>
+              💡 安全提醒：私鑰上傳後只存放在伺服器受保護目錄，頁面與 API 都不會再顯示內容；
+              所有操作都會記錄在稽核日誌。建議在 Google Cloud 上定期輪替金鑰。
+            </p>
+          </section>
+        ) : null}
 
         {loading ? <div className={styles.stateCard}>正在讀取…</div> : null}
         {message ? <div className={styles.successCard} role="status">{message}</div> : null}

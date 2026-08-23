@@ -238,6 +238,82 @@
   color: #68766e;
 }
 
+.linkButton {
+  background: none;
+  border: none;
+  color: #2f6f39;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 0;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.guideCard {
+  background: #fffdf4;
+  border: 1px solid #e8dcb5;
+  border-radius: 18px;
+  padding: 22px;
+  margin-bottom: 18px;
+}
+
+.guideCard h2 {
+  margin: 0 0 14px;
+  font-size: 20px;
+  color: #6b531f;
+}
+
+.guideSteps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: step;
+  display: grid;
+  gap: 14px;
+}
+
+.guideSteps li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 46px;
+  min-height: 34px;
+}
+
+.guideSteps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #315c4b;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.guideSteps strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 16px;
+}
+
+.guideSteps span {
+  color: #55645c;
+  font-size: 15px;
+}
+
+.headerActions {
+  display: flex;
+  gap: 10px;
+}
+
 .page button:focus-visible,
 .page a:focus-visible,
 .page input:focus-visible,
