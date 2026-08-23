@@ -46,6 +46,23 @@ def _job_context() -> tuple[dict[str, Any], Path]:
     return context_for_job(record, data_dir), data_dir / "jobs" / job_id
 
 
+def _normalize_quota_state(value: object) -> M3QuotaState:
+    """Normalize by value so module reloads/serialized snapshots cannot break `is` routing.
+
+    ``choose_initial_route`` intentionally uses enum identity. A long-running
+    process or test suite can reload the defining module, leaving an older
+    ``StrEnum`` instance whose value is still ``available`` but whose identity
+    belongs to a previous class object. Reconstructing the current enum at this
+    boundary keeps provider selection deterministic. Unknown/malformed values
+    remain fail-closed.
+    """
+    raw = getattr(value, "value", value)
+    try:
+        return M3QuotaState(str(raw).strip().lower())
+    except (TypeError, ValueError):
+        return M3QuotaState.UNKNOWN
+
+
 def _quota_snapshot(policy: str) -> MiniMaxQuotaSnapshot:
     if policy != M3_FIRST:
         return MiniMaxQuotaSnapshot(
@@ -66,7 +83,7 @@ def _quota_snapshot(policy: str) -> MiniMaxQuotaSnapshot:
             reason="quota_check_disabled",
         )
     try:
-        return MiniMaxQuotaClient().get_quota(force_refresh=True)
+        snapshot = MiniMaxQuotaClient().get_quota(force_refresh=True)
     except Exception:
         # No provider payload or exception text is persisted here. Ambiguous
         # quota state must remain fail-closed to Gemini.
@@ -75,6 +92,21 @@ def _quota_snapshot(policy: str) -> MiniMaxQuotaSnapshot:
             "",
             reason="quota_check_failed",
         )
+    normalized = _normalize_quota_state(snapshot.state)
+    if normalized is snapshot.state:
+        return snapshot
+    # Preserve all safe quota evidence while pinning the state to the current
+    # routing enum class. This is metadata-only; it never calls a provider.
+    return MiniMaxQuotaSnapshot(
+        normalized,
+        snapshot.checked_at,
+        source_pool=snapshot.source_pool,
+        interval_remaining=snapshot.interval_remaining,
+        weekly_remaining=snapshot.weekly_remaining,
+        interval_reset_at=snapshot.interval_reset_at,
+        weekly_reset_at=snapshot.weekly_reset_at,
+        reason=snapshot.reason,
+    )
 
 
 def _write_route_evidence(
@@ -94,7 +126,7 @@ def _write_route_evidence(
             "initial_provider": provider.value,
             "initial_route_reason": reason,
             "m3_feature_enabled": _true("MINIMAX_M3_ENABLED"),
-            "m3_quota_state_at_start": quota.state.value,
+            "m3_quota_state_at_start": _normalize_quota_state(quota.state).value,
             "m3_quota_checked_at": quota.checked_at or None,
             "m3_quota_source_pool": quota.source_pool,
             "m3_interval_remaining": quota.interval_remaining,
@@ -162,10 +194,11 @@ def main() -> int:
         os.environ.get("CORRECTION_REQUESTED_POLICY", GEMINI_FIRST)
     )
     quota = _quota_snapshot(policy)
+    quota_state = _normalize_quota_state(quota.state)
     decision = choose_initial_route(
         requested_policy=policy,
         m3_feature_enabled=_true("MINIMAX_M3_ENABLED"),
-        m3_quota_state=quota.state,
+        m3_quota_state=quota_state,
     )
 
     ctx, job_dir = _job_context()
