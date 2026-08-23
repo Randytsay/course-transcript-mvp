@@ -98,4 +98,6 @@ A separate explicit validation step is required on the VPS/current MiniMax Token
 8. Compare corrected text quality against retained Chirp/Gemini evidence.
 9. Keep production settings unchanged until this live gate passes.
 
+The items above are the policy summary, not an operator runbook. The authoritative bounded ARM64/VPS procedure is [`docs/MINIMAX_M3_LIVE_GATE.md`](./MINIMAX_M3_LIVE_GATE.md). It fixes the historical source identities, runs the current window builder in an ephemeral read-only container, requires stage-by-stage provider approval, records only sanitized metrics, and leaves production M3 disabled even after a technical PASS.
+
 Streaming remains a later transport optimization only if non-stream windowed M3 fails the reliability/latency gate. If needed, Streaming must be implemented inside the MiniMax provider rather than as a second correction runtime.
