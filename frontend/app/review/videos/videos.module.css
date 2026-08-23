@@ -39,23 +39,7 @@
   line-height: 1.7;
 }
 
-.headerActions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 8px;
-}
 
-.accountLink {
-  flex: 0 0 auto;
-  padding: 10px 15px;
-  border: 1px solid #d7d0c5;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.75);
-  color: #575047;
-  text-decoration: none;
-  font-size: 14px;
-  font-weight: 700;
-}
 
 .stateCard,
 .errorCard {
@@ -312,16 +296,8 @@
     gap: 12px;
   }
 
-  .headerActions {
-    flex-direction: column;
-  }
-
-  .accountLink {
-    padding: 8px 12px;
-    font-size: 12px;
-    text-align: center;
-  }
-
+  
+  
   .subhead {
     font-size: 14px;
   }

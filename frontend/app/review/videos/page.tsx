@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import styles from "./videos.module.css";
+import ReviewNav from "../review-nav";
 
 type VideoSummary = {
   youtube_video_id: string;
@@ -128,10 +129,7 @@ export default function ReviewVideosPage() {
               {name ? `${name}，` : ""}任何時候都能先觀看；要修改字幕時再按「開始校訂」即可。
             </p>
           </div>
-          <div className={styles.headerActions}>
-            <Link href="/review/contributions" className={styles.accountLink}>我的共修</Link>
-            <Link href="/review" className={styles.accountLink}>帳號</Link>
-          </div>
+          <ReviewNav active="videos" />
         </header>
 
         {loading ? <div className={styles.stateCard}>正在整理影片…</div> : null}
