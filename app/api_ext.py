@@ -19,6 +19,7 @@ from app.jobs.correction_policy import (
 )
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, DYNAMIC_BATCHING, STANDARD_BATCH
 from app.live_error import safe_chunk_error
+from app.providers.correction.registry import LEGACY_MINIMAX_PROFILE_ID
 from app.providers.correction_routing import M3QuotaState
 from app.providers.minimax_quota import MiniMaxQuotaClient
 import app.live_features as live_features
@@ -84,6 +85,28 @@ def _m3_enabled() -> bool:
         "yes",
         "on",
     }
+
+
+def _production_correction_router_fields(
+    *, policy: str, correction_enabled: bool
+) -> dict[str, object]:
+    """Bridge the existing M3_FIRST UI contract to the shared provider router.
+
+    M3_FIRST is allowed to be saved while M3 is disabled. In that state we
+    deliberately leave provider fields blank so the existing fail-closed Gemini
+    path remains in force. Only jobs created after the production M3 flag is
+    explicitly enabled are pinned to the windowed MiniMax router.
+    """
+    if correction_enabled and policy == "M3_FIRST" and _m3_enabled():
+        return {
+            "correction_provider": "minimax",
+            "correction_provider_profile_id": LEGACY_MINIMAX_PROFILE_ID,
+            "correction_model": os.environ.get("MINIMAX_M3_MODEL", "MiniMax-M3"),
+            "correction_execution_mode": "REALTIME",
+            "correction_fallback_policy": "RAW_CHIRP_FALLBACK",
+            "pricing_snapshot": {},
+        }
+    return {}
 
 
 _REPLACED_READ_PATHS = {
@@ -160,6 +183,10 @@ def create_batch_with_parallelism(
 ) -> dict[str, object]:
     actor = _mutation_actor(request)
     parallelism = _validate_parallelism(payload.chirp_max_parallel_chunks)
+    router_fields = _production_correction_router_fields(
+        policy=payload.correction_policy,
+        correction_enabled=payload.enable_gemini_correction,
+    )
     try:
         result = _store().create_preflight_batch(
             batch_preview_id=payload.batch_preview_id,
@@ -174,6 +201,7 @@ def create_batch_with_parallelism(
             content_mode=payload.content_mode,
             document_context=payload.document_context,
             actor=actor,
+            **router_fields,
         )
         job_ids = [job["id"] for job in result["jobs"]]
         policy = set_batch_correction_policy(
@@ -212,6 +240,10 @@ def create_job_with_parallelism(
 ) -> dict[str, object]:
     actor = _mutation_actor(request)
     parallelism = _validate_parallelism(payload.chirp_max_parallel_chunks)
+    router_fields = _production_correction_router_fields(
+        policy=payload.correction_policy,
+        correction_enabled=payload.enable_gemini_correction,
+    )
     try:
         record = _store().create_preflight_job(
             preview_id=payload.preview_id,
@@ -226,6 +258,7 @@ def create_job_with_parallelism(
             content_mode=payload.content_mode,
             document_context=payload.document_context,
             actor=actor,
+            **router_fields,
         )
         policy = set_job_correction_policy(
             _store(),
