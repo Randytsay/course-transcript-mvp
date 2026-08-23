@@ -54,6 +54,7 @@ test("admin UI keeps import, versioning and YouTube publication as explicit sepa
   const page = source("app/review-admin/page.tsx");
   const layout = source("app/review-admin/layout.tsx");
   const reviewerLayout = source("app/review/layout.tsx");
+  const reviewerDock = source("app/review/review-portal-dock.tsx");
   const reviewerLink = source("app/review/review-admin-link.tsx");
   assert.match(page, />影片同步</);
   assert.match(page, />版本管理</);
@@ -65,8 +66,9 @@ test("admin UI keeps import, versioning and YouTube publication as explicit sepa
   assert.match(page, /這一步會真正覆蓋目前 YouTube 字幕軌/);
   assert.match(layout, /進入校訂入口/);
   assert.match(layout, /\/review\/videos/);
-  assert.match(reviewerLayout, /ReviewAdminLink/);
+  assert.match(reviewerDock, /ReviewAdminLink/);
   assert.match(reviewerLink, /ADMIN_ORIGIN = "https:\/\/transcript\.randy88\.ccwu\.cc"/);
   assert.match(reviewerLink, /\$\{ADMIN_ORIGIN\}\/review-admin/);
+  assert.match(reviewerLink, /role === "owner"/);
   assert.match(reviewerLink, /管理員入口/);
 });
