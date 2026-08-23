@@ -154,17 +154,21 @@ class TestOpenRouterBatch(unittest.TestCase):
             if url == f"{BASE_URL}/models" and method == "GET":
                 if headers.get("Authorization") != "Bearer fake-openrouter-key":
                     return 401, {}
-                return 200, {"data": [{"id": "google/gemini-3.7-flash"}]}
+                return 200, {"data": [
+                    {"id": "google/gemini-3.7-flash"},
+                    {"id": "google/gemini-3.7-flash:batch", "batch_supported": True},
+                ]}
             if url == BATCH_URL and method == "POST":
                 return 201, {"id": "or-batch-123", "status": "submitted"}
             if url == f"{BATCH_URL}/or-batch-123":
-                return 200, {"status": "completed", "output_file_id": "f-1"}
-            if url == f"{BASE_URL}/files/f-1/content":
-                return 200, {"data": [
-                    {"custom_id": "w-1", "response": {"body": {"choices": [
-                        {"message": {"content": json.dumps([
-                            {"segment_id": "s0", "corrected_text": "ok"}])}}]}}}
-                ]}
+                # Official contract: results inline on the batch response.
+                return 200, {"status": "completed",
+                             "results": [
+                                 {"custom_id": "w-1",
+                                  "response": {"body": {"choices": [
+                                      {"message": {"content": json.dumps([
+                                          {"segment_id": "s0",
+                                           "corrected_text": "ok"}])}}]}}}]}
             return 404, {}
         return OpenRouterCorrectionProvider(api_key="fake-openrouter-key", http=http)
 
@@ -185,8 +189,11 @@ class TestOpenRouterBatch(unittest.TestCase):
         posts = [c for c in calls if c[1] == BATCH_URL]
         assert len(posts) == 1
         body = posts[0][2]
+        # Official contract: endpoint + model + requests (not input_requests)
         assert body["endpoint"] == "/v1/chat/completions"
-        assert body["input_requests"][0]["custom_id"] == "w-1"
+        assert body["model"] == "google/gemini-3.7-flash"
+        assert body["requests"][0]["custom_id"] == "w-1"
+        assert "input_requests" not in body
 
     def test_get_batch_terminal_states_and_results(self):
         calls: list = []
@@ -195,6 +202,99 @@ class TestOpenRouterBatch(unittest.TestCase):
         assert state["status"] == "completed"
         results = p.fetch_results(state["body"])
         assert results[0]["custom_id"] == "w-1"
+
+
+class TestOpenRouterModelBatchGating(unittest.TestCase):
+    """BATCH only when the SELECTED MODEL is confirmed batch-capable."""
+
+    def _provider_with(self, ids):
+        def http(method, url, headers, payload=None):
+            if url.endswith("/models"):
+                return 200, {"data": [{"id": i} for i in ids]}
+            return 404, {}
+        return OpenRouterCorrectionProvider(api_key="fake-openrouter-key", http=http)
+
+    def test_batch_variant_confirms_support(self):
+        p = self._provider_with(["m/x", "m/x:batch"])
+        ok, reason = p.model_supports_batch("m/x")
+        assert ok is True and reason == ""
+
+    def test_unverified_model_batch_disabled(self):
+        p = self._provider_with(["m/x", "m/y"])
+        ok, reason = p.model_supports_batch("m/z")
+        assert ok is False and "未確認" in reason
+
+    def test_metadata_flag_confirms(self):
+        def http(method, url, headers, payload=None):
+            return 200, {"data": [{"id": "m/x", "batch_supported": True}]}
+        p = OpenRouterCorrectionProvider(api_key="fake-openrouter-key", http=http)
+        ok, _ = p.model_supports_batch("m/x")
+        assert ok is True
+
+
+class TestMiniMaxKeyVerification(unittest.TestCase):
+    """GET /v1/models free verification; 401/403 FAIL; no fake batch."""
+
+    def _p(self, status, models=None):
+        def http(method, url, headers, payload=None):
+            if method == "GET" and url == "https://api.minimax.io/v1/models":
+                return status, {"data": [{"id": m} for m in (models or [])]}
+            if method == "POST" and url.endswith("/chat/completions"):
+                return 200, {"choices": [{"message": {"content": "[]"}}]}
+            return 404, {}
+        return MiniMaxCorrectionProvider(api_key="fake-minimax-key", http=http)
+
+    def test_valid_key_verified(self):
+        result = self._p(200, ["MiniMax-M3"]).validate_credentials()
+        assert result["key_verified"] is True
+        assert "MiniMax-M3" in result["models"]
+
+    def test_invalid_key_401_fails(self):
+        with self.assertRaises(ProviderError) as cm:
+            self._p(401).validate_credentials()
+        assert cm.exception.kind == "auth"
+
+    def test_invalid_key_403_fails(self):
+        with self.assertRaises(ProviderError):
+            self._p(403).validate_credentials()
+
+    def test_5xx_unavailable(self):
+        with self.assertRaises(ProviderError) as cm:
+            self._p(503).validate_credentials()
+        assert cm.exception.kind == "unreachable"
+
+    def test_realtime_uses_openai_compatible_endpoint(self):
+        calls: list = []
+        captured = []
+        def http(method, url, headers, payload=None):
+            captured.append(url)
+            return 200, {"choices": [{"message": {"content": "[{}]"}}]}
+        p = MiniMaxCorrectionProvider(api_key="fake-minimax-key", http=http)
+        p.realtime_generate("x")
+        assert captured[0] == "https://api.minimax.io/v1/chat/completions"
+
+    def test_no_batch_capability_or_method(self):
+        p = MiniMaxCorrectionProvider(api_key="fake-minimax-key")
+        assert not p.capabilities.supports_batch
+        assert not hasattr(p, "submit_batch")
+
+
+class TestDirectoryPermissions(unittest.TestCase):
+    def test_profile_dir_is_0700_and_normalized(self):
+        import tempfile
+        from pathlib import Path as P
+        tmp = tempfile.TemporaryDirectory()
+        try:
+            store = AIProviderProfileStore(P(tmp.name))
+            # pre-create a loose dir to verify normalization
+            loose = P(tmp.name) / "mm-1"
+            loose.mkdir(mode=0o755)
+            store.create(profile_id="mm-1", name="MM", provider="minimax",
+                         api_key="fake-minimax-key", default_model="MiniMax-M3")
+            assert oct(loose.stat().st_mode & 0o777) == "0o700"
+            assert oct((P(tmp.name)).stat().st_mode & 0o777) == "0o700"
+        finally:
+            tmp.cleanup()
 
 
 class TestVertexBatch(unittest.TestCase):

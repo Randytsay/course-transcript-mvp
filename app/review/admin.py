@@ -838,3 +838,86 @@ def ai_providers_delete(profile_id: str,
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     _audit_ai_account("ai_provider_profile_deleted", profile_id, {}, actor)
     return redact(result)
+
+@router.get("/ai-providers/openrouter-models")
+def ai_providers_openrouter_models(request: Request) -> dict[str, Any]:
+    """Model list from OpenRouter models endpoint (free, read-only)."""
+    _admin_read_actor(request)
+    store = _provider_store()
+    profiles = [p for p in store.list_profiles()
+                if p.get("provider") == "openrouter"]
+    if not profiles:
+        raise HTTPException(status_code=404, detail="尚未登記 OpenRouter 設定檔")
+    client = store.build_client(profiles[0]["id"])
+    try:
+        models = client.list_models()
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"models": redact(models)}
+
+
+@router.get("/ai-providers/batch-capability")
+def ai_providers_batch_capability(provider: str, model: str,
+                                  request: Request) -> dict[str, Any]:
+    """Server-side per-model BATCH gating — the UI never self-declares."""
+    _admin_read_actor(request)
+    if provider == "vertex":
+        # Gemini 3.7 Flash on Vertex officially supports batch prediction.
+        supported = "gemini-3.7" in (model or "").lower()
+        return {"supported": supported,
+                "reason": "" if supported else "此 Vertex model 未確認支援批次"}
+    if provider == "minimax":
+        return {"supported": False,
+                "reason": "MiniMax 官方目前未提供批次折扣 API，僅即時模式"}
+    if provider == "openrouter":
+        store = _provider_store()
+        profiles = [p for p in store.list_profiles()
+                    if p.get("provider") == "openrouter"]
+        if not profiles:
+            return {"supported": False, "reason": "尚未登記 OpenRouter 設定檔"}
+        try:
+            client = store.build_client(profiles[0]["id"])
+            ok, reason = client.model_supports_batch(model)
+            return {"supported": ok, "reason": reason}
+        except ProviderError as exc:
+            return {"supported": False, "reason": str(exc)}
+    return {"supported": False, "reason": "未知供應商"}
+
+
+@router.get("/ai-providers/cost-preview")
+def ai_providers_cost_preview(provider: str, model: str, execution_mode: str,
+                              request: Request) -> dict[str, Any]:
+    """Date-aware estimate; unknown pricing returns known=false (never $0)."""
+    _admin_read_actor(request)
+    from app.providers.correction.pricing import estimate_correction_cost
+    from datetime import date
+
+    openrouter_pricing = None
+    if provider == "openrouter":
+        store = _provider_store()
+        profiles = [p for p in store.list_profiles()
+                    if p.get("provider") == "openrouter"]
+        if profiles:
+            try:
+                client = store.build_client(profiles[0]["id"])
+                for m in client.list_models():
+                    if m.get("id") == model:
+                        openrouter_pricing = {
+                            "input": m.get("pricing_prompt"),
+                            "output": m.get("pricing_completion")}
+            except ProviderError:
+                pass
+    est = estimate_correction_cost(
+        provider=provider, model=model, mode=execution_mode,
+        input_tokens=100_000, output_tokens=20_000, on=date.today(),
+        openrouter_pricing=openrouter_pricing)
+    realtime_cost = None
+    if execution_mode == "BATCH":
+        rt = estimate_correction_cost(
+            provider=provider, model=model, mode="REALTIME",
+            input_tokens=100_000, output_tokens=20_000, on=date.today(),
+            openrouter_pricing=openrouter_pricing)
+        realtime_cost = rt.get("estimated_cost_usd") if rt.get("known") else None
+    return {"known": bool(est.get("known")),
+            "estimated_cost_usd": est.get("estimated_cost_usd"),
+            "realtime_cost_usd": realtime_cost}

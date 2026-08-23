@@ -36,11 +36,35 @@ class OpenRouterCorrectionProvider:
     def capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
             supports_realtime=True,
-            supports_batch=True,          # official beta Batch API
-            supports_native_schema=False, # prompt-forced JSON + strict validation
+            # Batch availability is MODEL-specific; the generic capability only
+            # says the provider HAS an official batch API. Per-model support is
+            # checked via model_supports_batch() before BATCH may be offered.
+            supports_batch=True,
+            supports_native_schema=False,  # prompt-forced JSON + strict validation
             supports_model_listing=True,
-            pricing_known=False,          # only when models API returns pricing
+            pricing_known=False,           # only when models API returns pricing
         )
+
+    def model_supports_batch(self, model: str) -> tuple[bool, str]:
+        """Confirm batch availability for THIS model from provider metadata.
+
+        OpenRouter exposes batch-capable models via ':batch' model variants
+        or explicit metadata. If we cannot confirm -> BATCH disabled with a
+        reason. Never enable batch on unverified models.
+        """
+        try:
+            models = self.list_models()
+        except ProviderError as exc:
+            return False, f"無法取得 OpenRouter model 資料：{exc.safe_message}"
+        ids = {m.get("id") for m in models if m.get("id")}
+        if f"{model}:batch" in ids:
+            return True, ""
+        # check metadata flag if present
+        for m in models:
+            if m.get("id") == model and m.get("batch_supported"):
+                return True, ""
+        return False, (f"OpenRouter 未確認 model「{model}」支援批次；"
+                       "僅有官方 :batch 變體或明確標示的 model 才能使用 Batch")
 
     # -- headers -------------------------------------------------------------
 
@@ -86,6 +110,7 @@ class OpenRouterCorrectionProvider:
                 "name": m.get("name"),
                 "pricing_prompt": pricing.get("prompt"),
                 "pricing_completion": pricing.get("completion"),
+                "batch_supported": bool(m.get("batch_supported")),
                 "batch_discount_documented": False,  # only set from official docs
             })
         return out
@@ -136,11 +161,18 @@ class OpenRouterCorrectionProvider:
 
     def submit_batch(self, windows: list[dict[str, Any]],
                      glossary: list[dict[str, Any]]) -> str:
-        """Submit the OFFICIAL OpenRouter batch; returns provider batch id."""
+        """Submit the OFFICIAL OpenRouter batch; returns provider batch id.
+
+        Official contract:
+        POST /api/beta/batches
+        { "endpoint": "/v1/chat/completions", "model": "<base model>",
+          "requests": [ {"custom_id": ..., "body": {...}} ] }
+        """
         requests_payload = self.build_batch_requests(windows, glossary)
         payload = {
             "endpoint": "/v1/chat/completions",
-            "input_requests": requests_payload,
+            "model": self.model,
+            "requests": requests_payload,
         }
         status, body = self._call("POST", BATCH_URL, payload)
         if status == 401:
@@ -171,25 +203,16 @@ class OpenRouterCorrectionProvider:
         return status in (200, 201, 204)
 
     def fetch_results(self, batch_body: dict[str, Any]) -> list[dict[str, Any]]:
-        """Download result items immediately; persist them ourselves afterwards."""
-        output_file_id = batch_body.get("output_file_id")
-        if not output_file_id:
-            raise ProviderError("batch_failed", "Batch 完成但缺少 output_file_id")
-        status, body = self._call("GET",
-                                  f"{BASE_URL}/files/{output_file_id}/content")
-        if status != 200:
-            raise ProviderError("batch_failed",
-                                f"Batch 結果下載失敗（HTTP {status}）")
-        results = []
-        if isinstance(body, dict) and isinstance(body.get("data"), list):
-            return body["data"]
-        if isinstance(body, list):
-            return body
-        # JSONL text response
-        text = body.get("text") if isinstance(body, dict) else None
-        if isinstance(text, str):
-            for line in text.splitlines():
-                line = line.strip()
-                if line:
-                    results.append(json.loads(line))
-        return results
+        """Read results inline from the completed batch response.
+
+        Current OpenRouter Batch API returns `results` inline on the batch
+        object when completed — no output_file_id / file download.
+        """
+        results = batch_body.get("results")
+        if isinstance(results, list):
+            return results
+        if isinstance(results, dict) and isinstance(results.get("data"), list):
+            return results["data"]
+        raise ProviderError(
+            "batch_failed",
+            "Batch 完成但回應沒有內嵌 results；請確認官方 API 契約")

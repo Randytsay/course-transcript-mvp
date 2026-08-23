@@ -60,12 +60,34 @@ def _module_env(record: dict[str, Any], job_dir: Path) -> dict[str, str]:
     env.setdefault("GEMINI_CORRECTION_WINDOW_MS", "60000")
     data_dir = Path(env.get("COURSE_TRANSCRIPT_DATA_DIR", str(job_dir.parent.parent)))
     try:
-        env["CORRECTION_REQUESTED_POLICY"] = get_job_correction_policy(
-            JobStore(data_dir / "course-transcript.db"), record["id"]
-        )
+        store = JobStore(data_dir / "course-transcript.db")
     except Exception:
-        # Missing policy evidence must be safe: the correction runtime defaults
-        # to Gemini rather than accidentally enabling M3 for an unlabelled job.
+        env["CORRECTION_REQUESTED_POLICY"] = "GEMINI_FIRST"
+        return env
+    try:
+        full = store.get_job(record["id"]) if hasattr(store, "get_job") else None
+        full = full or record
+        provider = (full or {}).get("correction_provider") or ""
+        mode = (full or {}).get("correction_execution_mode") or "REALTIME"
+        profile_id = (full or {}).get("correction_provider_profile_id") or ""
+        model = (full or {}).get("correction_model") or ""
+        if provider:
+            env["CORRECTION_ROUTER_ENABLED"] = "true"
+            env["CORRECTION_PROVIDER"] = provider
+            env["CORRECTION_PROVIDER_PROFILE_ID"] = profile_id
+            env["CORRECTION_MODEL"] = model
+            env["CORRECTION_EXECUTION_MODE"] = mode
+            env["CORRECTION_REQUESTED_POLICY"] = f"ROUTER:{provider}:{mode}"
+        else:
+            env["CORRECTION_ROUTER_ENABLED"] = "false"
+            try:
+                env["CORRECTION_REQUESTED_POLICY"] = get_job_correction_policy(
+                    store, record["id"]
+                )
+            except Exception:
+                env["CORRECTION_REQUESTED_POLICY"] = "GEMINI_FIRST"
+    except Exception:
+        env["CORRECTION_ROUTER_ENABLED"] = "false"
         env["CORRECTION_REQUESTED_POLICY"] = "GEMINI_FIRST"
     return env
 
@@ -513,6 +535,12 @@ def _finish_after_chirp(
 ) -> dict[str, Any]:
     job_dir = data_dir / "jobs" / leased["id"]
     fake_provider = _env_true("COURSE_TRANSCRIPT_FAKE_PROVIDER")
+    # Per-job provider router only kicks in when the legacy correction policy
+    # env (CORRECTION_REQUESTED_POLICY) is NOT already set for legacy jobs.
+    use_router = (
+        str(leased.get("correction_provider") or "")
+        and not fake_provider
+    )
     if str(leased.get("active_stage") or "") == "chirp":
         base._complete(
             store,
@@ -536,7 +564,10 @@ def _finish_after_chirp(
             stage="correction", status="correcting",
             detail="固定 segment AI 純文字校正",
             progress_start=73, progress_end=88,
-            module=("app.providers.fake_correction" if fake_provider else "app.providers.correct_text_hardened"),
+            module=("app.providers.fake_correction"
+                    if fake_provider
+                    else ("app.providers.correction_runtime_bridge"
+                          if use_router else "app.providers.correct_text_hardened")),
             timeout_seconds=14_400,
             evidence=("glossary/global-terms.json", "subtitles-corrected.json", "review-terms.json", "terminology-consistency.json"),
         )

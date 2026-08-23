@@ -600,6 +600,12 @@ class JobStore:
         content_mode: str = "general",
         document_context: str = "",
         actor: str,
+        correction_provider: str = "",
+        correction_provider_profile_id: str = "",
+        correction_model: str = "",
+        correction_execution_mode: str = "REALTIME",
+        correction_fallback_policy: str = "RAW_CHIRP_FALLBACK",
+        pricing_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         selected_output_formats = normalize_output_formats(output_formats)
         processing_strategy = normalize_processing_strategy(processing_strategy)
@@ -695,6 +701,26 @@ class JobStore:
                         actor,
                         now,
                         now,
+                    ),
+                )
+                # B23: per-job correction selection (immutable post-approval)
+                connection.execute(
+                    """UPDATE jobs SET
+                           correction_provider=?,
+                           correction_provider_profile_id=?,
+                           correction_model=?,
+                           correction_execution_mode=?,
+                           correction_fallback_policy=?,
+                           pricing_snapshot_json=?
+                       WHERE id=?""",
+                    (
+                        correction_provider,
+                        correction_provider_profile_id,
+                        correction_model,
+                        correction_execution_mode,
+                        correction_fallback_policy,
+                        json.dumps(pricing_snapshot or {}, ensure_ascii=False),
+                        job_id,
                     ),
                 )
                 self._event(

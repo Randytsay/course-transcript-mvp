@@ -74,13 +74,19 @@ class AIProviderProfileStore:
 
     # -- CRUD ---------------------------------------------------------------
 
+    def _ensure_private_dir(self, path: Path) -> None:
+        """Normalize directory mode to 0700 (also fixes pre-existing dirs)."""
+        path.mkdir(parents=True, exist_ok=True)
+        os.chmod(path, 0o700)
+
     def create(self, *, profile_id: str, name: str, provider: str,
                api_key: str, default_model: str) -> dict[str, Any]:
         if provider not in PROVIDER_CLASSES:
             raise ProviderError("unknown", f"未知的 provider: {provider}")
         pdir = self.profile_dir(profile_id)
         existed = pdir.exists()
-        pdir.mkdir(parents=True, exist_ok=True)
+        self._ensure_private_dir(pdir)
+        self._ensure_private_dir(self.profiles_dir)
         self._write_atomic(pdir / "api-key", api_key, 0o600)
         meta = {
             "id": profile_id,

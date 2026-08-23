@@ -14,7 +14,9 @@ from .base import (
     ProviderId,
 )
 
-BASE_URL = "https://api.minimax.io/v1/text/chatcompletion_v2"
+BASE_URL = "https://api.minimax.io/v1"
+CHAT_URL = f"{BASE_URL}/chat/completions"   # current OpenAI-compatible route
+MODELS_URL = f"{BASE_URL}/models"           # free key verification
 DEFAULT_MODEL = "MiniMax-M3"
 
 
@@ -26,7 +28,7 @@ class MiniMaxCorrectionProvider:
         supports_realtime=True,
         supports_batch=False,          # no official batch documented -> not offered
         supports_native_schema=False,  # prompt-forced JSON + strict validation
-        supports_model_listing=False,
+        supports_model_listing=True,
         pricing_known=False,           # token-plan / manual metadata only
         batch_note="MiniMax 官方目前未提供批次折扣 API，僅提供即時模式",
     )
@@ -55,32 +57,41 @@ class MiniMaxCorrectionProvider:
         return r.status_code, body
 
     def validate_credentials(self) -> dict[str, Any]:
-        """No free model-list endpoint; only structural auth probe possible.
+        """Free key verification via GET /v1/models (no paid generation).
 
-        We do NOT run a paid generation to 'test'. Report key as configured
-        but model unverified unless owner runs a real job.
+        200 -> key verified + models listed
+        401/403 -> FAIL
+        network/5xx -> UNAVAILABLE / FAIL
         """
-        # Lightweight reachability check against the chat endpoint would still
-        # be a billed call, so we only verify key format + endpoint reachable
-        # via an intentionally-unauthorized GET (no billing impact).
-        status, _ = self._call("GET", BASE_URL)
-        if status == 404 or status in (401, 403):
-            # endpoint exists and responded; key validity can't be proven free
-            return {"ok": True, "key_verified": False,
-                    "note": "API Key 已儲存；尚未執行付費驗證"}
+        status, body = self._call("GET", MODELS_URL)
+        if status in (401, 403):
+            raise ProviderError("auth", "MiniMax API key 無效（驗證失敗）")
         if status >= 500:
             raise ProviderError("unreachable", f"MiniMax 無法連線（HTTP {status}）")
-        return {"ok": True, "key_verified": False,
-                "note": "API Key 已儲存；尚未執行付費驗證"}
+        if status != 200:
+            raise ProviderError("unreachable", f"MiniMax models 驗證失敗（HTTP {status}）")
+        models: list[str] = []
+        data = body.get("data") if isinstance(body, dict) else None
+        if isinstance(data, list):
+            models = [str(m["id"]) for m in data
+                      if isinstance(m, dict) and m.get("id")]
+        return {"ok": True, "key_verified": True,
+                "models": models,
+                "note": "API Key 已驗證（唯讀 /v1/models，未產生費用）"}
 
     def realtime_generate(self, prompt: str) -> str:
+        """OpenAI-compatible /v1/chat/completions.
+
+        No native JSON schema assumed: prompt forces JSON; caller must run
+        strict canonical-schema validation on the parsed output.
+        """
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
             "response_format": {"type": "json_object"},
         }
-        status, body = self._call("POST", BASE_URL, payload)
+        status, body = self._call("POST", CHAT_URL, payload)
         if status in (401, 403):
             raise ProviderError("auth", "MiniMax API key 無效或無權限")
         if status == 429:

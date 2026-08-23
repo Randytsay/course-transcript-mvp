@@ -29,6 +29,7 @@ import {
 } from "@/lib/drive-browser-client";
 import {
   createBatchWithPolicy,
+  type AIProviderId,
   getCorrectionProviderStatus,
   type CorrectionPolicy,
 } from "@/lib/correction-policy-client";
@@ -91,6 +92,101 @@ export default function NewJobPageDriveApi() {
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>(DEFAULT_OUTPUT_FORMATS);
   const [contentMode, setContentMode] = useState<ContentMode>("general");
   const [documentContext, setDocumentContext] = useState("");
+
+  // Provider router per-job selection
+  type ProviderProfileLite = { id: string; name?: string; provider?: string; default_model?: string };
+  type ProviderModelLite = { id: string; name?: string };
+  const [providerId, setProviderId] = useState<AIProviderId>("vertex");
+  const [providerProfiles, setProviderProfiles] = useState<ProviderProfileLite[]>([]);
+  const [providerProfileId, setProviderProfileId] = useState("");
+  const [providerModels, setProviderModels] = useState<ProviderModelLite[]>([]);
+  const [providerModel, setProviderModel] = useState("gemini-3.7-flash");
+  const [executionMode, setExecutionMode] = useState<"REALTIME" | "BATCH">("REALTIME");
+  const [fallbackPolicy, setFallbackPolicy] = useState<"RAW_CHIRP_FALLBACK">("RAW_CHIRP_FALLBACK");
+
+  const DEFAULT_MODELS: Record<AIProviderId, string> = {
+    vertex: "gemini-3.7-flash",
+    openrouter: "google/gemini-3.7-flash",
+    minimax: "MiniMax-M3",
+  };
+
+  // Load registered provider profiles for profile/model selectors.
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/v1/review-admin/ai-providers", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { profiles: [] }))
+      .then((body: { profiles?: ProviderProfileLite[] }) => {
+        if (!alive) return;
+        const profiles = body.profiles ?? [];
+        setProviderProfiles(profiles);
+        if (profiles.length && !profiles.some((p) => p.id === providerProfileId)) {
+          setProviderProfileId(profiles[0].id);
+        }
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // When switching provider: default model, clear model list (vertex/minimax
+  // have fixed defaults; openrouter loads from its models endpoint).
+  useEffect(() => {
+    setExecutionMode("REALTIME");
+    setProviderModel(DEFAULT_MODELS[providerId]);
+    setProviderModels([]);
+    if (providerId !== "openrouter" || !providerProfileId) return;
+    let alive = true;
+    fetch("/api/v1/review-admin/ai-providers/openrouter-models", { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { models: [] }))
+      .then((body: { models?: ProviderModelLite[] }) => {
+        if (alive) setProviderModels(body.models ?? []);
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [providerId, providerProfileId]);
+
+  // BATCH availability is server-confirmed per model — never trusted from UI.
+  const [batchAvailable, setBatchAvailable] = useState(false);
+  const [batchUnavailableReason, setBatchUnavailableReason] =
+    useState<string>("此供應商／模型未確認支援批次");
+  useEffect(() => {
+    let alive = true;
+    if (executionMode === "BATCH") return;
+    fetch("/api/v1/review-admin/ai-providers/batch-capability?" +
+          new URLSearchParams({ provider: providerId, model: providerModel }),
+          { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { supported: false, reason: "無法確認批次支援" }))
+      .then((body: { supported: boolean; reason?: string }) => {
+        if (!alive) return;
+        setBatchAvailable(body.supported === true);
+        if (!body.supported && body.reason) setBatchUnavailableReason(body.reason);
+      })
+      .catch(() => { if (alive) setBatchAvailable(false); });
+    return () => { alive = false; };
+  }, [providerId, providerModel, executionMode]);
+
+  // Cost preview only when pricing is known; never fabricate $0.
+  const [costPreviewKnown, setCostPreviewKnown] = useState(false);
+  const [costPreviewUsd, setCostPreviewUsd] = useState<number | null>(null);
+  const [realtimeCostUsd, setRealtimeCostUsd] = useState<number | null>(null);
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/v1/review-admin/ai-providers/cost-preview?" +
+          new URLSearchParams({ provider: providerId, model: providerModel,
+                                execution_mode: executionMode }),
+          { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : { known: false }))
+      .then((body: { known: boolean; estimated_cost_usd?: number | null;
+                      realtime_cost_usd?: number | null }) => {
+        if (!alive) return;
+        setCostPreviewKnown(body.known === true && typeof body.estimated_cost_usd === "number");
+        setCostPreviewUsd(body.estimated_cost_usd ?? null);
+        setRealtimeCostUsd(body.realtime_cost_usd ?? null);
+      })
+      .catch(() => { if (alive) setCostPreviewKnown(false); });
+    return () => { alive = false; };
+  }, [providerId, providerModel, executionMode]);
 
   const selectedEntries = useMemo(() => Array.from(selected.values()), [selected]);
   const selectedSize = selectedEntries.reduce((sum, item) => sum + item.sizeBytes, 0);
@@ -220,7 +316,13 @@ export default function NewJobPageDriveApi() {
       const nextPreview = await previewBatch(selectionMode, paths);
       setPreview(nextPreview);
       setBusy("create");
-      const nextBatch = await createBatchWithPolicy(nextPreview.batchPreviewId, correctionPolicy, chirpMaxParallelChunks, outputFormats, processingStrategy, contentMode, documentContext);
+      const nextBatch = await createBatchWithPolicy(nextPreview.batchPreviewId, correctionPolicy, chirpMaxParallelChunks, outputFormats, processingStrategy, contentMode, documentContext, {
+        provider: providerId,
+        provider_profile_id: providerProfileId,
+        model: providerModel,
+        execution_mode: executionMode,
+        fallback_policy: fallbackPolicy,
+      });
       setCreated(nextBatch);
       router.push(`/batches/${nextBatch.batchId}`);
     } catch (cause) {
@@ -363,6 +465,83 @@ export default function NewJobPageDriveApi() {
               </div>
             </div>
             <div className="model-route-note"><ShieldCheck size={15} /><span>開關可選 MiniMax M3 人工抽查模式；關閉就是 Gemini 3.7。設定只影響這一批任務，建立後會把實際請求路由與 fallback 記錄在任務稽核檔。</span></div>
+
+            <div className="model-route-card" data-testid="ai-provider-router">
+              <div className="model-route-card__copy" style={{ flex: 1 }}>
+                <div className="model-route-card__heading"><strong>AI 文字校正（Provider Router）</strong><span className="model-route-card__badge">進階</span></div>
+                <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr", marginTop: 10 }}>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span style={{ fontWeight: 700 }}>供應商</span>
+                    <select value={providerId} onChange={(e) => {
+                      const next = e.target.value as AIProviderId;
+                      setProviderId(next);
+                      setExecutionMode("REALTIME");
+                    }}>
+                      <option value="vertex">Google Vertex AI</option>
+                      <option value="openrouter">OpenRouter</option>
+                      <option value="minimax">MiniMax</option>
+                    </select>
+                  </label>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span style={{ fontWeight: 700 }}>帳號／設定檔</span>
+                    {providerProfiles.length ? (
+                      <select value={providerProfileId} onChange={(e) => setProviderProfileId(e.target.value)}>
+                        {providerProfiles.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name || p.id}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input value={providerProfileId} onChange={(e) => setProviderProfileId(e.target.value)}
+                             placeholder="尚未登記設定檔；請到 AI 模型供應商新增" disabled />
+                    )}
+                  </label>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span style={{ fontWeight: 700 }}>模型</span>
+                    {providerModels.length ? (
+                      <select value={providerModel} onChange={(e) => { setProviderModel(e.target.value); setExecutionMode("REALTIME"); }}>
+                        {!providerModels.some((m) => m.id === providerModel) && (
+                          <option value={providerModel}>{providerModel}（未驗證 model）</option>
+                        )}
+                        {providerModels.map((m) => (
+                          <option key={m.id} value={m.id}>{m.name ? `${m.name}（${m.id}）` : m.id}</option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input value={providerModel} onChange={(e) => setProviderModel(e.target.value)}
+                             placeholder={providerId === "minimax" ? "MiniMax-M3" : providerId === "vertex" ? "gemini-3.7-flash" : "openrouter model slug"} />
+                    )}
+                  </label>
+                  <div style={{ display: "grid", gap: 4 }}>
+                    <span style={{ fontWeight: 700 }}>執行模式</span>
+                    <div role="radiogroup" aria-label="AI 文字校正處理模式" style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                      <button type="button" role="radio" aria-checked={executionMode === "REALTIME"}
+                              className={`selection-mode-card ${executionMode === "REALTIME" ? "selection-mode-card--active" : ""}`}
+                              onClick={() => setExecutionMode("REALTIME")}>
+                        <Zap size={17} /><span><strong>即時 REALTIME</strong><small>速度較快、標準價格</small></span>
+                      </button>
+                      <button type="button" role="radio" aria-checked={executionMode === "BATCH"}
+                              className={`selection-mode-card ${executionMode === "BATCH" ? "selection-mode-card--active" : ""}`}
+                              disabled={!batchAvailable}
+                              title={!batchAvailable ? batchUnavailableReason ?? undefined : undefined}
+                              onClick={() => batchAvailable && setExecutionMode("BATCH")}>
+                        <Layers3 size={17} /><span><strong>經濟 BATCH</strong><small>{batchAvailable ? "非即時、較便宜、可能等待數小時" : batchUnavailableReason}</small></span>
+                      </button>
+                    </div>
+                  </div>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span style={{ fontWeight: 700 }}>失敗時</span>
+                    <select value={fallbackPolicy} onChange={(e) => setFallbackPolicy(e.target.value as typeof fallbackPolicy)}>
+                      <option value="RAW_CHIRP_FALLBACK">保留 Chirp 原文（預設，零額外 AI 費用）</option>
+                    </select>
+                  </label>
+                  {costPreviewKnown ? (
+                    <p style={{ margin: 0 }}><small>預估 AI 成本：USD {costPreviewUsd?.toFixed(4)}{executionMode === "BATCH" && realtimeCostUsd != null && realtimeCostUsd > 0 ? `（相較即時約省 ${Math.round((1 - costPreviewUsd! / realtimeCostUsd) * 100)}%）` : ""}</small></p>
+                  ) : (
+                    <p style={{ margin: 0 }}><small>預估 AI 成本：價格未知（不顯示估算數字）</small></p>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="form-section">
