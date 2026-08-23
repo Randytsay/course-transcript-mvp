@@ -47,14 +47,6 @@ const severityLabels: Record<string, string> = {
   high: "優先檢查",
 };
 
-function formatTime(ms: number) {
-  const total = Math.max(0, Math.floor(ms / 1000));
-  const hours = Math.floor(total / 3600);
-  const minutes = Math.floor((total % 3600) / 60);
-  const seconds = total % 60;
-  return [hours, minutes, seconds].map((value) => String(value).padStart(2, "0")).join(":");
-}
-
 function metric(metrics: Record<string, number | string | null>, key: string, digits = 2) {
   const raw = metrics[key];
   if (typeof raw !== "number" || !Number.isFinite(raw)) return "—";
@@ -168,6 +160,10 @@ export default function AsrRetranscriptionPanel({ jobId }: { jobId: string }) {
 
   async function confirmCreate() {
     if (!preview) return;
+    if (!preview.retranscription_enabled) {
+      setError("單段付費重辨識尚在 production live gate 階段，目前不會送出 Chirp 3 請求。");
+      return;
+    }
     const message = [
       `只重新辨識第 ${preview.chunk_index + 1} 段。`,
       `預估費用：約 NT$${preview.estimate.estimated_cost_twd}（US$${preview.estimate.estimated_cost_usd}）。`,
@@ -245,6 +241,7 @@ export default function AsrRetranscriptionPanel({ jobId }: { jobId: string }) {
             <Summary label="高優先" value={report.summary.high_count} />
             <Summary label="中優先" value={report.summary.medium_count} />
             <Summary label="本次品質分析費用" value="NT$0" />
+            <Summary label="付費重辨識" value={report.retranscription_enabled ? "已啟用" : "實機驗收中"} />
           </div>
         </section>
       ) : null}
@@ -290,7 +287,7 @@ export default function AsrRetranscriptionPanel({ jobId }: { jobId: string }) {
                   <h2 style={{ margin: 0 }}>第 {selected.chunk_index + 1} 段 · {severityLabels[selected.quality?.severity ?? "normal"]}</h2>
                 </div>
                 <div style={{ textAlign: "right", color: "#64748b" }}>
-                  <div>辨識覆蓋 {metric(selected.metrics, "recognized_span_ratio")} </div>
+                  <div>辨識覆蓋 {metric(selected.metrics, "recognized_span_ratio")}</div>
                   <div>相對本課密度 {metric(selected.metrics, "relative_density")}×</div>
                 </div>
               </div>
@@ -330,9 +327,15 @@ export default function AsrRetranscriptionPanel({ jobId }: { jobId: string }) {
               {preview.existing_candidate ? (
                 <p style={{ color: "#7c3aed", fontWeight: 700 }}>這個相同版本已經有候選任務，不會重複保留費用或建立第二筆。</p>
               ) : null}
-              <button type="button" disabled={busy !== null} onClick={() => void confirmCreate()} style={{ ...buttonStyle, background: "#b45309", color: "#fff" }}>
-                {busy === "create" ? "建立中…" : preview.existing_candidate ? "查看既有候選" : "確認費用並建立候選"}
-              </button>
+              {!preview.retranscription_enabled ? (
+                <p style={{ color: "#92400e", fontWeight: 750, background: "#fffbeb", borderRadius: "10px", padding: "12px" }}>
+                  目前只開放品質分析與估價。付費單段重辨識仍在 ARM64/VPS production live gate，尚未送出任何新 Chirp 3 費用。
+                </p>
+              ) : (
+                <button type="button" disabled={busy !== null} onClick={() => void confirmCreate()} style={{ ...buttonStyle, background: "#b45309", color: "#fff" }}>
+                  {busy === "create" ? "建立中…" : preview.existing_candidate ? "查看既有候選" : "確認費用並建立候選"}
+                </button>
+              )}
             </div>
           ) : null}
 
