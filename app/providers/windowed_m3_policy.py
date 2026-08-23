@@ -1,12 +1,12 @@
 """Production compatibility bridge from M3_FIRST to the windowed M3 router.
 
 The public production API persists the long-standing correction policy rather
-than a provider profile.  Dynamic Chirp work may finish hours after job
+than a provider profile. Dynamic Chirp work may finish hours after job
 creation, so MiniMax Token Plan availability must be evaluated when the
 correction stage actually starts, not when the job is created.
 
 This module keeps that contract while dispatching an available M3_FIRST job to
-the shared windowed correction router.  Gemini remains the fail-closed path for
+the shared windowed correction router. Gemini remains the fail-closed path for
 GEMINI_FIRST, disabled M3, disabled quota checking, unknown quota, unavailable
 quota, or a quota-check failure.
 """
@@ -102,11 +102,52 @@ def _write_route_evidence(
             "m3_interval_reset_at": quota.interval_reset_at,
             "m3_weekly_reset_at": quota.weekly_reset_at,
             "m3_quota_reason": quota.reason,
+            "provider_switches": [],
+            "segment_counts": {},
             "router": "windowed-provider-router-v1",
             "chirp_raw_immutable": True,
             "timestamps_immutable": True,
         },
     )
+
+
+def _finalize_route_evidence(
+    job_dir: Path,
+    *,
+    provider: CorrectionProvider,
+    window_results: list[dict[str, Any]] | None = None,
+    circuit_opened: bool = False,
+) -> None:
+    """Keep historical performance/UI routing accounting truthful."""
+    from app.providers.correction_runtime_bridge import _atomic_json, _read_json
+
+    route_path = job_dir / "correction-routing.json"
+    route = _read_json(route_path, {})
+    route = route if isinstance(route, dict) else {}
+    corrected = _read_json(job_dir / "subtitles-corrected.json", {})
+    segments = corrected.get("segments", []) if isinstance(corrected, dict) else []
+    segments = segments if isinstance(segments, list) else []
+    raw_count = sum(
+        1
+        for item in segments
+        if isinstance(item, dict)
+        and bool(item.get("correction_fallback") or item.get("fallback_to_raw"))
+    )
+    provider_count = max(0, len(segments) - raw_count)
+    counts = {
+        CorrectionProvider.MINIMAX_M3.value: 0,
+        CorrectionProvider.GEMINI.value: 0,
+        "chirp-3-raw": raw_count,
+    }
+    counts[provider.value] = provider_count
+    route.update(
+        {
+            "segment_counts": counts,
+            "window_results": list(window_results or []),
+            "provider_circuit_opened": bool(circuit_opened),
+        }
+    )
+    _atomic_json(route_path, route)
 
 
 def main() -> int:
@@ -139,7 +180,10 @@ def main() -> int:
     if decision.provider is not CorrectionProvider.MINIMAX_M3:
         # Preserve the established Gemini implementation and its artifact/audit
         # contract whenever M3 is not explicitly safe to use at correction time.
-        return legacy.main()
+        rc = legacy.main()
+        if rc == 0:
+            _finalize_route_evidence(job_dir, provider=CorrectionProvider.GEMINI)
+        return rc
 
     ctx.update(
         {
@@ -158,6 +202,12 @@ def main() -> int:
             result,
             raw_response=result.get("correction_raw_response"),
             audit_status=status,
+        )
+        _finalize_route_evidence(
+            job_dir,
+            provider=CorrectionProvider.MINIMAX_M3,
+            window_results=list(result.get("correction_window_results") or []),
+            circuit_opened=bool(result.get("correction_provider_circuit_opened", False)),
         )
         print(
             "CORRECTION=PASS provider=minimax "
