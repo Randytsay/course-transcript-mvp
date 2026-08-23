@@ -75,7 +75,10 @@ class CorrectionOrchestrator:
         corrections = validate_correction_payload(
             parsed, [s["segment_id"] for s in segments])
         return {"corrections": [c.__dict__ for c in corrections],
-                "prompt_version": PROMPT_VERSION}
+                "prompt_version": PROMPT_VERSION,
+                # Keep the provider response in the job's immutable audit
+                # directory.  It is deliberately not returned by the API.
+                "raw_response": raw}
 
     # -- batch lifecycle ------------------------------------------------------
 
@@ -96,11 +99,19 @@ class CorrectionOrchestrator:
             job_id=spec.job_id, source_revision=spec.source_revision,
             request_sha256=rh)
         if existing is not None:
-            # NEVER resubmit a paid batch.
-            return {"run_id": int(existing["id"]),
-                    "provider_job_id": existing["provider_job_id"],
-                    "resubmitted": False,
-                    "status": existing["status"]}
+            # NEVER resubmit a paid batch. A provider id is missing only for
+            # the crash window covered by the durable submission claim.
+            if existing.get("provider_job_id") and existing.get("status") in {
+                "submitted", "processing", "completed"
+            }:
+                return {"run_id": int(existing["id"]),
+                        "provider_job_id": existing["provider_job_id"],
+                        "resubmitted": False,
+                        "status": existing["status"]}
+            raise ProviderError(
+                "batch_failed",
+                "AI Batch submission 狀態未明，已阻止自動重送；請先人工核對 provider",
+            )
 
         client = self.client_factory(spec.provider, spec.provider_profile_id)
 
@@ -111,19 +122,48 @@ class CorrectionOrchestrator:
             if not ok:
                 raise ProviderError("batch_failed", f"BATCH 未啟用：{reason}")
 
-        provider_job_id = client.submit_batch(windows, glossary)
-        run_id = self.runs.record_submitted(
+        claim = self.runs.claim_submission(
             job_id=spec.job_id, source_revision=spec.source_revision,
             source_sha256=spec.source_sha256, provider=spec.provider,
             provider_profile_id=spec.provider_profile_id, model=spec.model,
-            execution_mode=spec.execution_mode,
-            provider_job_id=provider_job_id, request_sha256=rh)
+            execution_mode=spec.execution_mode, request_sha256=rh,
+        )
+        if not claim["claimed"]:
+            existing = claim["run"]
+            if existing.get("provider_job_id") and existing.get("status") in {
+                "submitted", "processing", "completed"
+            }:
+                return {
+                    "run_id": int(existing["id"]),
+                    "provider_job_id": existing["provider_job_id"],
+                    "resubmitted": False,
+                    "status": existing["status"],
+                    "job_status": "waiting_ai_batch",
+                }
+            raise ProviderError(
+                "batch_failed",
+                "AI Batch submission 狀態未明，已阻止自動重送；請先人工核對 provider",
+            )
+
+        try:
+            provider_job_id = client.submit_batch(windows, glossary)
+        except TypeError as exc:
+            # Vertex's native BatchPrediction adapter uses a GCS input/output
+            # contract and is not the same as the inline-window contract used
+            # by this worker.  Never accidentally call it with the wrong
+            # argument shape or silently fall back to realtime.
+            raise ProviderError(
+                "batch_failed",
+                "此 provider 的官方 Batch 介面尚未接到目前的 worker contract",
+            ) from exc
+        run_id = int(claim["run_id"])
+        self.runs.finalize_submission(run_id, provider_job_id)
         return {"run_id": run_id, "provider_job_id": provider_job_id,
                 "resubmitted": True, "status": "submitted",
                 "job_status": "waiting_ai_batch"}
 
-    def poll_pending(self, *, providers: list[str] | None = None
-                     ) -> list[dict[str, Any]]:
+    def poll_pending(self, *, providers: list[str] | None = None,
+                     finalize: bool = True) -> list[dict[str, Any]]:
         """Recovery scheduler tick. Restart-safe: reads durable runs table."""
         outcomes = []
         for run in self.runs.pending_batches(providers):
@@ -137,7 +177,11 @@ class CorrectionOrchestrator:
                 continue
             status = state["status"]
             if status == "completed":
-                self.runs.update_status(run["id"], status="completed")
+                # A recovery caller may need to persist the raw provider body
+                # before marking the run completed.  The default keeps the
+                # original library contract used by tests and admin tooling.
+                if finalize:
+                    self.runs.update_status(run["id"], status="completed")
                 outcomes.append({"run_id": run["id"], "status": "completed",
                                  "body": state.get("body")})
             elif status in ("failed", "cancelled", "expired"):
@@ -154,8 +198,7 @@ class CorrectionOrchestrator:
                          ) -> dict[str, Any]:
         """Persist raw result locally + strict-validate before pipeline resume."""
         client_for_run = None
-        run = next((r for r in self.runs.pending_batches() if r["id"] == run_id),
-                   None)
+        run = self.runs.get(run_id)
         if run is None:
             raise ProviderError("unknown", f"找不到 run {run_id}")
         client = self.client_factory(run["provider"], run["provider_profile_id"])

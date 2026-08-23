@@ -390,6 +390,24 @@ class TestBatchDurableState(unittest.TestCase):
         rows = self.store.for_job("job-1")
         assert len(rows) == 1  # duplicate paid submission prevented
 
+    def test_submission_claim_blocks_unknown_crash_retry(self):
+        rh = request_hash({"windows": ["w-crash"]})
+        first = self.store.claim_submission(
+            job_id="job-1", source_revision="rev1", source_sha256="abc",
+            provider="openrouter", provider_profile_id="openrouter-main",
+            model="google/gemini-3.7-flash", execution_mode="BATCH",
+            request_sha256=rh,
+        )
+        second = self.store.claim_submission(
+            job_id="job-1", source_revision="rev1", source_sha256="abc",
+            provider="openrouter", provider_profile_id="openrouter-main",
+            model="google/gemini-3.7-flash", execution_mode="BATCH",
+            request_sha256=rh,
+        )
+        assert first["claimed"] is True
+        assert second["claimed"] is False
+        assert second["run"]["status"] == "submitting"
+
     def test_recovery_poll_finds_pending(self):
         rh = request_hash({"w": 2})
         self.store.record_submitted(

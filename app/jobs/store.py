@@ -32,6 +32,7 @@ ACTIVE_STATUSES = frozenset(
         "merging",
         "segmenting",
         "correcting",
+        "waiting_ai_batch",
         "exporting",
         "quality_check",
     }

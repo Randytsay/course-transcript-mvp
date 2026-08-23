@@ -526,6 +526,186 @@ def _repair_qa_only(
         raise
 
 
+def _next_ai_batch(store: JobStore, data_dir: Path) -> dict[str, Any] | None:
+    """Select one submitted AI Batch job without holding a source lease."""
+    for record in _available_rows(store, ("waiting_ai_batch",)):
+        job_dir = data_dir / "jobs" / record["id"]
+        if (job_dir / "subtitles.json").is_file():
+            return record
+    return None
+
+
+def _router_context(record: dict[str, Any], data_dir: Path) -> dict[str, Any]:
+    from app.providers.correction_runtime_bridge import context_for_job
+
+    return context_for_job(record, data_dir)
+
+
+def _submit_ai_batch(
+    store: JobStore,
+    leased: dict[str, Any],
+    *,
+    data_dir: Path,
+    worker_id: str,
+) -> dict[str, Any]:
+    """Submit an official correction Batch and release the source lease."""
+    from app.providers.correction_runtime_bridge import run_module
+
+    job_dir = data_dir / "jobs" / leased["id"]
+    base._begin(
+        store,
+        leased,
+        worker_id,
+        stage="correction",
+        status="correcting",
+        detail="提交官方 AI Batch 並保存 recovery 證據",
+        progress=73,
+    )
+    result = run_module(ctx=_router_context(leased, data_dir))
+    if str(result.get("correction_status")) not in {"submitted", "processing"}:
+        raise base.PipelineError("AI Batch 提交後未取得可 recovery 的 provider job id")
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    schedule(job_dir, "ai-batch-submitted", detail=f"run_id={result.get('correction_run_id')}")
+    with store.transaction() as connection:
+        store._require_lease(connection, leased["id"], worker_id)
+        connection.execute(
+            """
+            UPDATE jobs
+            SET status='waiting_ai_batch', active_stage='correction',
+                stage_detail=?, progress=88, updated_at=?, revision=revision+1
+            WHERE id=?
+            """,
+            (
+                f"AI Batch 已提交，等待 provider 回收（run_id={result.get('correction_run_id')}）",
+                now,
+                leased["id"],
+            ),
+        )
+        store._clear_lease(connection, leased["id"], worker_id)
+        store._event(
+            connection,
+            leased["id"],
+            "ai_correction_batch_submitted",
+            worker_id,
+            {
+                "run_id": result.get("correction_run_id"),
+                "provider_job_id": result.get("correction_provider_job_id"),
+                "provider": result.get("correction_provider"),
+                "model": result.get("correction_model"),
+                "worker_released": True,
+            },
+        )
+    return store.get_job(leased["id"])
+
+
+def _recover_ai_batch(
+    store: JobStore,
+    record: dict[str, Any],
+    *,
+    data_dir: Path,
+    worker_id: str,
+) -> dict[str, Any]:
+    """Poll, persist, strictly ingest, and resume a completed AI Batch."""
+    from app.providers.correction.batch_state import AICorrectionRunStore
+    from app.providers.correction.orchestrator import build_windows
+    from app.providers.correction_runtime_bridge import (
+        _atomic_json,
+        _build_orchestrator,
+        _write_corrected_outputs,
+    )
+
+    leased = store.acquire_lease(record["id"], worker_id, lease_seconds=300)
+    job_dir = data_dir / "jobs" / leased["id"]
+    ctx = _router_context(leased, data_dir)
+    run_store = AICorrectionRunStore(lambda: store.transaction())
+    runs = [run for run in run_store.for_job(leased["id"])
+            if str(run.get("execution_mode")) == "BATCH"]
+    run = runs[-1] if runs else None
+    try:
+        if run is None:
+            raise base.PipelineError("waiting_ai_batch 找不到 durable AI correction run")
+        body_path = job_dir / "correction-batch-results" / f"run-{run['id']}.json"
+        body: dict[str, Any] | None = None
+        if run["status"] == "completed":
+            body = json.loads(body_path.read_text(encoding="utf-8"))
+        elif run["status"] in {"submitted", "processing"}:
+            orchestrator = _build_orchestrator(ctx)
+            outcomes = orchestrator.poll_pending(
+                providers=[str(run["provider"])], finalize=False
+            )
+            outcome = next((item for item in outcomes if int(item["run_id"]) == int(run["id"])), None)
+            if outcome is None or outcome["status"] == "processing":
+                now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                with store.transaction() as connection:
+                    store._require_lease(connection, leased["id"], worker_id)
+                    connection.execute(
+                        "UPDATE jobs SET stage_detail=?, updated_at=?, revision=revision+1 WHERE id=?",
+                        ("AI Batch 處理中，已釋放來源 lease 等待下次 recovery", now, leased["id"]),
+                    )
+                    store._clear_lease(connection, leased["id"], worker_id)
+                    store._event(connection, leased["id"], "ai_correction_batch_processing", worker_id, {"run_id": run["id"]})
+                return store.get_job(leased["id"])
+            if outcome["status"] in {"failed", "cancelled", "expired", "error"}:
+                raise base.PipelineError(
+                    f"AI Batch recovery 失敗（run_id={run['id']}，status={outcome['status']}）"
+                )
+            body = outcome.get("body")
+            if not isinstance(body, dict):
+                raise base.PipelineError("AI Batch 已完成但缺少 provider response body")
+            _atomic_json(body_path, body)
+            run_store.update_status(run["id"], status="completed")
+        else:
+            raise base.PipelineError(
+                f"AI Batch run {run['id']} 處於不可 recovery 狀態：{run['status']}"
+            )
+
+        if body is None:
+            raise base.PipelineError("AI Batch recovery 缺少已保存 response body")
+        windows = build_windows(ctx["segments"])
+        segments_by_window = {window["window_id"]: window["segments"] for window in windows}
+        orchestrator = _build_orchestrator(ctx)
+        ingested = orchestrator.ingest_completed(
+            int(run["id"]), body, segments_by_window
+        )
+        render_result = {
+            **ctx,
+            "correction_status": "completed_batch",
+            "correction_corrections": ingested["corrections"],
+            "correction_prompt_version": ingested["prompt_version"],
+        }
+        _write_corrected_outputs(ctx, render_result, raw_response=body, audit_status="completed_batch")
+        schedule(job_dir, "ai-batch-completed", detail=f"run_id={run['id']}")
+        store.append_audit_event(
+            job_id=leased["id"],
+            event_type="ai_correction_batch_ingested",
+            actor=worker_id,
+            payload={"run_id": run["id"], "provider": run["provider"], "raw_response_saved": True},
+        )
+        # The normal completion path is deliberately reused only after the
+        # corrected evidence has been durably written. It will skip paid
+        # stages and continue with cleanup, export, QA, validation and review.
+        return _finish_after_chirp(store, leased, data_dir=data_dir, worker_id=worker_id)
+    except base.PipelinePaused:
+        try:
+            store.release_lease(leased["id"], worker_id)
+        except JobConflict:
+            pass
+        return store.get_job(leased["id"])
+    except Exception as exc:
+        try:
+            current = store.get_job(leased["id"])
+            store.fail_job(
+                job_id=leased["id"],
+                stage=current.get("active_stage") or "correction",
+                error=base._safe_error(str(exc)),
+                worker_id=worker_id,
+            )
+        except JobConflict:
+            pass
+        observed._write_report_safely(data_dir, leased["id"])
+        return store.get_job(leased["id"])
+
+
 def _finish_after_chirp(
     store: JobStore,
     leased: dict[str, Any],
@@ -559,6 +739,17 @@ def _finish_after_chirp(
         evidence=("subtitles.json", "subtitles.srt", "subtitles.vtt"),
     )
     if leased["enable_gemini_correction"]:
+        if (
+            use_router
+            and str(leased.get("correction_execution_mode") or "REALTIME").upper() == "BATCH"
+            and not (job_dir / "subtitles-corrected.json").is_file()
+        ):
+            return _submit_ai_batch(
+                store,
+                leased,
+                data_dir=data_dir,
+                worker_id=worker_id,
+            )
         base._run_module_stage(
             store, leased, data_dir, worker_id,
             stage="correction", status="correcting",
@@ -762,6 +953,16 @@ def run_once(store: JobStore, *, data_dir: Path, worker_id: str) -> bool:
             )
         except JobConflict:
             pass
+        return True
+
+    ai_batch = _next_ai_batch(store, data_dir)
+    if ai_batch is not None:
+        try:
+            _recover_ai_batch(
+                store, ai_batch, data_dir=data_dir, worker_id=worker_id
+            )
+        except JobConflict:
+            return False
         return True
 
     due = _next_due_waiting(store, data_dir)

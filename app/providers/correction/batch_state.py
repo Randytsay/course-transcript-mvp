@@ -39,6 +39,59 @@ class AICorrectionRunStore:
             ).fetchone()
             return dict(row) if row else None
 
+    def get(self, run_id: int) -> dict[str, Any] | None:
+        """Read a run across pending and completed states for recovery."""
+        with self._conn() as c:
+            row = c.execute(
+                "SELECT * FROM ai_correction_runs WHERE id=?", (run_id,)
+            ).fetchone()
+            return dict(row) if row else None
+
+    def claim_submission(self, *, job_id: str, source_revision: str,
+                         source_sha256: str, provider: str,
+                         provider_profile_id: str, model: str,
+                         execution_mode: str,
+                         request_sha256: str) -> dict[str, Any]:
+        """Claim a provider submission before making a paid network call.
+
+        If the process dies after the provider accepts a request but before
+        its id is persisted, the ``submitting`` row intentionally blocks an
+        automatic retry. That is safer than risking a duplicate paid batch;
+        an operator can reconcile the provider request explicitly.
+        """
+        now = _now()
+        with self._conn() as c:
+            row = c.execute(
+                """SELECT * FROM ai_correction_runs
+                   WHERE job_id=? AND source_revision=? AND request_sha256=?""",
+                (job_id, source_revision, request_sha256),
+            ).fetchone()
+            if row is not None:
+                return {"claimed": False, "run": dict(row)}
+            cur = c.execute(
+                """INSERT INTO ai_correction_runs(
+                       job_id, source_revision, source_sha256, provider,
+                       provider_profile_id, model, execution_mode,
+                       provider_job_id, request_sha256, status,
+                       submitted_at, updated_at)
+                   VALUES (?,?,?,?,?,?,?,NULL,?,'submitting',?,?)""",
+                (job_id, source_revision, source_sha256, provider,
+                 provider_profile_id, model, execution_mode, request_sha256,
+                 now, now),
+            )
+            return {"claimed": True, "run_id": int(cur.lastrowid)}
+
+    def finalize_submission(self, run_id: int, provider_job_id: str) -> None:
+        with self._conn() as c:
+            updated = c.execute(
+                """UPDATE ai_correction_runs
+                   SET provider_job_id=?, status='submitted', updated_at=?
+                   WHERE id=? AND status='submitting'""",
+                (provider_job_id, _now(), run_id),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeError("AI Batch submission claim is no longer writable")
+
     def record_submitted(self, *, job_id: str, source_revision: str,
                          source_sha256: str, provider: str,
                          provider_profile_id: str, model: str,

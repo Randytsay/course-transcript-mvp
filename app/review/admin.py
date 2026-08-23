@@ -862,10 +862,12 @@ def ai_providers_batch_capability(provider: str, model: str,
     """Server-side per-model BATCH gating — the UI never self-declares."""
     _admin_read_actor(request)
     if provider == "vertex":
-        # Gemini 3.7 Flash on Vertex officially supports batch prediction.
-        supported = "gemini-3.7" in (model or "").lower()
-        return {"supported": supported,
-                "reason": "" if supported else "此 Vertex model 未確認支援批次"}
+        # Vertex's official BatchPrediction API uses GCS JSONL input/output;
+        # the current worker contract is the inline-window contract used by
+        # OpenRouter. Keep this option disabled until a separate GCS adapter
+        # is implemented and tested end-to-end.
+        return {"supported": False,
+                "reason": "Vertex 官方 BatchPrediction 尚未接到目前 worker contract；請使用 REALTIME"}
     if provider == "minimax":
         return {"supported": False,
                 "reason": "MiniMax 官方目前未提供批次折扣 API，僅即時模式"}
