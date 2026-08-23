@@ -27,6 +27,9 @@ from app.jobs.strategy import DYNAMIC_BATCHING
 
 _PENDING_EXIT = 75
 _RETRYABLE_EXIT = 76
+_PROVIDER_STARTED_MANIFEST_STATUSES = frozenset(
+    {"SUBMITTED", "RUNNING", "RECOVERING", "SUCCEEDED", "EMPTY_SILENCE"}
+)
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -194,6 +197,20 @@ def _candidate_manifest(candidate_dir: Path, chunk_index: int) -> dict[str, Any]
     return payload if isinstance(payload, dict) else {}
 
 
+def _provider_started(row: dict[str, Any], manifest: dict[str, Any]) -> bool:
+    """Return whether durable evidence proves a paid provider request may exist.
+
+    Once this is true the worker must never stop solely because the accepted job
+    changed. It must recover the retained operation first so paid output and GCS
+    cleanup are not abandoned. Staleness is applied only after recovery.
+    """
+    if str(row.get("submitted_at") or "") or str(row.get("operation_name") or ""):
+        return True
+    if str(row.get("status") or "") in {"submitted", "processing"}:
+        return True
+    return str(manifest.get("status") or "") in _PROVIDER_STARTED_MANIFEST_STATUSES
+
+
 def _submit(
     store: JobStore,
     candidates: RetranscriptionCandidateStore,
@@ -201,18 +218,21 @@ def _submit(
     row: dict[str, Any],
     worker_id: str,
 ) -> None:
-    if _mark_stale_if_needed(store, candidates, data_dir, row, worker_id):
-        return
     job_dir, candidate_dir = _prepare_candidate_root(data_dir, row)
     start_ms, end_ms = _chunk_window(job_dir, int(row["chunk_index"]))
     env = _env(data_dir, row, start_ms, end_ms)
     manifest = _candidate_manifest(candidate_dir, int(row["chunk_index"]))
 
+    # Staleness is a hard stop only before any durable provider evidence exists.
+    # If a prior process crashed after submit, the retained manifest is the
+    # source of truth and must be recovered rather than abandoned or resubmitted.
+    if not _provider_started(row, manifest):
+        if _mark_stale_if_needed(store, candidates, data_dir, row, worker_id):
+            return
+
     # Crash recovery: the provider operation may already have been submitted
     # before the DB status was advanced. The hardened submitter retains it.
-    if str(manifest.get("status") or "") not in {
-        "SUBMITTED", "RUNNING", "RECOVERING", "SUCCEEDED", "EMPTY_SILENCE"
-    }:
+    if str(manifest.get("status") or "") not in _PROVIDER_STARTED_MANIFEST_STATUSES:
         code = _run_module("app.providers.chirp_chunk_hardened", env)
         if code != 0:
             candidates.mark_failed(
@@ -251,8 +271,6 @@ def _complete(
     row: dict[str, Any],
     worker_id: str,
 ) -> None:
-    if _mark_stale_if_needed(store, candidates, data_dir, row, worker_id):
-        return
     job_dir = Path(data_dir) / "jobs" / str(row["job_id"])
     candidate_dir = _candidate_dir(data_dir, row)
     chunk = candidate_dir / "chunks" / f"chunk-{int(row['chunk_index']):03d}"
@@ -263,6 +281,28 @@ def _complete(
             safe_message="Recovered Chirp candidate is missing local words/transcript evidence",
         )
         return
+
+    current, stale_reason = _still_current(store, data_dir, row)
+    if not current:
+        manifest = _candidate_manifest(candidate_dir, int(row["chunk_index"]))
+        _atomic_json(
+            candidate_dir / "stale-result.json",
+            {
+                "schema_version": "asr-retranscription-stale-result-v1",
+                "candidate_id": row["id"],
+                "job_id": row["job_id"],
+                "chunk_index": int(row["chunk_index"]),
+                "reason": stale_reason,
+                "provider_result_preserved": True,
+                "provider_status": manifest.get("status"),
+                "gcs_cleanup": manifest.get("gcs_cleanup"),
+                "comparison_created": False,
+                "accepted_artifacts_mutated": False,
+            },
+        )
+        candidates.mark_stale(str(row["id"]), worker_id, reason=stale_reason)
+        return
+
     current_sha = chunk_source_sha256(job_dir, int(row["chunk_index"]))
     write_candidate_comparison(
         job_dir=job_dir,
@@ -281,8 +321,9 @@ def _recover(
     row: dict[str, Any],
     worker_id: str,
 ) -> None:
-    if _mark_stale_if_needed(store, candidates, data_dir, row, worker_id):
-        return
+    # A submitted/processing candidate may already have incurred provider cost.
+    # Always recover that retained operation even if the accepted job changed;
+    # _complete() will preserve the result and mark it stale without comparison.
     job_dir, candidate_dir = _prepare_candidate_root(data_dir, row)
     start_ms, end_ms = _chunk_window(job_dir, int(row["chunk_index"]))
     env = _env(data_dir, row, start_ms, end_ms)
