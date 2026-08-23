@@ -362,6 +362,49 @@ class JobStore:
                 "context_version",
                 "TEXT NOT NULL DEFAULT 'job-context-v1'",
             )
+            # B10: durable AI correction batch state — restart/idempotency safe.
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ai_correction_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL REFERENCES jobs(id),
+                    source_revision TEXT NOT NULL DEFAULT '',
+                    source_sha256 TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    provider_profile_id TEXT NOT NULL DEFAULT '',
+                    model TEXT NOT NULL,
+                    execution_mode TEXT NOT NULL,
+                    provider_job_id TEXT,
+                    request_sha256 TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'submitted',
+                    submitted_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    input_tokens INTEGER NOT NULL DEFAULT 0,
+                    output_tokens INTEGER NOT NULL DEFAULT 0,
+                    estimated_cost_usd REAL,
+                    actual_cost_usd REAL,
+                    error_kind TEXT,
+                    error_safe_message TEXT,
+                    UNIQUE(job_id, source_revision, request_sha256)
+                );
+                """
+
+            )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS ai_corr_runs_job_idx
+                   ON ai_correction_runs(job_id, id)"""
+            )
+            connection.execute(
+                """CREATE INDEX IF NOT EXISTS ai_corr_runs_provider_job_idx
+                   ON ai_correction_runs(provider_job_id)"""
+            )
+            self._ensure_column(connection, "jobs", "correction_provider", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "jobs", "correction_provider_profile_id", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "jobs", "correction_model", "TEXT NOT NULL DEFAULT ''")
+            self._ensure_column(connection, "jobs", "correction_execution_mode", "TEXT NOT NULL DEFAULT 'REALTIME'")
+            self._ensure_column(connection, "jobs", "correction_fallback_policy", "TEXT NOT NULL DEFAULT 'RAW_CHIRP_FALLBACK'")
+            self._ensure_column(connection, "jobs", "pricing_snapshot_json", "TEXT NOT NULL DEFAULT '{}'")
             self._ensure_column(connection, "jobs", "context_digest", "TEXT")
             self._ensure_column(
                 connection,
@@ -721,6 +764,13 @@ class JobStore:
         content_mode: str = "general",
         document_context: str = "",
         actor: str,
+        # B23: per-job provider selection, persisted and immutable post-approval
+        correction_provider: str = "",
+        correction_provider_profile_id: str = "",
+        correction_model: str = "",
+        correction_execution_mode: str = "REALTIME",
+        correction_fallback_policy: str = "RAW_CHIRP_FALLBACK",
+        pricing_snapshot: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         selected_output_formats = normalize_output_formats(output_formats)
         processing_strategy = normalize_processing_strategy(processing_strategy)
@@ -779,6 +829,26 @@ class JobStore:
                     actor,
                     now,
                     now,
+                ),
+            )
+            # B23: persist per-job correction selection (immutable post-approval)
+            connection.execute(
+                """UPDATE jobs SET
+                       correction_provider=?,
+                       correction_provider_profile_id=?,
+                       correction_model=?,
+                       correction_execution_mode=?,
+                       correction_fallback_policy=?,
+                       pricing_snapshot_json=?
+                   WHERE id=?""",
+                (
+                    correction_provider,
+                    correction_provider_profile_id,
+                    correction_model,
+                    correction_execution_mode,
+                    correction_fallback_policy,
+                    json.dumps(pricing_snapshot or {}, ensure_ascii=False),
+                    job_id,
                 ),
             )
             connection.execute(

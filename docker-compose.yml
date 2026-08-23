@@ -83,6 +83,7 @@ services:
       # AI account profile state — ONLY this subtree is writable by the API.
       - ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}:${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
       - ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}
+      - ${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}:${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}
     command: ["uvicorn", "app.api_hardened:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
@@ -183,6 +184,7 @@ services:
       - ./logs:/app/logs
       - ./tmp:/app/tmp
       - ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:ro
+      - ${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}:${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
       - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
     command: ["python", "-m", "app.pipeline.dynamic_worker_production"]

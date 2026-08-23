@@ -13,6 +13,7 @@ services:
         required: true
     volumes:
       - ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:ro
+      - ${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}:${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}:ro
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs
       - ${COURSE_TRANSCRIPT_TMP_HOST_PATH:?Set COURSE_TRANSCRIPT_TMP_HOST_PATH}:/app/tmp
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
@@ -46,6 +47,7 @@ services:
       # AI profile state: only this subtree is writable by the API.
       - ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}:${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
       - ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}
+      - ${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}:${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}
 
   worker:
     build:
@@ -86,6 +88,7 @@ services:
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs
       - ${COURSE_TRANSCRIPT_TMP_HOST_PATH:?Set COURSE_TRANSCRIPT_TMP_HOST_PATH}:/app/tmp
       - ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:ro
+      - ${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}:${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}:ro
       - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
       - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
 
@@ -130,6 +133,7 @@ services:
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
       - ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:ro
+      - ${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}:${AI_PROVIDER_PROFILES_DIR:-/opt/course-transcript/secrets/ai-providers}:ro
 
   billing-worker:
     build:
