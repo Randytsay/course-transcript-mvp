@@ -1,5 +1,17 @@
 # Deployment status — 2026-07-31
 
+> **Historical snapshot — not the current deployment runbook.**
+>
+> This file records the project state as of 2026-07-31 / Draft PR #2 and is preserved for provenance only. The `Pending human gates` at the bottom must **not** be treated as current instructions.
+>
+> For current operations use the reviewed gate documents instead:
+>
+> - [`VPS_DEPLOY_GATE.md`](./VPS_DEPLOY_GATE.md) — exact-SHA, backup, ARM64 build/restart and non-paid production deployment gate.
+> - [`ASR_RETRANSCRIPTION_LIVE_GATE.md`](./ASR_RETRANSCRIPTION_LIVE_GATE.md) — bounded targeted Chirp re-transcription acceptance gate.
+> - [`MINIMAX_M3_LIVE_GATE.md`](./MINIMAX_M3_LIVE_GATE.md) — bounded MiniMax M3 windowed correction acceptance gate; production M3 remains off until its separate technical + quality gates pass.
+>
+> Do not infer current model, test-count, production SHA, provider enablement, or next paid action from this historical snapshot.
+
 Source:
 
 - Branch: `agent/frontend-api-integration`
@@ -35,7 +47,7 @@ Backup:
 - Excludes secrets, persistent data, logs, temp data, Git metadata, and build
   caches. Existing SQLite/data were never overwritten by the backup.
 
-Pending human gates:
+Pending human gates (historical; superseded by the current gate documents above):
 
 1. Refresh the already authenticated production browser and confirm Dashboard
    and `新增轉錄任務` render.
