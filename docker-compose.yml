@@ -28,6 +28,8 @@ services:
     env_file:
       - path: .env
         required: false
+      - path: ${AI_ACTIVE_ENV_HOST_PATH:-/opt/course-transcript/secrets/ai-accounts/ai-active.env}
+        required: false
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
       COURSE_TRANSCRIPT_CORS_ORIGINS: http://localhost:3000
@@ -69,12 +71,17 @@ services:
       MINIMAX_M3_API_PATH: ${MINIMAX_M3_API_PATH:-/v1/chat/completions}
       MINIMAX_API_BASE_URL: ${MINIMAX_API_BASE_URL:-https://api.minimaxi.com}
       MINIMAX_API_KEY_FILE: /run/secrets/minimax-api-key
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
+      AI_ACCOUNTS_DIR: ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
     volumes:
       - ./data:/app/data
       - ./logs:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
       - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
       - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
+      # AI account profile state — ONLY this subtree is writable by the API.
+      - ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}:${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
+      - ${GCP_CREDENTIALS_HOST_PATH:-/opt/course-transcript/secrets/gcp-sa.json}:/run/secrets/gcp-sa.json
     command: ["uvicorn", "app.api_hardened:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
@@ -127,6 +134,9 @@ services:
     image: course-transcript-pipeline-worker:local
     restart: unless-stopped
     stop_grace_period: 45s
+    env_file:
+      - path: ${AI_ACTIVE_ENV_HOST_PATH:-/opt/course-transcript/secrets/ai-accounts/ai-active.env}
+        required: false
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
       COURSE_TRANSCRIPT_COST_LIMIT_USD: "200"
@@ -143,9 +153,12 @@ services:
       COURSE_TRANSCRIPT_MINIMUM_FREE_SPACE_GB: "3"
       COURSE_TRANSCRIPT_PIPELINE_WORKER_ID: "pipeline-worker-1"
       GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
-      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-course-transcript-mvp}
-      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-global}
-      GCS_BUCKET: ${GCS_BUCKET:-course-transcript-mvp}
+      # Values normally supplied by ai-active.env (env_file). Host-level vars
+      # win if explicitly set; empty string lets env_file value stand.
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-}
+      GCS_BUCKET: ${GCS_BUCKET:-}
+      AI_ACCOUNTS_DIR: ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
       RCLONE_CONFIG: /run/secrets/rclone.conf
       CHIRP_DYNAMIC_BATCHING: ${CHIRP_DYNAMIC_BATCHING:-true}
       CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS: ${CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS:-5}

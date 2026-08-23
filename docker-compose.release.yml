@@ -29,15 +29,22 @@ services:
     env_file:
       - path: ${COURSE_TRANSCRIPT_ENV_FILE:?Set COURSE_TRANSCRIPT_ENV_FILE to the protected production env file}
         required: true
+      - path: ${AI_ACTIVE_ENV_HOST_PATH:-/opt/course-transcript/secrets/ai-accounts/ai-active.env}
+        required: false
     environment:
       COURSE_TRANSCRIPT_RUNTIME_GIT_SHA: ${COURSE_TRANSCRIPT_RELEASE_TAG}
       COURSE_TRANSCRIPT_DOCKER_IMAGE_REVISION: ${COURSE_TRANSCRIPT_RELEASE_TAG}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
+      AI_ACCOUNTS_DIR: ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
       - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
       - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
+      # AI profile state: only this subtree is writable by the API.
+      - ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}:${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
+      - ${GCP_CREDENTIALS_HOST_PATH:?Set GCP_CREDENTIALS_HOST_PATH}:/run/secrets/gcp-sa.json
 
   worker:
     build:
@@ -66,6 +73,9 @@ services:
         RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
         VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-pipeline-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    env_file:
+      - path: ${AI_ACTIVE_ENV_HOST_PATH:-/opt/course-transcript/secrets/ai-accounts/ai-active.env}
+        required: false
     environment:
       COURSE_TRANSCRIPT_RUNTIME_GIT_SHA: ${COURSE_TRANSCRIPT_RELEASE_TAG}
       COURSE_TRANSCRIPT_DOCKER_IMAGE_REVISION: ${COURSE_TRANSCRIPT_RELEASE_TAG}

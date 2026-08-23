@@ -42,7 +42,7 @@ test("reviewer workspace separates watched and reviewed progress without seat ja
   assert.match(workspace, /toggleTimecode/);
   assert.match(workspace, /onStateChange/);
   assert.match(workspace, /aria-pressed=\{active\}/);
-  assert.match(workspaceStyles, /grid-template-columns: minmax\(0, 1\.18fr\) minmax\(360px, 0\.82fr\)/);
+  assert.match(workspaceStyles, /grid-template-columns: minmax\(0, 1\.25fr\) minmax\(360px, 0\.75fr\)/);
   assert.match(workspaceStyles, /overflow-wrap: anywhere/);
   assert.match(workspaceStyles, /overflow-x: hidden/);
   assert.match(workspaceStyles, /@media \(max-width: 1180px\)/);
