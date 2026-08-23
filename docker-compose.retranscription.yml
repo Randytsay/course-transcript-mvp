@@ -1,0 +1,31 @@
+services:
+  retranscription-worker:
+    profiles: ["web"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-pipeline-worker:local
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - path: .env
+        required: false
+      - path: ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}/ai-active.env
+        required: false
+    environment:
+      COURSE_TRANSCRIPT_DATA_DIR: /app/data
+      COURSE_TRANSCRIPT_RETRANSCRIPTION_WORKER_ID: retranscription-worker-1
+      ASR_RETRANSCRIPTION_ENABLED: ${ASR_RETRANSCRIPTION_ENABLED:-false}
+      COURSE_TRANSCRIPT_RETRANSCRIPTION_DISABLED_POLL_SECONDS: ${COURSE_TRANSCRIPT_RETRANSCRIPTION_DISABLED_POLL_SECONDS:-60}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
+      GCS_BUCKET: ${GCS_BUCKET:-course-transcript-mvp}
+      CHIRP_PROVIDER_DEADLINE_SECONDS: ${CHIRP_PROVIDER_DEADLINE_SECONDS:-90000}
+      CHIRP_OUTPUT_PROPAGATION_GRACE_SECONDS: ${CHIRP_OUTPUT_PROPAGATION_GRACE_SECONDS:-300}
+      CHIRP_GCS_CLEANUP_AFTER_RECOVERY: ${CHIRP_GCS_CLEANUP_AFTER_RECOVERY:-true}
+      CHIRP_SPEECH_ADAPTATION: ${CHIRP_SPEECH_ADAPTATION:-false}
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./tmp:/app/tmp
+      - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro
+    command: ["python", "-m", "app.jobs.retranscription_worker_entry"]

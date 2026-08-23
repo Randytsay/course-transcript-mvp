@@ -20,6 +20,7 @@ jobs:
           printf 'RELEASE_ENV_SENTINEL=loaded\n' > /tmp/live.env
           touch /tmp/rclone.conf /tmp/gcp-sa.json /tmp/billing-sa.json
           mkdir -p /tmp/release-state/data /tmp/release-state/logs /tmp/release-state/tmp
+          mkdir -p /tmp/ai-runtime
       - name: Render release model
         env:
           COURSE_TRANSCRIPT_RELEASE_TAG: ci-release
@@ -103,4 +104,42 @@ jobs:
                   if item.get('target') == '/run/ai-runtime'
               )
               assert runtime.get('read_only') is True, (name, runtime)
+          PY
+      - name: Render retranscription worker overlay
+        env:
+          AI_RUNTIME_HOST_DIR: /tmp/ai-runtime
+          RCLONE_CONFIG_HOST_PATH: /tmp/rclone.conf
+          GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH: /dev/null
+          MINIMAX_API_KEY_HOST_PATH: /dev/null
+          ASR_RETRANSCRIPTION_ENABLED: "false"
+        run: |
+          docker compose \
+            -p course-transcript-retranscription-ci \
+            -f docker-compose.yml \
+            -f docker-compose.retranscription.yml \
+            --profile web \
+            config --format json > /tmp/retranscription-compose.json
+      - name: Verify retranscription worker is gated by default
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          model = json.loads(Path('/tmp/retranscription-compose.json').read_text())
+          worker = model['services']['retranscription-worker']
+          environment = worker.get('environment') or {}
+          command = worker.get('command') or []
+
+          assert environment.get('ASR_RETRANSCRIPTION_ENABLED') == 'false', environment
+          assert command == [
+              'python', '-m', 'app.jobs.retranscription_worker_entry'
+          ], command
+          assert environment.get('GOOGLE_APPLICATION_CREDENTIALS') == (
+              '/run/ai-runtime/gcp-sa.json'
+          ), environment
+          runtime = next(
+              item for item in worker.get('volumes', [])
+              if item.get('target') == '/run/ai-runtime'
+          )
+          assert runtime.get('read_only') is True, runtime
           PY

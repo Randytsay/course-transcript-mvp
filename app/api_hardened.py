@@ -8,6 +8,7 @@ from app.api_observed import app
 from app.drive_api_routes import router as drive_api_router
 from app.learning.admin import router as learning_admin_router
 from app.learning.routes import router as learning_router
+from app.retranscription_routes import router as retranscription_router
 from app.review.admin import router as review_admin_router
 from app.review.auth import router as review_auth_router
 from app.review.contributions import router as review_contributions_router
@@ -142,6 +143,10 @@ app.post("/api/v1/subtitles/import", status_code=201)(import_srt)
 app.post(_PUBLISH_PATH)(publish_reviewed)
 app.get(_PUBLISH_STATUS_PATH)(get_publish_status)
 app.include_router(drive_api_router)
+# Retranscription mutation routes reuse the same Cloudflare Access owner boundary
+# as the existing operator API. They never perform a paid call inside the API
+# request; confirmed candidates are consumed later by the durable worker.
+app.include_router(retranscription_router)
 # Reviewer auth is deliberately independent from the Cloudflare Access operator
 # identity. Edge policy must allow these paths on the reviewer-facing origin.
 app.include_router(review_auth_router)
