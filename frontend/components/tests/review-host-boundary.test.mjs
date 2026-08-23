@@ -23,6 +23,8 @@ test("review hostname allows only reviewer pages and APIs", () => {
     "/review/contributions",
     "/api/v1/review/auth/google/callback",
     "/api/v1/review/videos",
+    "/images/cisheng-hero.png",
+    "/images/learning-dashboard-ornament.webp",
     "/favicon.ico",
   ]) {
     assert.equal(classifyReviewHostRequest(REVIEW, path, REVIEW), "allow", path);

@@ -27,6 +27,7 @@ export function classifyReviewHostRequest(
     hasPathPrefix(pathname, "/review") ||
     hasPathPrefix(pathname, "/api/v1/review") ||
     hasPathPrefix(pathname, "/_next") ||
+    hasPathPrefix(pathname, "/images") ||
     pathname === "/favicon.ico" ||
     pathname === "/robots.txt"
   ) {
