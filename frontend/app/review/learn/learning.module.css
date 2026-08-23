@@ -52,3 +52,44 @@
   .segmentTimeButton{font-size:13px;padding:7px 6px}
   .segmentTextButton{font-size:15px;line-height:1.7}
 }
+
+/* Keep the secondary learning routes in the same warm paper-and-gold language as the learning center. */
+.page:not(.dashboard){
+  background:
+    radial-gradient(circle at 8% 5%,rgba(192,151,77,.14),transparent 26rem),
+    linear-gradient(180deg,#f8f2e6 0%,#fffaf0 48%,#f4ebd9 100%);
+  color:#3e2d19;
+}
+.page:not(.dashboard) .topbar{border-bottom:1px solid rgba(172,123,30,.26);color:#3e2d19}
+.page:not(.dashboard) .brandMark{border:1px solid #d4a649;background:linear-gradient(145deg,#d6a333,#95600c);color:#fff8e9;box-shadow:0 5px 13px rgba(122,80,13,.16)}
+.page:not(.dashboard) .brandText strong{color:#3d2812;font-family:"Noto Serif TC","Songti TC",serif}
+.page:not(.dashboard) .brandText span{color:#806c50}
+.page:not(.dashboard) .nav a{border-color:rgba(201,154,63,.34);color:#755522;background:rgba(255,253,245,.72)}
+.page:not(.dashboard) .nav a:hover,.page:not(.dashboard) .nav a[aria-current="page"]{border-color:#b9811e;color:#fff8e9;background:linear-gradient(145deg,#d8a62e,#9a650e);box-shadow:0 3px 7px rgba(133,85,7,.15)}
+.page:not(.dashboard) .heroMain,.page:not(.dashboard) .panel,.page:not(.dashboard) .statCard,.page:not(.dashboard) .lessonCard,.page:not(.dashboard) .videoPanel,.page:not(.dashboard) .sidePanel{border-color:rgba(190,137,35,.34);background:rgba(255,253,246,.9);box-shadow:0 10px 28px rgba(130,93,29,.08)}
+.page:not(.dashboard) .eyebrow{color:#8b6b32}
+.page:not(.dashboard) .heroMain h1,.page:not(.dashboard) .sectionHeader h2,.page:not(.dashboard) .lessonHeading h1,.page:not(.dashboard) .sidePanel h2{color:#3d2812;font-family:"Noto Serif TC","Songti TC",serif}
+.page:not(.dashboard) .heroMain p,.page:not(.dashboard) .sectionHeader p,.page:not(.dashboard) .muted,.page:not(.dashboard) .courseInfoHint{color:#806c50}
+.page:not(.dashboard) .bigNumber,.page:not(.dashboard) .statCard strong,.page:not(.dashboard) .sectionHeader a,.page:not(.dashboard) .listItem a{color:#9a650e}
+.page:not(.dashboard) .continueCard{background:linear-gradient(145deg,#c99625,#8b5708 76%);color:#fff9e8;box-shadow:inset 0 0 0 1px rgba(255,235,169,.24),0 15px 32px rgba(123,79,7,.19)}
+.page:not(.dashboard) .continueCard p{color:#fff0c9}
+.page:not(.dashboard) .primaryButton,.page:not(.dashboard) .actionRow .accent,.page:not(.dashboard) .toolbar button.active,.page:not(.dashboard) .tabs button.active,.page:not(.dashboard) .saveButton,.page:not(.dashboard) .searchBar button,.page:not(.dashboard) .returnToPlayback,.page:not(.dashboard) .openButton{border-color:#a76d0d;background:linear-gradient(145deg,#d09b26,#98600a);color:#fff8e8;box-shadow:0 3px 7px rgba(133,85,7,.15)}
+.page:not(.dashboard) .toolbar button,.page:not(.dashboard) .actionRow button,.page:not(.dashboard) .actionRow a,.page:not(.dashboard) .infoToggle{border-color:rgba(201,154,63,.34);background:rgba(255,253,245,.84);color:#755522}
+.page:not(.dashboard) .infoToggle{font-weight:800}
+.page:not(.dashboard) .reviewButton{border:1px solid #e6c987;background:#fff4d6;color:#865e20}
+.page:not(.dashboard) .badge{color:#84632d;background:#f3e9d0}
+.page:not(.dashboard) .badgeDone{color:#6d6b2b;background:#eef0d7}
+.page:not(.dashboard) .badgeDue{color:#8d5c10;background:#f7e8bf}
+.page:not(.dashboard) .progressLine{background:#eadfc5}
+.page:not(.dashboard) .progressLine span{background:linear-gradient(90deg,#d8a536,#9a6309)}
+.page:not(.dashboard) .tabs,.page:not(.dashboard) .courseInfoPanel,.page:not(.dashboard) .playbackMessage{border-color:rgba(201,154,63,.24);background:#fffaf0}
+.page:not(.dashboard) .listItem,.page:not(.dashboard) .miniItem,.page:not(.dashboard) .flashcard{border-color:rgba(201,154,63,.28);background:rgba(255,253,245,.86)}
+.page:not(.dashboard) .listItemActive{border-color:#d1aa58;background:#fff4d6!important;box-shadow:0 7px 18px rgba(130,93,29,.08)}
+.page:not(.dashboard) .listItemSelected{border-color:#b9811e;box-shadow:0 0 0 2px rgba(185,129,27,.14)}
+.page:not(.dashboard) .segmentTimeButton{background:#f7eed8;color:#835b17}
+.page:not(.dashboard) .segmentTimeButton:hover,.page:not(.dashboard) .segmentTimeButton:focus-visible{background:#f1dfb2}
+.page:not(.dashboard) .segmentTextButton{color:#4a3823}
+.page:not(.dashboard) .segmentTextButton:hover{color:#9a650e}
+.page:not(.dashboard) .citation{background:#f3e9d0;color:#84632d}
+.page:not(.dashboard) .noteSection{border-color:#eadfc5}
+.page:not(.dashboard) button:focus-visible,.page:not(.dashboard) a:focus-visible,.page:not(.dashboard) input:focus-visible,.page:not(.dashboard) textarea:focus-visible,.page:not(.dashboard) select:focus-visible{outline-color:rgba(185,129,27,.38)}

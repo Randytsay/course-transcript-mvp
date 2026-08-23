@@ -212,8 +212,10 @@ export default function ReviewVideosPage() {
                       <div className={styles.thumbnail}>
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
-                          src={`https://i.ytimg.com/vi/${video.youtube_video_id}/hqdefault.jpg`}
+                          src={`https://i.ytimg.com/vi/${video.youtube_video_id}/mqdefault.jpg`}
                           alt=""
+                          loading="lazy"
+                          decoding="async"
                         />
                         <span>{formatDuration(video.duration_ms)}</span>
                         {video.completed ? <b className={styles.completedBadge}>✓ 已完成</b> : null}

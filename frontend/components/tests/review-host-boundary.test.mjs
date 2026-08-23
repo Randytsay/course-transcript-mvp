@@ -23,7 +23,7 @@ test("review hostname allows only reviewer pages and APIs", () => {
     "/review/contributions",
     "/api/v1/review/auth/google/callback",
     "/api/v1/review/videos",
-    "/images/cisheng-hero.png",
+    "/images/cisheng-hero.webp",
     "/images/learning-dashboard-ornament.webp",
     "/favicon.ico",
   ]) {

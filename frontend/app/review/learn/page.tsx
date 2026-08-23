@@ -145,7 +145,7 @@ export default function LearningDashboardPage() {
       <div className={`${styles.shell} ${brandStyles.shell}`}>
         <header className={`${styles.topbar} ${brandStyles.topbar}`}>
           <a className={`${styles.brand} ${brandStyles.brand}`} href="/review/learn" aria-label="回到學習中心">
-            <span className={`${styles.brandMark} ${brandStyles.brandMark}`}><img src="/images/cisheng-lotus-seal.png" alt="" /></span>
+            <span className={`${styles.brandMark} ${brandStyles.brandMark}`}><img src="/images/cisheng-lotus-seal.webp" alt="" decoding="async" /></span>
             <span className={`${styles.brandText} ${brandStyles.brandText}`}><strong>慈聖佛堂・佛學共學平台</strong><span>看課・複習・共修・留下自己的學習歷程</span></span>
           </a>
           <nav className={`${styles.nav} ${brandStyles.nav}`} aria-label="學習功能">
@@ -226,7 +226,7 @@ export default function LearningDashboardPage() {
               const subtitleProgress = reviewPercent(video);
               return <article className={`${styles.lessonCard} ${brandStyles.courseCard}`} key={video.youtube_video_id}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img className={`${styles.thumb} ${brandStyles.courseThumb}`} src={`https://i.ytimg.com/vi/${video.youtube_video_id}/hqdefault.jpg`} alt={`${video.title} 縮圖`} />
+                <img loading="lazy" decoding="async" className={`${styles.thumb} ${brandStyles.courseThumb}`} src={`https://i.ytimg.com/vi/${video.youtube_video_id}/mqdefault.jpg`} alt={`${video.title} 縮圖`} />
                 <div className={`${styles.lessonBody} ${brandStyles.courseBody}`}>
                   <div className={brandStyles.courseStatus}>{statusLabel(video.learning_status)}{video.saved ? <span>已收藏</span> : null}</div>
                   <h3 className={`${styles.lessonTitle} ${brandStyles.courseTitle}`}>{video.title}</h3>
