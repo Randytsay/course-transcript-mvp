@@ -2,7 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import styles from "./learning.module.css";
-import ReviewNav from "../review-nav";
 
 type Video = {
   youtube_video_id: string;
@@ -121,7 +120,14 @@ export default function LearningDashboardPage() {
             <span className={styles.brandMark}>慈</span>
             <span className={styles.brandText}><strong>慈聖佛堂・佛學共學平台</strong><span>看課・複習・共修・留下自己的學習歷程</span></span>
           </a>
-          <ReviewNav active="learn" />
+          <nav className={styles.nav} aria-label="學習功能">
+            <a aria-current="page" href="/review/learn">學習中心</a>
+            <a href="/review/videos">字幕共修</a>
+            <a href="/review/learn/review">複習中心</a>
+            <a href="/review/learn/search">知識搜尋</a>
+            <a href="/review/contributions">共修紀錄</a>
+            <a href="/review/help">使用說明</a>
+          </nav>
         </header>
 
         <section className={styles.hero}>

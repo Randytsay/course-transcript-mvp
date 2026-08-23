@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import styles from "./contributions.module.css";
-import ReviewNav from "../review-nav";
 
 type LeaderboardRow = {
   rank: number;
@@ -131,7 +130,7 @@ export default function ContributionPage() {
             <h1>我的共修紀錄</h1>
             <p>每一筆校訂建議都會留下紀錄；同一筆建議後續調整，不會重複計算。完成整支影片的校閱，也會記錄在這裡。</p>
           </div>
-          <ReviewNav active="contributions" />
+          <Link href="/review/videos" className={styles.backLink}>返回影片</Link>
         </header>
 
         {loading ? <div className={styles.stateCard}>正在整理共修紀錄…</div> : null}

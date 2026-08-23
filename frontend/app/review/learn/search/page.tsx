@@ -2,7 +2,6 @@
 
 import { FormEvent, useState } from "react";
 import styles from "../learning.module.css";
-import ReviewNav from "../../review-nav";
 
 type SubtitleResult={segment_id:number;youtube_video_id:string;segment_index:number;start_ms:number;end_ms:number;text:string;video_title:string};
 type ArtifactResult={id:string;artifact_id:string;youtube_video_id:string;video_title:string;title:string;artifact_type:string;section:string;snippet:string;start_ms:number;end_ms:number;source_segment_index:number;generated_at:string};
@@ -16,7 +15,7 @@ export default function LearningSearchPage(){
  async function submit(event:FormEvent){event.preventDefault();await runSearch(query)}
  const total=(data?.subtitle_results.length||0)+(data?.artifact_results.length||0);
  return <main className={styles.page}><div className={styles.shell}>
-  <header className={styles.topbar}><a className={styles.brand} href="/review/learn"><span className={styles.brandMark}>學</span><span className={styles.brandText}><strong>佛學共學平台</strong><span>知識搜尋</span></span></a><ReviewNav active="search" /></header>
+  <header className={styles.topbar}><a className={styles.brand} href="/review/learn"><span className={styles.brandMark}>學</span><span className={styles.brandText}><strong>佛學共學平台</strong><span>知識搜尋</span></span></a><nav className={styles.nav} aria-label="學習功能"><a href="/review/learn">學習中心</a><a href="/review/learn/review">複習中心</a><a href="/review/videos">字幕共修</a><a aria-current="page" href="/review/learn/search">知識搜尋</a><a href="/review/help">使用說明</a></nav></header>
   <section className={styles.heroMain}><p className={styles.eyebrow}>知識搜尋</p><h1>忘了在哪一堂聽過？從課程字幕與目前有效的 AI 學習整理找回來。</h1><p>搜尋結果以可追溯來源為主；點時間就回到影片原段落。AI 整理如果所依據的字幕已更新，就不會被當成目前有效知識顯示。</p><form className={styles.searchBar} onSubmit={submit}><input aria-label="搜尋課程內容" autoComplete="off" placeholder="例如：龍華三會、兜率天、發菩提心…" value={query} onChange={e=>setQuery(e.target.value)}/><button disabled={loading} type="submit">{loading?"搜尋中…":"搜尋"}</button></form><div className={styles.toolbar} style={{marginTop:12,marginBottom:0}} aria-label="搜尋範例">{examples.map(example=><button disabled={loading} key={example} onClick={()=>{setQuery(example);void runSearch(example)}} type="button">{example}</button>)}</div>{error?<p className={styles.error} role="alert">{error}</p>:null}</section>
   {data?<><div className={styles.sectionHeader}><div><h2>「{data.query}」的結果</h2><p>{total?`找到 ${total} 筆可追溯內容。點時間即可回到影片核對。`:"目前沒有找到相符內容，可以換一個名詞或較短的片語再試。"}</p></div></div>
    {total?<div className={styles.twoColumn}>

@@ -3,7 +3,6 @@
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "../learning.module.css";
-import ReviewNav from "../../review-nav";
 
 type Segment = { id:number; segment_index:number; start_ms:number; end_ms:number; working_text:string };
 type Citation = { segment_index:number; start_ms:number; end_ms:number; text:string };
@@ -86,7 +85,7 @@ export default function LearningLessonPage(){
   if(!lesson)return <main className={styles.page}><div className={styles.shell}><p className={styles.status}>正在準備這堂課…</p></div></main>;
   const artifact=lesson.artifact;const content=artifact?.content||{};const active=lesson.segments.find(s=>currentMs>=s.start_ms&&currentMs<s.end_ms);
   return <main className={styles.page}><div className={styles.shell}>
-    <header className={styles.topbar}><a className={styles.brand} href="/review/learn"><span className={styles.brandMark}>學</span><span className={styles.brandText}><strong>佛學共學平台</strong><span>我的學習中心</span></span></a><ReviewNav active="learn" /></header>
+    <header className={styles.topbar}><a className={styles.brand} href="/review/learn"><span className={styles.brandMark}>學</span><span className={styles.brandText}><strong>佛學共學平台</strong><span>我的學習中心</span></span></a><nav className={styles.nav} aria-label="學習功能"><a href="/review/learn">學習中心</a><a href="/review/videos">字幕共修</a><a href="/review/learn/review">複習中心</a><a href="/review/learn/search">知識搜尋</a><a href="/review/help">使用說明</a></nav></header>
     <div className={styles.workspace}>
       <section className={styles.videoPanel}>
         <div aria-label="課程影片播放器" className={styles.videoFrame} ref={hostRef}/>

@@ -1,5 +1,4 @@
 import styles from "../learn/learning.module.css";
-import ReviewNav from "../review-nav";
 
 const steps = [
   ["1", "選一堂課開始", "從「我的學習中心」進入課程。影片每隔一段時間會保存播放位置，下次可以從上次的位置繼續。"],
@@ -19,7 +18,13 @@ export default function LearnerHelpPage() {
             <span className={styles.brandMark}>慈</span>
             <span className={styles.brandText}><strong>慈聖佛堂・佛學共學平台</strong><span>使用說明</span></span>
           </a>
-          <ReviewNav active="help" />
+          <nav className={styles.nav} aria-label="使用說明導覽">
+            <a href="/review/learn">學習中心</a>
+            <a href="/review/learn/notes">我的筆記</a>
+            <a href="/review/videos">字幕共修</a>
+            <a href="/review/learn/review">複習中心</a>
+            <a href="/review/learn/search">知識搜尋</a>
+          </nav>
         </header>
 
         <section className={styles.heroMain}>

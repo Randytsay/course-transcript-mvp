@@ -9,11 +9,58 @@
   color: #2a2925;
 }
 
+.portalDock {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 80;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 36px);
+}
 
+.portalLink {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 10px 14px;
+  border: 1px solid rgba(49, 92, 75, 0.2);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 8px 28px rgba(35, 55, 45, 0.16);
+  color: #315c4b;
+  font-size: 14px;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+  transition: transform 140ms ease, box-shadow 140ms ease, background 140ms ease;
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
 
+.portalLink:hover {
+  background: #ffffff;
+  box-shadow: 0 10px 32px rgba(35, 55, 45, 0.2);
+  transform: translateY(-1px);
+}
 
+.portalLink:focus-visible {
+  outline: 3px solid rgba(49, 92, 75, 0.32);
+  outline-offset: 3px;
+}
 
+.adminPortalLink {
+  border-color: #315c4b;
+  background: #315c4b;
+  color: #ffffff;
+}
 
+.adminPortalLink:hover {
+  background: #23483a;
+}
 
 .shell {
   width: min(100%, 760px);
