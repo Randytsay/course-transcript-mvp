@@ -13,6 +13,8 @@ from app.api import JOBS_DIR, _cost_config, _mutation_actor, _store
 from app.jobs.retranscription_candidates import (
     RetranscriptionCandidateStore,
     chunk_source_sha256,
+    config_sha256,
+    request_idempotency_key,
 )
 from app.jobs.store import JobConflict, JobNotFound
 from app.jobs.strategy import normalize_processing_strategy
@@ -120,15 +122,24 @@ def _estimate(job: dict[str, Any], start_ms: int, end_ms: int) -> dict[str, Any]
 
 
 def _candidate_committed_usd() -> Decimal:
+    """Reserve queued work and retain cost once a provider submission occurred.
+
+    Rejecting a completed result does not undo provider billing. Failed/stale
+    candidates are excluded only when they never reached provider submission.
+    """
     candidates = _candidate_store()
     with candidates.jobs.connect() as connection:
         rows = connection.execute(
             """
             SELECT confirmed_cost_usd FROM asr_retranscription_candidates
-            WHERE status NOT IN ('failed','rejected','stale')
+            WHERE status IN ('queued','submitted','processing','completed','applied')
+               OR submitted_at IS NOT NULL
             """
         ).fetchall()
-    return sum((Decimal(str(row["confirmed_cost_usd"] or "0")) for row in rows), Decimal("0"))
+    return sum(
+        (Decimal(str(row["confirmed_cost_usd"] or "0")) for row in rows),
+        Decimal("0"),
+    )
 
 
 def _budget_snapshot(estimate: Decimal | None = None) -> dict[str, str]:
@@ -146,6 +157,36 @@ def _budget_snapshot(estimate: Decimal | None = None) -> dict[str, str]:
         "committed_after_request_usd": str(after),
         "remaining_after_request_usd": str(max(Decimal("0"), config.project_limit_usd - after)),
     }
+
+
+def _existing_candidate(
+    *,
+    job_id: str,
+    source_revision: int,
+    chunk_index: int,
+    source_chunk_sha256: str,
+    language_code: str,
+    processing_strategy: str,
+) -> dict[str, Any] | None:
+    """Find the exact idempotent request so preview never double-reserves it."""
+    digest = config_sha256(
+        language_code=language_code,
+        processing_strategy=processing_strategy,
+    )
+    key = request_idempotency_key(
+        job_id=job_id,
+        source_revision=source_revision,
+        chunk_index=chunk_index,
+        source_chunk_sha256=source_chunk_sha256,
+        recognizer_config_sha256=digest,
+    )
+    candidates = _candidate_store()
+    with candidates.jobs.connect() as connection:
+        row = connection.execute(
+            "SELECT * FROM asr_retranscription_candidates WHERE idempotency_key=?",
+            (key,),
+        ).fetchone()
+    return dict(row) if row is not None else None
 
 
 def _safe_candidate(row: dict[str, Any]) -> dict[str, Any]:
@@ -193,6 +234,16 @@ def _preview(job_id: str, expected_revision: int, chunk_index: int) -> dict[str,
     except JobConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     amount = Decimal(str(estimate["estimated_cost_usd"]))
+    strategy = str(estimate["processing_strategy"])
+    language_code = str(job.get("language_code") or "cmn-Hant-TW")
+    existing = _existing_candidate(
+        job_id=job_id,
+        source_revision=int(job["revision"]),
+        chunk_index=chunk_index,
+        source_chunk_sha256=source_sha,
+        language_code=language_code,
+        processing_strategy=strategy,
+    )
     return {
         "job_id": job_id,
         "job_revision": int(job["revision"]),
@@ -208,7 +259,9 @@ def _preview(job_id: str, expected_revision: int, chunk_index: int) -> dict[str,
         },
         "recommended_for_retranscription": str(quality.get("severity")) in {"medium", "high"},
         "estimate": estimate,
-        "budget": _budget_snapshot(amount),
+        "budget": _budget_snapshot(None if existing is not None else amount),
+        "existing_candidate": _safe_candidate(existing) if existing is not None else None,
+        "new_cost_reservation_required": existing is None,
         "paid_operation_started": False,
     }
 
