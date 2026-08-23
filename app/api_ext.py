@@ -19,12 +19,7 @@ from app.jobs.correction_policy import (
 )
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, DYNAMIC_BATCHING, STANDARD_BATCH
 from app.live_error import safe_chunk_error
-from app.providers.correction.registry import LEGACY_MINIMAX_PROFILE_ID
-from app.providers.correction_routing import (
-    CorrectionProvider,
-    M3QuotaState,
-    choose_initial_route,
-)
+from app.providers.correction_routing import M3QuotaState
 from app.providers.minimax_quota import MiniMaxQuotaClient
 import app.live_features as live_features
 
@@ -89,54 +84,6 @@ def _m3_enabled() -> bool:
         "yes",
         "on",
     }
-
-
-def _m3_quota_state() -> M3QuotaState:
-    """Read Token Plan availability without weakening the existing fail-closed rule."""
-    if not _m3_enabled():
-        return M3QuotaState.UNKNOWN
-    quota_check_enabled = os.environ.get(
-        "MINIMAX_M3_QUOTA_CHECK_ENABLED", "false"
-    ).strip().lower() in {"1", "true", "yes", "on"}
-    if not quota_check_enabled:
-        return M3QuotaState.UNKNOWN
-    try:
-        quota = MiniMaxQuotaClient().get_quota(force_refresh=True)
-    except Exception:
-        return M3QuotaState.UNKNOWN
-    try:
-        return M3QuotaState(str(quota.state))
-    except ValueError:
-        return M3QuotaState.UNKNOWN
-
-
-def _production_correction_router_fields(
-    *, policy: str, correction_enabled: bool
-) -> dict[str, object]:
-    """Bridge the existing M3_FIRST UI contract to the shared provider router.
-
-    M3_FIRST is allowed to be saved while M3 is disabled or quota is unknown.
-    In those states provider fields remain blank, preserving the existing Gemini
-    fail-closed path. Only an explicitly enabled M3 with confirmed Token Plan
-    availability is pinned to the windowed MiniMax router.
-    """
-    if not correction_enabled:
-        return {}
-    decision = choose_initial_route(
-        requested_policy=policy,
-        m3_feature_enabled=_m3_enabled(),
-        m3_quota_state=_m3_quota_state(),
-    )
-    if decision.provider is CorrectionProvider.MINIMAX_M3:
-        return {
-            "correction_provider": "minimax",
-            "correction_provider_profile_id": LEGACY_MINIMAX_PROFILE_ID,
-            "correction_model": os.environ.get("MINIMAX_M3_MODEL", "MiniMax-M3"),
-            "correction_execution_mode": "REALTIME",
-            "correction_fallback_policy": "RAW_CHIRP_FALLBACK",
-            "pricing_snapshot": {},
-        }
-    return {}
 
 
 _REPLACED_READ_PATHS = {
@@ -213,10 +160,6 @@ def create_batch_with_parallelism(
 ) -> dict[str, object]:
     actor = _mutation_actor(request)
     parallelism = _validate_parallelism(payload.chirp_max_parallel_chunks)
-    router_fields = _production_correction_router_fields(
-        policy=payload.correction_policy,
-        correction_enabled=payload.enable_gemini_correction,
-    )
     try:
         result = _store().create_preflight_batch(
             batch_preview_id=payload.batch_preview_id,
@@ -231,7 +174,6 @@ def create_batch_with_parallelism(
             content_mode=payload.content_mode,
             document_context=payload.document_context,
             actor=actor,
-            **router_fields,
         )
         job_ids = [job["id"] for job in result["jobs"]]
         policy = set_batch_correction_policy(
@@ -270,10 +212,6 @@ def create_job_with_parallelism(
 ) -> dict[str, object]:
     actor = _mutation_actor(request)
     parallelism = _validate_parallelism(payload.chirp_max_parallel_chunks)
-    router_fields = _production_correction_router_fields(
-        policy=payload.correction_policy,
-        correction_enabled=payload.enable_gemini_correction,
-    )
     try:
         record = _store().create_preflight_job(
             preview_id=payload.preview_id,
@@ -288,7 +226,6 @@ def create_job_with_parallelism(
             content_mode=payload.content_mode,
             document_context=payload.document_context,
             actor=actor,
-            **router_fields,
         )
         policy = set_job_correction_policy(
             _store(),
