@@ -492,3 +492,231 @@ def publish_version(
     except YouTubePublishError as exc:
         store.mark_publish_failed(version_id=version_id, actor=actor, error=str(exc))
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# AI / Vertex account profile management — owner only
+# ---------------------------------------------------------------------------
+
+from .ai_accounts_preflight import run_live_checks  # noqa: E402
+from .ai_accounts_store import AIAccountError, AIAccountStore, sanitize  # noqa: E402
+
+AI_ACCOUNTS_DIR = Path(os.environ.get(
+    "AI_ACCOUNTS_DIR", "/opt/course-transcript/secrets/ai-accounts"
+))
+AI_RUNTIME_DIR = Path(os.environ.get(
+    "AI_RUNTIME_DIR", "/opt/course-transcript/secrets/ai-runtime"
+))
+
+
+def _ai_accounts_store() -> AIAccountStore:
+    return AIAccountStore(
+        accounts_dir=AI_ACCOUNTS_DIR,
+        runtime_dir=AI_RUNTIME_DIR,
+        preflight=run_live_checks,
+        audit_callback=None,
+    )
+
+
+class AIAccountAddRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=64)
+    sa_json: dict[str, Any]
+    location: str = Field(default="global", max_length=64)
+    gcs_bucket: str = Field(default="", max_length=222)
+    credit_type: str = Field(default="unknown", max_length=32)
+    billing_label: str = Field(default="", max_length=128)
+    credit_note: str = Field(default="", max_length=512)
+    credit_status: str = Field(default="unknown", max_length=16)
+    trial_started_at: str = Field(default="", max_length=10)
+    trial_expires_at: str = Field(default="", max_length=10)
+
+
+class AIAccountActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=64)
+    confirm: bool = False
+
+
+@router.get("/ai-accounts")
+def ai_accounts_list(request: Request) -> dict[str, Any]:
+    _admin_read_actor(request)
+    store = _ai_accounts_store()
+    profiles = store.list_profiles()
+    for p in profiles:
+        p["credit_type_label"] = AIAccountStore.CREDIT_TYPE_LABELS.get(
+            p.get("credit_type"), p.get("credit_type"))
+        p["credit_note_display"] = p.get("credit_note") or ""
+        p["credit_status_is_manual"] = True  # owner-marked, not live billing
+        warn = AIAccountStore.trial_warning(p)
+        p["trial_warning"] = warn
+    profiles = AIAccountStore.sorted_profiles(profiles)
+    return sanitize({
+        "profiles": profiles,
+        "active": store.get_active_name(),
+        "previous": store.get_previous(),
+        "runtime_status": store.runtime_status(),
+        "runtime_verification": store.verify_runtime(),
+        "credit_types": list(AIAccountStore.CREDIT_TYPES),
+        "credit_statuses": list(AIAccountStore.CREDIT_STATUSES),
+        "credit_type_labels": AIAccountStore.CREDIT_TYPE_LABELS,
+        "restart_required_hint": "切換後需重啟 api 與 pipeline-worker 容器才會載入新憑證與 Project",
+        "billing_note": (
+            "Vertex 用量與額度主要跟 GCP Project / Billing 設定相關。"
+            "切換帳號會同時切換 Service Account 與目標 GCP Project。"
+            "Google AI Pro：每月提供 GenAI & Cloud credit，可套用到指定 Cloud Billing "
+            "Account，並可用於 Vertex AI 等 Google Cloud 產品。"
+            "Google Cloud Free Trial：新戶 Welcome Credit 通常為 US$300 / 90 天；"
+            "實際有效額度與到期時間以 Google Cloud Billing Console 為準。"
+            "切換 Profile 會切換 Service Account 與目標 GCP Project；"
+            "實際費用與 Credit 由該 Project 所連結的 Cloud Billing Account 決定。"
+            "本系統顯示的 credit 狀態為管理員標記，非 Google 即時帳務資料。"
+        ),
+    })
+
+
+class AIAccountCreditStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=64)
+    credit_status: str = Field(max_length=16)
+
+
+@router.post("/ai-accounts/credit-status")
+def ai_accounts_credit_status(payload: AIAccountCreditStatusRequest,
+                              request: Request) -> dict[str, Any]:
+    """Owner manually marks available/low/exhausted/expired/disabled."""
+    actor = _admin_mutation_actor(request)
+    store = _ai_accounts_store()
+    try:
+        result = store.update_credit_status(name=payload.name,
+                                            credit_status=payload.credit_status,
+                                            actor=actor)
+    except AIAccountError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _audit_ai_account("ai_profile_credit_status", payload.name,
+                      {"previous": result.get("previous"), "new": result["credit_status"]},
+                      actor)
+    return sanitize(result)
+
+
+@router.post("/ai-accounts")
+def ai_accounts_add(payload: AIAccountAddRequest, request: Request) -> dict[str, Any]:
+    actor = _admin_mutation_actor(request)
+    store = _ai_accounts_store()
+    try:
+        result = store.save_profile(
+            name=payload.name,
+            sa_json=payload.sa_json,
+            location=payload.location,
+            gcs_bucket=payload.gcs_bucket,
+            actor=actor,
+            credit_type=payload.credit_type,
+            billing_label=payload.billing_label,
+            credit_note=payload.credit_note,
+            credit_status=payload.credit_status,
+            trial_started_at=payload.trial_started_at,
+            trial_expires_at=payload.trial_expires_at,
+        )
+    except AIAccountError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _audit_ai_account("ai_profile_replaced" if result["replaced"] else "ai_profile_added",
+                      result["name"], {"client_email": result["client_email"],
+                                       "project_id": result["project_id"]}, actor)
+    return sanitize(result)
+
+
+@router.post("/ai-accounts/preflight")
+def ai_accounts_preflight(payload: AIAccountActionRequest, request: Request) -> dict[str, Any]:
+    """Run read-only checks for a candidate profile. Changes nothing."""
+    _admin_read_actor(request)
+    store = _ai_accounts_store()
+    active = store.get_active_name()
+    try:
+        meta = store.load_metadata(payload.name)
+        checks = store.run_preflight(payload.name)
+    except AIAccountError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    same_project = bool(active) and (
+        store._safe_meta(active).get("project_id") == meta.get("project_id")
+    )
+    return {
+        "ok": checks.get("ok", False),
+        "checks": checks,
+        "candidate": sanitize(meta),
+        "current": store.get_active_name(),
+        "same_project_warning": same_project,
+    }
+
+
+@router.post("/ai-accounts/switch")
+def ai_accounts_switch(payload: AIAccountActionRequest, request: Request) -> dict[str, Any]:
+    if not payload.confirm:
+        raise HTTPException(
+            status_code=422,
+            detail="切換需要明確 confirm=true（請先執行 preflight 並確認差異）",
+        )
+    actor = _admin_mutation_actor(request)
+    store = _ai_accounts_store()
+    try:
+        result = store.switch(
+            name=payload.name,
+            actor=actor,
+            confirm=True,
+        )
+    except AIAccountError as exc:
+        status = 404 if "找不到" in str(exc) else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    _audit_ai_account("ai_profile_switched", payload.name,
+                      {"previous": result.get("previous"),
+                       "project_id": result.get("project_id"),
+                       "location": result.get("location")}, actor)
+    return sanitize(result)
+
+
+@router.post("/ai-accounts/rollback")
+def ai_accounts_rollback(request: Request) -> dict[str, Any]:
+    actor = _admin_mutation_actor(request)
+    store = _ai_accounts_store()
+    try:
+        result = store.rollback(actor=actor)
+    except AIAccountError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    _audit_ai_account("ai_profile_rolled_back", str(result.get("name")), {}, actor)
+    return sanitize(result)
+
+
+@router.post("/ai-accounts/delete")
+def ai_accounts_delete(payload: AIAccountActionRequest, request: Request) -> dict[str, Any]:
+    if not payload.confirm:
+        raise HTTPException(status_code=422, detail="刪除需要明確 confirm=true")
+    actor = _admin_mutation_actor(request)
+    store = _ai_accounts_store()
+    try:
+        result = store.delete_profile(name=payload.name, actor=actor)
+    except AIAccountError as exc:
+        status = 404 if "找不到" in str(exc) else 409
+        raise HTTPException(status_code=status, detail=str(exc)) from exc
+    _audit_ai_account("ai_profile_deleted", payload.name, {}, actor)
+    return sanitize(result)
+
+
+def _audit_ai_account(action: str, entity_id: str, payload: dict[str, Any], actor: str) -> None:
+    """Write sanitized (secret-free) records to review_admin_audit."""
+    from datetime import UTC, datetime
+
+    with _store().transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO review_admin_audit(
+                actor, action, entity_type, entity_id, payload_json, created_at
+            ) VALUES (?, ?, 'ai_account', ?, ?, ?)
+            """,
+            (
+                actor,
+                action,
+                entity_id,
+                json.dumps(sanitize(payload), ensure_ascii=False, sort_keys=True),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+

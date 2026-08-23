@@ -91,4 +91,16 @@ jobs:
               'gcp-sa.json' not in str(item)
               for item in services['api'].get('volumes', [])
           )
+
+          for name in ('infrastructure-test', 'pipeline-worker', 'retention-monitor'):
+              service = services[name]
+              environment = service.get('environment') or {}
+              assert environment.get('GOOGLE_APPLICATION_CREDENTIALS') == (
+                  '/run/ai-runtime/gcp-sa.json'
+              ), (name, environment)
+              runtime = next(
+                  item for item in service.get('volumes', [])
+                  if item.get('target') == '/run/ai-runtime'
+              )
+              assert runtime.get('read_only') is True, (name, runtime)
           PY

@@ -11,8 +11,10 @@ services:
     env_file:
       - path: ${COURSE_TRANSCRIPT_ENV_FILE:?Set COURSE_TRANSCRIPT_ENV_FILE to the protected production env file}
         required: true
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
     volumes:
-      - ${GCP_CREDENTIALS_HOST_PATH:?Set GCP_CREDENTIALS_HOST_PATH}:/run/secrets/gcp-sa.json:ro
+      - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs
       - ${COURSE_TRANSCRIPT_TMP_HOST_PATH:?Set COURSE_TRANSCRIPT_TMP_HOST_PATH}:/app/tmp
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
@@ -29,15 +31,24 @@ services:
     env_file:
       - path: ${COURSE_TRANSCRIPT_ENV_FILE:?Set COURSE_TRANSCRIPT_ENV_FILE to the protected production env file}
         required: true
+      - path: ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}/ai-active.env
+        required: false
     environment:
       COURSE_TRANSCRIPT_RUNTIME_GIT_SHA: ${COURSE_TRANSCRIPT_RELEASE_TAG}
       COURSE_TRANSCRIPT_DOCKER_IMAGE_REVISION: ${COURSE_TRANSCRIPT_RELEASE_TAG}
+      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
+      AI_RUNTIME_DIR: /run/ai-runtime
+      AI_RUNTIME_HOST_DIR: ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}
+      AI_ACCOUNTS_DIR: ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
       - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
       - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
+      # AI profile state: only this subtree is writable by the API.
+      - ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}:${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
+      - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime
 
   worker:
     build:
@@ -66,14 +77,18 @@ services:
         RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
         VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-pipeline-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    env_file:
+      - path: ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}/ai-active.env
+        required: false
     environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
       COURSE_TRANSCRIPT_RUNTIME_GIT_SHA: ${COURSE_TRANSCRIPT_RELEASE_TAG}
       COURSE_TRANSCRIPT_DOCKER_IMAGE_REVISION: ${COURSE_TRANSCRIPT_RELEASE_TAG}
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs
       - ${COURSE_TRANSCRIPT_TMP_HOST_PATH:?Set COURSE_TRANSCRIPT_TMP_HOST_PATH}:/app/tmp
-      - ${GCP_CREDENTIALS_HOST_PATH:?Set GCP_CREDENTIALS_HOST_PATH}:/run/secrets/gcp-sa.json:ro
+      - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro
       - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
       - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
 
@@ -115,9 +130,11 @@ services:
         RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
         VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-pipeline-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
-      - ${GCP_CREDENTIALS_HOST_PATH:?Set GCP_CREDENTIALS_HOST_PATH}:/run/secrets/gcp-sa.json:ro
+      - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro
 
   billing-worker:
     build:

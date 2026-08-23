@@ -180,11 +180,40 @@ jobs:
 
           api_volumes = services['api'].get('volumes', [])
           assert all('gcp-sa.json' not in str(item) for item in api_volumes)
-          pipeline_gcp = next(
+          pipeline_runtime = next(
               item for item in services['pipeline-worker'].get('volumes', [])
-              if item.get('target') == '/run/secrets/gcp-sa.json'
+              if item.get('target') == '/run/ai-runtime'
           )
-          assert pipeline_gcp.get('read_only') is True
+          assert pipeline_runtime.get('read_only') is True
+          assert (
+              (services['pipeline-worker'].get('environment') or {}).get(
+                  'GOOGLE_APPLICATION_CREDENTIALS'
+              ) == '/run/ai-runtime/gcp-sa.json'
+          )
+
+          infrastructure = services['infrastructure-test']
+          assert (
+              (infrastructure.get('environment') or {}).get(
+                  'GOOGLE_APPLICATION_CREDENTIALS'
+              ) == '/run/ai-runtime/gcp-sa.json'
+          )
+          infrastructure_runtime = next(
+              item for item in infrastructure.get('volumes', [])
+              if item.get('target') == '/run/ai-runtime'
+          )
+          assert infrastructure_runtime.get('read_only') is True
+
+          retention = services['retention-monitor']
+          assert (
+              (retention.get('environment') or {}).get(
+                  'GOOGLE_APPLICATION_CREDENTIALS'
+              ) == '/run/ai-runtime/gcp-sa.json'
+          )
+          retention_runtime = next(
+              item for item in retention.get('volumes', [])
+              if item.get('target') == '/run/ai-runtime'
+          )
+          assert retention_runtime.get('read_only') is True
 
           for name in ('api', 'worker', 'pipeline-worker', 'delivery-worker'):
               rclone = next(
