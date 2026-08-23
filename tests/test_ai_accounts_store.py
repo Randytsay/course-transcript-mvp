@@ -438,6 +438,76 @@ class TestComposeContract(unittest.TestCase):
                 for v in vols:
                     assert "docker.sock" not in v, f"{name}:{svc} mounts docker.sock"
 
+    # -- exact host/container mount contract (owner review fix) --------------
+
+    _RUNTIME_CONTRACT = {
+        "host_source": "/opt/course-transcript/secrets/ai-runtime",
+        "container_target": "/run/ai-runtime",
+        "credential": "/run/ai-runtime/gcp-sa.json",
+    }
+
+    def _runtime_mount(self, svc_cfg, *, readonly: bool) -> str:
+        want = f":{self._RUNTIME_CONTRACT['container_target']}"
+        if readonly:
+            want += ":ro"
+        matches = [v for v in (svc_cfg.get("volumes") or [])
+                   if isinstance(v, str) and v.endswith(want)]
+        assert matches, f"expected mount ending {want}, got {svc_cfg.get('volumes')}"
+        return matches[0]
+
+    def test_runtime_mount_contract_exact(self) -> None:
+        """host source -> /run/ai-runtime; api RW; pipeline RO; GAC inside mount."""
+        host = self._RUNTIME_CONTRACT["host_source"]
+        target = self._RUNTIME_CONTRACT["container_target"]
+        cred = self._RUNTIME_CONTRACT["credential"]
+        for name in ("docker-compose.yml", "docker-compose.release.yml"):
+            services = self._load(name)["services"]
+            api, pw = services["api"], services["pipeline-worker"]
+
+            # API: RW (no :ro suffix), exact host:target
+            api_mount = self._runtime_mount(api, readonly=False)
+            parts = api_mount.split(":")
+            src = ":".join(parts[:-1]) if parts[-1] != "ro" else ":".join(parts[:-2])
+            # src = ${AI_RUNTIME_HOST_DIR:-/opt/...} (contains ':' inside the default value)
+            assert "${AI_RUNTIME_HOST_DIR:-" in src and host in src, api_mount
+
+            # pipeline-worker: RO
+            pw_mount = self._runtime_mount(pw, readonly=True)
+            assert "AI_RUNTIME_HOST_DIR" in pw_mount and pw_mount.endswith(":ro"), pw_mount
+
+            # credential path lives INSIDE the container mount target
+            assert cred.startswith(target + "/")
+            assert api["environment"]["GOOGLE_APPLICATION_CREDENTIALS"] == cred
+            assert pw["environment"]["GOOGLE_APPLICATION_CREDENTIALS"] == cred
+
+            # AI_RUNTIME_DIR env inside API = container path (not the host path)
+            assert api["environment"]["AI_RUNTIME_DIR"] == target, \
+                api["environment"]["AI_RUNTIME_DIR"]
+
+            # env_file resolved on HOST -> uses AI_RUNTIME_HOST_DIR
+            ef_paths = [e.get("path") for e in api.get("env_file", [])]
+            active_envs = [p for p in ef_paths if p and "ai-active.env" in p]
+            assert active_envs, ef_paths
+            assert "${AI_RUNTIME_HOST_DIR:" in active_envs[0], active_envs[0]
+
+    def test_runtime_host_dir_variable_is_unambiguous(self) -> None:
+        """The same variable must not be used for both a host path and a
+        container path anywhere in compose."""
+        for name in ("docker-compose.yml", "docker-compose.release.yml"):
+            raw = open(Path(__file__).parents[1] / name).read()
+            d = self._load(name)
+            for svc, cfg in d["services"].items():
+                vols = [v for v in (cfg.get("volumes") or []) if isinstance(v, str)]
+                for v in vols:
+                    if "ai-runtime" in v:
+                        # container side = last path segment before optional :ro
+                        parts = v.split(":")
+                        right = parts[-2] if parts[-1] == "ro" else parts[-1]
+                        left = parts[0]
+                        # container side must be fixed /run/ai-runtime, never ${AI_RUNTIME_HOST_DIR...}
+                        assert right.startswith("/run/ai-runtime"), (name, svc, v)
+                        assert "${AI_RUNTIME_HOST_DIR" not in right, (name, svc, v)
+
 
 class TestGlobalEndpoint(Base):
     """A3: location=global must use aiplatform.googleapis.com, not global-aiplatform."""

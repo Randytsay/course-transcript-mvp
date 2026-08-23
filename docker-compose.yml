@@ -28,7 +28,7 @@ services:
     env_file:
       - path: .env
         required: false
-      - path: ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}/ai-active.env
+      - path: ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}/ai-active.env
         required: false
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
@@ -72,7 +72,8 @@ services:
       MINIMAX_API_BASE_URL: ${MINIMAX_API_BASE_URL:-https://api.minimaxi.com}
       MINIMAX_API_KEY_FILE: /run/secrets/minimax-api-key
       GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
-      AI_RUNTIME_DIR: ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}
+      AI_RUNTIME_DIR: /run/ai-runtime
+      AI_RUNTIME_HOST_DIR: ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}
       AI_ACCOUNTS_DIR: ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
     volumes:
       - ./data:/app/data
@@ -82,7 +83,7 @@ services:
       - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
       # AI account profile state — ONLY this subtree is writable by the API.
       - ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}:${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
-      - ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}
+      - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime
     command: ["uvicorn", "app.api_hardened:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test:
@@ -136,7 +137,7 @@ services:
     restart: unless-stopped
     stop_grace_period: 45s
     env_file:
-      - path: ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}/ai-active.env
+      - path: ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}/ai-active.env
         required: false
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
@@ -182,7 +183,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./tmp:/app/tmp
-      - ${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:${AI_RUNTIME_DIR:-/opt/course-transcript/secrets/ai-runtime}:ro
+      - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
       - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
     command: ["python", "-m", "app.pipeline.dynamic_worker_production"]
