@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 from decimal import Decimal, ROUND_UP
 from pathlib import Path
 from typing import Any
@@ -37,6 +38,15 @@ class CreateRetranscriptionCandidateRequest(RetranscriptionPreviewRequest):
 class CandidateDecisionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1)
+
+
+def _retranscription_enabled() -> bool:
+    return os.environ.get("ASR_RETRANSCRIPTION_ENABLED", "false").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 def _read_json(path: Path, default: Any) -> Any:
@@ -266,6 +276,7 @@ def _preview(job_id: str, expected_revision: int, chunk_index: int) -> dict[str,
         "budget": _budget_snapshot(None if existing is not None else amount),
         "existing_candidate": _safe_candidate(existing) if existing is not None else None,
         "new_cost_reservation_required": existing is None,
+        "retranscription_enabled": _retranscription_enabled(),
         "paid_operation_started": False,
     }
 
@@ -276,7 +287,10 @@ def get_asr_quality(job_id: str) -> dict[str, Any]:
     job_dir = JOBS_DIR / job_id
     if not job_dir.is_dir():
         raise HTTPException(status_code=404, detail="Job artifacts not found")
-    return analyze_job(job_dir)
+    return {
+        **analyze_job(job_dir),
+        "retranscription_enabled": _retranscription_enabled(),
+    }
 
 
 @router.post("/jobs/{job_id}/retranscription-candidates/preview")
@@ -294,6 +308,11 @@ def create_retranscription_candidate(
     request: Request,
 ) -> dict[str, Any]:
     actor = _mutation_actor(request)
+    if not _retranscription_enabled():
+        raise HTTPException(
+            status_code=409,
+            detail="單段付費重辨識尚未通過 production live gate，目前只開放品質分析與估價",
+        )
     preview = _preview(job_id, payload.expected_revision, payload.chunk_index)
     quality = preview["quality"]
     if not preview["recommended_for_retranscription"] and not payload.force:
