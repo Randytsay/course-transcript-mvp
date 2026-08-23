@@ -127,16 +127,21 @@ def _make_client_factory(ctx: dict[str, Any]):
         "AI_PROVIDER_PROFILES_DIR",
         "/run/ai-providers"))
 
+    selected_model = (ctx.get("correction_model") or "").strip()
+
     def factory(provider: str, profile_id: str):
         if provider == "vertex":
-            return _vertex_client(ctx)
+            return _vertex_client(ctx, model=selected_model or None)
         prof_store = AIProviderProfileStore(profiles_root)
-        return prof_store.build_client(profile_id)
+        return prof_store.build_client(
+            profile_id, model=selected_model or None)
     return factory
 
 
-def _vertex_client(ctx: dict[str, Any]):
+def _vertex_client(ctx: dict[str, Any], *, model: str | None = None):
     """Build a Vertex client. Auth comes from GOOGLE_APPLICATION_CREDENTIALS
     (already pointed at /run/ai-runtime/gcp-sa.json by compose)."""
     from app.providers.correction.vertex import VertexCorrectionProvider
+    if model:
+        return VertexCorrectionProvider(model=model)
     return VertexCorrectionProvider()

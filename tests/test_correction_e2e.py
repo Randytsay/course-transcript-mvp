@@ -268,26 +268,9 @@ class TestOpenRouterBatchE2E(OrchestratorBase):
                                                  "corrected_text": "好"}])}}]}}}]}
             return 404, {}
 
-        client = type("OC", (), {})()
-        client.model = "m/x"
-        client.api_key = "fake-openrouter-key"
-        client.id = "openrouter"
-        client.list_models = lambda: models_data["data"]
-        client.model_supports_batch = lambda model: (True, "") if model == "m/x" \
-            else (False, "未確認")
         from app.providers.correction.openrouter import OpenRouterCorrectionProvider
-        inner = OpenRouterCorrectionProvider(api_key="fake-openrouter-key",
-                                             http=http)
-        for m in ("_call", "_headers"):
-            setattr(client, m, getattr(inner, m).__get__(client))
-        client._http = http
-        for m in ("submit_batch", "get_batch", "fetch_results",
-                  "build_batch_requests", "list_models", "model_supports_batch"):
-            if getattr(inner, m, None) is not None and not hasattr(client, m):
-                setattr(client, m, getattr(inner, m).__get__(client))
-        client.model_supports_batch = lambda model: (True, "") if model == "m/x" \
-            else (False, "未確認")
-        client.list_models = lambda: models_data["data"]
+        client = OpenRouterCorrectionProvider(api_key="fake-openrouter-key",
+                                              model="m/x", http=http)
 
         orch = CorrectionOrchestrator(run_store=self.runs,
                                       client_factory=lambda p, pid: client)
