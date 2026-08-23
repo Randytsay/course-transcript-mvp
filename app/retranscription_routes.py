@@ -227,7 +227,10 @@ def _preview(job_id: str, expected_revision: int, chunk_index: int) -> dict[str,
     if not job_dir.is_dir():
         raise HTTPException(status_code=404, detail="Job artifacts not found")
     start_ms, end_ms = _chunk_window(job_dir, chunk_index)
-    _report, quality = _quality_entry(job_dir, chunk_index)
+    _report, quality_item = _quality_entry(job_dir, chunk_index)
+    quality_state = (
+        quality_item.get("quality", {}) if isinstance(quality_item.get("quality"), dict) else {}
+    )
     estimate = _estimate(job, start_ms, end_ms)
     try:
         source_sha = chunk_source_sha256(job_dir, chunk_index)
@@ -244,6 +247,7 @@ def _preview(job_id: str, expected_revision: int, chunk_index: int) -> dict[str,
         language_code=language_code,
         processing_strategy=strategy,
     )
+    severity = str(quality_state.get("severity") or "normal")
     return {
         "job_id": job_id,
         "job_revision": int(job["revision"]),
@@ -252,12 +256,12 @@ def _preview(job_id: str, expected_revision: int, chunk_index: int) -> dict[str,
         "source_end_ms": end_ms,
         "source_chunk_sha256": source_sha,
         "quality": {
-            "severity": quality.get("severity"),
-            "score": quality.get("score"),
-            "reasons": list(quality.get("reasons") or []),
-            "metrics": quality.get("metrics", {}),
+            "severity": severity,
+            "score": int(quality_state.get("score") or 0),
+            "reasons": list(quality_state.get("reasons") or []),
+            "metrics": quality_item.get("metrics", {}),
         },
-        "recommended_for_retranscription": str(quality.get("severity")) in {"medium", "high"},
+        "recommended_for_retranscription": severity in {"medium", "high"},
         "estimate": estimate,
         "budget": _budget_snapshot(None if existing is not None else amount),
         "existing_candidate": _safe_candidate(existing) if existing is not None else None,
