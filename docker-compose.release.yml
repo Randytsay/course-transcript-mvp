@@ -40,12 +40,16 @@ services:
       AI_RUNTIME_DIR: /run/ai-runtime
       AI_RUNTIME_HOST_DIR: ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}
       AI_ACCOUNTS_DIR: ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
+      # The owner refresh token is mounted below; keep the application pointed
+      # at the mounted path instead of accepting a token value from the env.
+      YOUTUBE_OWNER_REFRESH_TOKEN_FILE: /run/secrets/youtube-owner-refresh-token
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs:ro
       - ${RCLONE_CONFIG_HOST_PATH:?Set RCLONE_CONFIG_HOST_PATH}:/run/secrets/rclone.conf:ro
       - ${GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/google-drive-refresh-token:ro
       - ${MINIMAX_API_KEY_HOST_PATH:-/opt/course-transcript/secrets/minimax-api-key}:/run/secrets/minimax-api-key:ro
+      - ${YOUTUBE_OWNER_REFRESH_TOKEN_HOST_PATH:-/dev/null}:/run/secrets/youtube-owner-refresh-token:ro
       # AI profile state: only this subtree is writable by the API.
       - ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}:${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
       - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime
