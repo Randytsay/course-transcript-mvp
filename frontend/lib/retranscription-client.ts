@@ -19,6 +19,7 @@ export interface AsrQualityReport {
   schema_version: string;
   job_id: string;
   paid_provider_calls: number;
+  retranscription_enabled: boolean;
   baseline: {
     eligible_chunk_count: number;
     median_density_chars_per_min: number;
@@ -87,6 +88,7 @@ export interface RetranscriptionPreview {
   };
   existing_candidate: RetranscriptionCandidate | null;
   new_cost_reservation_required: boolean;
+  retranscription_enabled: boolean;
   paid_operation_started: false;
 }
 
