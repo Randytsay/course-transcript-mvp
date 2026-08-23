@@ -1,7 +1,7 @@
 """MiniMax correction provider (realtime only).
 
 MiniMax M3 is used as a text-only correction engine behind the shared
-correction router.  This adapter deliberately does not implement a second
+correction router. This adapter deliberately does not implement a second
 correction runtime and does not expose a fake Batch mode.
 
 Important invariants:
@@ -25,8 +25,8 @@ from .base import (
 )
 
 BASE_URL = "https://api.minimax.io/v1"
-CHAT_URL = f"{BASE_URL}/chat/completions"   # current OpenAI-compatible route
-MODELS_URL = f"{BASE_URL}/models"           # free key verification
+CHAT_URL = f"{BASE_URL}/chat/completions"
+MODELS_URL = f"{BASE_URL}/models"
 DEFAULT_MODEL = "MiniMax-M3"
 DEFAULT_MAX_COMPLETION_TOKENS = 4096
 
@@ -35,12 +35,16 @@ class MiniMaxCorrectionProvider:
     id = ProviderId.MINIMAX
     display_name = "MiniMax"
     default_model = DEFAULT_MODEL
+    # Only the hardened provider opts into per-window fallback semantics.
+    # Generic/custom MiniMax-like clients keep the old strict single-request
+    # contract unless they explicitly advertise the same capability.
+    supports_window_fallback = True
     capabilities = ProviderCapabilities(
         supports_realtime=True,
-        supports_batch=False,          # no official batch documented -> not offered
-        supports_native_schema=False,  # prompt-forced JSON + strict validation
+        supports_batch=False,
+        supports_native_schema=False,
         supports_model_listing=True,
-        pricing_known=False,           # token-plan / manual metadata only
+        pricing_known=False,
         batch_note="MiniMax 官方目前未提供批次折扣 API，僅提供即時模式",
     )
 
@@ -50,7 +54,7 @@ class MiniMaxCorrectionProvider:
             raise ProviderError("auth", "MiniMax API key 未設定")
         self.api_key = api_key
         self.model = model or self.default_model
-        self._http = http  # (method,url,headers,payload)->(status,json)
+        self._http = http
         self.max_completion_tokens = max(256, int(max_completion_tokens))
         self.last_response_meta: dict[str, Any] = {}
 
@@ -127,13 +131,7 @@ class MiniMaxCorrectionProvider:
                 "note": "API Key 已驗證（唯讀 /v1/models，未產生費用）"}
 
     def realtime_generate(self, prompt: str) -> str:
-        """Call the OpenAI-compatible realtime endpoint for deterministic text correction.
-
-        MiniMax is not treated as a native-schema provider.  The canonical
-        response is a JSON array, so format enforcement remains in the prompt
-        plus the shared strict server-side parser instead of requesting a
-        contradictory ``json_object`` response format.
-        """
+        """Call the OpenAI-compatible endpoint for deterministic correction."""
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
