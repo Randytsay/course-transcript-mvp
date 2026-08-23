@@ -113,7 +113,7 @@ export default function ReviewPortalPage() {
       <div className={styles.shell}>
         <header className={styles.topbar}>
           <a className={styles.brand} href="/review" aria-label="回到慈聖佛堂首頁">
-            <span className={styles.brandMark} aria-hidden="true"><img src="/images/cisheng-lotus-seal.png" alt="" /></span>
+            <span className={styles.brandMark} aria-hidden="true"><img src="/images/cisheng-lotus-seal.webp" alt="" decoding="async" /></span>
             <span className={styles.brandText}>
               <strong>慈聖佛堂・佛學共學平台</strong>
               <span>看課・複習・共修・留下自己的學習歷程</span>
@@ -136,7 +136,7 @@ export default function ReviewPortalPage() {
 
         <section className={styles.hero} aria-labelledby="review-title">
           <div className={styles.heroCopy}>
-            <div className={styles.heroBrand} aria-hidden="true"><img src="/images/cisheng-lotus-seal.png" alt="" /></div>
+            <div className={styles.heroBrand} aria-hidden="true"><img src="/images/cisheng-lotus-seal.webp" alt="" decoding="async" /></div>
             <p className={styles.eyebrow}>慈聖佛堂・佛學共學平台</p>
             <h1 id="review-title">佛經字幕共學<br /><span>觀修並進・法益共成</span></h1>
             <p className={styles.lead}>一起讓佛法影片的字幕更準確、更好讀。登入後即可參與字幕校訂，也能保存自己的學習進度、筆記與複習紀錄。</p>
@@ -147,7 +147,7 @@ export default function ReviewPortalPage() {
           </div>
           <div className={styles.heroArt} aria-hidden="true">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/images/cisheng-hero.png" alt="" />
+            <img src="/images/cisheng-hero.webp" alt="" decoding="async" fetchPriority="high" />
           </div>
         </section>
 
