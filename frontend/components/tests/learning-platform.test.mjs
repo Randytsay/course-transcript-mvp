@@ -65,6 +65,16 @@ test("lesson workspace provides traceable AI notes, review, flashcards, quiz and
   assert.doesNotMatch(lesson, /依字幕版本 v\{artifact\.latest_subtitle_version\} 整理/);
 });
 
+test("lesson playback follows the active segment inside the transcript pane", () => {
+  const lesson = source("app/review/learn/[videoId]/page.tsx");
+  const styles = source("app/review/learn/learning.module.css");
+  assert.match(lesson, /transcriptListRef/);
+  assert.match(lesson, /list\.scrollTo\(\{top:targetTop,behavior:"smooth"\}\)/);
+  assert.match(lesson, /list\.addEventListener\("scroll"/);
+  assert.match(lesson, /videoId:youtubeVideoId/);
+  assert.match(styles, /transcriptWorkspace>\.list\{max-height:min\(68vh,760px\);overflow-y:auto/);
+});
+
 test("review center and knowledge search stay grounded in learning evidence", () => {
   const review = source("app/review/learn/review/page.tsx");
   const search = source("app/review/learn/search/page.tsx");
