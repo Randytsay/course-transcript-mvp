@@ -21,6 +21,18 @@ from typing import Any
 READONLY_SCOPE = "https://www.googleapis.com/auth/cloud-platform.read-only"
 
 
+def vertex_endpoint_host(location: str) -> str:
+    """Official Vertex endpoint host for a location.
+
+    'global' uses aiplatform.googleapis.com; regional locations use
+    {location}-aiplatform.googleapis.com.
+    """
+    location = (location or "global").strip()
+    if location == "global":
+        return "aiplatform.googleapis.com"
+    return f"{location}-aiplatform.googleapis.com"
+
+
 class PreflightUnavailable(Exception):
     """Raised when checks cannot run (SDK/network) — treated as FAIL."""
 
@@ -87,10 +99,12 @@ def run_live_checks(cred: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any
         checks["project_visible"] = "unavailable"
 
     # 2) Vertex AI endpoint + permission (locations.get — read-only, free)
+    # "global" uses the official global endpoint, NOT "global-aiplatform...".
     location = str(meta.get("location") or "global")
+    vertex_host = vertex_endpoint_host(location)
     try:
         resp = requests.get(
-            f"https://{location}-aiplatform.googleapis.com/v1/projects/{project_id}"
+            f"https://{vertex_host}/v1/projects/{project_id}"
             f"/locations/{location}",
             headers=headers, timeout=10,
         )

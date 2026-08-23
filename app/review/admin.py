@@ -504,15 +504,15 @@ from .ai_accounts_store import AIAccountError, AIAccountStore, sanitize  # noqa:
 AI_ACCOUNTS_DIR = Path(os.environ.get(
     "AI_ACCOUNTS_DIR", "/opt/course-transcript/secrets/ai-accounts"
 ))
-AI_TARGET_KEY_PATH = Path(os.environ.get(
-    "GCP_CREDENTIALS_TARGET_PATH", "/opt/course-transcript/secrets/gcp-sa.json"
+AI_RUNTIME_DIR = Path(os.environ.get(
+    "AI_RUNTIME_DIR", "/opt/course-transcript/secrets/ai-runtime"
 ))
 
 
 def _ai_accounts_store() -> AIAccountStore:
     return AIAccountStore(
         accounts_dir=AI_ACCOUNTS_DIR,
-        target_key_path=AI_TARGET_KEY_PATH,
+        runtime_dir=AI_RUNTIME_DIR,
         preflight=run_live_checks,
         audit_callback=None,
     )

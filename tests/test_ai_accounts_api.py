@@ -28,9 +28,9 @@ class AIAccountsAPITests(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.tmp = Path(tmp.name)
         os.environ["AI_ACCOUNTS_DIR"] = str(self.tmp / "ai-accounts")
-        os.environ["GCP_CREDENTIALS_TARGET_PATH"] = str(self.tmp / "mounted" / "gcp-sa.json")
+        os.environ["AI_RUNTIME_DIR"] = str(self.tmp / "ai-runtime")
         self.addCleanup(os.environ.pop, "AI_ACCOUNTS_DIR", None)
-        self.addCleanup(os.environ.pop, "GCP_CREDENTIALS_TARGET_PATH", None)
+        self.addCleanup(os.environ.pop, "AI_RUNTIME_DIR", None)
 
         # Drop cached modules so env vars take effect.
         for mod in list(sys.modules):
@@ -102,7 +102,7 @@ class AIAccountsAPITests(unittest.TestCase):
             r2 = self.client.post("/api/v1/review-admin/ai-accounts/switch",
                                   json={"name": "pf", "confirm": True})
             assert r2.status_code == 200
-        target = Path(os.environ["GCP_CREDENTIALS_TARGET_PATH"])
+        target = Path(os.environ["AI_RUNTIME_DIR"]) / "gcp-sa.json"
         assert json.loads(target.read_text())["project_id"] == "proj-a"
 
         listing = self.client.get("/api/v1/review-admin/ai-accounts").json()
@@ -127,7 +127,7 @@ class AIAccountsAPITests(unittest.TestCase):
         r = self.client.post("/api/v1/review-admin/ai-accounts/rollback")
         assert r.status_code == 200
         assert r.json()["rolled_back"] is True
-        target = json.loads(Path(os.environ["GCP_CREDENTIALS_TARGET_PATH"]).read_text())
+        target = json.loads((Path(os.environ["AI_RUNTIME_DIR"]) / "gcp-sa.json").read_text())
         assert target["project_id"] == "proj-a"
 
     def test_delete_active_blocked_and_confirm_gate(self) -> None:

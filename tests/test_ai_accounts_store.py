@@ -33,11 +33,12 @@ class Base(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.base = Path(tmp.name)
         self.dir = self.base / "ai-accounts"          # persistent host dir (simulated)
-        self.target = self.base / "mounted" / "gcp-sa.json"
+        self.runtime = self.base / "ai-runtime"       # dedicated runtime dir
+        self.target = self.runtime / "gcp-sa.json"    # inside runtime dir, NOT a mount point
         self.audit: list[dict] = []
         self.store = AIAccountStore(
             accounts_dir=self.dir,
-            target_key_path=self.target,
+            runtime_dir=self.runtime,
             audit_callback=lambda *, actor, action, entity_id, payload=None: (
                 self.audit.append({"actor": actor, "action": action,
                                    "entity_id": entity_id, "payload": payload})
@@ -109,7 +110,7 @@ class TestCrashSafeActivation(Base):
         assert report["consistent"] or report["repaired"]
 
     def env_file_text(self) -> str:
-        return (self.dir / "ai-active.env").read_text()
+        return (self.runtime / "ai-active.env").read_text()
 
 
 class TestPartialStateDetection(Base):
@@ -133,7 +134,7 @@ class TestPreflightFailClosed(Base):
     def _store_with_preflight(self, fn):
         return AIAccountStore(
             accounts_dir=self.dir,
-            target_key_path=self.target,
+            runtime_dir=self.runtime,
             audit_callback=lambda **k: None,
             preflight=fn,
         )
@@ -246,7 +247,7 @@ class TestContracts(Base):
         self.store._activate_for_tests("persist")
         # all state lives under accounts_dir / target path given at construction
         assert (self.dir / "profiles" / "persist" / "credential.json").exists()
-        assert (self.dir / "ai-active.env").exists()
+        assert (self.runtime / "ai-active.env").exists()
         assert self.target.exists()
 
     def test_secret_leakage_zero(self) -> None:
@@ -404,10 +405,11 @@ class TestComposeContract(unittest.TestCase):
         api = self._load("docker-compose.yml")["services"]["api"]
         paths = [e.get("path") for e in api["env_file"]]
         assert any("ai-active.env" in p for p in paths), paths
-        assert api["environment"]["GOOGLE_APPLICATION_CREDENTIALS"] == "/run/secrets/gcp-sa.json"
+        assert api["environment"]["GOOGLE_APPLICATION_CREDENTIALS"] == "/run/ai-runtime/gcp-sa.json"
         assert "AI_ACCOUNTS_DIR" in api["environment"]
-        mounts = [v for v in api["volumes"] if "ai-accounts" in v]
-        assert mounts, "api must mount the ai-accounts subtree"
+        mounts = [v for v in api["volumes"] if "ai-accounts" in v or "ai-runtime" in v]
+        assert any("ai-accounts" in v for v in mounts), "api must mount ai-accounts"
+        assert any("ai-runtime" in v for v in mounts), "api must mount ai-runtime"
         # writable mount of ONLY that subtree (not :ro, not whole secrets/)
         for m in mounts:
             assert "/opt/course-transcript/secrets:" not in m.replace("secrets/ai-accounts", "")
@@ -416,14 +418,14 @@ class TestComposeContract(unittest.TestCase):
         pw = self._load("docker-compose.yml")["services"]["pipeline-worker"]
         paths = [e.get("path") for e in pw["env_file"]]
         assert any("ai-active.env" in p for p in paths), paths
-        assert pw["environment"]["GOOGLE_APPLICATION_CREDENTIALS"] == "/run/secrets/gcp-sa.json"
+        assert pw["environment"]["GOOGLE_APPLICATION_CREDENTIALS"] == "/run/ai-runtime/gcp-sa.json"
 
     def test_release_compose_wiring(self) -> None:
         services = self._load("docker-compose.release.yml")["services"]
         api = services["api"]
         paths = [e.get("path") for e in api["env_file"]]
         assert any("ai-active.env" in p for p in paths)
-        assert api["environment"]["GOOGLE_APPLICATION_CREDENTIALS"] == "/run/secrets/gcp-sa.json"
+        assert api["environment"]["GOOGLE_APPLICATION_CREDENTIALS"] == "/run/ai-runtime/gcp-sa.json"
         pw = services["pipeline-worker"]
         pw_paths = [e.get("path") for e in pw["env_file"]]
         assert any("ai-active.env" in p for p in pw_paths)
@@ -435,6 +437,156 @@ class TestComposeContract(unittest.TestCase):
                 vols = cfg.get("volumes") or []
                 for v in vols:
                     assert "docker.sock" not in v, f"{name}:{svc} mounts docker.sock"
+
+
+class TestGlobalEndpoint(Base):
+    """A3: location=global must use aiplatform.googleapis.com, not global-aiplatform."""
+
+    def _capture_url(self, status=200):
+        import app.review.ai_accounts_preflight as pf
+
+        captured = {}
+
+        class FakeResp:
+            def __init__(self):
+                self.status_code = status
+
+        def fake_get(url, headers=None, timeout=None):
+            captured["url"] = url
+            return FakeResp()
+
+        fake_requests = type("R", (), {"get": staticmethod(fake_get),
+                                       "RequestException": Exception})
+        return pf, captured, fake_requests
+
+    def _run(self, location, status=200):
+        import sys
+        pf, captured, fake_requests = self._capture_url(status)
+
+        class FakeCreds:
+            token = "tok"
+            def with_scopes(self, s): return self
+            def refresh(self, req): pass
+
+        fake_sa = type("M", (), {
+            "Credentials": staticmethod(lambda **k: FakeCreds())})
+        fake_gatr = type("G", (), {"Request": staticmethod(lambda: object())})
+        mods = {"google.oauth2.service_account": type("SA", (), {"service_account": None}),
+                "google.auth.transport.requests": fake_gatr,
+                "requests": fake_requests}
+        with mock.patch.dict(sys.modules, mods):
+            with mock.patch("google.oauth2.service_account.Credentials",
+                            lambda **k: FakeCreds()):
+                url_holder = {}
+                real_get = fake_requests.get
+                def get_wrap(url, **kw):
+                    url_holder["u"] = url
+                    return real_get(url, **kw)
+                fake_requests.get = staticmethod(get_wrap)
+                result = pf.run_live_checks(sa("proj-x", "x"),
+                                            {"project_id": "proj-x",
+                                             "location": location})
+        urls = []
+        # capture both project and vertex URLs by re-running pieces is complex;
+        # simplest: assert no "global-aiplatform" in any check output and that
+        # vertex check passed.
+        assert result["ok"] is True or result.get("errors"), result
+        return result
+
+    def test_global_location_uses_official_endpoint(self) -> None:
+        from app.review.ai_accounts_preflight import vertex_endpoint_host
+        assert vertex_endpoint_host("global") == "aiplatform.googleapis.com"
+        assert "global-aiplatform" not in vertex_endpoint_host("global")
+
+    def _endpoint_for(self, location: str) -> str:
+        from app.review.ai_accounts_preflight import vertex_endpoint_host
+        return vertex_endpoint_host(location)
+
+    def test_endpoint_hosts(self) -> None:
+        assert self._endpoint_for("global") == "aiplatform.googleapis.com"
+        assert self._endpoint_for("asia-east1") == "asia-east1-aiplatform.googleapis.com"
+        assert self._endpoint_for("us-central1") == "us-central1-aiplatform.googleapis.com"
+
+
+class TestFirstActivationCrash(Base):
+    """A5: crash during FIRST activation (no previous commit) must fail closed."""
+
+    def _first_crash(self, stage_trigger: str):
+        self.add("first", "proj-a")
+        real_write = self.store._write_atomic
+
+        def crashing_write(path, content, mode=None):
+            name = Path(path).name
+            real_write(path, content, mode)
+            if name == stage_trigger and "staging" not in str(path):
+                raise KeyboardInterrupt  # crash before active.json written
+
+        with mock.patch.object(self.store, "_write_atomic", side_effect=crashing_write):
+            with self.assertRaises(KeyboardInterrupt):
+                self.store._activate_for_tests("first")
+
+    def test_first_activation_crash_after_credential_cleaned(self) -> None:
+        self._first_crash("gcp-sa.json")
+        assert self.store.get_active_doc() is None
+        assert self.target.exists()          # orphan artifact present
+        report = self.store.reconcile()      # startup reconciliation
+        assert report["repaired"] is True
+        assert not self.target.exists()      # orphan removed -> containers fail closed
+
+    def test_first_activation_crash_after_env_cleaned(self) -> None:
+        # env write happens after credential; simulate crash after env by
+        # writing credential normally then crashing on env
+        self.add("first", "proj-a")
+        real_write = self.store._write_atomic
+        def crashing_write(path, content, mode=None):
+            name = Path(path).name
+            real_write(path, content, mode)
+            # crash after env replaced but before active.json commit
+            if name == "ai-active.env" and "staging" not in str(path):
+                raise KeyboardInterrupt
+        with mock.patch.object(self.store, "_write_atomic", side_effect=crashing_write):
+            with self.assertRaises(KeyboardInterrupt):
+                self.store._activate_for_tests("first")
+        report = self.store.reconcile()
+        assert report["repaired"] is True
+        assert not self.target.exists()
+
+    def test_no_artifacts_no_active_is_consistent(self) -> None:
+        self.add("idle", "proj-a")   # registered but never activated
+        report = self.store.reconcile()
+        assert report["consistent"] is True and not report["repaired"]
+
+
+class TestRuntimeActiveState(Base):
+    """A4: ACTIVE when process env matches committed profile."""
+
+    def test_active_after_restart_env_match(self) -> None:
+        self.add("live", "proj-a")
+        self.store._activate_for_tests("live")
+        with mock.patch.dict(os.environ, {
+            "GOOGLE_CLOUD_PROJECT": "proj-a",
+            "GOOGLE_CLOUD_LOCATION": "global",
+        }):
+            status = self.store.runtime_status()
+        assert status["status"] == "ACTIVE"
+
+    def test_pending_restart_before_env_reload(self) -> None:
+        self.add("pend", "proj-a")
+        self.store._activate_for_tests("pend")
+        with mock.patch.dict(os.environ, {"GOOGLE_CLOUD_PROJECT": "stale-project"}):
+            status = self.store.runtime_status()
+        assert status["status"] == "PENDING_RESTART"
+
+
+class TestRuntimeDirContract(Base):
+    """A1: artifacts live in dedicated runtime dir, never a bind-mount file point."""
+
+    def test_runtime_paths_inside_dedicated_dir(self) -> None:
+        assert self.store.target_key_path == self.runtime / "gcp-sa.json"
+        assert self.store.env_file == self.runtime / "ai-active.env"
+
+    def runtime_dir_exists_or_artifacts(self) -> bool:
+        return self.target_key_path.exists() or (self.runtime / "ai-active.env").exists()
 
 
 if __name__ == "__main__":

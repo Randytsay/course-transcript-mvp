@@ -91,14 +91,21 @@ class AIAccountStore:
     def __init__(
         self,
         accounts_dir: Path,
-        target_key_path: Path,
+        runtime_dir: Path,
         *,
         preflight: Callable[..., dict[str, Any]] | None = None,
         audit_callback: Callable[..., None] | None = None,
     ):
+        # accounts_dir: source of truth (profiles / active pointer / staging).
+        #   API container: RW. pipeline-worker: never mounted.
+        # runtime_dir: artifacts the containers actually consume.
+        #   Dedicated bind-mount directory — NEVER os.replace() a single-file
+        #   bind mount point; replace files INSIDE this directory instead.
+        #   api: RW, pipeline-worker: RO.
         self.accounts_dir = Path(accounts_dir)
-        self.target_key_path = Path(target_key_path)
-        self.env_file = self.accounts_dir / "ai-active.env"
+        self.runtime_dir = Path(runtime_dir)
+        self.target_key_path = self.runtime_dir / "gcp-sa.json"
+        self.env_file = self.runtime_dir / "ai-active.env"
         self.active_file = self.accounts_dir / "active.json"
         self.staging_dir = self.accounts_dir / "staging"
         self._preflight = preflight
@@ -443,7 +450,27 @@ class AIAccountStore:
         report: dict[str, Any] = {"consistent": True, "repaired": False}
         doc = self.get_active_doc()
         if doc is None:
-            # No activation ever committed: leftover artifacts are stale but harmless.
+            # A5: no commit pointer, but runtime artifacts present means a FIRST
+            # activation crashed before committing. Containers must never use
+            # credentials that no committed profile backs — fail closed.
+            orphans = []
+            if self.target_key_path.exists():
+                orphans.append("runtime credential")
+            if self.env_file.exists():
+                orphans.append("runtime env")
+            if orphans:
+                # Safe recovery: remove uncommitted runtime artifacts so
+                # containers fail closed instead of using an unbacked credential.
+                with contextlib_suppress():
+                    self.target_key_path.unlink(missing_ok=True)
+                with contextlib_suppress():
+                    self.env_file.unlink(missing_ok=True)
+                self._audit(actor="system", action="ai_state_orphan_cleaned",
+                            entity_id="(none)", payload={"removed": orphans})
+                report.update({"consistent": False, "repaired": True,
+                               "status": "REPAIRED",
+                               "problems": [f"未 committed 的 runtime artifacts 已清除: "
+                                            f"{', '.join(orphans)}"]})
             return report
         name = doc.get("name")
         try:
@@ -514,9 +541,12 @@ class AIAccountStore:
             for line in env_expected.splitlines() if not line.startswith("#")
         )
         if cred_match and env_match:
-            base["status"] = "PENDING_RESTART"  # files ok; containers unverified
-            # Container-level confirmation requires reading inside api itself;
-            # the /health endpoint reports this via verify_runtime below.
+            # A4: files match; if THIS process's env also matches (post-restart),
+            # we are genuinely ACTIVE, not pending.
+            verification = self.verify_runtime()
+            base["status"] = ("ACTIVE" if verification.get("verified")
+                              else "PENDING_RESTART")
+            base["verification"] = verification
         else:
             base.update({"status": "PENDING_RESTART",
                          "file_mismatch": {"credential": cred_match, "env": env_match}})
