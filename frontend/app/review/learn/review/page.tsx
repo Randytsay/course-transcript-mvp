@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import styles from "../learning.module.css";
+import ReviewNav from "../../review-nav";
 
 type ReviewItem={youtube_video_id:string;title:string;duration_ms:number|null;last_playback_ms:number|null;next_due_at:string;stage:number;completed_cycles:number;artifact_id:string|null};
 function stamp(ms:number|null|undefined){const total=Math.max(0,Math.floor((ms||0)/1000));const h=Math.floor(total/3600);const m=Math.floor((total%3600)/60);const s=total%60;return h?`${h}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`:`${m}:${String(s).padStart(2,"0")}`}
@@ -11,7 +12,7 @@ export default function ReviewCenterPage(){
  const load=useCallback(async()=>{setLoading(true);setError(null);try{const r=await fetch("/api/v1/review/learning/review-queue",{cache:"no-store",credentials:"same-origin"});if(r.status===401){window.location.assign("/review");return}if(!r.ok)throw new Error("目前無法讀取複習清單");const body=await r.json();setItems(body.items||[])}catch(e){setError(e instanceof Error?e.message:"載入失敗")}finally{setLoading(false)}},[]);
  useEffect(()=>{void load()},[load]);
  return <main className={styles.page}><div className={styles.shell}>
-  <header className={styles.topbar}><a className={styles.brand} href="/review/learn"><span className={styles.brandMark}>學</span><span className={styles.brandText}><strong>佛學共學平台</strong><span>複習中心</span></span></a><nav className={styles.nav} aria-label="學習功能"><a href="/review/learn">學習中心</a><a href="/review/videos">字幕共修</a><a aria-current="page" href="/review/learn/review">複習中心</a><a href="/review/learn/search">知識搜尋</a><a href="/review/help">使用說明</a></nav></header>
+  <header className={styles.topbar}><a className={styles.brand} href="/review/learn"><span className={styles.brandMark}>學</span><span className={styles.brandText}><strong>佛學共學平台</strong><span>複習中心</span></span></a><ReviewNav active="review" /></header>
   <section className={styles.heroMain}><p className={styles.eyebrow}>我的複習中心</p><h1>不是看完就算了，把重要內容在對的時間重新想起來。</h1><p>完成一堂課後，系統依 1、3、7、14、30 天節奏提醒複習。每次複習可以用 3 分鐘重點、10 分鐘摘要、Flashcards 或自我測驗，不會影響你的字幕共修進度。</p></section>
   <div className={styles.sectionHeader}><div><h2>今天到期</h2><p>{items?`共有 ${items.length} 堂等待複習。`:"正在整理…"}</p></div></div>
   {error?<div className={styles.error} role="alert"><p>{error}</p><button onClick={()=>void load()} type="button">重新載入</button></div>:loading&&items===null?<p className={styles.status}>正在整理複習清單…</p>:items?.length?<section className={styles.lessonGrid}>{items.map(item=><article className={styles.lessonCard} key={item.youtube_video_id}>

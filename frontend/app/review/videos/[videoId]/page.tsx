@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./video.module.css";
+import ReviewNav from "../../review-nav";
 
 type SuggestionStatus = "pending" | "approved" | "rejected" | "withdrawn" | null;
 
@@ -713,7 +714,10 @@ export default function ReviewVideoPage() {
   return (
     <main className={styles.page}>
       <header className={styles.topbar}>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",width:"100%"}}>
         <Link href="/review/videos" className={styles.backLink}>← 影片清單</Link>
+        <ReviewNav active="videos" />
+        </div>
         <div className={styles.titleBlock}>
           <p>佛學字幕共修</p>
           <h1>{detail.video.title}</h1>

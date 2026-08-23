@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import styles from "./review.module.css";
+import ReviewNav from "./review-nav";
 
 type ProviderName = "google" | "line";
 type ProviderStatus = { configured: boolean };
@@ -27,6 +28,7 @@ export default function ReviewPortalPage(){
  async function logout(){if(!me?.csrf_token)return;setBusy("logout");setMessage(null);try{const r=await fetch("/api/v1/review/auth/logout",{method:"POST",credentials:"same-origin",headers:{"X-Review-CSRF":me.csrf_token}});if(!r.ok){const body=await r.json().catch(()=>({}));throw new Error(body.detail||"登出失敗")}setMe(null)}catch(e){setMessage(e instanceof Error?e.message:"登出失敗")}finally{setBusy(null)}}
  const linkedProviders=new Set(me?.identities.map(identity=>identity.provider)??[]);
  return <main className={styles.page}><section className={styles.shell} aria-labelledby="review-title">
+  <ReviewNav active="account" mode={me ? "full" : "minimal"} />
   <div className={styles.brandMark} aria-hidden="true">慈</div><p className={styles.eyebrow}>慈聖佛堂・佛學共學平台</p><h1 id="review-title">歡迎加入慈聖大成佛經校稿志工行列</h1>
   <p className={styles.lead}>一起讓佛法影片的字幕更準確、更好讀。登入後即可參與字幕校訂，也能保存自己的學習進度、筆記與複習紀錄。</p>
   <section className={styles.howItWorks} aria-label="使用方式"><div><b>1</b><strong>接著上次學習</strong><span>影片會記住你的觀看位置</span></div><div><b>2</b><strong>用重點快速複習</strong><span>AI 筆記可回到影片時間核對</span></div><div><b>3</b><strong>一起把字幕校準</strong><span>發現錯字時再送出修改建議</span></div></section>

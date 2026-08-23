@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import styles from "../learning.module.css";
+import ReviewNav from "../../review-nav";
 
 type Me={csrf_token:string};
 type Note={id:string;youtube_video_id:string;video_title:string;title:string|null;body:string;start_ms:number|null;created_at:string;updated_at:string};
@@ -23,7 +24,7 @@ export default function PersonalLearningNotesPage(){
  async function deleteNote(note:Note){if(!window.confirm(`確定刪除這則筆記${note.title?`「${note.title}」`:""}？刪除後無法復原。`))return;setBusy(note.id);try{const r=await fetch(`/api/v1/review/learning/notes/${note.id}`,{method:"DELETE",credentials:"same-origin",headers:headers()});const body=await r.json().catch(()=>({}));if(!r.ok)throw new Error(body.detail||"筆記刪除失敗");setMessage("筆記已刪除");await load()}catch(e){setError(e instanceof Error?e.message:"筆記刪除失敗")}finally{setBusy(null)}}
  async function deleteBookmark(item:Bookmark){if(!window.confirm("確定移除這個書籤？"))return;setBusy(item.id);try{const r=await fetch(`/api/v1/review/learning/bookmarks/${item.id}`,{method:"DELETE",credentials:"same-origin",headers:headers()});const body=await r.json().catch(()=>({}));if(!r.ok)throw new Error(body.detail||"書籤移除失敗");setMessage("書籤已移除");await load()}catch(e){setError(e instanceof Error?e.message:"書籤移除失敗")}finally{setBusy(null)}}
  return <main className={styles.page}><div className={styles.shell}>
-  <header className={styles.topbar}><a className={styles.brand} href="/review/learn"><span className={styles.brandMark}>學</span><span className={styles.brandText}><strong>佛學共學平台</strong><span>我的筆記與書籤</span></span></a><nav className={styles.nav} aria-label="學習功能"><a href="/review/learn">學習中心</a><a aria-current="page" href="/review/learn/notes">我的筆記</a><a href="/review/learn/review">複習中心</a><a href="/review/learn/search">知識搜尋</a><a href="/review/videos">字幕共修</a><a href="/review/help">使用說明</a></nav></header>
+  <header className={styles.topbar}><a className={styles.brand} href="/review/learn"><span className={styles.brandMark}>學</span><span className={styles.brandText}><strong>佛學共學平台</strong><span>我的筆記與書籤</span></span></a><ReviewNav active="learn" /></header>
   <section className={styles.heroMain}><p className={styles.eyebrow}>我的學習資料</p><h1>自己的理解、疑問與重要時間點，都集中在這裡。</h1><p>個人筆記和 AI 筆記分開保存。你可以搜尋、修改自己的筆記，或點時間直接回到當時的影片段落。</p></section>
   {message?<p aria-live="polite" className={styles.status} role="status">{message}</p>:null}{error?<div className={styles.error} role="alert">{error}<button onClick={()=>void load()} type="button">重新整理</button></div>:null}
   <div className={styles.sectionHeader}><div><h2>我的資料</h2><p>筆記 {notes.length} 則・書籤 {bookmarks.length} 個</p></div></div>
