@@ -1,0 +1,396 @@
+.page {
+  min-height: 100vh;
+  padding: 28px 18px 60px;
+  background: linear-gradient(180deg, #f4f1e8 0%, #fbfaf6 100%);
+  color: #2a2925;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.shell {
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 22px;
+}
+
+.eyebrow {
+  margin: 0 0 6px;
+  color: #7d5b24;
+  font-weight: 800;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 30px;
+}
+
+.header p {
+  max-width: 620px;
+  color: #56645d;
+}
+
+.addButton,
+.switchButton,
+.deleteButton {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 12px;
+  padding: 9px 16px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.addButton {
+  background: #315c4b;
+  color: #fff;
+  border: 0;
+}
+
+.switchButton {
+  background: #315c4b;
+  color: #fff;
+  border: 1px solid #315c4b;
+}
+
+.deleteButton {
+  background: #fff;
+  color: #963f36;
+  border: 1px solid #ddb3ad;
+}
+
+.statusRow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  background: #fff;
+  border: 1px solid #e3e7e1;
+  border-radius: 18px;
+  padding: 18px;
+  margin-bottom: 18px;
+  box-shadow: 0 10px 30px rgba(50, 70, 60, 0.06);
+}
+
+.statusRow > div {
+  display: grid;
+  gap: 4px;
+}
+
+.statusRow span {
+  font-size: 13px;
+  color: #68766e;
+}
+
+.okText { color: #2f6f39; }
+.badText { color: #963f36; }
+
+.formCard {
+  display: grid;
+  gap: 14px;
+  background: #fff;
+  border: 1px solid #dde4dd;
+  border-radius: 18px;
+  padding: 20px;
+  margin-bottom: 18px;
+}
+
+.formCard label {
+  display: grid;
+  gap: 6px;
+  font-weight: 700;
+  font-size: 14px;
+}
+
+.formCard input[type="text"],
+.formCard input:not([type]),
+.formCard textarea {
+  width: 100%;
+  border: 1px solid #cfd9d1;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font: inherit;
+}
+
+.formCard button {
+  justify-self: start;
+  min-height: 44px;
+  background: #315c4b;
+  color: #fff;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 20px;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.hint {
+  font-size: 13px;
+  color: #68766e;
+}
+
+.accountList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.accountCard {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: #fff;
+  border: 1px solid #e3e7e1;
+  border-radius: 16px;
+  padding: 16px 18px;
+}
+
+.activeCard {
+  border-color: #91ad9e;
+  background: #f4f8f5;
+}
+
+.accountMain {
+  display: grid;
+  gap: 3px;
+  overflow-wrap: anywhere;
+}
+
+.accountMain strong {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 17px;
+}
+
+.activeBadge {
+  font-size: 12px;
+  background: #315c4b;
+  color: #fff;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-weight: 800;
+}
+
+.accountMain small {
+  color: #526058;
+}
+
+.accountMain span {
+  font-size: 13px;
+  color: #7d887f;
+}
+
+.accountActions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stateCard,
+.emptyState {
+  padding: 24px;
+  text-align: center;
+  color: #526158;
+  border: 1px dashed #cbd5cd;
+  border-radius: 16px;
+  background: #fbfcfb;
+}
+
+.successCard {
+  padding: 13px 16px;
+  border-radius: 14px;
+  background: #edf7ee;
+  border: 1px solid #bcd9bf;
+  color: #245c2c;
+  margin-bottom: 14px;
+}
+
+.errorCard {
+  padding: 13px 16px;
+  border-radius: 14px;
+  background: #fff1f0;
+  border: 1px solid #edc9c6;
+  color: #8f332d;
+  margin-bottom: 14px;
+}
+
+.footerNote {
+  margin-top: 20px;
+  text-align: center;
+  font-size: 13px;
+  color: #68766e;
+}
+
+.linkButton {
+  background: none;
+  border: none;
+  color: #2f6f39;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+  padding: 0;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
+.guideCard {
+  background: #fffdf4;
+  border: 1px solid #e8dcb5;
+  border-radius: 18px;
+  padding: 22px;
+  margin-bottom: 18px;
+}
+
+.guideCard h2 {
+  margin: 0 0 14px;
+  font-size: 20px;
+  color: #6b531f;
+}
+
+.guideSteps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: step;
+  display: grid;
+  gap: 14px;
+}
+
+.guideSteps li {
+  counter-increment: step;
+  position: relative;
+  padding-left: 46px;
+  min-height: 34px;
+}
+
+.guideSteps li::before {
+  content: counter(step);
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #315c4b;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 15px;
+}
+
+.guideSteps strong {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 16px;
+}
+
+.guideSteps span {
+  color: #55645c;
+  font-size: 15px;
+}
+
+.headerActions {
+  display: flex;
+  gap: 10px;
+}
+
+.rollbackButton {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 12px;
+  padding: 9px 16px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  background: #fff;
+  color: #7d5b24;
+  border: 1px solid #d9c48f;
+}
+
+.billingNote {
+  background: #eef4f8;
+  border: 1px solid #c4d7e3;
+  border-radius: 14px;
+  padding: 12px 16px;
+  margin-bottom: 18px;
+  font-size: 14px;
+  color: #2b5468;
+}
+
+.preflightFail {
+  border-color: #edc9c6;
+}
+
+.switchDiff {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.switchDiff > div {
+  display: grid;
+  gap: 2px;
+  background: #f6f8f6;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.switchDiff span {
+  font-size: 12px;
+  color: #68766e;
+}
+
+.warnBox {
+  background: #fff8e6;
+  border: 1px solid #ecd9a0;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  color: #7a5c13;
+  font-size: 14px;
+}
+
+.page button:focus-visible,
+.page a:focus-visible,
+.page input:focus-visible,
+.page textarea:focus-visible {
+  outline: 3px solid rgba(49, 92, 75, 0.35);
+  outline-offset: 2px;
+}
+
+.page button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+@media (max-width: 720px) {
+  .statusRow {
+    grid-template-columns: 1fr;
+  }
+
+  .header h1 {
+    font-size: 25px;
+  }
+}
