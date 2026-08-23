@@ -4,7 +4,11 @@ import "./accessibility.css";
 
 export const metadata: Metadata = {
   title: "Course Transcript",
-  description: "AI-assisted course transcription workspace"
+  description: "AI-assisted course transcription workspace",
+  icons: {
+    icon: [{ url: "/images/cisheng-lotus-seal.png", type: "image/png", sizes: "512x512" }],
+    apple: [{ url: "/images/cisheng-lotus-seal.png", type: "image/png", sizes: "512x512" }]
+  }
 };
 
 const fontPreferenceScript = `

@@ -11,6 +11,8 @@ services:
     env_file:
       - path: ${COURSE_TRANSCRIPT_ENV_FILE:?Set COURSE_TRANSCRIPT_ENV_FILE to the protected production env file}
         required: true
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
     volumes:
       - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro
       - ${COURSE_TRANSCRIPT_LOGS_HOST_PATH:?Set COURSE_TRANSCRIPT_LOGS_HOST_PATH}:/app/logs
@@ -128,6 +130,8 @@ services:
         RCLONE_RELEASE: ${RCLONE_RELEASE:-1.74.0}
         VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-pipeline-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    environment:
+      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
       - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro

@@ -8,10 +8,10 @@ services:
       - path: .env
         required: false
     environment:
-      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
+      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
       CHIRP_DYNAMIC_BATCHING: ${CHIRP_DYNAMIC_BATCHING:-true}
     volumes:
-      - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
+      - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro
       - ./logs:/app/logs
       - ./tmp:/app/tmp
       - ./data:/app/data
@@ -236,12 +236,12 @@ services:
     restart: unless-stopped
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
-      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
+      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
       GCS_BUCKET: ${GCS_BUCKET:-course-transcript-mvp}
       COURSE_TRANSCRIPT_RETENTION_POLL_SECONDS: ${COURSE_TRANSCRIPT_RETENTION_POLL_SECONDS:-86400}
     volumes:
       - ./data:/app/data
-      - /opt/course-transcript/secrets/gcp-sa.json:/run/secrets/gcp-sa.json:ro
+      - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro
     # Always dry-run: deletion still requires an explicit, reviewed --apply.
     command: ["sh", "-c", "while true; do python -m app.operations.retention_cleanup --data-dir /app/data --output /app/data/retention-report.json || true; sleep $${COURSE_TRANSCRIPT_RETENTION_POLL_SECONDS}; done"]
 
