@@ -12,6 +12,7 @@ from app.providers.correction.registry import (
     AIProviderProfileStore,
     LEGACY_MINIMAX_PROFILE_ID,
 )
+from app.providers.correction_routing import M3QuotaState
 
 
 class TestMiniMaxEndpointSelection(unittest.TestCase):
@@ -87,20 +88,32 @@ class TestLegacyMiniMaxTokenPlanProfile(unittest.TestCase):
 
 
 class TestProductionM3RoutingFields(unittest.TestCase):
-    def _fields(self, *, enabled: str, policy: str, correction_enabled: bool = True):
-        with patch.dict(os.environ, {"MINIMAX_M3_ENABLED": enabled}, clear=False):
-            from app.api_ext import _production_correction_router_fields
+    def _fields(
+        self,
+        *,
+        enabled: str,
+        policy: str,
+        quota_state: M3QuotaState = M3QuotaState.AVAILABLE,
+        correction_enabled: bool = True,
+    ):
+        import app.api_ext as api_ext
 
-            return _production_correction_router_fields(
-                policy=policy,
-                correction_enabled=correction_enabled,
-            )
+        with patch.dict(os.environ, {"MINIMAX_M3_ENABLED": enabled}, clear=False):
+            with patch.object(api_ext, "_m3_quota_state", return_value=quota_state):
+                return api_ext._production_correction_router_fields(
+                    policy=policy,
+                    correction_enabled=correction_enabled,
+                )
 
     def test_disabled_m3_first_remains_legacy_fail_closed(self):
         self.assertEqual(self._fields(enabled="false", policy="M3_FIRST"), {})
 
-    def test_enabled_m3_first_pins_windowed_router(self):
-        fields = self._fields(enabled="true", policy="M3_FIRST")
+    def test_enabled_available_m3_first_pins_windowed_router(self):
+        fields = self._fields(
+            enabled="true",
+            policy="M3_FIRST",
+            quota_state=M3QuotaState.AVAILABLE,
+        )
         self.assertEqual(fields["correction_provider"], "minimax")
         self.assertEqual(
             fields["correction_provider_profile_id"],
@@ -108,6 +121,26 @@ class TestProductionM3RoutingFields(unittest.TestCase):
         )
         self.assertEqual(fields["correction_execution_mode"], "REALTIME")
         self.assertEqual(fields["correction_fallback_policy"], "RAW_CHIRP_FALLBACK")
+
+    def test_unknown_quota_keeps_gemini_safe_path(self):
+        self.assertEqual(
+            self._fields(
+                enabled="true",
+                policy="M3_FIRST",
+                quota_state=M3QuotaState.UNKNOWN,
+            ),
+            {},
+        )
+
+    def test_unavailable_quota_keeps_gemini_safe_path(self):
+        self.assertEqual(
+            self._fields(
+                enabled="true",
+                policy="M3_FIRST",
+                quota_state=M3QuotaState.UNAVAILABLE,
+            ),
+            {},
+        )
 
     def test_gemini_first_never_pins_minimax_router(self):
         self.assertEqual(self._fields(enabled="true", policy="GEMINI_FIRST"), {})
@@ -117,6 +150,21 @@ class TestProductionM3RoutingFields(unittest.TestCase):
             self._fields(enabled="true", policy="M3_FIRST", correction_enabled=False),
             {},
         )
+
+    def test_quota_check_disabled_is_unknown_without_network(self):
+        import app.api_ext as api_ext
+
+        with patch.dict(
+            os.environ,
+            {
+                "MINIMAX_M3_ENABLED": "true",
+                "MINIMAX_M3_QUOTA_CHECK_ENABLED": "false",
+            },
+            clear=False,
+        ):
+            with patch.object(api_ext, "MiniMaxQuotaClient") as client:
+                self.assertEqual(api_ext._m3_quota_state(), M3QuotaState.UNKNOWN)
+                client.assert_not_called()
 
 
 if __name__ == "__main__":
