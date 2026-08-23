@@ -147,7 +147,11 @@ class TestCorrectionTimeQuota(unittest.TestCase):
             with patch.object(policy, "MiniMaxQuotaClient") as quota_cls:
                 quota_cls.return_value.get_quota.return_value = expected
                 snapshot = policy._quota_snapshot(M3_FIRST)
-        self.assertIs(snapshot, expected)
+        self.assertEqual(snapshot.state.value, "available")
+        self.assertEqual(snapshot.checked_at, expected.checked_at)
+        self.assertEqual(snapshot.source_pool, expected.source_pool)
+        self.assertEqual(snapshot.interval_remaining, expected.interval_remaining)
+        self.assertEqual(snapshot.weekly_remaining, expected.weekly_remaining)
         quota_cls.return_value.get_quota.assert_called_once_with(force_refresh=True)
 
     def test_quota_check_error_becomes_unknown_without_leaking_error(self):
@@ -214,6 +218,7 @@ class TestCorrectionTimeDispatch(unittest.TestCase):
             with patch.object(policy, "_quota_snapshot", return_value=quota), \
                  patch.object(policy, "_job_context", return_value=(self._ctx(), Path("/tmp/job"))), \
                  patch.object(policy, "_write_route_evidence"), \
+                 patch.object(policy, "_finalize_route_evidence"), \
                  patch.object(bridge, "run_module", return_value=result) as run_module, \
                  patch.object(bridge, "_write_corrected_outputs") as writer, \
                  patch.object(legacy, "main", return_value=0) as legacy_main:
@@ -246,6 +251,7 @@ class TestCorrectionTimeDispatch(unittest.TestCase):
             with patch.object(policy, "_quota_snapshot", return_value=quota), \
                  patch.object(policy, "_job_context", return_value=(self._ctx(), Path("/tmp/job"))), \
                  patch.object(policy, "_write_route_evidence"), \
+                 patch.object(policy, "_finalize_route_evidence"), \
                  patch.object(bridge, "run_module") as run_module, \
                  patch.object(legacy, "main", return_value=0) as legacy_main:
                 rc = policy.main()
@@ -270,6 +276,7 @@ class TestCorrectionTimeDispatch(unittest.TestCase):
             with patch.object(policy, "_quota_snapshot", return_value=quota), \
                  patch.object(policy, "_job_context", return_value=(self._ctx(), Path("/tmp/job"))), \
                  patch.object(policy, "_write_route_evidence"), \
+                 patch.object(policy, "_finalize_route_evidence"), \
                  patch.object(bridge, "run_module") as run_module, \
                  patch.object(legacy, "main", return_value=0) as legacy_main:
                 rc = policy.main()
@@ -294,6 +301,7 @@ class TestCorrectionTimeDispatch(unittest.TestCase):
             with patch.object(policy, "_quota_snapshot", return_value=quota), \
                  patch.object(policy, "_job_context", return_value=(self._ctx(), Path("/tmp/job"))), \
                  patch.object(policy, "_write_route_evidence"), \
+                 patch.object(policy, "_finalize_route_evidence"), \
                  patch.object(bridge, "run_module") as run_module, \
                  patch.object(legacy, "main", return_value=0) as legacy_main:
                 rc = policy.main()
