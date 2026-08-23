@@ -1,6 +1,6 @@
 """Focused tests for the redesigned MiniMax M3 realtime correction path.
 
-All provider calls are mocked.  These tests verify the behavior that replaces
+All provider calls are mocked. These tests verify the behavior that replaces
 PR #50's one-way course-level fallback without making any paid request.
 """
 from __future__ import annotations
@@ -62,6 +62,7 @@ class TestMiniMaxProviderRequest(unittest.TestCase):
             }
 
         provider = MiniMaxCorrectionProvider(api_key="fake", http=http)
+        assert provider.supports_window_fallback is True
         assert provider.realtime_generate("x") == "[]"
         request = captured[0][2]
         assert request["thinking"] == {"type": "disabled"}
@@ -123,6 +124,7 @@ class TestMiniMaxWindowFallback(unittest.TestCase):
         calls = 0
 
         class Client:
+            supports_window_fallback = True
             last_response_meta = {"finish_reason": "stop", "usage": {}}
 
             def realtime_generate(self, prompt):
@@ -144,8 +146,6 @@ class TestMiniMaxWindowFallback(unittest.TestCase):
         assert len(result["fallback_segment_ids"]) == 24
         assert result["fallback_segment_ids"][0] == "s024"
         assert result["fallback_segment_ids"][-1] == "s047"
-        # First and third windows were corrected; only the failed middle window
-        # remains exact Chirp text.
         by_id = {item["segment_id"]: item for item in result["corrections"]}
         assert by_id["s000"]["corrected_text"].endswith("校")
         assert by_id["s024"]["corrected_text"] == source[24]["text"]
@@ -155,6 +155,7 @@ class TestMiniMaxWindowFallback(unittest.TestCase):
         calls = 0
 
         class Client:
+            supports_window_fallback = True
             last_response_meta = {"finish_reason": "stop", "usage": {}}
 
             def realtime_generate(self, prompt):
@@ -176,6 +177,8 @@ class TestMiniMaxWindowFallback(unittest.TestCase):
         calls = 0
 
         class Client:
+            supports_window_fallback = True
+
             def realtime_generate(self, prompt):
                 nonlocal calls
                 calls += 1
@@ -184,11 +187,9 @@ class TestMiniMaxWindowFallback(unittest.TestCase):
         orch = CorrectionOrchestrator(
             run_store=None, client_factory=lambda provider, profile: Client()
         )
-        source = segments(96)  # four 24-segment windows
+        source = segments(96)
         result = orch.correct_realtime(spec(), source, [])
 
-        # 3 failed windows * 2 bounded attempts. The fourth is not sent after
-        # the circuit opens.
         assert calls == 6
         assert result["provider_circuit_opened"] is True
         assert len(result["fallback_segment_ids"]) == 96
@@ -198,6 +199,8 @@ class TestMiniMaxWindowFallback(unittest.TestCase):
         calls = 0
 
         class Client:
+            supports_window_fallback = True
+
             def realtime_generate(self, prompt):
                 nonlocal calls
                 calls += 1
