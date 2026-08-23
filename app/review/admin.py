@@ -492,3 +492,101 @@ def publish_version(
     except YouTubePublishError as exc:
         store.mark_publish_failed(version_id=version_id, actor=actor, error=str(exc))
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+# ---------------------------------------------------------------------------
+# AI account (GCP service account) management — owner only
+# ---------------------------------------------------------------------------
+
+from .ai_accounts_store import AIAccountError, AIAccountStore  # noqa: E402
+
+AI_ACCOUNTS_DIR = Path(os.environ.get("AI_ACCOUNTS_DIR", "/opt/course-transcript/secrets/ai-accounts"))
+AI_ACTIVE_FILE = AI_ACCOUNTS_DIR / ".active"
+AI_TARGET_KEY_PATH = Path(
+    os.environ.get("GCP_CREDENTIALS_TARGET_PATH", "/opt/course-transcript/secrets/gcp-sa.json")
+)
+
+
+class AIAccountUploadRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=64)
+    sa_json: dict[str, Any]
+
+
+class AIAccountActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=64)
+    confirm: bool = False
+
+
+def _audit_ai_account(action: str, entity_id: str, payload: dict[str, Any], actor: str) -> None:
+    """Write to the same review_admin_audit table as other admin actions."""
+    from datetime import UTC, datetime
+
+    with _store().transaction() as connection:
+        connection.execute(
+            """
+            INSERT INTO review_admin_audit(
+                actor, action, entity_type, entity_id, payload_json, created_at
+            ) VALUES (?, ?, 'ai_account', ?, ?, ?)
+            """,
+            (
+                actor,
+                action,
+                entity_id,
+                json.dumps(payload or {}, ensure_ascii=False, sort_keys=True),
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+
+
+@router.get("/ai-accounts")
+def ai_accounts_list(request: Request) -> dict[str, Any]:
+    _admin_read_actor(request)
+    store = AIAccountStore(AI_ACCOUNTS_DIR, AI_ACTIVE_FILE, AI_TARGET_KEY_PATH)
+    return {
+        "accounts": store.list_accounts(),
+        "active": store.get_active(),
+        "verify": store.verify_active(),
+        "restart_required_hint": "切換後需重啟 api / pipeline-worker 容器才會載入新憑證",
+    }
+
+
+@router.post("/ai-accounts")
+def ai_accounts_add(payload: AIAccountUploadRequest, request: Request) -> dict[str, Any]:
+    actor = _admin_mutation_actor(request)
+    store = AIAccountStore(AI_ACCOUNTS_DIR, AI_ACTIVE_FILE, AI_TARGET_KEY_PATH)
+    try:
+        result = store.add_account(name=payload.name, sa_json=payload.sa_json, actor=actor)
+    except AIAccountError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _audit_ai_account("ai_account_added" if not result["replaced"] else "ai_account_replaced",
+                      result["name"], {"client_email": result["client_email"]}, actor)
+    return result
+
+
+@router.post("/ai-accounts/switch")
+def ai_accounts_switch(payload: AIAccountActionRequest, request: Request) -> dict[str, Any]:
+    _confirmed(payload.confirm)
+    actor = _admin_mutation_actor(request)
+    store = AIAccountStore(AI_ACCOUNTS_DIR, AI_ACTIVE_FILE, AI_TARGET_KEY_PATH)
+    try:
+        result = store.switch_active(name=payload.name, actor=actor)
+    except AIAccountError as exc:
+        raise HTTPException(status_code=409 if "找不到" not in str(exc) else 404, detail=str(exc)) from exc
+    _audit_ai_account("ai_account_switched", result["name"],
+                      {"previous": result["previous"], "client_email": result["client_email"]}, actor)
+    return result
+
+
+@router.post("/ai-accounts/delete")
+def ai_accounts_delete(payload: AIAccountActionRequest, request: Request) -> dict[str, Any]:
+    _confirmed(payload.confirm)
+    actor = _admin_mutation_actor(request)
+    store = AIAccountStore(AI_ACCOUNTS_DIR, AI_ACTIVE_FILE, AI_TARGET_KEY_PATH)
+    try:
+        result = store.delete_account(name=payload.name, actor=actor)
+    except AIAccountError as exc:
+        raise HTTPException(status_code=409 if "使用中" in str(exc) else 404, detail=str(exc)) from exc
+    _audit_ai_account("ai_account_deleted", payload.name, {}, actor)
+    return result
