@@ -314,6 +314,64 @@
   gap: 10px;
 }
 
+.rollbackButton {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  border-radius: 12px;
+  padding: 9px 16px;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  background: #fff;
+  color: #7d5b24;
+  border: 1px solid #d9c48f;
+}
+
+.billingNote {
+  background: #eef4f8;
+  border: 1px solid #c4d7e3;
+  border-radius: 14px;
+  padding: 12px 16px;
+  margin-bottom: 18px;
+  font-size: 14px;
+  color: #2b5468;
+}
+
+.preflightFail {
+  border-color: #edc9c6;
+}
+
+.switchDiff {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.switchDiff > div {
+  display: grid;
+  gap: 2px;
+  background: #f6f8f6;
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.switchDiff span {
+  font-size: 12px;
+  color: #68766e;
+}
+
+.warnBox {
+  background: #fff8e6;
+  border: 1px solid #ecd9a0;
+  border-radius: 12px;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  color: #7a5c13;
+  font-size: 14px;
+}
+
 .page button:focus-visible,
 .page a:focus-visible,
 .page input:focus-visible,
