@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.providers import correction_runtime_bridge as bridge
+from app.providers.correction.base import ProviderError
 
 
 class CorrectionWindowFallbackBridgeTests(unittest.TestCase):
@@ -75,6 +76,19 @@ class CorrectionWindowFallbackBridgeTests(unittest.TestCase):
             self.assertEqual(result["correction_fallback_segment_ids"], ["seg-0002"])
             self.assertEqual(result["correction_window_results"][0]["reason"], "invalid_request")
             self.assertFalse(result["correction_provider_circuit_opened"])
+
+    def test_auth_failure_is_not_disguised_as_raw_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            ctx = self._context(temporary)
+
+            def fail_auth(self, spec, segments, glossary):
+                raise ProviderError("auth", "invalid credential")
+
+            fake = type("Orchestrator", (), {"correct_realtime": fail_auth})()
+            with patch.object(bridge, "_build_orchestrator", return_value=fake):
+                with self.assertRaises(ProviderError) as cm:
+                    bridge.run_module(ctx=ctx)
+            self.assertEqual(cm.exception.kind, "auth")
 
     def test_writer_applies_routed_text_and_marks_only_failed_segment(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
