@@ -172,6 +172,11 @@ def run_module(*, ctx: dict[str, Any]) -> dict[str, Any]:
             "correction_provider_circuit_opened": bool(result.get("provider_circuit_opened", False)),
         }
     except ProviderError as exc:
+        # Credential/quota failures are provider-level configuration errors.
+        # They must fail closed instead of being disguised as a successful
+        # raw-Chirp fallback, otherwise operators could miss a broken account.
+        if exc.kind in {"auth", "quota"}:
+            raise
         if str(ctx.get("correction_fallback_policy") or "RAW_CHIRP_FALLBACK") == "RAW_CHIRP_FALLBACK":
             return {
                 **ctx,
