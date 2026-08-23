@@ -115,6 +115,30 @@ class BatchPreviewRequest(BaseModel):
     source_paths: list[str] = Field(min_length=1, max_length=100)
 
 
+class CorrectionSelection(BaseModel):
+    """Per-job AI text-correction selection. Validated server-side; capability
+    claims from the client are re-checked against provider metadata before any
+    paid call. Immutable once the job is approved."""
+    model_config = ConfigDict(extra="forbid")
+    provider: Literal["vertex", "openrouter", "minimax"] | None = None
+    provider_profile_id: str = Field(default="", max_length=48,
+                                     pattern=r"^[a-z0-9][a-z0-9-]{0,47}$")
+    model: str = Field(default="", max_length=128)
+    execution_mode: Literal["REALTIME", "BATCH"] = "REALTIME"
+    fallback_policy: Literal["RAW_CHIRP_FALLBACK"] = "RAW_CHIRP_FALLBACK"
+
+
+def _correction_fields(sel: CorrectionSelection | None) -> dict[str, Any]:
+    return {
+        "correction_provider": sel.provider or "" if sel else "",
+        "correction_provider_profile_id": sel.provider_profile_id if sel else "",
+        "correction_model": sel.model if sel else "",
+        "correction_execution_mode": sel.execution_mode if sel else "REALTIME",
+        "correction_fallback_policy": sel.fallback_policy if sel else "RAW_CHIRP_FALLBACK",
+        "pricing_snapshot": {},
+    }
+
+
 class CreateJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     preview_id: str = Field(pattern=r"^[a-f0-9]{32}$")
@@ -125,6 +149,7 @@ class CreateJobRequest(BaseModel):
     require_human_review: bool = True
     processing_strategy: Literal[DYNAMIC_BATCHING, STANDARD_BATCH] = DEFAULT_PROCESSING_STRATEGY
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
+    ai_correction: CorrectionSelection | None = None
 
 
 class CreateBatchRequest(BaseModel):
@@ -137,6 +162,7 @@ class CreateBatchRequest(BaseModel):
     require_human_review: bool = True
     processing_strategy: Literal[DYNAMIC_BATCHING, STANDARD_BATCH] = DEFAULT_PROCESSING_STRATEGY
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
+    ai_correction: CorrectionSelection | None = None
 
 
 class ApproveJobRequest(BaseModel):
@@ -1109,6 +1135,7 @@ def create_batch(
             processing_strategy=payload.processing_strategy,
             output_formats=payload.output_formats,
             actor=actor,
+            **_correction_fields(payload.ai_correction),
         )
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -1203,6 +1230,7 @@ def create_job(payload: CreateJobRequest, request: Request) -> dict[str, Any]:
             processing_strategy=payload.processing_strategy,
             output_formats=payload.output_formats,
             actor=actor,
+            **_correction_fields(payload.ai_correction),
         )
     except JobNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

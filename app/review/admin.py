@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict, Field
@@ -720,3 +720,206 @@ def _audit_ai_account(action: str, entity_id: str, payload: dict[str, Any], acto
             ),
         )
 
+# ---------------------------------------------------------------------------
+# AI model provider profiles (OpenRouter / MiniMax API keys) — owner only
+# ---------------------------------------------------------------------------
+
+from app.providers.correction.registry import (  # noqa: E402
+    AIProviderProfileStore,
+    PROVIDER_CLASSES,
+    redact,
+)
+from app.providers.correction.base import ProviderError  # noqa: E402
+
+AI_PROVIDER_PROFILES_DIR = Path(os.environ.get(
+    "AI_PROVIDER_PROFILES_DIR", "/opt/course-transcript/secrets/ai-providers"
+))
+
+
+def _provider_store() -> AIProviderProfileStore:
+    return AIProviderProfileStore(AI_PROVIDER_PROFILES_DIR)
+
+
+class AIProviderCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=2, max_length=48, pattern=r"^[a-z0-9][a-z0-9-]{1,47}$")
+    name: str = Field(min_length=1, max_length=64)
+    provider: Literal["openrouter", "minimax"]
+    api_key: str = Field(min_length=8, max_length=256)
+    default_model: str = Field(min_length=1, max_length=128)
+
+
+class AIProviderKeyReplaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    api_key: str = Field(min_length=8, max_length=256)
+
+
+class AIProviderActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    confirm: bool = False
+
+
+@router.get("/ai-providers")
+def ai_providers_list(request: Request) -> dict[str, Any]:
+    _admin_read_actor(request)
+    store = _provider_store()
+    profiles = store.list_profiles()  # redacted; keys never returned
+    return {
+        "profiles": profiles,
+        "supported_providers": ["minimax", "openrouter"],
+        "capabilities": {
+            "openrouter": {"realtime": True, "batch": True,
+                           "batch_note": "使用 OpenRouter 官方 Batch API"},
+            "minimax": {"realtime": True, "batch": False,
+                        "batch_note": "MiniMax 官方目前未提供批次折扣 API，僅即時模式"},
+        },
+        "security_note": "API key 只會寫入受保護目錄（0600），不會顯示或回傳。",
+    }
+
+
+@router.post("/ai-providers")
+def ai_providers_create(payload: AIProviderCreateRequest, request: Request) -> dict[str, Any]:
+    actor = _admin_mutation_actor(request)
+    store = _provider_store()
+    try:
+        result = store.create(profile_id=payload.id, name=payload.name,
+                              provider=payload.provider, api_key=payload.api_key,
+                              default_model=payload.default_model)
+    except ProviderError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    _audit_ai_account("ai_provider_profile_created", payload.id,
+                      redact({"provider": payload.provider,
+                              "default_model": payload.default_model}), actor)
+    return redact(result)
+
+
+@router.post("/ai-providers/{profile_id}/key")
+def ai_providers_replace_key(profile_id: str,
+                             payload: AIProviderKeyReplaceRequest,
+                             request: Request) -> dict[str, Any]:
+    actor = _admin_mutation_actor(request)
+    store = _provider_store()
+    try:
+        result = store.replace_key(profile_id, api_key=payload.api_key)
+    except ProviderError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _audit_ai_account("ai_provider_key_replaced", profile_id, {}, actor)
+    return redact(result)
+
+
+@router.post("/ai-providers/{profile_id}/test")
+def ai_providers_test(profile_id: str, request: Request) -> dict[str, Any]:
+    """Read-only connection test. NEVER runs a paid generation."""
+    _admin_read_actor(request)
+    store = _provider_store()
+    try:
+        client = store.build_client(profile_id)
+        result = client.validate_credentials()
+        status = "PASS" if result.get("ok") else "FAIL"
+        store.mark_validated(profile_id, status)
+    except ProviderError as exc:
+        store.mark_validated(profile_id, "FAIL")
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return redact({"id": profile_id, "validation_status": status,
+                   **{k: v for k, v in result.items() if k != "ok"}})
+
+
+@router.post("/ai-providers/{profile_id}/delete")
+def ai_providers_delete(profile_id: str,
+                        payload: AIProviderActionRequest,
+                        request: Request) -> dict[str, Any]:
+    if not payload.confirm:
+        raise HTTPException(status_code=422, detail="刪除需要明確 confirm=true")
+    actor = _admin_mutation_actor(request)
+    store = _provider_store()
+    try:
+        result = store.delete(profile_id)
+    except ProviderError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    _audit_ai_account("ai_provider_profile_deleted", profile_id, {}, actor)
+    return redact(result)
+
+@router.get("/ai-providers/openrouter-models")
+def ai_providers_openrouter_models(request: Request) -> dict[str, Any]:
+    """Model list from OpenRouter models endpoint (free, read-only)."""
+    _admin_read_actor(request)
+    store = _provider_store()
+    profiles = [p for p in store.list_profiles()
+                if p.get("provider") == "openrouter"]
+    if not profiles:
+        raise HTTPException(status_code=404, detail="尚未登記 OpenRouter 設定檔")
+    client = store.build_client(profiles[0]["id"])
+    try:
+        models = client.list_models()
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"models": redact(models)}
+
+
+@router.get("/ai-providers/batch-capability")
+def ai_providers_batch_capability(provider: str, model: str,
+                                  request: Request) -> dict[str, Any]:
+    """Server-side per-model BATCH gating — the UI never self-declares."""
+    _admin_read_actor(request)
+    if provider == "vertex":
+        # Vertex's official BatchPrediction API uses GCS JSONL input/output;
+        # the current worker contract is the inline-window contract used by
+        # OpenRouter. Keep this option disabled until a separate GCS adapter
+        # is implemented and tested end-to-end.
+        return {"supported": False,
+                "reason": "Vertex 官方 BatchPrediction 尚未接到目前 worker contract；請使用 REALTIME"}
+    if provider == "minimax":
+        return {"supported": False,
+                "reason": "MiniMax 官方目前未提供批次折扣 API，僅即時模式"}
+    if provider == "openrouter":
+        store = _provider_store()
+        profiles = [p for p in store.list_profiles()
+                    if p.get("provider") == "openrouter"]
+        if not profiles:
+            return {"supported": False, "reason": "尚未登記 OpenRouter 設定檔"}
+        try:
+            client = store.build_client(profiles[0]["id"])
+            ok, reason = client.model_supports_batch(model)
+            return {"supported": ok, "reason": reason}
+        except ProviderError as exc:
+            return {"supported": False, "reason": str(exc)}
+    return {"supported": False, "reason": "未知供應商"}
+
+
+@router.get("/ai-providers/cost-preview")
+def ai_providers_cost_preview(provider: str, model: str, execution_mode: str,
+                              request: Request) -> dict[str, Any]:
+    """Date-aware estimate; unknown pricing returns known=false (never $0)."""
+    _admin_read_actor(request)
+    from app.providers.correction.pricing import estimate_correction_cost
+    from datetime import date
+
+    openrouter_pricing = None
+    if provider == "openrouter":
+        store = _provider_store()
+        profiles = [p for p in store.list_profiles()
+                    if p.get("provider") == "openrouter"]
+        if profiles:
+            try:
+                client = store.build_client(profiles[0]["id"])
+                for m in client.list_models():
+                    if m.get("id") == model:
+                        openrouter_pricing = {
+                            "input": m.get("pricing_prompt"),
+                            "output": m.get("pricing_completion")}
+            except ProviderError:
+                pass
+    est = estimate_correction_cost(
+        provider=provider, model=model, mode=execution_mode,
+        input_tokens=100_000, output_tokens=20_000, on=date.today(),
+        openrouter_pricing=openrouter_pricing)
+    realtime_cost = None
+    if execution_mode == "BATCH":
+        rt = estimate_correction_cost(
+            provider=provider, model=model, mode="REALTIME",
+            input_tokens=100_000, output_tokens=20_000, on=date.today(),
+            openrouter_pricing=openrouter_pricing)
+        realtime_cost = rt.get("estimated_cost_usd") if rt.get("known") else None
+    return {"known": bool(est.get("known")),
+            "estimated_cost_usd": est.get("estimated_cost_usd"),
+            "realtime_cost_usd": realtime_cost}

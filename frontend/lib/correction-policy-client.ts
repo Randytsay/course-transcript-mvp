@@ -7,6 +7,18 @@ import type {
 
 export type CorrectionPolicy = "GEMINI_FIRST" | "M3_FIRST";
 
+// New per-job provider selection (provider router). Legacy jobs keep
+// CorrectionPolicy semantics untouched.
+export type AIProviderId = "vertex" | "openrouter" | "minimax";
+
+export type CorrectionSelection = {
+  provider: AIProviderId;
+  provider_profile_id: string;
+  model: string;
+  execution_mode: "REALTIME" | "BATCH";
+  fallback_policy: "RAW_CHIRP_FALLBACK";
+};
+
 const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
 async function postJson<T>(path: string, body: unknown): Promise<T> {
@@ -31,6 +43,7 @@ export async function createBatchWithPolicy(
   processingStrategy: ProcessingStrategy = "DYNAMIC_BATCHING",
   contentMode: ContentMode = "general",
   documentContext: string = "",
+  aiCorrection?: CorrectionSelection,
 ): Promise<CreatedBatch & { correctionPolicy: CorrectionPolicy }> {
   const result = await postJson<{
     batch_id: string;
@@ -55,6 +68,17 @@ export async function createBatchWithPolicy(
     content_mode: contentMode,
     document_context: documentContext,
     correction_policy: correctionPolicy,
+    ...(aiCorrection
+      ? {
+          ai_correction: {
+            provider: aiCorrection.provider,
+            provider_profile_id: aiCorrection.provider_profile_id,
+            model: aiCorrection.model,
+            execution_mode: aiCorrection.execution_mode,
+            fallback_policy: aiCorrection.fallback_policy,
+          },
+        }
+      : {}),
   });
   return {
     batchId: result.batch_id,

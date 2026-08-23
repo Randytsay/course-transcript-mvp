@@ -248,9 +248,16 @@ def main() -> int:
     supported_correction_models = {"gemini-3.6-flash", "gemini-3.7-flash", "minimax-m3", "MiniMax-M3"}
     for path in correction_records:
         record = json.loads(path.read_text(encoding="utf-8"))
-        if record.get("model") not in supported_correction_models or not isinstance(
-            record.get("raw_response"), str
-        ):
+        provider = str(record.get("provider") or "")
+        model = str(record.get("model") or "")
+        model_ok = model in supported_correction_models or (
+            provider in {"vertex", "openrouter", "minimax"} and bool(model)
+        )
+        raw_response = record.get("raw_response")
+        raw_ok = isinstance(raw_response, (str, dict, list)) or (
+            record.get("status") == "fallback_raw_chirp"
+        )
+        if not model_ok or not raw_ok:
             errors.append(f"invalid text-correction evidence: {path.name}")
             break
     if require_correction and not (JOB / "glossary" / "global-terms.json").is_file():

@@ -66,6 +66,30 @@ export default function AdminHelpPage() {
           <div className={styles.panelHeader}><div><h2>遇到錯誤時</h2><p>不要因畫面 timeout 就直接重送 mutation。</p></div></div>
           <div className={styles.note}>如果匯入、核准、批次修正、版本還原或發布發生 timeout / connection reset，先查資料庫或 audit 實際狀態，判斷「完全沒發生」還是「已成功但 response lost」，再決定是否重試，避免 duplicate mutation。</div>
         </section>
+
+        <section className={styles.panel}>
+          <div className={styles.panelHeader}><div><h2>AI 帳戶與供應商設定</h2><p>兩個管理頁面管理的是不同東西，不要混用。</p></div></div>
+          <div className={styles.jobs}>
+            <div className={styles.job}><div><strong>AI 帳戶管理（Vertex Account Profile）</strong>
+              <p>管理 Google Cloud 服務帳戶設定檔：Service Account + GCP Project + Region + Bucket。
+              切換時四項一併更新。額度跟 Project 綁定：Google AI Pro 每月提供 GenAI &amp; Cloud credit；
+              新戶 Welcome Credit 通常 US$300／90 天，實際以 Google Cloud Billing Console 為準。</p></div>
+              <span className={`${styles.status} ${styles.completed}`}>GCP</span></div>
+            <div className={styles.job}><div><strong>AI 模型供應商（OpenRouter / MiniMax）</strong>
+              <p>管理 API Key 設定檔。Key 只存伺服器保護目錄（0600），畫面只顯示已設定狀態。
+              「測試連線」只做唯讀驗證，不會產生費用。</p></div>
+              <span className={`${styles.status} ${styles.running}`}>API Key</span></div>
+            <div className={styles.job}><div><strong>語音辨識 vs AI 文字校正的 Batch</strong>
+              <p>Chirp Dynamic Batch 是語音辨識的省錢模式；Gemini / OpenRouter Batch 是 AI 文字校正的非即時批次。
+              兩者完全不同、價格也不同。AI Batch 可能等待數小時才完成。</p></div>
+              <span className={`${styles.status} ${styles.failed}`}>勿混淆</span></div>
+            <div className={styles.job}><div><strong>執行模式與失敗備援</strong>
+              <p>REALTIME 即時但標準價；BATCH 較慢較便宜（僅支援的 provider/model 可選）。
+              失敗時預設保留 Chirp 原文（零額外費用），也可選擇改用其他 provider（會顯示可能的額外費用）。
+              每個任務建立時就固定 provider／model／模式，事後改預設不影響進行中的任務。</p></div>
+              <span className={`${styles.status} ${styles.completed}`}>Per-job</span></div>
+          </div>
+        </section>
       </div>
     </main>
   );
