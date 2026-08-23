@@ -896,11 +896,34 @@ class LearningStore:
             ).fetchone()
             segments = connection.execute(
                 """
-                SELECT id, segment_index, start_ms, end_ms, working_text
-                FROM review_subtitle_segments
-                WHERE youtube_video_id = ? ORDER BY segment_index
+                SELECT
+                    seg.id,
+                    seg.segment_index,
+                    seg.start_ms,
+                    seg.end_ms,
+                    seg.working_text,
+                    suggestion.id AS my_suggestion_id,
+                    suggestion.suggested_text AS my_suggested_text,
+                    suggestion.status AS my_suggestion_status,
+                    CASE WHEN EXISTS (
+                        SELECT 1
+                        FROM review_suggestion_events event
+                        WHERE event.suggestion_id = suggestion.id
+                          AND event.event_type = 'withdrawn'
+                    ) THEN 1 ELSE 0 END AS my_suggestion_withdrawn
+                FROM review_subtitle_segments seg
+                LEFT JOIN review_suggestions suggestion
+                    ON suggestion.id = (
+                        SELECT latest.id
+                        FROM review_suggestions latest
+                        WHERE latest.segment_id = seg.id AND latest.user_id = ?
+                        ORDER BY latest.updated_at DESC, latest.created_at DESC
+                        LIMIT 1
+                    )
+                WHERE seg.youtube_video_id = ?
+                ORDER BY seg.segment_index
                 """,
-                (youtube_video_id,),
+                (user_id, youtube_video_id),
             ).fetchall()
             schedule = connection.execute(
                 "SELECT * FROM learning_review_schedule WHERE user_id = ? AND youtube_video_id = ?",
