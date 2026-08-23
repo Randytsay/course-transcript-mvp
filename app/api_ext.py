@@ -20,7 +20,11 @@ from app.jobs.correction_policy import (
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, DYNAMIC_BATCHING, STANDARD_BATCH
 from app.live_error import safe_chunk_error
 from app.providers.correction.registry import LEGACY_MINIMAX_PROFILE_ID
-from app.providers.correction_routing import M3QuotaState
+from app.providers.correction_routing import (
+    CorrectionProvider,
+    M3QuotaState,
+    choose_initial_route,
+)
 from app.providers.minimax_quota import MiniMaxQuotaClient
 import app.live_features as live_features
 
@@ -87,17 +91,43 @@ def _m3_enabled() -> bool:
     }
 
 
+def _m3_quota_state() -> M3QuotaState:
+    """Read Token Plan availability without weakening the existing fail-closed rule."""
+    if not _m3_enabled():
+        return M3QuotaState.UNKNOWN
+    quota_check_enabled = os.environ.get(
+        "MINIMAX_M3_QUOTA_CHECK_ENABLED", "false"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if not quota_check_enabled:
+        return M3QuotaState.UNKNOWN
+    try:
+        quota = MiniMaxQuotaClient().get_quota(force_refresh=True)
+    except Exception:
+        return M3QuotaState.UNKNOWN
+    try:
+        return M3QuotaState(str(quota.state))
+    except ValueError:
+        return M3QuotaState.UNKNOWN
+
+
 def _production_correction_router_fields(
     *, policy: str, correction_enabled: bool
 ) -> dict[str, object]:
     """Bridge the existing M3_FIRST UI contract to the shared provider router.
 
-    M3_FIRST is allowed to be saved while M3 is disabled. In that state we
-    deliberately leave provider fields blank so the existing fail-closed Gemini
-    path remains in force. Only jobs created after the production M3 flag is
-    explicitly enabled are pinned to the windowed MiniMax router.
+    M3_FIRST is allowed to be saved while M3 is disabled or quota is unknown.
+    In those states provider fields remain blank, preserving the existing Gemini
+    fail-closed path. Only an explicitly enabled M3 with confirmed Token Plan
+    availability is pinned to the windowed MiniMax router.
     """
-    if correction_enabled and policy == "M3_FIRST" and _m3_enabled():
+    if not correction_enabled:
+        return {}
+    decision = choose_initial_route(
+        requested_policy=policy,
+        m3_feature_enabled=_m3_enabled(),
+        m3_quota_state=_m3_quota_state(),
+    )
+    if decision.provider is CorrectionProvider.MINIMAX_M3:
         return {
             "correction_provider": "minimax",
             "correction_provider_profile_id": LEGACY_MINIMAX_PROFILE_ID,
