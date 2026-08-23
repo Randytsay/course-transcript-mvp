@@ -12,10 +12,12 @@ Important invariants:
 - non-success HTTP responses are mapped to safe error kinds without retaining
   provider response text in the exception;
 - when finish/usage metadata is present it is validated before content is
-  accepted.
+  accepted;
+- runtime base URLs are restricted to MiniMax's fixed CN/global API hosts.
 """
 from __future__ import annotations
 
+from urllib.parse import urlparse
 from typing import Any
 
 from .base import (
@@ -24,11 +26,24 @@ from .base import (
     ProviderId,
 )
 
-BASE_URL = "https://api.minimax.io/v1"
-CHAT_URL = f"{BASE_URL}/chat/completions"
-MODELS_URL = f"{BASE_URL}/models"
+GLOBAL_BASE_URL = "https://api.minimax.io/v1"
+CN_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MODEL = "MiniMax-M3"
 DEFAULT_MAX_COMPLETION_TOKENS = 4096
+_ALLOWED_API_HOSTS = frozenset({"api.minimax.io", "api.minimaxi.com"})
+
+
+def _normalize_base_url(value: str | None) -> str:
+    raw = (value or GLOBAL_BASE_URL).strip().rstrip("/")
+    parsed = urlparse(raw)
+    if parsed.scheme != "https" or parsed.hostname not in _ALLOWED_API_HOSTS:
+        raise ProviderError("auth", "MiniMax API endpoint 不在允許的官方主機清單")
+    if parsed.username or parsed.password or parsed.port:
+        raise ProviderError("auth", "MiniMax API endpoint 格式不允許自訂認證或 port")
+    path = parsed.path.rstrip("/")
+    if path not in {"", "/v1"}:
+        raise ProviderError("auth", "MiniMax API endpoint 只允許官方根路徑或 /v1")
+    return f"https://{parsed.hostname}/v1"
 
 
 class MiniMaxCorrectionProvider:
@@ -49,12 +64,16 @@ class MiniMaxCorrectionProvider:
     )
 
     def __init__(self, *, api_key: str, model: str | None = None, http=None,
-                 max_completion_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS):
+                 max_completion_tokens: int = DEFAULT_MAX_COMPLETION_TOKENS,
+                 base_url: str | None = None):
         if not api_key:
             raise ProviderError("auth", "MiniMax API key 未設定")
         self.api_key = api_key
         self.model = model or self.default_model
         self._http = http
+        self.base_url = _normalize_base_url(base_url)
+        self.chat_url = f"{self.base_url}/chat/completions"
+        self.models_url = f"{self.base_url}/models"
         self.max_completion_tokens = max(256, int(max_completion_tokens))
         self.last_response_meta: dict[str, Any] = {}
 
@@ -114,7 +133,7 @@ class MiniMaxCorrectionProvider:
 
     def validate_credentials(self) -> dict[str, Any]:
         """Free key verification via GET /v1/models (no paid generation)."""
-        status, body = self._call("GET", MODELS_URL)
+        status, body = self._call("GET", self.models_url)
         if status in (401, 403):
             raise ProviderError("auth", "MiniMax API key 無效（驗證失敗）")
         if status >= 500:
@@ -140,7 +159,7 @@ class MiniMaxCorrectionProvider:
             "reasoning_split": True,
             "max_completion_tokens": self.max_completion_tokens,
         }
-        status, body = self._call("POST", CHAT_URL, payload)
+        status, body = self._call("POST", self.chat_url, payload)
         if status != 200:
             self._raise_http_error(status, body)
         try:
