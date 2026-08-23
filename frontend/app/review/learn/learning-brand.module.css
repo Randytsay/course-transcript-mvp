@@ -37,14 +37,21 @@
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  border: 2px solid #d4a649;
+  overflow: hidden;
+  border: 1px solid #d4a649;
   border-radius: 50%;
-  color: #fff8e7;
-  background: radial-gradient(circle at 35% 28%, #d9a631, #8f5a0b 76%);
-  box-shadow: inset 0 0 0 3px rgba(255, 240, 183, 0.28), 0 5px 13px rgba(122, 80, 13, 0.16);
+  background: #f8f1dc;
+  box-shadow: 0 5px 13px rgba(122, 80, 13, 0.16);
   font-family: "Noto Serif TC", "Songti TC", serif;
   font-size: 27px;
   font-weight: 800;
+}
+
+.brandMark img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
 }
 
 .brandText strong,
@@ -229,6 +236,7 @@
 .stepArrow { color: #bd8523; }
 
 .continueCard {
+  position: relative;
   min-height: 294px;
   display: flex;
   flex-direction: column;
@@ -241,6 +249,19 @@
     radial-gradient(circle at 90% 83%, rgba(255, 226, 139, 0.25), transparent 30%),
     linear-gradient(145deg, #c99625, #8b5708 76%);
   box-shadow: inset 0 0 0 1px rgba(255, 235, 169, 0.24), 0 15px 32px rgba(123, 79, 7, 0.19);
+}
+
+.continueCard::before {
+  position: absolute;
+  top: -28px;
+  right: -24px;
+  width: 190px;
+  height: 190px;
+  background: url("/images/cisheng-compassion-seal.png") center / contain no-repeat;
+  content: "";
+  opacity: 0.14;
+  pointer-events: none;
+  transform: rotate(7deg);
 }
 
 .continueCard::after {

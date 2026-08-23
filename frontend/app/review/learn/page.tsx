@@ -145,7 +145,7 @@ export default function LearningDashboardPage() {
       <div className={`${styles.shell} ${brandStyles.shell}`}>
         <header className={`${styles.topbar} ${brandStyles.topbar}`}>
           <a className={`${styles.brand} ${brandStyles.brand}`} href="/review/learn" aria-label="回到學習中心">
-            <span className={`${styles.brandMark} ${brandStyles.brandMark}`}>慈</span>
+            <span className={`${styles.brandMark} ${brandStyles.brandMark}`}><img src="/images/cisheng-lotus-seal.png" alt="" /></span>
             <span className={`${styles.brandText} ${brandStyles.brandText}`}><strong>慈聖佛堂・佛學共學平台</strong><span>看課・複習・共修・留下自己的學習歷程</span></span>
           </a>
           <nav className={`${styles.nav} ${brandStyles.nav}`} aria-label="學習功能">
