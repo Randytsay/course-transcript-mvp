@@ -1,7 +1,9 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { BookOpen, PencilLine, PlayCircle } from "lucide-react";
 import styles from "./learning.module.css";
+import brandStyles from "./learning-brand.module.css";
 
 type Video = {
   youtube_video_id: string;
@@ -37,6 +39,10 @@ type Dashboard = {
   recent_bookmarks: Array<{ id: string; youtube_video_id: string; video_title: string; label: string | null; note: string | null; start_ms: number }>;
 };
 
+type MeResponse = {
+  user: { display_name: string; avatar_url: string | null };
+};
+
 type Filter = "all" | "in_progress" | "not_started" | "completed" | "saved";
 type Sort = "recent" | "title" | "progress";
 
@@ -62,6 +68,7 @@ function reviewPercent(video: Video) {
 
 export default function LearningDashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
+  const [me, setMe] = useState<MeResponse | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("recent");
   const [query, setQuery] = useState("");
@@ -72,13 +79,17 @@ export default function LearningDashboardPage() {
     setLoading(true);
     setError(null);
     try {
-      const response = await fetch("/api/v1/review/learning/dashboard", { cache: "no-store", credentials: "same-origin" });
-      if (response.status === 401) {
+      const [response, meResponse] = await Promise.all([
+        fetch("/api/v1/review/learning/dashboard", { cache: "no-store", credentials: "same-origin" }),
+        fetch("/api/v1/review/auth/me", { cache: "no-store", credentials: "same-origin" })
+      ]);
+      if (response.status === 401 || meResponse.status === 401) {
         window.location.assign("/review");
         return;
       }
       if (!response.ok) throw new Error("目前無法讀取學習進度");
       setData(await response.json());
+      if (meResponse.ok) setMe(await meResponse.json());
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "目前無法讀取學習進度");
     } finally {
@@ -113,14 +124,14 @@ export default function LearningDashboardPage() {
   const hasHistory = data.summary.completed_count > 0 || data.summary.in_progress_count > 0;
 
   return (
-    <main className={styles.page}>
+    <main className={`${styles.page} ${brandStyles.brandPage}`}>
       <div className={styles.shell}>
-        <header className={styles.topbar}>
-          <a className={styles.brand} href="/review/learn">
+        <header className={`${styles.topbar} ${brandStyles.topbar}`}>
+          <a className={`${styles.brand} ${brandStyles.brand}`} href="/review/learn">
             <span className={styles.brandMark}>慈</span>
-            <span className={styles.brandText}><strong>慈聖佛堂・佛學共學平台</strong><span>看課・複習・共修・留下自己的學習歷程</span></span>
+            <span className={`${styles.brandText} ${brandStyles.brandText}`}><strong>慈聖佛堂・佛學共學平台</strong><span>看課・複習・共修・留下自己的學習歷程</span></span>
           </a>
-          <nav className={styles.nav} aria-label="學習功能">
+          <nav className={`${styles.nav} ${brandStyles.nav}`} aria-label="學習功能">
             <a aria-current="page" href="/review/learn">學習中心</a>
             <a href="/review/videos">字幕共修</a>
             <a href="/review/learn/review">複習中心</a>
@@ -128,10 +139,15 @@ export default function LearningDashboardPage() {
             <a href="/review/contributions">共修紀錄</a>
             <a href="/review/help">使用說明</a>
           </nav>
+          {me ? <a className={brandStyles.profileChip} href="/review/learn" aria-label="目前登入身分">
+            {me.user.avatar_url ? <img src={me.user.avatar_url} alt="" /> : <span aria-hidden="true">{me.user.display_name.slice(0, 1)}</span>}
+            <strong>{me.user.display_name}</strong>
+            <span aria-hidden="true">⌄</span>
+          </a> : null}
         </header>
 
-        <section className={styles.hero}>
-          <div className={styles.heroMain}>
+        <section className={`${styles.hero} ${brandStyles.hero}`}>
+          <div className={`${styles.heroMain} ${brandStyles.heroMain}`}>
             <p className={styles.eyebrow}>我的學習中心</p>
             <h1>一眼知道學到哪裡，回來就能接著學。</h1>
             <p>觀看、學習完成、複習與字幕共修分開記錄；AI 筆記只根據已核准的字幕版本整理，每個重點都能回到影片原始時間。</p>
@@ -141,18 +157,24 @@ export default function LearningDashboardPage() {
               <div><span className={styles.bigNumber}>{data.summary.review_due_count}</span><div className={styles.muted}>今天待複習</div></div>
             </div>
           </div>
-          <aside className={styles.continueCard}>
+          <aside className={`${styles.continueCard} ${brandStyles.continueCard}`}>
             {resume ? <>
               <div><p>繼續學習</p><h2>{resume.title}</h2><p>上次看到 {time(resume.last_playback_ms)} ・ {resume.watch_percent}%</p></div>
-              <a className={styles.primaryButton} href={`/review/learn/${resume.youtube_video_id}?t=${Math.floor((resume.last_playback_ms || 0) / 1000)}`}>從上次位置繼續 →</a>
+              <a className={`${styles.primaryButton} ${brandStyles.primaryButton}`} href={`/review/learn/${resume.youtube_video_id}?t=${Math.floor((resume.last_playback_ms || 0) / 1000)}`}>從上次位置繼續 →</a>
             </> : hasHistory ? <>
               <div><p>目前沒有進行中的課程</p><h2>{data.summary.completed_count ? `已完成 ${data.summary.completed_count} 堂，可以開始下一堂或回頭複習。` : "選一堂課繼續學習。"}</h2><p>已學完的課仍可隨時重看，不會因此取消完成狀態。</p></div>
-              {data.summary.review_due_count ? <a className={styles.primaryButton} href="/review/learn/review">前往今天的複習 →</a> : data.videos[0] ? <a className={styles.primaryButton} href={`/review/learn/${data.videos[0].youtube_video_id}`}>查看全部課程 →</a> : null}
+              {data.summary.review_due_count ? <a className={`${styles.primaryButton} ${brandStyles.primaryButton}`} href="/review/learn/review">前往今天的複習 →</a> : data.videos[0] ? <a className={`${styles.primaryButton} ${brandStyles.primaryButton}`} href={`/review/learn/${data.videos[0].youtube_video_id}`}>查看全部課程 →</a> : null}
             </> : <>
               <div><p>開始第一堂</p><h2>目前還沒有觀看紀錄</h2><p>選一堂課開始，系統會自動記住你看到哪裡。</p></div>
-              {data.videos[0] ? <a className={styles.primaryButton} href={`/review/learn/${data.videos[0].youtube_video_id}`}>開始學習 →</a> : null}
+              {data.videos[0] ? <a className={`${styles.primaryButton} ${brandStyles.primaryButton}`} href={`/review/learn/${data.videos[0].youtube_video_id}`}>開始學習 →</a> : null}
             </>}
           </aside>
+        </section>
+
+        <section className={brandStyles.featureStrip} aria-label="學習平台特色">
+          <div className={brandStyles.featureItem}><span className={brandStyles.featureIcon} aria-hidden="true"><PlayCircle size={22} strokeWidth={1.6} /></span><div><strong>學習・精進不斷</strong><span>把每一次觀看，留下成為理解的痕跡</span></div></div>
+          <div className={brandStyles.featureItem}><span className={brandStyles.featureIcon} aria-hidden="true"><BookOpen size={22} strokeWidth={1.6} /></span><div><strong>複習・記憶長存</strong><span>從筆記與時間點回到真正重要的段落</span></div></div>
+          <div className={brandStyles.featureItem}><span className={brandStyles.featureIcon} aria-hidden="true"><PencilLine size={22} strokeWidth={1.6} /></span><div><strong>校稿・法益共成</strong><span>只改文字、不動時間碼，安心提出建議</span></div></div>
         </section>
 
         <section className={styles.stats} aria-label="學習摘要">
