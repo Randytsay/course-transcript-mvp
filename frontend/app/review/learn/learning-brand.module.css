@@ -1,0 +1,474 @@
+.dashboard {
+  min-height: 100vh;
+  padding: 0 22px 84px;
+  color: #3e2d19;
+  background-color: #faf5e8;
+  background-image: url("/images/learning-dashboard-ornament.webp");
+  background-position: center top;
+  background-repeat: no-repeat;
+  background-size: 100% auto;
+  font-family: "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+}
+
+.shell { width: min(100%, 1600px); margin: 0 auto; }
+.dashboard .shell { max-width: 1600px; width: min(100%, 1600px); }
+
+.topbar {
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  border-bottom: 1px solid rgba(172, 123, 30, 0.26);
+  margin-bottom: 3px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  min-width: max-content;
+  color: #261c12;
+  text-decoration: none;
+}
+
+.brandMark {
+  width: 57px;
+  height: 57px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid #d4a649;
+  border-radius: 50%;
+  background: #f8f1dc;
+  box-shadow: 0 5px 13px rgba(122, 80, 13, 0.16);
+  font-family: "Noto Serif TC", "Songti TC", serif;
+  font-size: 27px;
+  font-weight: 800;
+}
+
+.brandMark img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+
+.brandText strong,
+.brandText span { display: block; }
+.brandText strong { font-family: "Noto Serif TC", "Songti TC", serif; font-size: 21px; letter-spacing: 0.06em; }
+.brandText span { margin-top: 4px; color: #806c50; font-size: 13px; letter-spacing: 0.08em; }
+
+.nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.navLink,
+.navActive {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #62471f;
+  font-family: "Noto Serif TC", "Songti TC", serif;
+  font-size: 15px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 160ms ease, color 160ms ease, border-color 160ms ease;
+}
+
+.navActive {
+  border-color: #b9811e;
+  color: #fff8e9;
+  background: linear-gradient(145deg, #d8a62e, #9a650e);
+  box-shadow: inset 0 1px 0 rgba(255, 238, 170, 0.55), 0 4px 10px rgba(139, 91, 9, 0.18);
+}
+
+.navLink:hover,
+.navLink:focus-visible {
+  border-color: rgba(183, 132, 38, 0.32);
+  color: #8b5a0c;
+  background: rgba(255, 252, 242, 0.84);
+}
+
+.profileChip,
+.profilePlaceholder {
+  min-width: 46px;
+  min-height: 46px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  gap: 8px;
+  padding: 4px 9px 4px 4px;
+  border: 1px solid rgba(167, 117, 25, 0.42);
+  border-radius: 999px;
+  color: #674a20;
+  background: rgba(255, 252, 241, 0.72);
+  font-size: 13px;
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.profileChip img,
+.profileChip > span:first-child,
+.profilePlaceholder > span {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  object-fit: cover;
+  color: #fff6df;
+  background: linear-gradient(145deg, #d6a333, #95600c);
+}
+
+.profileChip > span:last-child { color: #95600c; font-size: 16px; }
+
+.learningHero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.9fr) minmax(350px, 0.96fr);
+  gap: 14px;
+  margin-top: 2px;
+}
+
+.focusPanel,
+.continueCard,
+.metricCard,
+.recommendSection,
+.courseSection,
+.recentCard {
+  border: 1px solid rgba(190, 137, 35, 0.34);
+  box-shadow: 0 10px 28px rgba(130, 93, 29, 0.08);
+}
+
+.focusPanel {
+  position: relative;
+  min-height: 294px;
+  overflow: hidden;
+  padding: 27px 24px 22px;
+  border-radius: 18px;
+  background: rgba(255, 253, 246, 0.82);
+}
+
+.focusPanel::before,
+.focusPanel::after {
+  position: absolute;
+  width: 52px;
+  height: 52px;
+  border: 1px solid rgba(198, 146, 42, 0.36);
+  content: "";
+  pointer-events: none;
+}
+
+.focusPanel::before { top: 16px; left: 18px; border-right: 0; border-bottom: 0; border-radius: 14px 0 0; }
+.focusPanel::after { right: 18px; bottom: 16px; border-top: 0; border-left: 0; border-radius: 0 0 14px; }
+
+.sectionRibbon {
+  width: fit-content;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 auto 28px;
+  padding: 8px 27px;
+  border: 1px solid #d5a64e;
+  border-radius: 999px;
+  color: #8b5b12;
+  background: rgba(255, 250, 232, 0.94);
+  box-shadow: 0 0 0 4px rgba(255, 248, 224, 0.65), 0 4px 12px rgba(177, 126, 26, 0.1);
+  font-family: "Noto Serif TC", "Songti TC", serif;
+  font-size: clamp(20px, 2vw, 29px);
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.sectionRibbon svg { color: #c18a21; }
+
+.steps {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+}
+
+.stepCard {
+  min-height: 134px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-content: center;
+  align-items: center;
+  column-gap: 12px;
+  padding: 14px 14px 12px;
+  border: 1px solid rgba(213, 166, 78, 0.35);
+  border-radius: 16px;
+  background: rgba(255, 253, 247, 0.86);
+  text-align: left;
+}
+
+.stepNumber {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  grid-row: span 2;
+  border: 2px solid #f4dda2;
+  border-radius: 50%;
+  color: #fff9e9;
+  background: linear-gradient(145deg, #cf9821, #95600b);
+  box-shadow: inset 0 1px 2px rgba(255, 246, 192, 0.6), 0 3px 8px rgba(126, 83, 9, 0.15);
+  font-size: 19px;
+  font-weight: 800;
+}
+
+.stepIcon { color: #9d680e; }
+.stepCard strong { color: #4b3216; font-family: "Noto Serif TC", "Songti TC", serif; font-size: 16px; line-height: 1.45; }
+.stepCard > span:last-child { grid-column: 2; color: #907650; font-size: 13px; line-height: 1.5; }
+.stepArrow { color: #bd8523; }
+
+.continueCard {
+  position: relative;
+  min-height: 294px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 26px 27px 22px;
+  overflow: hidden;
+  border-radius: 18px;
+  color: #fff9e8;
+  background:
+    radial-gradient(circle at 90% 83%, rgba(255, 226, 139, 0.25), transparent 30%),
+    linear-gradient(145deg, #c99625, #8b5708 76%);
+  box-shadow: inset 0 0 0 1px rgba(255, 235, 169, 0.24), 0 15px 32px rgba(123, 79, 7, 0.19);
+}
+
+.continueCard::before {
+  position: absolute;
+  top: -28px;
+  right: -24px;
+  width: 190px;
+  height: 190px;
+  background: url("/images/cisheng-compassion-seal.png") center / contain no-repeat;
+  content: "";
+  opacity: 0.14;
+  pointer-events: none;
+  transform: rotate(7deg);
+}
+
+.continueCard::after {
+  position: absolute;
+  right: 18px;
+  bottom: 18px;
+  width: 145px;
+  height: 58px;
+  border: 1px solid rgba(255, 232, 167, 0.26);
+  border-radius: 50% 50% 0 0;
+  content: "";
+  opacity: 0.75;
+  transform: rotate(-8deg);
+}
+
+.continueEyebrow { display: flex; align-items: center; gap: 8px; color: #fff2c9; font-family: "Noto Serif TC", "Songti TC", serif; font-weight: 800; letter-spacing: 0.08em; }
+.continueCard h1 { position: relative; z-index: 1; margin: 18px 0 10px; color: #fffdf4; font-family: "Noto Serif TC", "Songti TC", serif; font-size: clamp(19px, 1.8vw, 25px); line-height: 1.5; }
+.continueMeta { position: relative; z-index: 1; margin: 0; color: #fff0c7; font-size: 14px; }
+
+.continueProgress {
+  height: 7px;
+  position: relative;
+  z-index: 1;
+  margin: 13px 0 17px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 242, 191, 0.31);
+}
+
+.continueProgress span { display: block; height: 100%; border-radius: inherit; background: #fff2b8; box-shadow: 0 0 8px rgba(255, 239, 167, 0.7); }
+.continueActions { position: relative; z-index: 1; display: grid; gap: 9px; }
+.goldButton,
+.outlineGoldButton {
+  min-height: 43px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 11px;
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.goldButton { color: #7a4b07; background: #fff7df; box-shadow: 0 4px 8px rgba(95, 60, 4, 0.14); }
+.outlineGoldButton { border: 1px solid rgba(255, 237, 174, 0.54); color: #fff7db; background: rgba(144, 84, 3, 0.28); }
+
+.metricGrid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; margin-top: 13px; }
+.metricCard { min-height: 112px; display: flex; align-items: center; gap: 16px; padding: 17px 21px; border-radius: 16px; background: rgba(255, 253, 246, 0.78); }
+.metricIcon,
+.recommendIcon {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid #e4bc68;
+  border-radius: 50%;
+  color: #a46c10;
+  background: radial-gradient(circle at 38% 30%, #fffaf0, #f4db9d);
+  box-shadow: inset 0 0 0 5px rgba(255, 249, 223, 0.66);
+}
+
+.metricCard > div { min-width: 0; }
+.metricCard > div > span { display: block; color: #8f6b39; font-family: "Noto Serif TC", "Songti TC", serif; font-size: 14px; }
+.metricCard strong { display: block; margin-top: 2px; color: #4c3214; font-family: "Noto Serif TC", "Songti TC", serif; font-size: 25px; line-height: 1.25; }
+.metricCard strong small { font-size: 14px; font-weight: 500; }
+.metricCard a { display: inline-flex; align-items: center; gap: 2px; margin-top: 5px; color: #7f570f; font-size: 13px; font-weight: 700; text-decoration: none; }
+
+.recommendSection { margin-top: 13px; padding: 10px 16px 11px; border-radius: 18px; background: rgba(255, 251, 237, 0.66); }
+.recommendHeading { display: flex; align-items: center; gap: 13px; margin: 0 0 8px 10px; }
+.recommendHeading h2 { margin: 0; color: #503313; font-family: "Noto Serif TC", "Songti TC", serif; font-size: 20px; }
+.recommendHeading span { padding: 3px 11px; border: 1px solid #e6c986; border-radius: 999px; color: #a17119; background: #fff3d3; font-size: 12px; }
+.recommendGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.recommendCard { min-height: 72px; display: flex; align-items: center; gap: 14px; padding: 6px 16px; border: 1px solid rgba(213, 166, 78, 0.4); border-radius: 14px; background: rgba(255, 254, 248, 0.78); line-height: 1.35; }
+.recommendIcon { width: 54px; height: 54px; }
+.recommendCard strong { display: block; color: #533514; font-family: "Noto Serif TC", "Songti TC", serif; font-size: 16px; }
+.recommendCard p { margin: 2px 0 5px; color: #8d7656; font-size: 13px; }
+.recommendCard a { display: inline-flex; align-items: center; gap: 2px; padding: 4px 10px; border-radius: 999px; color: #fff8e7; background: #a86d0d; font-size: 12px; font-weight: 800; text-decoration: none; }
+
+.courseSection { margin-top: 10px; padding: 0; border-right: 0; border-bottom: 0; border-left: 0; border-radius: 0; box-shadow: none; background: transparent; }
+.courseHeader { display: flex; align-items: center; justify-content: space-between; gap: 15px; margin-bottom: 13px; }
+.courseHeader h2 { display: inline; margin: 0 13px 0 0; color: #3d2812; font-family: "Noto Serif TC", "Songti TC", serif; font-size: 23px; }
+.courseHeader > div:first-child > span { color: #987642; font-size: 14px; }
+.courseTools { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.filterPills { display: flex; gap: 7px; flex-wrap: wrap; }
+.filterButton,
+.filterActive,
+.sortLabel,
+.courseSearch {
+  min-height: 36px;
+  border: 1px solid rgba(201, 154, 63, 0.34);
+  border-radius: 999px;
+  color: #755522;
+  background: rgba(255, 253, 245, 0.72);
+  font: inherit;
+  font-size: 13px;
+}
+
+.filterButton,
+.filterActive { padding: 6px 16px; cursor: pointer; }
+.filterActive { border-color: #a76d0d; color: #fff8e8; background: linear-gradient(145deg, #d09b26, #98600a); box-shadow: 0 3px 7px rgba(133, 85, 7, 0.15); }
+.sortLabel { display: inline-flex; align-items: center; gap: 4px; padding: 0 4px 0 12px; white-space: nowrap; }
+.sortLabel select { border: 0; color: #795721; background: transparent; font: inherit; font-size: 13px; outline: 0; }
+.courseSearch { width: 170px; padding: 6px 13px; border-radius: 10px; }
+
+.courseGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.courseCard { min-width: 0; display: flex; overflow: hidden; border-radius: 15px; border-color: rgba(201, 154, 63, 0.36); background: rgba(255, 253, 245, 0.86); box-shadow: 0 8px 20px rgba(130, 93, 29, 0.07); }
+.courseThumb { width: 42%; min-height: 190px; aspect-ratio: auto; flex: 0 0 42%; object-fit: cover; background: #e7deca; }
+.courseBody { min-width: 0; display: flex; flex: 1; flex-direction: column; padding: 12px 14px 12px; }
+.courseStatus { display: flex; align-items: center; justify-content: space-between; gap: 6px; color: #9a6d1c; font-size: 12px; font-weight: 800; }
+.courseStatus > span { padding: 3px 7px; border-radius: 999px; color: #8d5c10; background: #f7e8bf; font-weight: 600; }
+.courseTitle { min-height: 44px; margin: 7px 0 8px; overflow: hidden; color: #3e2b18; font-family: "Noto Serif TC", "Songti TC", serif; font-size: 15px; line-height: 1.48; }
+.courseProgress { height: 6px; margin-top: auto; border-radius: 999px; background: #eadfc5; }
+.courseProgress span { background: linear-gradient(90deg, #d8a536, #9a6309); }
+.courseMeta { display: flex; justify-content: space-between; gap: 5px; margin-top: 6px; color: #8d7754; font-size: 11px; }
+.courseTags { display: flex; gap: 5px; flex-wrap: wrap; margin: 7px 0 8px; }
+.courseTags span { padding: 3px 7px; border-radius: 999px; color: #84632d; background: #f3e9d0; font-size: 11px; }
+.courseActions { display: flex; gap: 7px; margin-top: auto; }
+.goldSmallButton,
+.lightSmallButton { min-height: 34px; display: inline-flex; align-items: center; justify-content: center; gap: 5px; flex: 1; border-radius: 8px; padding: 6px 8px; font-size: 12px; font-weight: 800; text-decoration: none; }
+.goldSmallButton { color: #fff8e9; background: linear-gradient(145deg, #d09b25, #996009); box-shadow: 0 3px 6px rgba(122, 77, 5, 0.17); }
+.lightSmallButton { border: 1px solid #e6c987; color: #865e20; background: #fff4d6; }
+
+.recentGrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 26px; }
+.recentCard { padding: 17px; border-radius: 16px; background: rgba(255, 253, 245, 0.67); }
+.recentHeading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.recentHeading h2 { margin: 0; color: #503313; font-family: "Noto Serif TC", "Songti TC", serif; font-size: 19px; }
+.recentHeading a { display: inline-flex; align-items: center; gap: 2px; color: #8a621e; font-size: 13px; font-weight: 700; text-decoration: none; }
+.recentCard > p { margin: 4px 0 12px; color: #8d7754; font-size: 13px; }
+.recentPanel { border-color: rgba(201, 154, 63, 0.28) !important; background: rgba(255, 254, 249, 0.7) !important; box-shadow: none !important; }
+
+.dashboard :global(.page) { background: transparent; }
+.dashboard a:focus-visible,
+.dashboard button:focus-visible,
+.dashboard input:focus-visible,
+.dashboard select:focus-visible { outline: 3px solid rgba(185, 129, 27, 0.38); outline-offset: 3px; }
+.dashboard button:disabled { cursor: not-allowed; opacity: 0.55; }
+
+@media (max-width: 1250px) {
+  .nav { gap: 3px; }
+  .navLink, .navActive { padding-inline: 9px; font-size: 13px; }
+  .learningHero { grid-template-columns: minmax(0, 1.55fr) minmax(310px, 0.9fr); }
+  .stepCard { padding-inline: 9px; column-gap: 7px; }
+  .stepCard strong { font-size: 14px; }
+  .stepCard > span:last-child { font-size: 12px; }
+  .courseGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 900px) {
+  .dashboard { padding-inline: 15px; background-size: auto 690px; }
+  .topbar { gap: 12px; }
+  .brandText strong { font-size: 18px; }
+  .brandText span { font-size: 11px; }
+  .nav { overflow-x: auto; justify-content: flex-start; }
+  .learningHero { grid-template-columns: 1fr; }
+  .metricGrid { grid-template-columns: repeat(2, 1fr); }
+  .courseHeader { align-items: flex-start; flex-direction: column; }
+  .courseTools { justify-content: flex-start; }
+}
+
+@media (max-width: 620px) {
+  .dashboard { padding: 0 11px 74px; background-size: auto 560px; }
+  .topbar { min-height: 72px; flex-direction: row; flex-wrap: nowrap; padding: 10px 0; }
+  .brand { min-width: 0; gap: 9px; }
+  .brandMark { width: 44px; height: 44px; font-size: 21px; }
+  .brandText { min-width: 0; }
+  .brandText strong { overflow: hidden; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+  .brandText span { display: none; }
+  .nav { display: none; }
+  .profileChip { margin-left: auto; padding-right: 5px; }
+  .profileChip strong, .profileChip > span:last-child { display: none; }
+  .profileChip img, .profileChip > span:first-child, .profilePlaceholder > span { width: 34px; height: 34px; }
+  .focusPanel { min-height: 0; padding: 20px 11px 14px; }
+  .sectionRibbon { margin-bottom: 18px; padding: 7px 16px; font-size: 19px; }
+  .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .stepArrow { display: none; }
+  .stepCard { min-height: 113px; grid-template-columns: auto 1fr; padding: 10px 8px; }
+  .stepNumber { width: 29px; height: 29px; font-size: 15px; }
+  .stepIcon { width: 27px; height: 27px; }
+  .stepCard strong { font-size: 13px; }
+  .stepCard > span:last-child { font-size: 11px; }
+  .continueCard { min-height: 260px; padding: 22px 19px 17px; }
+  .continueCard h1 { font-size: 19px; }
+  .metricGrid { gap: 8px; }
+  .metricCard { min-height: 100px; gap: 9px; padding: 12px 9px; }
+  .metricIcon { width: 45px; height: 45px; }
+  .metricIcon svg { width: 25px; height: 25px; }
+  .metricCard strong { font-size: 21px; }
+  .metricCard a { font-size: 11px; }
+  .recommendSection { padding: 13px 10px; }
+  .recommendGrid { grid-template-columns: 1fr; gap: 8px; }
+  .recommendCard { min-height: 82px; padding: 10px 12px; }
+  .recommendIcon { width: 45px; height: 45px; }
+  .recommendCard strong { font-size: 14px; }
+  .recommendCard p { font-size: 12px; }
+  .courseHeader h2 { font-size: 21px; }
+  .courseTools { width: 100%; gap: 7px; }
+  .filterPills { width: 100%; }
+  .filterButton, .filterActive { flex: 1; padding-inline: 8px; }
+  .courseSearch { width: 100%; }
+  .sortLabel { flex: 1; justify-content: center; }
+  .courseGrid { grid-template-columns: 1fr; }
+  .courseThumb { min-height: 166px; }
+  .courseTitle { font-size: 14px; }
+  .recentGrid { grid-template-columns: 1fr; gap: 10px; margin-top: 18px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dashboard *, .dashboard *::before, .dashboard *::after { scroll-behavior: auto !important; transition: none !important; animation: none !important; }
+}
