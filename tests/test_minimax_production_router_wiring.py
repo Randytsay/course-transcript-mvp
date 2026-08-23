@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from app.jobs.correction_policy import GEMINI_FIRST, M3_FIRST
 from app.providers.correction.base import ProviderError
 from app.providers.correction.minimax import MiniMaxCorrectionProvider
 from app.providers.correction.registry import (
@@ -13,6 +14,7 @@ from app.providers.correction.registry import (
     LEGACY_MINIMAX_PROFILE_ID,
 )
 from app.providers.correction_routing import M3QuotaState
+from app.providers.minimax_quota import MiniMaxQuotaSnapshot
 
 
 class TestMiniMaxEndpointSelection(unittest.TestCase):
@@ -87,72 +89,28 @@ class TestLegacyMiniMaxTokenPlanProfile(unittest.TestCase):
             self.assertEqual(cm.exception.kind, "auth")
 
 
-class TestProductionM3RoutingFields(unittest.TestCase):
-    def _fields(
-        self,
-        *,
-        enabled: str,
-        policy: str,
-        quota_state: M3QuotaState = M3QuotaState.AVAILABLE,
-        correction_enabled: bool = True,
-    ):
-        import app.api_ext as api_ext
+class TestCorrectionTimeQuota(unittest.TestCase):
+    def test_gemini_first_never_checks_minimax_quota(self):
+        import app.providers.windowed_m3_policy as policy
 
-        with patch.dict(os.environ, {"MINIMAX_M3_ENABLED": enabled}, clear=False):
-            with patch.object(api_ext, "_m3_quota_state", return_value=quota_state):
-                return api_ext._production_correction_router_fields(
-                    policy=policy,
-                    correction_enabled=correction_enabled,
-                )
+        with patch.object(policy, "MiniMaxQuotaClient") as quota_client:
+            snapshot = policy._quota_snapshot(GEMINI_FIRST)
+        self.assertEqual(snapshot.state, M3QuotaState.UNKNOWN)
+        self.assertEqual(snapshot.reason, "gemini_requested")
+        quota_client.assert_not_called()
 
-    def test_disabled_m3_first_remains_legacy_fail_closed(self):
-        self.assertEqual(self._fields(enabled="false", policy="M3_FIRST"), {})
+    def test_disabled_m3_does_not_check_quota(self):
+        import app.providers.windowed_m3_policy as policy
 
-    def test_enabled_available_m3_first_pins_windowed_router(self):
-        fields = self._fields(
-            enabled="true",
-            policy="M3_FIRST",
-            quota_state=M3QuotaState.AVAILABLE,
-        )
-        self.assertEqual(fields["correction_provider"], "minimax")
-        self.assertEqual(
-            fields["correction_provider_profile_id"],
-            LEGACY_MINIMAX_PROFILE_ID,
-        )
-        self.assertEqual(fields["correction_execution_mode"], "REALTIME")
-        self.assertEqual(fields["correction_fallback_policy"], "RAW_CHIRP_FALLBACK")
+        with patch.dict(os.environ, {"MINIMAX_M3_ENABLED": "false"}, clear=False):
+            with patch.object(policy, "MiniMaxQuotaClient") as quota_client:
+                snapshot = policy._quota_snapshot(M3_FIRST)
+        self.assertEqual(snapshot.state, M3QuotaState.UNKNOWN)
+        self.assertEqual(snapshot.reason, "m3_feature_disabled")
+        quota_client.assert_not_called()
 
-    def test_unknown_quota_keeps_gemini_safe_path(self):
-        self.assertEqual(
-            self._fields(
-                enabled="true",
-                policy="M3_FIRST",
-                quota_state=M3QuotaState.UNKNOWN,
-            ),
-            {},
-        )
-
-    def test_unavailable_quota_keeps_gemini_safe_path(self):
-        self.assertEqual(
-            self._fields(
-                enabled="true",
-                policy="M3_FIRST",
-                quota_state=M3QuotaState.UNAVAILABLE,
-            ),
-            {},
-        )
-
-    def test_gemini_first_never_pins_minimax_router(self):
-        self.assertEqual(self._fields(enabled="true", policy="GEMINI_FIRST"), {})
-
-    def test_correction_disabled_never_pins_minimax_router(self):
-        self.assertEqual(
-            self._fields(enabled="true", policy="M3_FIRST", correction_enabled=False),
-            {},
-        )
-
-    def test_quota_check_disabled_is_unknown_without_network(self):
-        import app.api_ext as api_ext
+    def test_quota_check_disabled_is_fail_closed_without_network(self):
+        import app.providers.windowed_m3_policy as policy
 
         with patch.dict(
             os.environ,
@@ -162,9 +120,199 @@ class TestProductionM3RoutingFields(unittest.TestCase):
             },
             clear=False,
         ):
-            with patch.object(api_ext, "MiniMaxQuotaClient") as client:
-                self.assertEqual(api_ext._m3_quota_state(), M3QuotaState.UNKNOWN)
-                client.assert_not_called()
+            with patch.object(policy, "MiniMaxQuotaClient") as quota_client:
+                snapshot = policy._quota_snapshot(M3_FIRST)
+        self.assertEqual(snapshot.state, M3QuotaState.UNKNOWN)
+        self.assertEqual(snapshot.reason, "quota_check_disabled")
+        quota_client.assert_not_called()
+
+    def test_enabled_m3_forces_fresh_quota_at_correction_time(self):
+        import app.providers.windowed_m3_policy as policy
+
+        expected = MiniMaxQuotaSnapshot(
+            M3QuotaState.AVAILABLE,
+            "2026-08-23T15:00:00+00:00",
+            source_pool="MiniMax-M3",
+            interval_remaining=10,
+            weekly_remaining=100,
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "MINIMAX_M3_ENABLED": "true",
+                "MINIMAX_M3_QUOTA_CHECK_ENABLED": "true",
+            },
+            clear=False,
+        ):
+            with patch.object(policy, "MiniMaxQuotaClient") as quota_cls:
+                quota_cls.return_value.get_quota.return_value = expected
+                snapshot = policy._quota_snapshot(M3_FIRST)
+        self.assertIs(snapshot, expected)
+        quota_cls.return_value.get_quota.assert_called_once_with(force_refresh=True)
+
+    def test_quota_check_error_becomes_unknown_without_leaking_error(self):
+        import app.providers.windowed_m3_policy as policy
+
+        with patch.dict(
+            os.environ,
+            {
+                "MINIMAX_M3_ENABLED": "true",
+                "MINIMAX_M3_QUOTA_CHECK_ENABLED": "true",
+            },
+            clear=False,
+        ):
+            with patch.object(policy, "MiniMaxQuotaClient") as quota_cls:
+                quota_cls.return_value.get_quota.side_effect = RuntimeError("secret provider body")
+                snapshot = policy._quota_snapshot(M3_FIRST)
+        self.assertEqual(snapshot.state, M3QuotaState.UNKNOWN)
+        self.assertEqual(snapshot.reason, "quota_check_failed")
+        self.assertNotIn("secret", snapshot.reason)
+
+
+class TestCorrectionTimeDispatch(unittest.TestCase):
+    def _ctx(self):
+        return {
+            "job_id": "job-1",
+            "data_dir": "/tmp/data",
+            "correction_provider": "",
+            "correction_provider_profile_id": "",
+            "correction_model": "",
+            "correction_execution_mode": "REALTIME",
+            "correction_fallback_policy": "RAW_CHIRP_FALLBACK",
+            "source_revision": "sha",
+            "source_sha256": "sha",
+            "segments": [{"segment_id": "s1", "text": "原文"}],
+            "raw_segments": [{"segment_id": "s1", "text": "原文"}],
+            "glossary": [],
+        }
+
+    def test_available_m3_uses_windowed_router_not_legacy_runtime(self):
+        import app.providers.windowed_m3_policy as policy
+        import app.providers.correction_runtime_bridge as bridge
+        import app.providers.correct_text_legacy_hardened as legacy
+
+        quota = MiniMaxQuotaSnapshot(M3QuotaState.AVAILABLE, "now")
+        result = {
+            "correction_status": "completed_realtime",
+            "correction_corrections": [
+                {"segment_id": "s1", "corrected_text": "校正", "uncertain_terms": []}
+            ],
+            "correction_raw_response": {},
+            "correction_prompt_version": "corr-v2",
+            "correction_fallback_segment_ids": [],
+            "correction_window_results": [],
+            "correction_provider_circuit_opened": False,
+        }
+        with patch.dict(
+            os.environ,
+            {
+                "CORRECTION_REQUESTED_POLICY": "M3_FIRST",
+                "MINIMAX_M3_ENABLED": "true",
+            },
+            clear=False,
+        ):
+            with patch.object(policy, "_quota_snapshot", return_value=quota), \
+                 patch.object(policy, "_job_context", return_value=(self._ctx(), Path("/tmp/job"))), \
+                 patch.object(policy, "_write_route_evidence"), \
+                 patch.object(bridge, "run_module", return_value=result) as run_module, \
+                 patch.object(bridge, "_write_corrected_outputs") as writer, \
+                 patch.object(legacy, "main", return_value=0) as legacy_main:
+                rc = policy.main()
+        self.assertEqual(rc, 0)
+        legacy_main.assert_not_called()
+        run_module.assert_called_once()
+        routed_ctx = run_module.call_args.kwargs["ctx"]
+        self.assertEqual(routed_ctx["correction_provider"], "minimax")
+        self.assertEqual(
+            routed_ctx["correction_provider_profile_id"],
+            LEGACY_MINIMAX_PROFILE_ID,
+        )
+        writer.assert_called_once()
+
+    def test_unknown_quota_uses_gemini_legacy_path(self):
+        import app.providers.windowed_m3_policy as policy
+        import app.providers.correction_runtime_bridge as bridge
+        import app.providers.correct_text_legacy_hardened as legacy
+
+        quota = MiniMaxQuotaSnapshot(M3QuotaState.UNKNOWN, "now", reason="quota_check_failed")
+        with patch.dict(
+            os.environ,
+            {
+                "CORRECTION_REQUESTED_POLICY": "M3_FIRST",
+                "MINIMAX_M3_ENABLED": "true",
+            },
+            clear=False,
+        ):
+            with patch.object(policy, "_quota_snapshot", return_value=quota), \
+                 patch.object(policy, "_job_context", return_value=(self._ctx(), Path("/tmp/job"))), \
+                 patch.object(policy, "_write_route_evidence"), \
+                 patch.object(bridge, "run_module") as run_module, \
+                 patch.object(legacy, "main", return_value=0) as legacy_main:
+                rc = policy.main()
+        self.assertEqual(rc, 0)
+        legacy_main.assert_called_once()
+        run_module.assert_not_called()
+
+    def test_unavailable_quota_uses_gemini_legacy_path(self):
+        import app.providers.windowed_m3_policy as policy
+        import app.providers.correction_runtime_bridge as bridge
+        import app.providers.correct_text_legacy_hardened as legacy
+
+        quota = MiniMaxQuotaSnapshot(M3QuotaState.UNAVAILABLE, "now", reason="no_allowance")
+        with patch.dict(
+            os.environ,
+            {
+                "CORRECTION_REQUESTED_POLICY": "M3_FIRST",
+                "MINIMAX_M3_ENABLED": "true",
+            },
+            clear=False,
+        ):
+            with patch.object(policy, "_quota_snapshot", return_value=quota), \
+                 patch.object(policy, "_job_context", return_value=(self._ctx(), Path("/tmp/job"))), \
+                 patch.object(policy, "_write_route_evidence"), \
+                 patch.object(bridge, "run_module") as run_module, \
+                 patch.object(legacy, "main", return_value=0) as legacy_main:
+                rc = policy.main()
+        self.assertEqual(rc, 0)
+        legacy_main.assert_called_once()
+        run_module.assert_not_called()
+
+    def test_gemini_first_uses_legacy_without_m3_generation(self):
+        import app.providers.windowed_m3_policy as policy
+        import app.providers.correction_runtime_bridge as bridge
+        import app.providers.correct_text_legacy_hardened as legacy
+
+        quota = MiniMaxQuotaSnapshot(M3QuotaState.UNKNOWN, "", reason="gemini_requested")
+        with patch.dict(
+            os.environ,
+            {
+                "CORRECTION_REQUESTED_POLICY": "GEMINI_FIRST",
+                "MINIMAX_M3_ENABLED": "true",
+            },
+            clear=False,
+        ):
+            with patch.object(policy, "_quota_snapshot", return_value=quota), \
+                 patch.object(policy, "_job_context", return_value=(self._ctx(), Path("/tmp/job"))), \
+                 patch.object(policy, "_write_route_evidence"), \
+                 patch.object(bridge, "run_module") as run_module, \
+                 patch.object(legacy, "main", return_value=0) as legacy_main:
+                rc = policy.main()
+        self.assertEqual(rc, 0)
+        legacy_main.assert_called_once()
+        run_module.assert_not_called()
+
+
+class TestCompatibilityEntrypoint(unittest.TestCase):
+    def test_hardened_entry_uses_windowed_policy_when_m3_enabled(self):
+        import app.providers.correct_text_hardened as hardened
+        import app.providers.windowed_m3_policy as policy
+
+        with patch.dict(os.environ, {"MINIMAX_M3_ENABLED": "true"}, clear=False):
+            with patch.object(policy, "main", return_value=1) as routed, \
+                 patch.object(hardened, "_with_consistency", side_effect=lambda rc: rc):
+                rc = hardened.main()
+        self.assertEqual(rc, 1)
+        routed.assert_called_once_with()
 
 
 if __name__ == "__main__":
