@@ -15,6 +15,8 @@ services:
     environment:
       COURSE_TRANSCRIPT_DATA_DIR: /app/data
       COURSE_TRANSCRIPT_RETRANSCRIPTION_WORKER_ID: retranscription-worker-1
+      ASR_RETRANSCRIPTION_ENABLED: ${ASR_RETRANSCRIPTION_ENABLED:-false}
+      COURSE_TRANSCRIPT_RETRANSCRIPTION_DISABLED_POLL_SECONDS: ${COURSE_TRANSCRIPT_RETRANSCRIPTION_DISABLED_POLL_SECONDS:-60}
       GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
       GCS_BUCKET: ${GCS_BUCKET:-course-transcript-mvp}
       CHIRP_PROVIDER_DEADLINE_SECONDS: ${CHIRP_PROVIDER_DEADLINE_SECONDS:-90000}
@@ -26,4 +28,4 @@ services:
       - ./logs:/app/logs
       - ./tmp:/app/tmp
       - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro
-    command: ["python", "-m", "app.jobs.retranscription_worker", "--poll-seconds", "30"]
+    command: ["python", "-m", "app.jobs.retranscription_worker_entry"]
