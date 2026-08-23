@@ -7,6 +7,10 @@ pipeline-worker):
     <profiles_dir>/<profile_id>/metadata.json
 
 Keys NEVER enter SQLite, logs, audit payloads or API responses.
+
+The production MiniMax Token Plan predates this profile store and already uses
+one protected read-only key file.  The explicit legacy profile id below bridges
+that existing credential into the shared router without copying the secret.
 """
 from __future__ import annotations
 
@@ -25,6 +29,7 @@ from .minimax import MiniMaxCorrectionProvider
 
 
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}$")
+LEGACY_MINIMAX_PROFILE_ID = "legacy-minimax-token-plan"
 PROVIDER_CLASSES = {
     ProviderId.VERTEX: VertexCorrectionProvider,
     ProviderId.OPENROUTER: OpenRouterCorrectionProvider,
@@ -83,6 +88,8 @@ class AIProviderProfileStore:
                api_key: str, default_model: str) -> dict[str, Any]:
         if provider not in PROVIDER_CLASSES:
             raise ProviderError("unknown", f"未知的 provider: {provider}")
+        if profile_id == LEGACY_MINIMAX_PROFILE_ID:
+            raise ProviderError("unknown", "保留的 MiniMax Token Plan profile id 不可由 UI 建立")
         pdir = self.profile_dir(profile_id)
         existed = pdir.exists()
         self._ensure_private_dir(pdir)
@@ -104,6 +111,8 @@ class AIProviderProfileStore:
                 "key_configured": True}  # never the key itself
 
     def replace_key(self, profile_id: str, *, api_key: str) -> dict[str, Any]:
+        if profile_id == LEGACY_MINIMAX_PROFILE_ID:
+            raise ProviderError("unknown", "保留的 MiniMax Token Plan key 只能由主機 secret 管理")
         pdir = self.profile_dir(profile_id)
         if not pdir.exists():
             raise ProviderError("unknown", "找不到這個供應商設定檔")
@@ -116,6 +125,8 @@ class AIProviderProfileStore:
         return {"id": profile_id, "key_replaced": True}
 
     def delete(self, profile_id: str) -> dict[str, Any]:
+        if profile_id == LEGACY_MINIMAX_PROFILE_ID:
+            raise ProviderError("unknown", "保留的 MiniMax Token Plan profile 不可由 UI 刪除")
         import shutil
         pdir = self.profile_dir(profile_id)
         if not pdir.exists():
@@ -139,6 +150,17 @@ class AIProviderProfileStore:
             raise ProviderError("auth", f"API key 空白: {profile_id}")
         return key
 
+    @staticmethod
+    def _legacy_minimax_key() -> str:
+        path = Path(os.environ.get("MINIMAX_API_KEY_FILE", "/run/secrets/minimax-api-key"))
+        try:
+            key = path.read_text("utf-8").strip()
+        except OSError as exc:
+            raise ProviderError("auth", "MiniMax Token Plan API key 無法讀取") from exc
+        if not key:
+            raise ProviderError("auth", "MiniMax Token Plan API key 空白")
+        return key
+
     def list_profiles(self) -> list[dict[str, Any]]:
         if not self.profiles_dir.is_dir():
             return []
@@ -155,6 +177,8 @@ class AIProviderProfileStore:
         return items
 
     def mark_validated(self, profile_id: str, status: str) -> None:
+        if profile_id == LEGACY_MINIMAX_PROFILE_ID:
+            return
         meta = self.load_metadata(profile_id)
         meta["last_validated_at"] = self._now()
         meta["validation_status"] = status
@@ -165,6 +189,13 @@ class AIProviderProfileStore:
 
     def build_client(self, profile_id: str, *, model: str | None = None,
                      http=None):
+        if profile_id == LEGACY_MINIMAX_PROFILE_ID:
+            return MiniMaxCorrectionProvider(
+                api_key=self._legacy_minimax_key(),
+                model=model or os.environ.get("MINIMAX_M3_MODEL") or MiniMaxCorrectionProvider.default_model,
+                http=http,
+                base_url=os.environ.get("MINIMAX_API_BASE_URL", "https://api.minimaxi.com"),
+            )
         meta = self.load_metadata(profile_id)
         cls = PROVIDER_CLASSES.get(meta.get("provider"))
         if cls is None:

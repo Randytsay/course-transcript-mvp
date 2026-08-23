@@ -52,10 +52,14 @@ def _with_consistency(result: int) -> int:
         run_terminology_consistency(base.JOB)
     return result
 
+
 def main() -> int:
     if os.getenv("MINIMAX_M3_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
-        from app.providers import correction_runtime
-        return _with_consistency(correction_runtime.main())
+        # Preserve the production M3_FIRST policy/quota contract, but route an
+        # actually available M3 job through the shared windowed provider router
+        # instead of the historical one-way course-level runtime.
+        from app.providers import windowed_m3_policy
+        return _with_consistency(windowed_m3_policy.main())
     if correction_cascade_enabled():
         return _with_consistency(cascade.main())
     legacy.generate_json = generate_json
