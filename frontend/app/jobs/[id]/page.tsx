@@ -37,6 +37,7 @@ export default async function Page({ params }: PageProps) {
           justifyContent: "flex-end",
         }}
       >
+        <Link href={`/jobs/${id}/asr-quality`} style={{ ...linkStyle, color: "#92400e", background: "#fffbeb", borderColor: "#f59e0b" }}>ASR 品質檢查</Link>
         <Link href={`/jobs/${id}/performance`} style={linkStyle}>效能與費用分析</Link>
         <Link href={`/subtitles/${id}`} style={{ ...linkStyle, color: "#fff", background: "#047857", borderColor: "#047857" }}>字幕校訂中心</Link>
         <Link href={`/jobs/${id}/review`} style={{ ...linkStyle, color: "#fff", background: "#3730a3", borderColor: "#3730a3" }}>完整審查與輸出</Link>
