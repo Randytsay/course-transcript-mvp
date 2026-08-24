@@ -151,6 +151,41 @@ class TestMiniMaxWindowFallback(unittest.TestCase):
         assert by_id["s024"]["corrected_text"] == source[24]["text"]
         assert by_id["s048"]["corrected_text"].endswith("校")
 
+    def test_content_rejected_window_falls_back_once_without_circuit_and_continues(self):
+        calls = 0
+
+        class Client:
+            supports_window_fallback = True
+            last_response_meta = {"finish_reason": "stop", "usage": {}}
+
+            def realtime_generate(self, prompt):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise ProviderError(
+                        "content_rejected",
+                        "MiniMax 內容審查拒絕請求（HTTP 422），category=content_rejected",
+                    )
+                return corrected_for_prompt(prompt)
+
+        orch = CorrectionOrchestrator(
+            run_store=None, client_factory=lambda provider, profile: Client()
+        )
+        source = segments(49)
+        result = orch.correct_realtime(spec(), source, [])
+
+        # Three windows => exactly one call per window. The rejected window is
+        # not retried, split, or used to open the transport circuit.
+        assert calls == 3
+        assert result["provider_circuit_opened"] is False
+        assert len(result["fallback_segment_ids"]) == 24
+        rejected = result["window_results"][1]
+        assert rejected["status"] == "fallback_raw_chirp"
+        assert rejected["reason"] == "content_rejected"
+        assert rejected["attempts"] == 1
+        assert "category=content_rejected" in rejected["safe_error"]
+        assert result["window_results"][2]["status"] == "completed"
+
     def test_invalid_json_gets_one_bounded_retry(self):
         calls = 0
 
