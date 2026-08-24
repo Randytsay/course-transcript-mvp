@@ -11,12 +11,15 @@ Important invariants:
   canonical response is an array and MiniMax is declared non-native-schema;
 - non-success HTTP responses are mapped to safe error kinds without retaining
   provider response text in the exception;
+- HTTP validation failures expose only bounded structural metadata such as
+  provider code / parameter / validation location, never arbitrary messages;
 - when finish/usage metadata is present it is validated before content is
   accepted;
 - runtime base URLs are restricted to MiniMax's fixed CN/global API hosts.
 """
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 from typing import Any
 
@@ -30,11 +33,22 @@ GLOBAL_BASE_URL = "https://api.minimax.io/v1"
 CN_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MODEL = "MiniMax-M3"
 DEFAULT_MAX_COMPLETION_TOKENS = 4096
-# The CN OpenAI-compatible /v1/chat/completions contract documents a hard
-# max_completion_tokens ceiling of 2048. Keep the broader historical default
-# for the global endpoint, but never send an invalid oversized request to CN.
-CN_MAX_COMPLETION_TOKENS = 2048
 _ALLOWED_API_HOSTS = frozenset({"api.minimax.io", "api.minimaxi.com"})
+_SAFE_ATOM_RE = re.compile(r"^[A-Za-z0-9_.:\-\[\]]{1,64}$")
+_CONTENT_REJECTION_MARKERS = (
+    "content moderation",
+    "moderation",
+    "content policy",
+    "sensitive",
+    "safety",
+    "prohibited",
+    "内容安全",
+    "敏感",
+    "审核",
+    "違規",
+    "违规",
+    "风控",
+)
 
 
 def _normalize_base_url(value: str | None) -> str:
@@ -48,6 +62,102 @@ def _normalize_base_url(value: str | None) -> str:
     if path not in {"", "/v1"}:
         raise ProviderError("auth", "MiniMax API endpoint 只允許官方根路徑或 /v1")
     return f"https://{parsed.hostname}/v1"
+
+
+def _safe_atom(value: Any) -> str | None:
+    """Return a bounded identifier-like value, never arbitrary provider text."""
+    if not isinstance(value, (str, int)):
+        return None
+    text = str(value).strip()
+    return text if _SAFE_ATOM_RE.fullmatch(text) else None
+
+
+def _safe_loc(value: Any) -> str | None:
+    """Normalize validation locations without accepting arbitrary content."""
+    if isinstance(value, (list, tuple)):
+        atoms: list[str] = []
+        for item in value[:8]:
+            atom = _safe_atom(item)
+            if atom is None:
+                return None
+            atoms.append(atom)
+        text = ".".join(atoms)
+        return text[:160] if text else None
+    return _safe_atom(value)
+
+
+def _known_message_candidates(body: Any) -> list[str]:
+    """Read provider messages only for categorization; callers never expose them."""
+    if not isinstance(body, dict):
+        return []
+    values: list[Any] = [body.get("message")]
+    error = body.get("error")
+    if isinstance(error, dict):
+        values.append(error.get("message"))
+    base_resp = body.get("base_resp")
+    if isinstance(base_resp, dict):
+        values.append(base_resp.get("status_msg"))
+    detail = body.get("detail")
+    if isinstance(detail, str):
+        values.append(detail)
+    elif isinstance(detail, list):
+        for item in detail[:4]:
+            if isinstance(item, dict):
+                values.append(item.get("msg"))
+                values.append(item.get("message"))
+    return [value for value in values if isinstance(value, str)]
+
+
+def _is_content_rejection(body: Any) -> bool:
+    for message in _known_message_candidates(body):
+        lowered = message.lower()
+        if any(marker in lowered for marker in _CONTENT_REJECTION_MARKERS):
+            return True
+    return False
+
+
+def _safe_request_metadata(body: Any) -> list[str]:
+    """Extract only allow-listed structural diagnostics from an error body."""
+    if not isinstance(body, dict):
+        return []
+    result: list[str] = []
+
+    def add(label: str, value: Any) -> None:
+        atom = _safe_atom(value)
+        if atom is not None:
+            entry = f"{label}={atom}"
+            if entry not in result:
+                result.append(entry)
+
+    error = body.get("error")
+    if isinstance(error, dict):
+        add("error_type", error.get("type"))
+        add("param", error.get("param"))
+
+    add("error_type", body.get("type"))
+    add("param", body.get("param"))
+
+    detail = body.get("detail")
+    if isinstance(detail, list):
+        for item in detail[:4]:
+            if not isinstance(item, dict):
+                continue
+            loc = _safe_loc(item.get("loc"))
+            kind = _safe_atom(item.get("type"))
+            parts = []
+            if loc:
+                parts.append(f"loc:{loc}")
+            if kind:
+                parts.append(f"type:{kind}")
+            if parts:
+                entry = "validation=" + ",".join(parts)
+                if entry not in result:
+                    result.append(entry)
+
+    if _is_content_rejection(body):
+        result.append("category=content_rejected")
+
+    return result[:6]
 
 
 class MiniMaxCorrectionProvider:
@@ -78,12 +188,7 @@ class MiniMaxCorrectionProvider:
         self.base_url = _normalize_base_url(base_url)
         self.chat_url = f"{self.base_url}/chat/completions"
         self.models_url = f"{self.base_url}/models"
-        requested_max = max(256, int(max_completion_tokens))
-        self.max_completion_tokens = (
-            min(requested_max, CN_MAX_COMPLETION_TOKENS)
-            if self.base_url == CN_BASE_URL
-            else requested_max
-        )
+        self.max_completion_tokens = max(256, int(max_completion_tokens))
         self.last_response_meta: dict[str, Any] = {}
 
     def _headers(self) -> dict[str, str]:
@@ -121,15 +226,18 @@ class MiniMaxCorrectionProvider:
             if isinstance(body.get("base_resp"), dict) else None,
         ]
         for value in candidates:
-            if isinstance(value, (str, int)):
-                code = str(value).strip()
-                if code and len(code) <= 64:
-                    return code
+            code = _safe_atom(value)
+            if code:
+                return code
         return None
 
     def _raise_http_error(self, status: int, body: Any) -> None:
+        safe_parts: list[str] = []
         code = self._provider_code(body)
-        suffix = f"，provider code={code}" if code else ""
+        if code:
+            safe_parts.append(f"provider code={code}")
+        safe_parts.extend(_safe_request_metadata(body))
+        suffix = "，" + "，".join(safe_parts) if safe_parts else ""
         if status in (401, 403):
             raise ProviderError("auth", f"MiniMax API key 無效或無權限{suffix}")
         if status == 429:
