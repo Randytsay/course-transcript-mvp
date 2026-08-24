@@ -11,6 +11,8 @@ Important invariants:
   canonical response is an array and MiniMax is declared non-native-schema;
 - non-success HTTP responses are mapped to safe error kinds without retaining
   provider response text in the exception;
+- provider-confirmed content moderation rejection is a distinct, non-retryable
+  ``content_rejected`` kind rather than a request-schema failure;
 - HTTP validation failures expose only bounded structural metadata such as
   provider code / parameter / validation location, never arbitrary messages;
 - when finish/usage metadata is present it is validated before content is
@@ -49,6 +51,7 @@ _CONTENT_REJECTION_MARKERS = (
     "违规",
     "风控",
 )
+_CONTENT_REJECTION_HTTP_STATUSES = frozenset({400, 403, 422})
 
 
 def _normalize_base_url(value: str | None) -> str:
@@ -238,6 +241,16 @@ class MiniMaxCorrectionProvider:
             safe_parts.append(f"provider code={code}")
         safe_parts.extend(_safe_request_metadata(body))
         suffix = "，" + "，".join(safe_parts) if safe_parts else ""
+
+        # A provider-confirmed policy rejection is not a malformed request.
+        # Treat it as a distinct, non-retryable window outcome so callers can
+        # preserve raw Chirp without attempting to evade moderation by retrying,
+        # splitting, rewriting, or changing endpoints/models.
+        if status in _CONTENT_REJECTION_HTTP_STATUSES and _is_content_rejection(body):
+            raise ProviderError(
+                "content_rejected",
+                f"MiniMax 內容審查拒絕請求（HTTP {status}）{suffix}",
+            )
         if status in (401, 403):
             raise ProviderError("auth", f"MiniMax API key 無效或無權限{suffix}")
         if status == 429:
