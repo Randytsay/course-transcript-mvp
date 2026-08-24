@@ -35,6 +35,15 @@ A provider-confirmed moderation/content-policy rejection is represented as:
 ProviderError.kind = content_rejected
 ```
 
+Classification is intentionally conservative. A message substring alone is not
+sufficient: the response must contain both a specific moderation/content-policy
+marker and bounded structural provider evidence such as `error.type`, top-level
+`type`, or `base_resp.status_code`. Generic words such as `safety`, `sensitive`,
+or `敏感` are not content-rejection markers because they can also appear in
+authentication, gateway, or permission errors. In particular, an HTTP 403 that
+lacks corroborating content-rejection structure must retain normal `auth`
+classification.
+
 It is **window-local and non-retryable**.
 
 When `fallback_policy=RAW_CHIRP_FALLBACK`, the correction orchestrator must:
