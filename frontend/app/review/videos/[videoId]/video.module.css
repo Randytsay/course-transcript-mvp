@@ -116,6 +116,9 @@
 .playerColumn {
   display: flex;
   flex-direction: column;
+  position: sticky;
+  top: 12px;
+  align-self: start;
 }
 
 .playerFrame {
@@ -858,6 +861,10 @@
     height: auto;
     min-height: 0;
     grid-template-columns: 1fr;
+  }
+
+  .playerColumn {
+    position: static;
   }
 
   .subtitlePanel {

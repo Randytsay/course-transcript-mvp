@@ -141,6 +141,15 @@ export default function ReviewVideoPage() {
   const [currentMs, setCurrentMs] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [followPlayback, setFollowPlayback] = useState(true);
+  const activeSegmentIdRef = useRef<number | null>(null);
+  const selectedSegmentIdRef = useRef<number | null>(null);
+  const followPlaybackRef = useRef(true);
+  useEffect(() => {
+    selectedSegmentIdRef.current = selectedSegmentId;
+  }, [selectedSegmentId]);
+  useEffect(() => {
+    followPlaybackRef.current = followPlayback;
+  }, [followPlayback]);
   const [batchFindText, setBatchFindText] = useState("");
   const [batchReplaceText, setBatchReplaceText] = useState("");
   const [batchBusy, setBatchBusy] = useState(false);
@@ -287,9 +296,10 @@ export default function ReviewVideoPage() {
       const active = detail.segments.find(
         (segment) => milliseconds >= segment.start_ms && milliseconds < segment.end_ms,
       );
-      if (active && active.id !== activeSegmentId) {
+      if (active && active.id !== activeSegmentIdRef.current) {
         setActiveSegmentId(active.id);
-        if (followPlayback && selectedSegmentId === null) {
+        activeSegmentIdRef.current = active.id;
+        if (followPlaybackRef.current && selectedSegmentIdRef.current === null) {
           document.getElementById(`review-segment-${active.id}`)?.scrollIntoView({
             block: "nearest",
             behavior: "smooth",
@@ -298,7 +308,7 @@ export default function ReviewVideoPage() {
       }
     }, 300);
     return () => window.clearInterval(timer);
-  }, [activeSegmentId, detail, followPlayback, selectedSegmentId]);
+  }, [detail]);
 
   useEffect(() => {
     if (!me || !detail) return;
