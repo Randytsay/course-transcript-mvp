@@ -106,14 +106,47 @@ class MiniMaxSafe422DiagnosticTests(unittest.TestCase):
         self.assertIn("param=reasoning_split", message)
         self.assertNotIn("TOP_SECRET_PROVIDER_MESSAGE", message)
 
-    def test_422_content_rejection_is_categorized_without_echoing_message(self):
+    def test_422_content_rejection_has_distinct_kind_without_echoing_message(self):
         exc = _error_for({
             "message": "Content moderation rejected TOP_SECRET_PROVIDER_MESSAGE",
+            "type": "unprocessable_entity_error",
+            "error": {"type": "error"},
         })
         message = exc.safe_message
-        self.assertEqual(exc.kind, "invalid_request")
+        self.assertEqual(exc.kind, "content_rejected")
+        self.assertIn("HTTP 422", message)
         self.assertIn("category=content_rejected", message)
+        self.assertIn("error_type=unprocessable_entity_error", message)
+        self.assertIn("error_type=error", message)
         self.assertNotIn("TOP_SECRET_PROVIDER_MESSAGE", message)
+        self.assertNotIn("TOP_SECRET_TRANSCRIPT", message)
+
+    def test_403_content_rejection_is_not_misclassified_as_auth(self):
+        exc = _error_for({
+            "error": {
+                "type": "policy_error",
+                "message": "Your message violates our content policy",
+            },
+        }, status=403)
+        self.assertEqual(exc.kind, "content_rejected")
+        self.assertIn("category=content_rejected", exc.safe_message)
+
+    def test_403_without_content_marker_remains_auth(self):
+        exc = _error_for({
+            "error": {
+                "type": "permission_error",
+                "message": "credential not permitted",
+            },
+        }, status=403)
+        self.assertEqual(exc.kind, "auth")
+
+    def test_422_unprocessable_entity_without_policy_marker_remains_invalid_request(self):
+        exc = _error_for({
+            "type": "unprocessable_entity_error",
+            "error": {"type": "error"},
+        })
+        self.assertEqual(exc.kind, "invalid_request")
+        self.assertNotIn("category=content_rejected", exc.safe_message)
 
     def test_422_rejects_arbitrary_metadata_tokens_in_safe_error(self):
         exc = _error_for({
