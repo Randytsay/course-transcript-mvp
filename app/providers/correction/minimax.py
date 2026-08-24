@@ -13,6 +13,9 @@ Important invariants:
   provider response text in the exception;
 - provider-confirmed content moderation rejection is a distinct, non-retryable
   ``content_rejected`` kind rather than a request-schema failure;
+- content rejection classification requires both a specific policy marker and
+  bounded structural provider evidence, so generic auth/permission messages
+  containing words such as ``safety`` cannot be reclassified by substring alone;
 - HTTP validation failures expose only bounded structural metadata such as
   provider code / parameter / validation location, never arbitrary messages;
 - when finish/usage metadata is present it is validated before content is
@@ -37,19 +40,20 @@ DEFAULT_MODEL = "MiniMax-M3"
 DEFAULT_MAX_COMPLETION_TOKENS = 4096
 _ALLOWED_API_HOSTS = frozenset({"api.minimax.io", "api.minimaxi.com"})
 _SAFE_ATOM_RE = re.compile(r"^[A-Za-z0-9_.:\-\[\]]{1,64}$")
+# Keep these markers specific to moderation/content-policy rejection. Generic
+# words such as "safety", "sensitive", and "敏感" also appear in auth,
+# gateway, and permission errors and therefore must not classify by themselves.
 _CONTENT_REJECTION_MARKERS = (
     "content moderation",
     "moderation",
     "content policy",
-    "sensitive",
-    "safety",
     "prohibited",
     "内容安全",
-    "敏感",
-    "审核",
+    "内容审核",
+    "审核拒绝",
     "違規",
     "违规",
-    "风控",
+    "风控拒绝",
 )
 _CONTENT_REJECTION_HTTP_STATUSES = frozenset({400, 403, 422})
 
@@ -111,7 +115,35 @@ def _known_message_candidates(body: Any) -> list[str]:
     return [value for value in values if isinstance(value, str)]
 
 
+def _has_content_rejection_structure(body: Any) -> bool:
+    """Require bounded provider structure in addition to message markers.
+
+    Provider error ``type`` fields and ``base_resp.status_code`` are useful
+    corroboration because they are structural fields rather than arbitrary
+    message prose. We deliberately require at least one of these before a
+    message marker may classify an error as ``content_rejected``.
+    """
+    if not isinstance(body, dict):
+        return False
+
+    error = body.get("error")
+    if isinstance(error, dict) and _safe_atom(error.get("type")) is not None:
+        return True
+    if _safe_atom(body.get("type")) is not None:
+        return True
+
+    base_resp = body.get("base_resp")
+    if (
+        isinstance(base_resp, dict)
+        and _safe_atom(base_resp.get("status_code")) is not None
+    ):
+        return True
+    return False
+
+
 def _is_content_rejection(body: Any) -> bool:
+    if not _has_content_rejection_structure(body):
+        return False
     for message in _known_message_candidates(body):
         lowered = message.lower()
         if any(marker in lowered for marker in _CONTENT_REJECTION_MARKERS):
