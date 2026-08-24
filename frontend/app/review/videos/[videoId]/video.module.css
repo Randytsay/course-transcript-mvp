@@ -863,10 +863,6 @@
     grid-template-columns: 1fr;
   }
 
-  .playerColumn {
-    position: static;
-  }
-
   .subtitlePanel {
     height: 58vh;
     min-height: 460px;
