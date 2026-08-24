@@ -30,6 +30,10 @@ GLOBAL_BASE_URL = "https://api.minimax.io/v1"
 CN_BASE_URL = "https://api.minimaxi.com/v1"
 DEFAULT_MODEL = "MiniMax-M3"
 DEFAULT_MAX_COMPLETION_TOKENS = 4096
+# The CN OpenAI-compatible /v1/chat/completions contract documents a hard
+# max_completion_tokens ceiling of 2048. Keep the broader historical default
+# for the global endpoint, but never send an invalid oversized request to CN.
+CN_MAX_COMPLETION_TOKENS = 2048
 _ALLOWED_API_HOSTS = frozenset({"api.minimax.io", "api.minimaxi.com"})
 
 
@@ -74,7 +78,12 @@ class MiniMaxCorrectionProvider:
         self.base_url = _normalize_base_url(base_url)
         self.chat_url = f"{self.base_url}/chat/completions"
         self.models_url = f"{self.base_url}/models"
-        self.max_completion_tokens = max(256, int(max_completion_tokens))
+        requested_max = max(256, int(max_completion_tokens))
+        self.max_completion_tokens = (
+            min(requested_max, CN_MAX_COMPLETION_TOKENS)
+            if self.base_url == CN_BASE_URL
+            else requested_max
+        )
         self.last_response_meta: dict[str, Any] = {}
 
     def _headers(self) -> dict[str, str]:
