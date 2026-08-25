@@ -280,6 +280,11 @@ def _validate_candidate(candidate: CandidateProposal, baseline_index: dict[str, 
                 raise HTTPException(status_code=422, detail=f"cue 引用不存在的 segment: {segment_id}")
             if segment_id not in ids:
                 raise HTTPException(status_code=422, detail=f"cue 超出候選範圍: {segment_id}")
+            if segment_id in seen_lineage:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"同一 source segment 不可出現在多個 derived cues: {segment_id}",
+                )
             seen_lineage.add(segment_id)
         text = cue.get("text")
         if not isinstance(text, str) or not text.strip():
@@ -408,6 +413,23 @@ def _resolve_cues(
                 )
             claimed_by[segment_id] = candidate["change_id"]
 
+    # V1 cannot safely edit only part of an already merged/reflowed Active cue.
+    # A candidate that touches a multi-source Active cue must own its complete
+    # lineage, otherwise replacing one member would either drop the remaining
+    # members or trigger an internal lookup failure. Fail closed instead.
+    for candidate in accepted:
+        scope = {str(value) for value in candidate["source_segment_ids"]}
+        for base_cue in base_cues:
+            members = {str(value) for value in base_cue["source_segment_ids"]}
+            if scope & members and not members <= scope:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "候選僅涵蓋 Active multi-source cue 的部分 lineage；"
+                        f"必須完整包含 {sorted(members)}"
+                    ),
+                )
+
     replaced_segments: dict[str, list[dict[str, Any]]] = {}
     for candidate in accepted:
         cue_specs: list[dict[str, Any]] = []
@@ -441,9 +463,34 @@ def _resolve_cues(
             continue
         cues.append(dict(cue))
     cues.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
+    _validate_final_cues(cues)
     for index, cue in enumerate(cues, 1):
         cue["cue_id"] = f"cue-{index:04d}"
     return cues
+
+
+def _validate_final_cues(cues: list[dict[str, Any]]) -> None:
+    """Fail closed if a materialized revision has invalid timeline/lineage."""
+    previous_end: int | None = None
+    seen_lineage: set[str] = set()
+    for cue in cues:
+        start = int(cue["start_ms"])
+        end = int(cue["end_ms"])
+        if start >= end:
+            raise HTTPException(status_code=409, detail="字幕 cue 時間範圍無效")
+        if previous_end is not None and start < previous_end:
+            raise HTTPException(status_code=409, detail="字幕 cue 時間重疊，拒絕建立 Revision")
+        lineage = [str(value) for value in cue.get("source_segment_ids", [])]
+        if not lineage:
+            raise HTTPException(status_code=409, detail="字幕 cue 缺少 source lineage")
+        for segment_id in lineage:
+            if segment_id in seen_lineage:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Final Revision 重複使用 source segment: {segment_id}",
+                )
+            seen_lineage.add(segment_id)
+        previous_end = end
 
 
 def _timing_of(cues: list[dict[str, Any]], segment_id: str) -> tuple[int, int] | None:
