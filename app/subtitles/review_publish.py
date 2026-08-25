@@ -36,7 +36,7 @@ def publish_reviewed(
             status_code=409,
             detail="Imported subtitle has no original Drive destination",
         )
-    canonical_state.ensure_editor_mutation_allowed(directory)
+    canonical_state.ensure_editor_mutation_allowed_for_legacy_only(directory)
     record = base._job_record(subtitle_id)
     if not record or not str(record.get("source_path", "")).startswith("gdrive:"):
         raise HTTPException(
@@ -50,9 +50,12 @@ def publish_reviewed(
         )
 
     with base._LOCK:
+        from app.subtitles import canonical_state as _cs
+
+        identity = _cs.publication_identity(directory)
         segments, state = base._current_segments(directory)
         snapshot_revision = int(state["revision"])
-        if snapshot_revision != payload.expected_revision:
+        if identity["canonical_source"] == "editor" and snapshot_revision != payload.expected_revision:
             raise HTTPException(
                 status_code=409,
                 detail="Reviewed subtitle revision changed; reload before publishing",
@@ -64,21 +67,42 @@ def publish_reviewed(
         shutil.copy2(rendered["txt"], publish_dir / "transcript-corrected.txt")
 
     source_path = str(record["source_path"])
+    publication_key = identity["publication_key"]
     with drive_publish_lock(base.DATA_DIR, source_path):
         with base._LOCK:
+            from app.subtitles import canonical_state as _cs
+
+            latest_identity = _cs.publication_identity(directory)
             latest_revision = int(base._edit_state(directory)["revision"])
         marker = hardened._delivery_marker(directory)
-        prior_editor_revision = hardened._marker_revision(marker)
-        if latest_revision != snapshot_revision or prior_editor_revision > snapshot_revision:
+        if (
+            str(marker.get("publication_key") or "") == publication_key
+            and str(marker.get("status")) in {"completed", "superseded_by_editor"}
+        ):
+            return {
+                "status": "completed",
+                "publication_key": publication_key,
+                "canonical_source": identity["canonical_source"],
+                "canonical_revision": identity["canonical_revision"],
+                "published_revision": snapshot_revision,
+                "current_revision": snapshot_revision,
+                "revision_changed_during_publish": False,
+                "zero_edit_review": snapshot_revision == 0,
+                "backup_count": int(marker.get("backup_count", 0)),
+                "files": {},
+                "idempotent_replay": True,
+            }
+        if latest_identity["publication_key"] != publication_key:
             raise HTTPException(
                 status_code=409,
-                detail="A newer subtitle revision exists; reload before publishing",
+                detail="A newer canonical version exists; reload before publishing",
             )
 
         hardened._mark_editor_intent(
             directory,
             revision=snapshot_revision,
             actor=actor,
+            publication_key=publication_key,
         )
         try:
             result = publish_outputs(
@@ -109,6 +133,7 @@ def publish_reviewed(
             source="editor",
             backup_count=int(result.get("backup_count", 0)),
             published_revision=snapshot_revision,
+            publication_key=publication_key,
         )
 
     with base._LOCK:
@@ -140,6 +165,9 @@ def publish_reviewed(
     return {
         "status": result.get("status"),
         "job_status": completed.get("status"),
+        "publication_key": publication_key,
+        "canonical_source": identity["canonical_source"],
+        "canonical_revision": identity["canonical_revision"],
         "published_revision": snapshot_revision,
         "current_revision": current_revision,
         "revision_changed_during_publish": current_revision != snapshot_revision,

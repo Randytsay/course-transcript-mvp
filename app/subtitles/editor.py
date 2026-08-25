@@ -62,6 +62,9 @@ class ImportSrtRequest(BaseModel):
 class PublishEditedRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1)
+    # Canonical concurrency check: when supplied, must match the current
+    # canonical publication key or the request is rejected (409).
+    expected_publication_key: str | None = None
     output_formats: list[Literal["srt", "txt"]] = Field(default_factory=lambda: ["srt", "txt"])
 
 
@@ -559,11 +562,27 @@ def publish_edited(
     record = _job_record(subtitle_id)
     if not record or not str(record.get("source_path", "")).startswith("gdrive:"):
         raise HTTPException(status_code=409, detail="Original Drive source is unavailable")
+    from app.subtitles import canonical_state
+
+    identity = canonical_state.publication_identity(directory)
     segments, state = _current_segments(directory)
-    if state["revision"] != payload.expected_revision or state["revision"] < 1:
+    expected_key = payload.expected_publication_key
+    if expected_key is not None and expected_key != identity["publication_key"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Canonical content changed since load "
+                f"(expected {expected_key}, current {identity['publication_key']}); reload"
+            ),
+        )
+    if (
+        identity["canonical_source"] == "editor"
+        and (state["revision"] != payload.expected_revision or state["revision"] < 1)
+    ):
         raise HTTPException(status_code=409, detail="Edited subtitle revision changed or has no edits")
     rendered = render_canonical(directory, segments, state["revision"])
-    publish_dir = directory / "editor-publish" / f"revision-{state['revision']}"
+    publication_key = identity["publication_key"]
+    publish_dir = directory / "editor-publish" / f"canonical-{publication_key.replace(':', '-')}"
     publish_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(rendered["srt"], publish_dir / "subtitles-corrected.srt")
     shutil.copy2(rendered["txt"], publish_dir / "transcript-corrected.txt")
@@ -577,6 +596,9 @@ def publish_edited(
     state["history"].append(
         {
             "revision": state["revision"],
+            "publication_key": publication_key,
+            "canonical_source": identity["canonical_source"],
+            "canonical_revision": identity["canonical_revision"],
             "type": "drive_publish",
             "actor": actor,
             "created_at": _iso(),
@@ -587,7 +609,13 @@ def publish_edited(
     _save_state(directory, state)
     return {
         "status": result.get("status"),
+        "publication_key": publication_key,
+        "canonical_source": identity["canonical_source"],
+        "canonical_revision": identity["canonical_revision"],
         "revision": state["revision"],
+        "published_revision": state["revision"],
+        "current_revision": state["revision"],
+        "zero_edit_review": False,
         "backup_count": result.get("backup_count", 0),
         "files": result.get("files", {}),
     }

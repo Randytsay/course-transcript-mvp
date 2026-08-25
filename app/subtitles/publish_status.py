@@ -14,6 +14,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from fastapi import HTTPException
+
 from app.subtitles import canonical_state
 from app.subtitles import editor as base
 
@@ -184,6 +186,39 @@ def _revision(value: object) -> int | None:
     return result if result >= 0 else None
 
 
+def _publication_events(directory: Path) -> list[dict[str, Any]]:
+    """All editor publication events for a job, keyed by publication_key."""
+    import sqlite3
+
+    try:
+        connection = sqlite3.connect(
+            f"{(base.DATA_DIR / 'course-transcript.db').resolve().as_uri()}?mode=ro",
+            uri=True,
+        )
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            """
+            SELECT payload_json
+            FROM job_events
+            WHERE job_id = ? AND event_type = 'job_drive_editor_published'
+            ORDER BY id
+            """,
+            (directory.name,),
+        ).fetchall()
+        connection.close()
+    except (sqlite3.Error, OSError):
+        return []
+    events: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            payload = json.loads(str(row["payload_json"] or "{}"))
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            events.append(payload)
+    return events
+
+
 def _history_revisions(history: list[dict[str, Any]]) -> tuple[list[int], bool]:
     revisions: list[int] = []
     for item in history:
@@ -282,6 +317,145 @@ def get_publish_status(subtitle_id: str) -> dict[str, object]:
 
     directory, kind = base._directory(subtitle_id)
     current_revision, history, editor_invalid = _editor_state(directory)
+    from app.subtitles import canonical_state as _cs
+
+    # Canonical publication identity: with an Active AI revision the status
+    # describes THAT version, not the stale editor integer. The legacy
+    # fail-closed block is replaced by namespaced identity reconciliation.
+    try:
+        identity = _cs.publication_identity(directory)
+        ai_active = identity["canonical_source"] == "ai_review_active"
+    except HTTPException as exc:
+        return _response(
+            status="ambiguous",
+            job_status=None,
+            batch_status=None,
+            current_revision=current_revision,
+            published_revision=None,
+            drive_publish_status=None,
+            current_event_count=0,
+            total_event_count=0,
+            can_publish=False,
+            message=str(exc.detail),
+        )
+    if ai_active:
+        events = [
+            item
+            for item in _publication_events(directory)
+            if item.get("publication_key") == identity["publication_key"]
+        ]
+        event_revisions = [int(item.get("published_revision", 0)) for item in events]
+        published_key_events = len(events)
+        marker = _marker_state(directory)[0] or {}
+        marker_key = str(marker.get("publication_key") or "")
+        marker_status = str(marker.get("status") or "")
+        marker_current = marker_key == identity["publication_key"]
+        record, batch_status, _, database_invalid = _read_database(
+            base.DATA_DIR / "course-transcript.db",
+            subtitle_id,
+        )
+        job_status = str(record.get("status")) if record else None
+        source_is_drive = bool(
+            record and str(record.get("source_path") or "").startswith("gdrive:")
+        )
+        invalid = bool(database_invalid or record is None or kind != "job")
+
+        if marker_current and marker_status == "editor_publish_in_progress":
+            return _response(
+                status="publishing",
+                job_status=job_status,
+                batch_status=batch_status,
+                current_revision=current_revision,
+                published_revision=None,
+                drive_publish_status=None,
+                current_event_count=published_key_events,
+                total_event_count=len(_publication_events(directory)),
+                can_publish=False,
+                message="正在發布至 Google Drive，請勿重複操作。",
+            )
+        if marker_current and marker_status in {"completed", "superseded_by_editor"}:
+            return {
+                **_response(
+                    status="completed",
+                    job_status=job_status,
+                    batch_status=batch_status,
+                    current_revision=current_revision,
+                    published_revision=current_revision,
+                    drive_publish_status="completed",
+                    current_event_count=published_key_events,
+                    total_event_count=len(_publication_events(directory)),
+                    can_publish=False,
+                    message="字幕已成功發布至 Google Drive。",
+                ),
+                "publication_key": identity["publication_key"],
+                "canonical_source": identity["canonical_source"],
+                "canonical_revision": identity["canonical_revision"],
+                "content_sha256": identity["content_sha256"],
+            }
+        if marker_current and marker_status == "editor_publish_failed":
+            return {
+                **_response(
+                    status="failed",
+                    job_status=job_status,
+                    batch_status=batch_status,
+                    current_revision=current_revision,
+                    published_revision=None,
+                    drive_publish_status=None,
+                    current_event_count=published_key_events,
+                    total_event_count=len(_publication_events(directory)),
+                    can_publish=False,
+                    message="發布已記錄失敗；目前不能安全重試。",
+                ),
+                "publication_key": identity["publication_key"],
+                "canonical_source": identity["canonical_source"],
+                "canonical_revision": identity["canonical_revision"],
+                "content_sha256": identity["content_sha256"],
+            }
+        if invalid:
+            return {
+                **_response(
+                    status="ambiguous",
+                    job_status=job_status,
+                    batch_status=batch_status,
+                    current_revision=current_revision,
+                    published_revision=None,
+                    drive_publish_status=None,
+                    current_event_count=published_key_events,
+                    total_event_count=len(_publication_events(directory)),
+                    can_publish=False,
+                    message="發布狀態資料不一致，請勿重複送出。",
+                ),
+                "publication_key": identity["publication_key"],
+                "canonical_source": identity["canonical_source"],
+                "canonical_revision": identity["canonical_revision"],
+            }
+        can_publish = bool(
+            source_is_drive and job_status in {"awaiting_review", "completed"}
+        )
+        idle = _response(
+            status="idle",
+            job_status=job_status,
+            batch_status=batch_status,
+            current_revision=current_revision,
+            published_revision=None,
+            drive_publish_status=None,
+            current_event_count=published_key_events,
+            total_event_count=len(_publication_events(directory)),
+            can_publish=can_publish,
+            message=(
+                f"可發布 AI Revision R{identity['canonical_revision']}（canonical key {identity['publication_key']}）。"
+                if can_publish
+                else "目前版本不可發布。"
+            ),
+        )
+        return {
+            **idle,
+            "publication_key": identity["publication_key"],
+            "canonical_source": identity["canonical_source"],
+            "canonical_revision": identity["canonical_revision"],
+            "content_sha256": identity["content_sha256"],
+        }
+
     block_reason = canonical_state.editor_mutation_block_reason(directory)
     if block_reason:
         return _response(

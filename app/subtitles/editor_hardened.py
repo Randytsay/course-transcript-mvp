@@ -127,17 +127,18 @@ def _mark_editor_intent(
     *,
     revision: int,
     actor: str,
+    publication_key: str | None = None,
 ) -> None:
-    base._atomic_json(
-        directory / "drive-delivery-state.json",
-        {
-            "status": "editor_publish_in_progress",
-            "intent_created_at": base._iso(),
-            "editor_revision": revision,
-            "actor": actor,
-            "next_attempt_at": None,
-        },
-    )
+    payload = {
+        "status": "editor_publish_in_progress",
+        "intent_created_at": base._iso(),
+        "editor_revision": revision,
+        "actor": actor,
+        "next_attempt_at": None,
+    }
+    if publication_key is not None:
+        payload["publication_key"] = publication_key
+    base._atomic_json(directory / "drive-delivery-state.json", payload)
     _update_pipeline_manifests(
         directory,
         status="editor_publish_in_progress",
@@ -247,32 +248,72 @@ def publish_edited(
         )
 
     with base._LOCK:
+        from app.subtitles import canonical_state
+
+        # Canonical publication identity: the published version is named by
+        # source + that source's revision + content hash, never by a bare
+        # editor integer. With an Active AI revision this publishes its cues.
+        identity = canonical_state.publication_identity(directory)
         segments, state = base._current_segments(directory)
         snapshot_revision = int(state["revision"])
-        if snapshot_revision != payload.expected_revision or snapshot_revision < 1:
+        expected_key = getattr(payload, "expected_publication_key", None)
+        if expected_key is not None and expected_key != identity["publication_key"]:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Canonical content changed since load "
+                    f"(expected {expected_key}, current {identity['publication_key']}); reload"
+                ),
+            )
+        if (
+            identity["canonical_source"] == "editor"
+            and (snapshot_revision != payload.expected_revision or snapshot_revision < 1)
+        ):
             raise HTTPException(
                 status_code=409,
                 detail="Edited subtitle revision changed or has no edits",
             )
         rendered = base.render_canonical(directory, segments, snapshot_revision)
-        publish_dir = directory / "editor-publish" / f"revision-{snapshot_revision}"
+        publish_dir = directory / "editor-publish" / f"canonical-{identity['publication_key'].replace(':', '-')}"
         publish_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(rendered["srt"], publish_dir / "subtitles-corrected.srt")
         shutil.copy2(rendered["txt"], publish_dir / "transcript-corrected.txt")
 
     source_path = str(record["source_path"])
+    from app.subtitles import canonical_state as _cs
+
+    publication_key = identity["publication_key"]
     with drive_publish_lock(base.DATA_DIR, source_path):
+        # Idempotency: the same canonical publication_key must never produce a
+        # second Drive write or a duplicate publication event.
+        marker = _delivery_marker(directory)
+        if (
+            str(marker.get("publication_key") or "") == publication_key
+            and str(marker.get("status")) in {"completed", "superseded_by_editor"}
+        ):
+            return {
+                "status": "completed",
+                "publication_key": publication_key,
+                "canonical_source": identity["canonical_source"],
+                "canonical_revision": identity["canonical_revision"],
+                "published_revision": snapshot_revision,
+                "current_revision": snapshot_revision,
+                "revision_changed_during_publish": False,
+                "zero_edit_review": False,
+                "backup_count": int(marker.get("backup_count", 0)),
+                "files": {},
+                "idempotent_replay": True,
+            }
         # Revalidate after acquiring the cross-process Drive lock. A newer edit
         # or already-published editor revision must never be overwritten by an
         # older request that waited longer for this lock.
         with base._LOCK:
+            latest_identity = _cs.publication_identity(directory)
             latest_revision = int(base._edit_state(directory)["revision"])
-        marker = _delivery_marker(directory)
-        prior_editor_revision = _marker_revision(marker)
-        if latest_revision != snapshot_revision or prior_editor_revision > snapshot_revision:
+        if latest_identity["publication_key"] != publication_key:
             raise HTTPException(
                 status_code=409,
-                detail="A newer subtitle revision exists; reload before publishing",
+                detail="A newer canonical version exists; reload before publishing",
             )
 
         # Persist user intent before any remote mutation. If the API process
@@ -282,6 +323,7 @@ def publish_edited(
             directory,
             revision=snapshot_revision,
             actor=actor,
+            publication_key=publication_key,
         )
         try:
             result = publish_outputs(
@@ -312,6 +354,7 @@ def publish_edited(
             source="editor",
             backup_count=int(result.get("backup_count", 0)),
             published_revision=snapshot_revision,
+            publication_key=publication_key,
         )
 
     with base._LOCK:
@@ -319,7 +362,7 @@ def publish_edited(
         current_revision = int(latest["revision"])
         if not any(
             item.get("type") == "drive_publish"
-            and item.get("published_snapshot_revision") == snapshot_revision
+            and item.get("publication_key") == publication_key
             for item in latest["history"]
             if isinstance(item, dict)
         ):
@@ -327,6 +370,9 @@ def publish_edited(
                 {
                     "revision": current_revision,
                     "published_snapshot_revision": snapshot_revision,
+                    "publication_key": publication_key,
+                    "canonical_source": identity["canonical_source"],
+                    "canonical_revision": identity["canonical_revision"],
                     "type": "drive_publish",
                     "actor": actor,
                     "created_at": base._iso(),
@@ -341,6 +387,9 @@ def publish_edited(
 
     return {
         "status": result.get("status"),
+        "publication_key": publication_key,
+        "canonical_source": identity["canonical_source"],
+        "canonical_revision": identity["canonical_revision"],
         "published_revision": snapshot_revision,
         "current_revision": current_revision,
         "revision_changed_during_publish": current_revision != snapshot_revision,

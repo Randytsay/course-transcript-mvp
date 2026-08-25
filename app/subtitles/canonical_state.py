@@ -102,6 +102,76 @@ def ensure_editor_mutation_allowed(directory: Path) -> None:
     if reason:
         raise HTTPException(status_code=409, detail=reason)
 
+
+def ensure_editor_mutation_allowed_for_legacy_only(directory: Path) -> None:
+    """Legacy publish path guard: block only while candidates are pending.
+
+    With a published Active AI revision, publication goes through the
+    canonical publication identity (publication_key), so the old
+    editor-revision-based lock no longer applies here.
+    """
+    payload = _review_payload(directory)
+    if not payload:
+        return
+    candidates = payload.get("candidates", [])
+    if not isinstance(candidates, list):
+        raise HTTPException(status_code=409, detail="AI Review candidates state 無效")
+    if any(isinstance(item, dict) and item.get("status") == "pending" for item in candidates):
+        raise HTTPException(
+            status_code=409,
+            detail="AI Review 尚有未審核候選；請先完成本輪 Review 再發布",
+        )
+
+
+import hashlib
+
+
+def _cues_content_sha256(cues: list[dict[str, Any]]) -> str:
+    payload = json.dumps(
+        [
+            {
+                "text": str(cue.get("text", "")),
+                "source_segment_ids": [str(v) for v in cue.get("source_segment_ids", [])],
+                "start_ms": int(cue.get("start_ms", 0)),
+                "end_ms": int(cue.get("end_ms", 0)),
+            }
+            for cue in cues
+        ],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def publication_identity(
+    directory: Path,
+    editor_segments: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Namespaced canonical publication identity.
+
+    An editor integer revision alone cannot identify a published version once
+    an AI Review Active Revision exists (same number, different content).
+    The stable key binds source namespace + that source's own revision +
+    content hash, so Editor rev1 and AI R1 never collide and any content
+    change produces a new key.
+    """
+    cues, source = canonical_cues(directory, editor_segments)
+    content_sha256 = _cues_content_sha256(cues)
+    if source == "ai_review_active":
+        active = load_active_revision(directory)
+        canonical_revision = int(active["revision"]) if active else 0
+    else:
+        from app.subtitles.editor import _edit_state
+
+        canonical_revision = int(_edit_state(directory)["revision"])
+    return {
+        "canonical_source": source,
+        "canonical_revision": canonical_revision,
+        "content_sha256": content_sha256,
+        # Deterministic, human-readable, collision-free across namespaces.
+        "publication_key": f"{source}:r{canonical_revision}:{content_sha256[:16]}",
+    }
+
 def canonical_cues(
     directory: Path,
     editor_segments: list[dict[str, Any]] | None = None,

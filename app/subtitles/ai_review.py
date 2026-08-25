@@ -724,10 +724,14 @@ def propose_candidates(subtitle_id: str, payload: OrganizeRequest, request: Requ
         from app.subtitles import canonical_state
 
         cues, _ = canonical_state.canonical_cues(directory)
+        base_identity = canonical_state.publication_identity(directory)
         created = []
         for candidate in payload.candidates:
             record = _validate_candidate(candidate, baseline_index, working_cues=cues)
             record["proposed_by"] = actor
+            # Bind this review round to the canonical base it was generated
+            # against; decide/publish re-check before applying.
+            record["base_publication_key"] = base_identity["publication_key"]
             state["candidates"].append(record)
             created.append(record)
         _save_state(directory, state)
@@ -750,6 +754,17 @@ def decide_candidate(subtitle_id: str, payload: CandidateDecision, request: Requ
             raise HTTPException(status_code=404, detail="Candidate not found")
         if target["status"] != "pending":
             raise HTTPException(status_code=409, detail="此建議已審核")
+        from app.subtitles import canonical_state
+
+        current_key = canonical_state.publication_identity(directory)["publication_key"]
+        if target.get("base_publication_key") not in (None, current_key):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Canonical base 已改變；請清空本輪候選並以最新字幕重新產生提案 "
+                    f"(base={target['base_publication_key']}, current={current_key})"
+                ),
+            )
         after = target["after"]
         if payload.decision == "accept":
             if payload.edited_after is not None:
@@ -802,6 +817,22 @@ def publish_revision(subtitle_id: str, payload: PublishRequest, request: Request
         state = _review_state(directory)
         if state["revision"] != payload.base_revision:
             raise HTTPException(status_code=409, detail="審核狀態已更新，請重新載入")
+        from app.subtitles import canonical_state
+
+        current_key = canonical_state.publication_identity(directory)["publication_key"]
+        stale_bases = {
+            item.get("base_publication_key")
+            for item in state["candidates"]
+            if item.get("base_publication_key") not in (None, current_key)
+        }
+        if stale_bases:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "本輪候選的 canonical base 已改變，拒絕發布；請重新產生提案 "
+                    f"(stale={sorted(str(k) for k in stale_bases)}, current={current_key})"
+                ),
+            )
         pending = sum(1 for item in state["candidates"] if item["status"] == "pending")
         if pending:
             raise HTTPException(status_code=409, detail=f"尚有 {pending} 項建議未審核")
@@ -839,6 +870,7 @@ def publish_revision(subtitle_id: str, payload: PublishRequest, request: Request
             "cue_count": len(cues),
             "accepted_count": len(accepted),
             "content_sha256": digest,
+            "publication_key": f"ai_review_active:r{number}:{digest[:16]}",
         }
 
 
@@ -905,6 +937,196 @@ def export_revision(subtitle_id: str, kind: str, revision: int | None = None) ->
             headers={"Content-Disposition": f'attachment; filename="{subtitle_id}-r{resolved}.docx"'},
         )
     raise HTTPException(status_code=422, detail="不支援的匯出格式")
+
+
+class CueEditRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # The cue being edited, identified by full lineage + current text
+    # (optimistic concurrency against the Active revision).
+    source_segment_ids: list[str] = Field(min_length=1, max_length=8)
+    current_text: str = Field(min_length=1)
+    new_text: str = Field(min_length=1)
+    base_content_sha256: str | None = None
+
+
+@router.patch("/{subtitle_id}/ai-review/cue")
+def edit_canonical_cue(subtitle_id: str, payload: CueEditRequest, request: Request) -> dict[str, Any]:
+    """Cue-aware human edit of the canonical current subtitle.
+
+    Editing a canonical cue's text (structure unchanged) creates an auditable
+    Revision N+1 from Active N; historical revisions stay immutable. Splitting
+    a merged cue without word-level immutable timing is fail-closed.
+    """
+    actor = _mutation_actor(request)
+    directory = _directory(subtitle_id)
+    with _LOCK:
+        from app.subtitles import canonical_state
+
+        cues, source = canonical_state.canonical_cues(directory)
+        if source != "ai_review_active":
+            raise HTTPException(
+                status_code=409,
+                detail="目前無 AI Active Revision；請使用既有 per-segment Editor 流程",
+            )
+        state = _review_state(directory)
+        if payload.base_content_sha256 is not None:
+            identity = canonical_state.publication_identity(directory)
+            if payload.base_content_sha256 != identity["content_sha256"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Canonical content changed since load；請重新載入",
+                )
+        target = next(
+            (
+                cue
+                for cue in cues
+                if [str(v) for v in cue["source_segment_ids"]]
+                == [str(v) for v in payload.source_segment_ids]
+            ),
+            None,
+        )
+        if target is None:
+            raise HTTPException(status_code=404, detail="找不到對應的 canonical cue")
+        if str(target["text"]) != payload.current_text:
+            raise HTTPException(status_code=409, detail="cue 文字已改變，請重新載入")
+
+        new_cues = []
+        for cue in cues:
+            if cue is target:
+                lineage = [str(v) for v in cue["source_segment_ids"]]
+                if len(lineage) > 0:
+                    new_cues.append({**cue, "text": payload.new_text.strip()})
+                else:  # pragma: no cover - guarded by min_length
+                    raise HTTPException(status_code=422, detail="lineage 不可為空")
+            else:
+                new_cues.append(dict(cue))
+        _validate_revision_cues(directory, new_cues)
+
+        number = state["revision"] + 1
+        record = {
+            "revision": number,
+            "created_at": _iso(),
+            "created_by": actor,
+            "source": "editor_cue_edit",
+            "edited_lineage": [str(v) for v in payload.source_segment_ids],
+            "accepted_change_ids": [],
+            "rejected_change_ids": [],
+            "cues": [
+                {
+                    "text": str(cue["text"]),
+                    "source_segment_ids": [str(v) for v in cue["source_segment_ids"]],
+                    "start_ms": int(cue["start_ms"]),
+                    "end_ms": int(cue["end_ms"]),
+                }
+                for cue in new_cues
+            ],
+            "content_sha256": hashlib.sha256(render_srt(new_cues).encode("utf-8")).hexdigest(),
+        }
+        state["revisions"].append(record)
+        state["active_revision"] = number
+        state["revision"] = number
+        _save_state(directory, state)
+        return {
+            "revision": number,
+            "active_revision": number,
+            "publication_key": (
+                f"ai_review_active:r{number}:{record['content_sha256'][:16]}"
+            ),
+            "edited_lineage": [str(v) for v in payload.source_segment_ids],
+        }
+
+
+class BatchCueReplaceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    replacements: list[dict[str, Any]] = Field(min_length=1, max_length=5000)
+    base_content_sha256: str | None = None
+
+
+@router.post("/{subtitle_id}/ai-review/batch-replace-cues")
+def batch_replace_canonical_cues(
+    subtitle_id: str, payload: BatchCueReplaceRequest, request: Request
+) -> dict[str, Any]:
+    """Batch replace against canonical working cues → auditable new revision.
+
+    All edits apply atomically as one new Revision; any mismatch fails
+    closed without partial application.
+    """
+    actor = _mutation_actor(request)
+    directory = _directory(subtitle_id)
+    with _LOCK:
+        return apply_batch_cue_replacements(
+            directory,
+            payload.model_dump(),
+            payload.replacements,
+            actor,
+        )
+
+
+def apply_batch_cue_replacements(
+    directory: Path, payload: dict[str, Any], replacements: list[dict[str, Any]], actor: str
+) -> dict[str, Any]:
+    from app.subtitles import canonical_state
+
+    cues, source = canonical_state.canonical_cues(directory)
+    if source != "ai_review_active":
+        raise HTTPException(
+            status_code=409,
+            detail="目前無 AI Active Revision；batch replace 請使用既有 Editor 流程",
+        )
+    state = _review_state(directory)
+    expected_sha = payload.get("base_content_sha256")
+    identity = canonical_state.publication_identity(directory)
+    if expected_sha is not None and expected_sha != identity["content_sha256"]:
+        raise HTTPException(
+            status_code=409, detail="Canonical content changed since load；請重新載入"
+        )
+    by_lineage = {tuple(str(v) for v in cue["source_segment_ids"]): dict(cue) for cue in cues}
+    for item in replacements:
+        if not isinstance(item, dict):
+            raise HTTPException(status_code=422, detail="replacement 項目格式錯誤")
+        lineage = tuple(str(v) for v in item.get("source_segment_ids", []))
+        target = by_lineage.get(lineage)
+        if target is None:
+            raise HTTPException(status_code=404, detail=f"找不到 canonical cue: {list(lineage)}")
+        if str(target.get("text")) != str(item.get("current_text")):
+            raise HTTPException(status_code=409, detail=f"cue 文字已改變: {list(lineage)}")
+        new_text = str(item.get("new_text", "")).strip()
+        if not new_text:
+            raise HTTPException(status_code=422, detail="new_text 不可空白")
+        target["text"] = new_text
+    new_cues = sorted(by_lineage.values(), key=lambda c: (c["start_ms"], c["end_ms"]))
+    _validate_revision_cues(directory, new_cues)
+    number = state["revision"] + 1
+    digest = hashlib.sha256(render_srt(new_cues).encode("utf-8")).hexdigest()
+    record = {
+        "revision": number,
+        "created_at": _iso(),
+        "created_by": actor,
+        "source": "editor_batch_replace",
+        "edited_lineages": [list(t) for t in by_lineage],
+        "accepted_change_ids": [],
+        "rejected_change_ids": [],
+        "cues": [
+            {
+                "text": str(cue["text"]),
+                "source_segment_ids": [str(v) for v in cue["source_segment_ids"]],
+                "start_ms": int(cue["start_ms"]),
+                "end_ms": int(cue["end_ms"]),
+            }
+            for cue in new_cues
+        ],
+        "content_sha256": digest,
+    }
+    state["revisions"].append(record)
+    state["active_revision"] = number
+    state["revision"] = number
+    _save_state(directory, state)
+    return {
+        "revision": number,
+        "active_revision": number,
+        "publication_key": f"ai_review_active:r{number}:{digest[:16]}",
+        "replaced_count": len(replacements),
+    }
 
 
 @router.get("/{subtitle_id}/ai-review/baseline")
