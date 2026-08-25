@@ -46,9 +46,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.api import _mutation_actor
 
 DATA_DIR = Path(__import__("os").environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
-JOBS_DIR = DATA_DIR / "jobs"
 router = APIRouter(prefix="/api/v1/subtitles", tags=["subtitles"])
 _LOCK = threading.RLock()
+
+
+def _jobs_dir() -> Path:
+    return DATA_DIR / "jobs"
 
 CHANGE_TYPES = frozenset(
     {
@@ -131,14 +134,14 @@ def _atomic_json(path: Path, payload: object) -> None:
 
 def _directory(subtitle_id: str) -> Path:
     """Resolve a job subtitle directory (jobs only for the AI review flow)."""
-    directory = JOBS_DIR / _safe_id(subtitle_id)
+    directory = _jobs_dir() / _safe_id(subtitle_id)
     if not directory.is_dir():
         raise HTTPException(status_code=404, detail="Subtitle not found")
     return directory
 
 
 def baseline_segments(directory: Path) -> list[dict[str, Any]]:
-    """Immutable SOURCE BASELINE read-only view."""
+    """Immutable SOURCE BASELINE read-only view (raw ASR evidence)."""
     for name in ("subtitles.json",):
         payload = _read_json(directory / name, {})
         items = payload.get("segments") if isinstance(payload, dict) else None
@@ -159,6 +162,47 @@ def baseline_segments(directory: Path) -> list[dict[str, Any]]:
                 if isinstance(item, dict) and item.get("segment_id") is not None
             ]
     raise HTTPException(status_code=409, detail="Subtitle segments are not ready")
+
+
+def working_segments(directory: Path) -> list[dict[str, Any]]:
+    """Canonical current working subtitle: Gemini corrected + manual edits.
+
+    Reuses the existing Subtitle Editor resolution (subtitles-corrected.json
+    → corrected_text → subtitle-editor.json edits overlay → current_text) so
+    there is exactly ONE canonical current-state definition. SOURCE evidence
+    fields (segment_id/start_ms/end_ms/raw_text) stay immutable.
+    """
+    from app.subtitles import editor as subtitle_editor
+
+    current, _ = subtitle_editor._current_segments(directory)
+    return [
+        {
+            "segment_id": item["segment_id"],
+            "start_ms": item["start_ms"],
+            "end_ms": item["end_ms"],
+            "raw_text": item["raw_text"],
+            "working_text": item["current_text"],
+            **({"speaker": speaker} if (speaker := _baseline_speaker(directory, item["segment_id"])) else {}),
+        }
+        for item in current
+    ]
+
+
+_SPEAKER_CACHE: dict[int, dict[str, str]] = {}
+
+
+def _baseline_speaker(directory: Path, segment_id: str) -> str | None:
+    cache_key = directory.stat().st_ino
+    mapping = _SPEAKER_CACHE.get(cache_key)
+    if mapping is None:
+        payload = _read_json(directory / "subtitles.json", {}) or {}
+        mapping = {}
+        for item in payload.get("segments") or []:
+            if isinstance(item, dict) and item.get("segment_id") is not None:
+                if item.get("speaker") is not None:
+                    mapping[str(item["segment_id"])] = str(item["speaker"])
+        _SPEAKER_CACHE[cache_key] = mapping
+    return mapping.get(segment_id)
 
 
 def _review_state(directory: Path) -> dict[str, Any]:
@@ -220,6 +264,11 @@ def _validate_candidate(candidate: CandidateProposal, baseline_index: dict[str, 
         if text != expected:
             raise HTTPException(status_code=422, detail=f"before 文字與來源不一致: {segment_id}")
 
+    # Contiguity: ANY multi-segment candidate must span adjacent segments.
+    indices = [baseline_index[s]["_index"] for s in ids]
+    if len(ids) > 1 and max(indices) - min(indices) != len(indices) - 1:
+        raise HTTPException(status_code=422, detail="跨段整理必須是相鄰 segments")
+
     seen_lineage: set[str] = set()
     total_after_chars = 0
     for cue in candidate.after:
@@ -239,6 +288,15 @@ def _validate_candidate(candidate: CandidateProposal, baseline_index: dict[str, 
         # No invented timestamps allowed anywhere in the payload.
         if "start_ms" in cue or "end_ms" in cue:
             raise HTTPException(status_code=422, detail="禁止發明 timestamp；時間僅能由來源 boundary 推導")
+        # Speaker boundary (shared rule): a derived cue must never span
+        # segments with different non-null speakers, regardless of type.
+        speakers = {
+            baseline_index[value].get("speaker")
+            for value in cue_ids
+            if baseline_index[value].get("speaker")
+        }
+        if len(speakers) > 1:
+            raise HTTPException(status_code=422, detail="不同 speaker 的字幕不可合併為同一 derived cue")
 
     if seen_lineage != set(ids):
         missing = sorted(set(ids) - seen_lineage)
@@ -273,6 +331,21 @@ def _validate_candidate(candidate: CandidateProposal, baseline_index: dict[str, 
                 detail="跨段整理不可改變總字詞內容；文字修正請另建 correction candidate",
             )
 
+    # split_for_readability v1: presentation line wrapping only — one source
+    # segment must never become multiple timed cues without word-level timing.
+    if candidate.change_type == "split_for_readability" and len(candidate.after) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail="第一版不支援將單一 segment 拆成多個時間 cue；請使用單 cue 多行（line wrapping）",
+        )
+    for cue in candidate.after:
+        cue_ids = [str(value) for value in cue["source_segment_ids"]]
+        cue_indices = [baseline_index[value]["_index"] for value in cue_ids]
+        if len(cue_indices) > 1 and max(cue_indices) - min(cue_indices) != len(cue_indices) - 1:
+            raise HTTPException(status_code=422, detail="cue 來源必須連續")
+        if sorted(cue_indices) != cue_indices:
+            raise HTTPException(status_code=422, detail="cue source_segment_ids 必須依原始順序")
+
     return {
         "change_id": f"cand-{uuid.uuid4().hex[:12]}",
         "change_type": candidate.change_type,
@@ -299,23 +372,50 @@ def _resolve_cues(
     state: dict[str, Any],
     accepted: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Materialize derived cues from accepted candidates over the baseline.
+    """Materialize derived cues for Revision N+1.
 
-    Timestamps always come from the referenced source boundaries — never
-    invented. A single-source cue uses that segment's timing; a multi-source
-    cue spans from the first source start to the last source end.
+    Invariant: Revision N+1 = Active Revision N + accepted candidate delta.
+    Only when no active revision exists is the base the canonical current
+    working subtitle (Gemini corrected + manual Subtitle Editor edits).
+    Timestamps always come from source boundaries — never invented.
     """
-    baseline = baseline_segments(directory)
-    baseline_index = {item["segment_id"]: {**item, "_position": position} for position, item in enumerate(baseline)}
-    consumed: set[str] = set()
-    cues: list[dict[str, Any]] = []
+    if state.get("active_revision") is not None:
+        active = _revision_by_number(state, int(state["active_revision"]))
+        if active is None:
+            raise HTTPException(status_code=409, detail="Active revision 遺失")
+        base_cues = [dict(cue) for cue in active["cues"]]
+    else:
+        base_cues = [
+            {
+                "text": str(item["working_text"]),
+                "source_segment_ids": [item["segment_id"]],
+                "start_ms": item["start_ms"],
+                "end_ms": item["end_ms"],
+            }
+            for item in working_segments(directory)
+        ]
+
+    # Fail closed on overlapping accepted candidate scopes: two candidates
+    # claiming the same source segment must never both apply (409, not guess).
+    claimed_by: dict[str, str] = {}
     for candidate in accepted:
-        cue_specs = []
-        offset = 0
+        for segment_id in candidate["source_segment_ids"]:
+            previous = claimed_by.get(segment_id)
+            if previous is not None and previous != candidate["change_id"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"多個已接受候選同時修改 {segment_id}；請先解決衝突再發布",
+                )
+            claimed_by[segment_id] = candidate["change_id"]
+
+    replaced_segments: dict[str, list[dict[str, Any]]] = {}
+    for candidate in accepted:
+        cue_specs: list[dict[str, Any]] = []
         for cue in candidate["after"]:
             cue_ids = [str(value) for value in cue["source_segment_ids"]]
-            start = min(baseline_index[value]["start_ms"] for value in cue_ids)
-            end = max(baseline_index[value]["end_ms"] for value in cue_ids)
+            timings = [_timing_of(base_cues, segment_id) or _baseline_timing(directory, segment_id) for segment_id in cue_ids]
+            start = min(item[0] for item in timings)
+            end = max(item[1] for item in timings)
             cue_specs.append(
                 {
                     "text": str(cue["text"]),
@@ -324,26 +424,40 @@ def _resolve_cues(
                     "end_ms": end,
                 }
             )
-            offset += 1
-        for spec in cue_specs:
-            consumed.update(spec["source_segment_ids"])
-            cues.append(spec)
-    for item in baseline:
-        if item["segment_id"] in consumed:
+        for segment_id in candidate["source_segment_ids"]:
+            replaced_segments[segment_id] = cue_specs
+
+    cues: list[dict[str, Any]] = []
+    seen_replaced: set[str] = set()
+    for cue in sorted(base_cues, key=lambda item: item["start_ms"]):
+        members = [str(value) for value in cue["source_segment_ids"]]
+        if any(member in replaced_segments for member in members):
+            for member in members:
+                if member not in seen_replaced:
+                    seen_replaced.add(member)
+                    specs = replaced_segments[member]
+                    if all(spec not in cues for spec in specs):
+                        cues.extend(specs)
             continue
-        working = str(baseline_index[item["segment_id"]].get("working_text", item["raw_text"]))
-        cues.append(
-            {
-                "text": working,
-                "source_segment_ids": [item["segment_id"]],
-                "start_ms": item["start_ms"],
-                "end_ms": item["end_ms"],
-            }
-        )
-    cues.sort(key=lambda cue: min(baseline_index[value]["_position"] for value in cue["source_segment_ids"]))
+        cues.append(dict(cue))
+    cues.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
     for index, cue in enumerate(cues, 1):
         cue["cue_id"] = f"cue-{index:04d}"
     return cues
+
+
+def _timing_of(cues: list[dict[str, Any]], segment_id: str) -> tuple[int, int] | None:
+    for cue in cues:
+        if segment_id in [str(value) for value in cue["source_segment_ids"]]:
+            return int(cue["start_ms"]), int(cue["end_ms"])
+    return None
+
+
+def _baseline_timing(directory: Path, segment_id: str) -> tuple[int, int]:
+    for item in baseline_segments(directory):
+        if item["segment_id"] == segment_id:
+            return item["start_ms"], item["end_ms"]
+    raise HTTPException(status_code=422, detail=f"未知 segment: {segment_id}")
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +495,9 @@ def render_vtt(cues: list[dict[str, Any]]) -> str:
 
 
 def render_txt(cues: list[dict[str, Any]]) -> str:
-    return "\n".join(re.sub(r"\s+", "", cue["text"]) for cue in cues) + "\n"
+    # Normalize whitespace, never remove it: "machine learning" must keep
+    # its inner space while CJK text stays unwrapped.
+    return "\n".join(re.sub(r"\s+", " ", cue["text"]).strip() for cue in cues) + "\n"
 
 
 def _wrap_lines(text: str) -> list[str]:
@@ -454,10 +570,10 @@ def propose_candidates(subtitle_id: str, payload: OrganizeRequest, request: Requ
         state = _review_state(directory)
         if state["revision"] != payload.expected_revision:
             raise HTTPException(status_code=409, detail="審核狀態已更新，請重新載入")
-        baseline = baseline_segments(directory)
+        working = working_segments(directory)
         baseline_index = {
             item["segment_id"]: {**item, "_index": position}
-            for position, item in enumerate(baseline)
+            for position, item in enumerate(working)
         }
         created = []
         for candidate in payload.candidates:
@@ -498,14 +614,20 @@ def decide_candidate(subtitle_id: str, payload: CandidateDecision, request: Requ
                     risk=target["risk"],
                     high_review_required=True,
                 )
-                baseline = baseline_segments(directory)
+                baseline = working_segments(directory)
                 baseline_index = {
                     item["segment_id"]: {**item, "_index": position}
                     for position, item in enumerate(baseline)
                 }
                 validated = _validate_candidate(replacement, baseline_index)
-                after = validated["after"]
+                # Persist the normalized/validated edit so Publish uses the
+                # human-approved text, not the original AI proposal. Keep the
+                # AI original as audit metadata.
+                if "original_after" not in target:
+                    target["original_after"] = target["after"]
+                target["after"] = validated["after"]
                 target["manually_edited"] = True
+                target["edited_at"] = _iso()
             target["status"] = "accepted"
         else:
             target["status"] = "rejected"
@@ -544,6 +666,9 @@ def publish_revision(subtitle_id: str, payload: PublishRequest, request: Request
             "rejected_change_ids": [
                 item["change_id"] for item in state["candidates"] if item["status"] == "rejected"
             ],
+            # Immutable audit snapshot: full candidate details must remain
+            # recoverable after publish (not just IDs).
+            "candidates_snapshot": [json.loads(json.dumps(item, ensure_ascii=False)) for item in state["candidates"]],
             "cues": cues,
             "content_sha256": digest,
         }

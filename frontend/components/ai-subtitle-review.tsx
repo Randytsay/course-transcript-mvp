@@ -133,7 +133,7 @@ export default function AIReviewPanel({ subtitleId }: { subtitleId: string }) {
     return state.candidates.filter((candidate) => {
       if (filter === "text") return !["cross_segment_reflow", "merge_adjacent", "split_for_readability"].includes(candidate.change_type);
       if (filter === "cross_segment") return ["cross_segment_reflow", "merge_adjacent", "split_for_readability"].includes(candidate.change_type);
-      if (filter === "high_risk") return candidate.risk === "high" || candidate.high_review_required;
+      if (filter === "high_risk") return candidate.risk === "high";
       if (filter === "pending") return candidate.status === "pending";
       return true;
     });

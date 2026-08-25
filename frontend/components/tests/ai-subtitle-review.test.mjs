@@ -52,6 +52,11 @@ test("backend keeps every candidate review_required (no auto-apply)", () => {
   assert.doesNotMatch(backend, /"status": "accepted"/.source.replace("\\ ", " ") && /auto_accept/);
 });
 
+test("high-risk filter uses risk only — high_review_required is a different concept", () => {
+  assert.match(panel, /candidate\.risk === "high";/);
+  assert.doesNotMatch(panel, /risk === "high" \|\| candidate\.high_review_required/);
+});
+
 test("exports render from active revision with lineage", () => {
   assert.match(backend, /def render_srt/);
   assert.match(backend, /def render_vtt/);
