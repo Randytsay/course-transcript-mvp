@@ -207,13 +207,13 @@ jobs:
           assert (
               (retention.get('environment') or {}).get(
                   'GOOGLE_APPLICATION_CREDENTIALS'
-              ) == '/run/ai-runtime/gcp-sa.json'
+              ) == '/run/secrets/gcp-sa.json'
           )
-          retention_runtime = next(
+          retention_gcp = next(
               item for item in retention.get('volumes', [])
-              if item.get('target') == '/run/ai-runtime'
+              if item.get('target') == '/run/secrets/gcp-sa.json'
           )
-          assert retention_runtime.get('read_only') is True
+          assert retention_gcp.get('read_only') is True
 
           for name in ('api', 'worker', 'pipeline-worker', 'delivery-worker'):
               rclone = next(

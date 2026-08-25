@@ -143,6 +143,16 @@ for name in ("api", "worker", "pipeline-worker", "delivery-worker"):
         raise SystemExit(f"unsafe rclone mount for {name}")
 if any(item.get("target") == "/run/secrets/gcp-sa.json" for item in services["api"].get("volumes", [])):
     raise SystemExit("API unexpectedly mounts GCP credentials")
+retention = services.get("retention-monitor") or {}
+retention_env = retention.get("environment") or {}
+if retention_env.get("GOOGLE_APPLICATION_CREDENTIALS") != "/run/secrets/gcp-sa.json":
+    raise SystemExit("retention monitor must use the mounted GCP credential path")
+retention_gcp = next(
+    (item for item in retention.get("volumes", []) if item.get("target") == "/run/secrets/gcp-sa.json"),
+    None,
+)
+if not retention_gcp or not bool(retention_gcp.get("read_only")):
+    raise SystemExit("retention monitor must mount GCP credentials read-only")
 ports = services["frontend"].get("ports") or []
 if len(ports) != 1 or ports[0].get("host_ip") != "127.0.0.1" or str(ports[0].get("published")) != "3300":
     raise SystemExit(f"unsafe frontend ports: {ports}")
