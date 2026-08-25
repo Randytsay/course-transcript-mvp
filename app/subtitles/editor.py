@@ -340,12 +340,81 @@ def import_srt(payload: ImportSrtRequest, request: Request) -> dict[str, Any]:
     return _summary(subtitle_id, directory, "imported")
 
 
+def render_canonical(
+    directory: Path,
+    segments: list[dict[str, Any]],
+    revision: int,
+) -> dict[str, str]:
+    """Render the canonical current subtitle for publication.
+
+    Uses the AI Review active revision cues when present (cue-aware: merged
+    and reflowed cues are preserved as-is); otherwise falls back to the
+    per-segment editor rendering. Output files are identical in shape so the
+    Drive publish transaction is unchanged.
+    """
+    from app.subtitles import canonical_state
+
+    cues, source = canonical_state.canonical_cues(directory, segments)
+    if source != "ai_review_active":
+        return _render_current(directory, segments, revision)
+    output = directory / "subtitle-editor"
+    output.mkdir(parents=True, exist_ok=True)
+    srt = output / "current.srt"
+    txt = output / "current.txt"
+    current_json = output / "current.json"
+    _atomic_text(
+        srt,
+        "\n\n".join(
+            f"{index}\n{_timestamp(cue['start_ms'])} --> {_timestamp(cue['end_ms'])}\n"
+            + "\n".join(_wrap_cue_lines(str(cue["text"])))
+            for index, cue in enumerate(cues, 1)
+        )
+        + "\n",
+    )
+    _atomic_text(txt, "\n".join(re.sub(r"\s+", " ", str(cue["text"])).strip() for cue in cues) + "\n")
+    _atomic_json(
+        current_json,
+        {
+            "revision": revision,
+            "generated_at": _iso(),
+            "canonical_source": source,
+            "cues": cues,
+            "segments": segments,
+        },
+    )
+    return {"srt": str(srt), "txt": str(txt), "json": str(current_json), "source": source}
+
+
+def _wrap_cue_lines(text: str) -> list[str]:
+    text = text.replace("\n", " ").strip()
+    if len(text) <= 20:
+        return [text]
+    midpoint = (len(text) + 1) // 2
+    for pivot in range(midpoint, max(0, midpoint - 6), -1):
+        if pivot < len(text) and text[pivot - 1] in "，。！？、；：":
+            return [text[:pivot], text[pivot:]]
+    return [text[:midpoint], text[midpoint:]]
+
+
 @router.get("/{subtitle_id}")
 def get_subtitle(subtitle_id: str) -> dict[str, Any]:
     directory, kind = _directory(subtitle_id)
     segments, state = _current_segments(directory)
     summary = _summary(subtitle_id, directory, kind)
-    return {**summary, "segments": segments, "history_count": len(state["history"])}
+    # Canonical truth: when an AI Review active revision exists its cue list
+    # (possibly merged/reflowed) is the current subtitle, not per-segment
+    # editor state. Editor rows keep raw evidence + their own text for
+    # traceability; the canonical cues are returned alongside.
+    from app.subtitles import canonical_state
+
+    cues, canonical_source = canonical_state.canonical_cues(directory, segments)
+    return {
+        **summary,
+        "segments": segments,
+        "history_count": len(state["history"]),
+        "canonical_source": canonical_source,
+        "canonical_cues": cues,
+    }
 
 
 @router.patch("/{subtitle_id}/segments/{segment_id}")
@@ -487,7 +556,7 @@ def publish_edited(
     segments, state = _current_segments(directory)
     if state["revision"] != payload.expected_revision or state["revision"] < 1:
         raise HTTPException(status_code=409, detail="Edited subtitle revision changed or has no edits")
-    rendered = _render_current(directory, segments, state["revision"])
+    rendered = render_canonical(directory, segments, state["revision"])
     publish_dir = directory / "editor-publish" / f"revision-{state['revision']}"
     publish_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(rendered["srt"], publish_dir / "subtitles-corrected.srt")

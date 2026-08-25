@@ -77,6 +77,11 @@ class CandidateProposal(BaseModel):
     model_config = ConfigDict(extra="forbid")
     change_type: str
     source_segment_ids: list[str] = Field(min_length=1, max_length=8)
+    # before entries are cue-aware: each item carries either a per-segment
+    # snapshot ({"segment_id": ..., "text": ...}) or, when the candidate
+    # re-edits an Active merged/reflowed cue, the full working-cue snapshot
+    # ({"source_segment_ids": [...], "text": ...}). The union shape keeps
+    # immutable source evidence separate from the working representation.
     before: list[dict[str, Any]]
     after: list[dict[str, Any]] = Field(min_length=1, max_length=8)
     reason: str = Field(min_length=1, max_length=500)
@@ -235,7 +240,11 @@ def _revision_by_number(state: dict[str, Any], number: int | None) -> dict[str, 
 # ---------------------------------------------------------------------------
 
 
-def _validate_candidate(candidate: CandidateProposal, baseline_index: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def _validate_candidate(
+    candidate: CandidateProposal,
+    baseline_index: dict[str, dict[str, Any]],
+    working_cues: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     if candidate.change_type not in CHANGE_TYPES:
         raise HTTPException(status_code=422, detail=f"未知的修改類型: {candidate.change_type}")
     if candidate.risk not in RISKS:
@@ -253,16 +262,58 @@ def _validate_candidate(candidate: CandidateProposal, baseline_index: dict[str, 
     if len(set(numbers)) != len(numbers):
         raise HTTPException(status_code=422, detail="source_segment_ids 重複")
 
-    before_by_id = {}
+    before_by_id: dict[str, str] = {}
+    cue_before: list[dict[str, Any]] = []
     for item in candidate.before:
-        key = str(item.get("segment_id", ""))
-        before_by_id[key] = str(item.get("text", ""))
-    if set(before_by_id) != set(ids):
+        if item.get("source_segment_ids") is not None:
+            # Cue-aware snapshot: full lineage of an Active working cue.
+            ids_key = [str(v) for v in item["source_segment_ids"]]
+            cue_before.append({"source_segment_ids": ids_key, "text": str(item.get("text", ""))})
+        elif item.get("segment_id") is not None:
+            key = str(item["segment_id"])
+            before_by_id[key] = str(item.get("text", ""))
+        else:
+            raise HTTPException(status_code=422, detail="before 項目必須提供 segment_id 或 source_segment_ids")
+    if set(before_by_id) | {sid for cue in cue_before for sid in cue["source_segment_ids"]} != set(ids):
         raise HTTPException(status_code=422, detail="before 與 source_segment_ids 不一致")
-    for segment_id, text in before_by_id.items():
-        expected = str(baseline_index[segment_id].get("working_text", baseline_index[segment_id]["raw_text"]))
-        if text != expected:
-            raise HTTPException(status_code=422, detail=f"before 文字與來源不一致: {segment_id}")
+
+    if cue_before:
+        # Validate the cue snapshots against the canonical Active cues: the
+        # candidate must re-edit the complete lineage with its current text.
+        active_cues = {
+            tuple(str(v) for v in cue.get("source_segment_ids", [])): str(cue.get("text", ""))
+            for cue in (working_cues or [])
+        }
+        for snapshot in cue_before:
+            key = tuple(snapshot["source_segment_ids"])
+            expected = active_cues.get(key)
+            if expected is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"before 與目前 Active cue 不一致（lineage {list(key)} 不存在或已改變）",
+                )
+            if snapshot["text"] != expected:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"before 文字與目前 Active cue 不一致: {list(key)}",
+                )
+    else:
+        for segment_id, text in before_by_id.items():
+            if working_cues:
+                # Canonical truth is the Active Revision: the expected text
+                # for a segment is the working cue that owns it.
+                owning = [
+                    str(cue.get("text", ""))
+                    for cue in working_cues
+                    if segment_id in [str(v) for v in cue.get("source_segment_ids", [])]
+                ]
+                expected = owning[0] if owning else str(
+                    baseline_index[segment_id].get("working_text", baseline_index[segment_id]["raw_text"])
+                )
+            else:
+                expected = str(baseline_index[segment_id].get("working_text", baseline_index[segment_id]["raw_text"]))
+            if text != expected:
+                raise HTTPException(status_code=422, detail=f"before 文字與來源不一致: {segment_id}")
 
     # Contiguity: ANY multi-segment candidate must span adjacent segments.
     indices = [baseline_index[s]["_index"] for s in ids]
@@ -326,7 +377,10 @@ def _validate_candidate(candidate: CandidateProposal, baseline_index: dict[str, 
             raise HTTPException(status_code=422, detail="不同 speaker 的字幕不可合併")
 
     # Text conservation for reflow-type changes: same visible words overall.
-    if candidate.change_type in {"cross_segment_reflow", "merge_adjacent"}:
+    # Cue-aware full-lineage re-edits of an Active merged/reflowed cue are
+    # deliberate corrections validated against the current working text, so
+    # conservation applies only to per-segment proposals.
+    if candidate.change_type in {"cross_segment_reflow", "merge_adjacent"} and not cue_before:
         before_joined = "".join(before_by_id[s] for s in ids)
         after_joined = "".join(str(cue["text"]) for cue in candidate.after)
         strip = lambda value: re.sub(r"\s+", "", value)  # noqa: E731
@@ -355,7 +409,7 @@ def _validate_candidate(candidate: CandidateProposal, baseline_index: dict[str, 
         "change_id": f"cand-{uuid.uuid4().hex[:12]}",
         "change_type": candidate.change_type,
         "source_segment_ids": list(ids),
-        "before": [
+        "before": cue_before if cue_before else [
             {"segment_id": segment_id, "text": before_by_id[segment_id]} for segment_id in ids
         ],
         "after": [
@@ -622,9 +676,14 @@ def propose_candidates(subtitle_id: str, payload: OrganizeRequest, request: Requ
             item["segment_id"]: {**item, "_index": position}
             for position, item in enumerate(working)
         }
+        # Candidate validation input must equal the true canonical state:
+        # Active Revision cues when published, otherwise editor working text.
+        from app.subtitles import canonical_state
+
+        cues, _ = canonical_state.canonical_cues(directory)
         created = []
         for candidate in payload.candidates:
-            record = _validate_candidate(candidate, baseline_index)
+            record = _validate_candidate(candidate, baseline_index, working_cues=cues)
             record["proposed_by"] = actor
             state["candidates"].append(record)
             created.append(record)
@@ -666,7 +725,10 @@ def decide_candidate(subtitle_id: str, payload: CandidateDecision, request: Requ
                     item["segment_id"]: {**item, "_index": position}
                     for position, item in enumerate(baseline)
                 }
-                validated = _validate_candidate(replacement, baseline_index)
+                from app.subtitles import canonical_state
+
+                cues_now, _ = canonical_state.canonical_cues(directory)
+                validated = _validate_candidate(replacement, baseline_index, working_cues=cues_now)
                 # Persist the normalized/validated edit so Publish uses the
                 # human-approved text, not the original AI proposal. Keep the
                 # AI original as audit metadata.
@@ -800,20 +862,56 @@ def export_revision(subtitle_id: str, kind: str, revision: int | None = None) ->
 
 @router.get("/{subtitle_id}/ai-review/baseline")
 def get_baseline(subtitle_id: str) -> dict[str, Any]:
+    """Immutable source evidence + canonical working representation.
+
+    - source_segments: raw ASR evidence (never mutated).
+    - working_cues: canonical current cues with lineage. With an Active AI
+      revision these are the revision cues (merged/reflowed preserved as-is,
+      never faked into per-segment text). Without one, they are the editor's
+      corrected/manual per-segment state — never raw ASR.
+    """
     directory = _directory(subtitle_id)
     baseline = baseline_segments(directory)
-    state = _review_state(directory)
-    working_by_id = {}
-    if state["revisions"]:
-        active = _revision_by_number(state, state["active_revision"])
-        if active:
-            for cue in active["cues"]:
-                for segment_id in cue["source_segment_ids"]:
-                    working_by_id.setdefault(segment_id, cue["text"])
+    from app.subtitles import canonical_state
+
+    cues, canonical_source = canonical_state.canonical_cues(directory)
     return {
         "subtitle_id": subtitle_id,
-        "segments": [
-            {**item, "working_text": working_by_id.get(item["segment_id"], item["raw_text"])}
-            for item in baseline
+        "canonical_source": canonical_source,
+        "source_segments": baseline,
+        "working_cues": [
+            {
+                "cue_id": cue.get("cue_id"),
+                "text": cue["text"],
+                "source_segment_ids": cue["source_segment_ids"],
+                "start_ms": cue["start_ms"],
+                "end_ms": cue["end_ms"],
+            }
+            for cue in cues
         ],
+        # Legacy per-segment view: only meaningful when each segment maps to
+        # its own cue; omitted for merged/reflowed states to avoid fake
+        # per-segment working_text.
+        **(
+            {}
+            if canonical_source == "ai_review_active" and any(
+                len(cue["source_segment_ids"]) > 1 for cue in cues
+            )
+            else {
+                "segments": [
+                    {
+                        **item,
+                        "working_text": next(
+                            (
+                                cue["text"]
+                                for cue in cues
+                                if cue["source_segment_ids"] == [item["segment_id"]]
+                            ),
+                            item["raw_text"],
+                        ),
+                    }
+                    for item in baseline
+                ]
+            }
+        ),
     }

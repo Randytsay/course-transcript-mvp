@@ -55,7 +55,7 @@ def publish_reviewed(
                 status_code=409,
                 detail="Reviewed subtitle revision changed; reload before publishing",
             )
-        rendered = base._render_current(directory, segments, snapshot_revision)
+        rendered = base.render_canonical(directory, segments, snapshot_revision)
         publish_dir = directory / "editor-publish" / f"revision-{snapshot_revision}"
         publish_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(rendered["srt"], publish_dir / "subtitles-corrected.srt")
