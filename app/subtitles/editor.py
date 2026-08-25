@@ -62,6 +62,9 @@ class ImportSrtRequest(BaseModel):
 class PublishEditedRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=1)
+    # Canonical concurrency check: when supplied, must match the current
+    # canonical publication key or the request is rejected (409).
+    expected_publication_key: str | None = None
     output_formats: list[Literal["srt", "txt"]] = Field(default_factory=lambda: ["srt", "txt"])
 
 
@@ -340,12 +343,81 @@ def import_srt(payload: ImportSrtRequest, request: Request) -> dict[str, Any]:
     return _summary(subtitle_id, directory, "imported")
 
 
+def render_canonical(
+    directory: Path,
+    segments: list[dict[str, Any]],
+    revision: int,
+) -> dict[str, str]:
+    """Render the canonical current subtitle for publication.
+
+    Uses the AI Review active revision cues when present (cue-aware: merged
+    and reflowed cues are preserved as-is); otherwise falls back to the
+    per-segment editor rendering. Output files are identical in shape so the
+    Drive publish transaction is unchanged.
+    """
+    from app.subtitles import canonical_state
+
+    cues, source = canonical_state.canonical_cues(directory, segments)
+    if source != "ai_review_active":
+        return _render_current(directory, segments, revision)
+    output = directory / "subtitle-editor"
+    output.mkdir(parents=True, exist_ok=True)
+    srt = output / "current.srt"
+    txt = output / "current.txt"
+    current_json = output / "current.json"
+    _atomic_text(
+        srt,
+        "\n\n".join(
+            f"{index}\n{_timestamp(cue['start_ms'])} --> {_timestamp(cue['end_ms'])}\n"
+            + "\n".join(_wrap_cue_lines(str(cue["text"])))
+            for index, cue in enumerate(cues, 1)
+        )
+        + "\n",
+    )
+    _atomic_text(txt, "\n".join(re.sub(r"\s+", " ", str(cue["text"])).strip() for cue in cues) + "\n")
+    _atomic_json(
+        current_json,
+        {
+            "revision": revision,
+            "generated_at": _iso(),
+            "canonical_source": source,
+            "cues": cues,
+            "segments": segments,
+        },
+    )
+    return {"srt": str(srt), "txt": str(txt), "json": str(current_json), "source": source}
+
+
+def _wrap_cue_lines(text: str) -> list[str]:
+    text = text.replace("\n", " ").strip()
+    if len(text) <= 20:
+        return [text]
+    midpoint = (len(text) + 1) // 2
+    for pivot in range(midpoint, max(0, midpoint - 6), -1):
+        if pivot < len(text) and text[pivot - 1] in "，。！？、；：":
+            return [text[:pivot], text[pivot:]]
+    return [text[:midpoint], text[midpoint:]]
+
+
 @router.get("/{subtitle_id}")
 def get_subtitle(subtitle_id: str) -> dict[str, Any]:
     directory, kind = _directory(subtitle_id)
     segments, state = _current_segments(directory)
     summary = _summary(subtitle_id, directory, kind)
-    return {**summary, "segments": segments, "history_count": len(state["history"])}
+    # Canonical truth: when an AI Review active revision exists its cue list
+    # (possibly merged/reflowed) is the current subtitle, not per-segment
+    # editor state. Editor rows keep raw evidence + their own text for
+    # traceability; the canonical cues are returned alongside.
+    from app.subtitles import canonical_state
+
+    cues, canonical_source = canonical_state.canonical_cues(directory, segments)
+    return {
+        **summary,
+        "segments": segments,
+        "history_count": len(state["history"]),
+        "canonical_source": canonical_source,
+        "canonical_cues": cues,
+    }
 
 
 @router.patch("/{subtitle_id}/segments/{segment_id}")
@@ -358,6 +430,8 @@ def edit_segment(
     actor = _mutation_actor(request)
     directory, _ = _directory(subtitle_id)
     with _LOCK:
+        from app.subtitles import canonical_state
+        canonical_state.ensure_editor_mutation_allowed(directory)
         segments, state = _current_segments(directory)
         if state["revision"] != payload.expected_revision:
             raise HTTPException(status_code=409, detail="字幕已更新，請重新載入")
@@ -395,6 +469,8 @@ def preview_replace(payload: ReplacePreviewRequest) -> dict[str, Any]:
     revisions: dict[str, int] = {}
     for subtitle_id in payload.subtitle_ids:
         directory, _ = _directory(subtitle_id)
+        from app.subtitles import canonical_state
+        canonical_state.ensure_editor_mutation_allowed(directory)
         segments, state = _current_segments(directory)
         revisions[subtitle_id] = state["revision"]
         for item in segments:
@@ -428,6 +504,8 @@ def apply_replace(payload: ReplaceApplyRequest, request: Request) -> dict[str, A
         loaded: list[tuple[str, Path, list[dict[str, Any]], dict[str, Any]]] = []
         for subtitle_id in payload.subtitle_ids:
             directory, _ = _directory(subtitle_id)
+            from app.subtitles import canonical_state
+            canonical_state.ensure_editor_mutation_allowed(directory)
             segments, state = _current_segments(directory)
             if payload.expected_revisions.get(subtitle_id) != state["revision"]:
                 raise HTTPException(status_code=409, detail=f"{subtitle_id} 已更新，請重新預覽")
@@ -484,11 +562,27 @@ def publish_edited(
     record = _job_record(subtitle_id)
     if not record or not str(record.get("source_path", "")).startswith("gdrive:"):
         raise HTTPException(status_code=409, detail="Original Drive source is unavailable")
+    from app.subtitles import canonical_state
+
+    identity = canonical_state.publication_identity(directory)
     segments, state = _current_segments(directory)
-    if state["revision"] != payload.expected_revision or state["revision"] < 1:
+    expected_key = payload.expected_publication_key
+    if expected_key is not None and expected_key != identity["publication_key"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Canonical content changed since load "
+                f"(expected {expected_key}, current {identity['publication_key']}); reload"
+            ),
+        )
+    if (
+        identity["canonical_source"] == "editor"
+        and (state["revision"] != payload.expected_revision or state["revision"] < 1)
+    ):
         raise HTTPException(status_code=409, detail="Edited subtitle revision changed or has no edits")
-    rendered = _render_current(directory, segments, state["revision"])
-    publish_dir = directory / "editor-publish" / f"revision-{state['revision']}"
+    rendered = render_canonical(directory, segments, state["revision"])
+    publication_key = identity["publication_key"]
+    publish_dir = directory / "editor-publish" / f"canonical-{publication_key.replace(':', '-')}"
     publish_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(rendered["srt"], publish_dir / "subtitles-corrected.srt")
     shutil.copy2(rendered["txt"], publish_dir / "transcript-corrected.txt")
@@ -502,6 +596,9 @@ def publish_edited(
     state["history"].append(
         {
             "revision": state["revision"],
+            "publication_key": publication_key,
+            "canonical_source": identity["canonical_source"],
+            "canonical_revision": identity["canonical_revision"],
             "type": "drive_publish",
             "actor": actor,
             "created_at": _iso(),
@@ -512,7 +609,13 @@ def publish_edited(
     _save_state(directory, state)
     return {
         "status": result.get("status"),
+        "publication_key": publication_key,
+        "canonical_source": identity["canonical_source"],
+        "canonical_revision": identity["canonical_revision"],
         "revision": state["revision"],
+        "published_revision": state["revision"],
+        "current_revision": state["revision"],
+        "zero_edit_review": False,
         "backup_count": result.get("backup_count", 0),
         "files": result.get("files", {}),
     }

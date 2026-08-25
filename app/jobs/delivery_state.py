@@ -15,6 +15,7 @@ def _event_is_duplicate(
     *,
     source: str,
     published_revision: int | None,
+    publication_key: str | None = None,
 ) -> bool:
     if source != "editor":
         return bool(rows)
@@ -22,6 +23,12 @@ def _event_is_duplicate(
         try:
             payload = json.loads(str(row["payload_json"] or "{}"))
         except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        if publication_key is not None:
+            # Canonical identity is authoritative when present; legacy events
+            # without a key never match a keyed request.
+            if payload.get("publication_key") == publication_key:
+                return True
             continue
         if payload.get("published_revision") == published_revision:
             return True
@@ -36,6 +43,7 @@ def record_delivery_success(
     source: str,
     backup_count: int,
     published_revision: int | None = None,
+    publication_key: str | None = None,
 ) -> dict[str, Any]:
     """Update visible state and append one idempotent delivery event.
 
@@ -85,6 +93,7 @@ def record_delivery_success(
             list(prior_events),
             source=source,
             published_revision=published_revision,
+            publication_key=publication_key,
         )
 
         if source == "editor":
@@ -124,6 +133,11 @@ def record_delivery_success(
                     "source": source,
                     "backup_count": int(backup_count),
                     "published_revision": published_revision,
+                    **(
+                        {"publication_key": publication_key}
+                        if publication_key is not None
+                        else {}
+                    ),
                     "paid_provider_repeated": False,
                     "human_review_released": source == "editor",
                 },
