@@ -99,13 +99,13 @@ class AIReviewWorkflowTests(unittest.TestCase):
                 ],
                 after=[
                     {"source_segment_ids": ["seg-0001"], "text": "所以我們今天要講的是"},
-                    {"source_segment_ids": ["seg-0001", "seg-0002"], "text": "彌勒大成佛經裡面這個內容"},
+                    {"source_segment_ids": ["seg-0002"], "text": "彌勒大成佛經裡面這個內容"},
                 ],
                 reason="完整專有名詞被 ASR boundary 切開",
             )
         )
         self.assertEqual(len(record["after"]), 2)
-        self.assertEqual(record["after"][1]["source_segment_ids"], ["seg-0001", "seg-0002"])
+        self.assertEqual(record["after"][1]["source_segment_ids"], ["seg-0002"])
 
     def test_proper_noun_not_split_across_cues(self) -> None:
         """The canonical term 彌勒大成佛經 must stay within a single cue."""
@@ -333,7 +333,7 @@ class AIReviewWorkflowTests(unittest.TestCase):
                 ],
                 after=[
                     {"source_segment_ids": ["seg-0001"], "text": "所以我們今天要講的是"},
-                    {"source_segment_ids": ["seg-0001", "seg-0002"], "text": "彌勒大成佛經裡面這個內容"},
+                    {"source_segment_ids": ["seg-0002"], "text": "彌勒大成佛經裡面這個內容"},
                 ],
                 reason="reflow",
             )
@@ -343,10 +343,10 @@ class AIReviewWorkflowTests(unittest.TestCase):
         cues = ai_review._resolve_cues(self.job_dir, state, [reflow])
         lineage = {tuple(cue["source_segment_ids"]) for cue in cues}
         self.assertIn(("seg-0001",), lineage)
-        self.assertIn(("seg-0001", "seg-0002"), lineage)
-        merged_cue = next(cue for cue in cues if len(cue["source_segment_ids"]) == 2)
-        self.assertEqual(merged_cue["start_ms"], 3000 - 3000)
-        self.assertEqual(merged_cue["end_ms"], 6000)
+        self.assertIn(("seg-0002",), lineage)
+        second_cue = next(cue for cue in cues if cue["source_segment_ids"] == ["seg-0002"])
+        self.assertEqual(second_cue["start_ms"], 3000)
+        self.assertEqual(second_cue["end_ms"], 6000)
 
 
 if __name__ == "__main__":

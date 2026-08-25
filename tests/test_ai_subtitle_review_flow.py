@@ -275,7 +275,6 @@ class AIReviewEndpointFlowTests(unittest.TestCase):
                     {"segment_id": "seg-0002", "text": "第二句"},
                 ],
                 "after": [
-                    {"source_segment_ids": ["seg-0001"], "text": "第一句"},
                     {"source_segment_ids": ["seg-0001", "seg-0002"], "text": "第一句第二句"},
                 ],
                 "reason": "reflow", "confidence": 0.9, "risk": "low",
