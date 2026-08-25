@@ -18,6 +18,10 @@ from app.subtitles import editor_hardened as hardened
 class PublishReviewedRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_revision: int = Field(ge=0)
+    # Canonical concurrency check: when the canonical subtitle is an AI Active
+    # revision this MUST match its current publication key, guaranteeing the
+    # published snapshot is exactly the human-reviewed one.
+    expected_publication_key: str | None = None
     output_formats: list[Literal["srt", "txt"]] = Field(
         default_factory=lambda: ["srt", "txt"]
     )
@@ -55,13 +59,34 @@ def publish_reviewed(
         identity = _cs.publication_identity(directory)
         segments, state = base._current_segments(directory)
         snapshot_revision = int(state["revision"])
+        # Publish exact human-reviewed snapshot: the canonical identity must
+        # still match what the reviewer loaded. AI-active publications MUST
+        # carry expected_publication_key; any supplied key is always verified.
+        if payload.expected_publication_key is not None:
+            if payload.expected_publication_key != identity["publication_key"]:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Canonical subtitle changed since review; reload before publishing",
+                )
+        elif identity["canonical_source"] == "ai_review_active":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Canonical subtitle changed since review; reload before publishing "
+                    f"(expected publication_key for {identity['publication_key']})"
+                ),
+            )
         if identity["canonical_source"] == "editor" and snapshot_revision != payload.expected_revision:
             raise HTTPException(
                 status_code=409,
                 detail="Reviewed subtitle revision changed; reload before publishing",
             )
         rendered = base.render_canonical(directory, segments, snapshot_revision)
-        publish_dir = directory / "editor-publish" / f"revision-{snapshot_revision}"
+        publish_dir = (
+            directory
+            / "editor-publish"
+            / f"canonical-{identity['publication_key'].replace(':', '-')}"
+        )
         publish_dir.mkdir(parents=True, exist_ok=True)
         shutil.copy2(rendered["srt"], publish_dir / "subtitles-corrected.srt")
         shutil.copy2(rendered["txt"], publish_dir / "transcript-corrected.txt")
@@ -125,6 +150,7 @@ def publish_reviewed(
             directory,
             revision=snapshot_revision,
             actor=actor,
+            publication_key=publication_key,
         )
         completed = record_delivery_success(
             base.DATA_DIR / "course-transcript.db",
@@ -139,9 +165,12 @@ def publish_reviewed(
     with base._LOCK:
         latest = base._edit_state(directory)
         current_revision = int(latest["revision"])
+        # History dedupe is keyed by canonical publication_key, never by the
+        # bare editor snapshot revision: AI R1 and AI R2 can both map to
+        # editor revision 0 yet are distinct publications.
         if not any(
             item.get("type") == "drive_publish"
-            and item.get("published_snapshot_revision") == snapshot_revision
+            and item.get("publication_key") == publication_key
             for item in latest["history"]
             if isinstance(item, dict)
         ):
@@ -149,6 +178,9 @@ def publish_reviewed(
                 {
                     "revision": current_revision,
                     "published_snapshot_revision": snapshot_revision,
+                    "publication_key": publication_key,
+                    "canonical_source": identity["canonical_source"],
+                    "canonical_revision": identity["canonical_revision"],
                     "type": "drive_publish",
                     "actor": actor,
                     "created_at": base._iso(),

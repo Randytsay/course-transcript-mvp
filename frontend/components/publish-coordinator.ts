@@ -15,6 +15,11 @@ export type PublishStatus = {
   can_publish: boolean;
   can_retry: boolean;
   message: string;
+  // Canonical publication identity (AI-active publications require it).
+  canonical_source?: string;
+  canonical_revision?: number;
+  content_sha256?: string;
+  publication_key?: string;
 };
 
 export type NoticeKind = "neutral" | "success" | "warning" | "error";
@@ -460,6 +465,20 @@ export class PublishCoordinator {
     );
     if (!allowed) return;
 
+    // Fail closed: an AI-active canonical publication must carry the exact
+    // publication key the reviewer saw. Without it we never send the request.
+    const publicationKey = this.status.publication_key;
+    if (
+      this.status.canonical_source === "ai_review_active"
+      && !publicationKey
+    ) {
+      this.busy = false;
+      this.notice = "無法確認字幕版本（缺少 publication key），請重新載入頁面。";
+      this.noticeKind = "error";
+      this.emit();
+      return;
+    }
+
     if (
       this.options.revision === 0
       && !this.options.confirm(
@@ -482,6 +501,8 @@ export class PublishCoordinator {
           method: "POST",
           body: JSON.stringify({
             expected_revision: this.options.revision,
+            // Bind the publication to the exact reviewed canonical snapshot.
+            ...(publicationKey ? { expected_publication_key: publicationKey } : {}),
             output_formats: ["srt", "txt"],
           }),
         },

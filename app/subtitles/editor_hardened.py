@@ -177,17 +177,20 @@ def _mark_pipeline_delivery_superseded(
     *,
     revision: int,
     actor: str,
+    publication_key: str | None = None,
 ) -> None:
-    base._atomic_json(
-        directory / "drive-delivery-state.json",
-        {
-            "status": "superseded_by_editor",
-            "superseded_at": base._iso(),
-            "editor_revision": revision,
-            "actor": actor,
-            "next_attempt_at": None,
-        },
-    )
+    payload = {
+        "status": "superseded_by_editor",
+        "superseded_at": base._iso(),
+        "editor_revision": revision,
+        "actor": actor,
+        "next_attempt_at": None,
+    }
+    if publication_key is not None:
+        # Keep the canonical key on the terminal marker so same-key replays
+        # stay idempotent after the publication completes.
+        payload["publication_key"] = publication_key
+    base._atomic_json(directory / "drive-delivery-state.json", payload)
     _update_pipeline_manifests(
         directory,
         status="superseded_by_editor",

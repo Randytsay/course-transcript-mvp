@@ -839,6 +839,11 @@ def publish_revision(subtitle_id: str, payload: PublishRequest, request: Request
         accepted = [item for item in state["candidates"] if item["status"] == "accepted"]
         cues = _resolve_cues(directory, state, accepted)
         digest = hashlib.sha256(render_srt(cues).encode("utf-8")).hexdigest()
+        # publication_key must use the canonical identity hash so keys are
+        # consistent across publish/status/cue-edit paths.
+        from app.subtitles import canonical_state
+
+        digest = canonical_state._cues_content_sha256(cues)
         number = state["revision"] + 1
         revision_record = {
             "revision": number,
@@ -939,9 +944,15 @@ def export_revision(subtitle_id: str, kind: str, revision: int | None = None) ->
     raise HTTPException(status_code=422, detail="不支援的匯出格式")
 
 
+def _canonical_cue_hash(cues: list[dict[str, Any]]) -> str:
+    """Canonical content hash shared with canonical_state.publication_identity."""
+    from app.subtitles import canonical_state
+
+    return canonical_state._cues_content_sha256(cues)
+
+
 class CueEditRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    # The cue being edited, identified by full lineage + current text
+    model_config = ConfigDict(extra="forbid")    # The cue being edited, identified by full lineage + current text
     # (optimistic concurrency against the Active revision).
     source_segment_ids: list[str] = Field(min_length=1, max_length=8)
     current_text: str = Field(min_length=1)
@@ -1020,7 +1031,7 @@ def edit_canonical_cue(subtitle_id: str, payload: CueEditRequest, request: Reque
                 }
                 for cue in new_cues
             ],
-            "content_sha256": hashlib.sha256(render_srt(new_cues).encode("utf-8")).hexdigest(),
+            "content_sha256": _canonical_cue_hash(new_cues),
         }
         state["revisions"].append(record)
         state["active_revision"] = number
@@ -1097,7 +1108,7 @@ def apply_batch_cue_replacements(
     new_cues = sorted(by_lineage.values(), key=lambda c: (c["start_ms"], c["end_ms"]))
     _validate_revision_cues(directory, new_cues)
     number = state["revision"] + 1
-    digest = hashlib.sha256(render_srt(new_cues).encode("utf-8")).hexdigest()
+    digest = _canonical_cue_hash(new_cues)
     record = {
         "revision": number,
         "created_at": _iso(),
