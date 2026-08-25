@@ -46,6 +46,9 @@ test("reviewer workspace separates watched and reviewed progress without seat ja
   assert.match(workspaceStyles, /overflow-wrap: anywhere/);
   assert.match(workspaceStyles, /overflow-x: hidden/);
   assert.match(workspaceStyles, /@media \(max-width: 1180px\)/);
+  assert.match(workspaceStyles, /\.subtitleHeader \{\s*position: relative;/);
+  assert.match(workspaceStyles, /\.segmentList \{\s*max-height: none;\s*overflow: visible;/);
+  assert.match(workspaceStyles, /\.editorNames,\s*\.contributorCard,\s*\.helperText \{\s*display: none;/);
   assert.doesNotMatch(library, /席位/);
   assert.doesNotMatch(workspace, /席位/);
 });
