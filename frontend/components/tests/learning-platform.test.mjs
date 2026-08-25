@@ -69,10 +69,13 @@ test("lesson playback follows the active segment inside the transcript pane", ()
   const lesson = source("app/review/learn/[videoId]/page.tsx");
   const styles = source("app/review/learn/learning.module.css");
   assert.match(lesson, /transcriptListRef/);
-  assert.match(lesson, /list\.scrollTo\(\{top:targetTop,behavior:"smooth"\}\)/);
+  assert.match(lesson, /nodeRect\.top-listRect\.top-4/);
+  assert.match(lesson, /list\.scrollTo\(\{top:targetTop,behavior\}\)/);
+  assert.match(lesson, /回到播放位置/);
   assert.match(lesson, /list\.addEventListener\("scroll"/);
   assert.match(lesson, /videoId:youtubeVideoId/);
   assert.match(styles, /transcriptWorkspace>\.list\{max-height:min\(68vh,760px\);overflow-y:auto/);
+  assert.match(styles, /\.playbackPage \.videoFrame\{position:sticky;top:0;z-index:10/);
 });
 
 test("review center and knowledge search stay grounded in learning evidence", () => {
