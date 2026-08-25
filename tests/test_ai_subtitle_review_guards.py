@@ -1,6 +1,7 @@
 """Regression guards for PR #86 AI subtitle review invariants."""
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,23 @@ class AIReviewGuardRegressionTests(unittest.TestCase):
                 "start_ms": 3000, "end_ms": 6000, "_index": 1,
             },
         }
+
+    def _write_baseline(self, directory: Path) -> None:
+        """Seed the immutable source evidence required by revision validation."""
+        segments = [
+            {
+                "segment_id": "seg-0001", "raw_text": "甲", "text": "甲",
+                "start_ms": 0, "end_ms": 3000,
+            },
+            {
+                "segment_id": "seg-0002", "raw_text": "乙", "text": "乙",
+                "start_ms": 3000, "end_ms": 6000,
+            },
+        ]
+        (directory / "subtitles.json").write_text(
+            json.dumps({"source": "chirp", "segments": segments}, ensure_ascii=False),
+            encoding="utf-8",
+        )
 
     def test_same_candidate_reused_lineage_is_rejected(self) -> None:
         proposal = ai_review.CandidateProposal(
@@ -56,6 +74,7 @@ class AIReviewGuardRegressionTests(unittest.TestCase):
     def test_partial_edit_of_active_multi_source_cue_fails_closed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
+            self._write_baseline(directory)
             state = {
                 "revision": 1, "active_revision": 1, "candidates": [],
                 "revisions": [{
@@ -79,6 +98,7 @@ class AIReviewGuardRegressionTests(unittest.TestCase):
     def test_full_lineage_edit_of_active_multi_source_cue_is_allowed(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
+            self._write_baseline(directory)
             state = {
                 "revision": 1, "active_revision": 1, "candidates": [],
                 "revisions": [{
