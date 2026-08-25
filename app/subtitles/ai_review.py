@@ -264,18 +264,48 @@ def _validate_candidate(
 
     before_by_id: dict[str, str] = {}
     cue_before: list[dict[str, Any]] = []
+    representation: str | None = None
+    seen_before_lineage: set[str] = set()
+    cue_lineage_order: list[str] = []
     for item in candidate.before:
-        if item.get("source_segment_ids") is not None:
-            # Cue-aware snapshot: full lineage of an Active working cue.
-            ids_key = [str(v) for v in item["source_segment_ids"]]
+        has_cue = item.get("source_segment_ids") is not None
+        has_segment = item.get("segment_id") is not None
+        if has_cue == has_segment:
+            raise HTTPException(status_code=422, detail="before 項目必須且只能提供 segment_id 或 source_segment_ids 其中一種")
+        current_representation = "cue" if has_cue else "segment"
+        if representation is None:
+            representation = current_representation
+        elif representation != current_representation:
+            raise HTTPException(status_code=422, detail="before 不可混用 per-segment 與 cue-aware snapshot")
+        if has_cue:
+            raw_ids = item.get("source_segment_ids")
+            if not isinstance(raw_ids, list) or not raw_ids:
+                raise HTTPException(status_code=422, detail="cue-aware before 必須有 source_segment_ids")
+            ids_key = [str(v) for v in raw_ids]
+            if len(set(ids_key)) != len(ids_key):
+                raise HTTPException(status_code=422, detail="cue-aware before lineage 重複")
+            for segment_id in ids_key:
+                if segment_id in seen_before_lineage:
+                    raise HTTPException(status_code=422, detail=f"before lineage 重複覆蓋: {segment_id}")
+                seen_before_lineage.add(segment_id)
+                cue_lineage_order.append(segment_id)
             cue_before.append({"source_segment_ids": ids_key, "text": str(item.get("text", ""))})
-        elif item.get("segment_id") is not None:
-            key = str(item["segment_id"])
-            before_by_id[key] = str(item.get("text", ""))
         else:
-            raise HTTPException(status_code=422, detail="before 項目必須提供 segment_id 或 source_segment_ids")
-    if set(before_by_id) | {sid for cue in cue_before for sid in cue["source_segment_ids"]} != set(ids):
+            key = str(item["segment_id"])
+            if key in before_by_id:
+                raise HTTPException(status_code=422, detail=f"before segment 重複: {key}")
+            before_by_id[key] = str(item.get("text", ""))
+    covered_before = set(before_by_id) | seen_before_lineage
+    if covered_before != set(ids):
         raise HTTPException(status_code=422, detail="before 與 source_segment_ids 不一致")
+    if cue_before and cue_lineage_order != list(ids):
+        raise HTTPException(status_code=422, detail="cue-aware before 必須依 source_segment_ids 原始順序完整分割")
+    if working_cues:
+        scope = set(ids)
+        for working_cue in working_cues:
+            members = {str(v) for v in working_cue.get("source_segment_ids", [])}
+            if len(members) > 1 and scope & members and not members <= scope:
+                raise HTTPException(status_code=409, detail=f"候選僅涵蓋 Active multi-source cue 的部分 lineage；必須完整包含 {sorted(members)}")
 
     if cue_before:
         # Validate the cue snapshots against the canonical Active cues: the
@@ -376,18 +406,19 @@ def _validate_candidate(
         if len({baseline_index[s].get("speaker") for s in ids if baseline_index[s].get("speaker")}) > 1:
             raise HTTPException(status_code=422, detail="不同 speaker 的字幕不可合併")
 
-    # Text conservation for reflow-type changes: same visible words overall.
-    # Cue-aware full-lineage re-edits of an Active merged/reflowed cue are
-    # deliberate corrections validated against the current working text, so
-    # conservation applies only to per-segment proposals.
-    if candidate.change_type in {"cross_segment_reflow", "merge_adjacent"} and not cue_before:
-        before_joined = "".join(before_by_id[s] for s in ids)
+    # Pure reflow/merge must conserve visible text even for cue-aware R2 edits.
+    if candidate.change_type in {"cross_segment_reflow", "merge_adjacent"}:
+        before_joined = (
+            "".join(str(snapshot["text"]) for snapshot in cue_before)
+            if cue_before
+            else "".join(before_by_id[s] for s in ids)
+        )
         after_joined = "".join(str(cue["text"]) for cue in candidate.after)
         strip = lambda value: re.sub(r"\s+", "", value)  # noqa: E731
         if strip(before_joined) != strip(after_joined):
             raise HTTPException(
                 status_code=422,
-                detail="跨段整理不可改變總字詞內容；文字修正請另建 correction candidate",
+                detail="跨段整理不可改變總字詞內容；文字修正請使用 correction/mixed candidate",
             )
 
     # split_for_readability v1: presentation line wrapping only — one source
@@ -517,7 +548,7 @@ def _resolve_cues(
             continue
         cues.append(dict(cue))
     cues.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
-    _validate_final_cues(cues)
+    _validate_revision_cues(directory, cues)
     for index, cue in enumerate(cues, 1):
         cue["cue_id"] = f"cue-{index:04d}"
     return cues
@@ -545,6 +576,18 @@ def _validate_final_cues(cues: list[dict[str, Any]]) -> None:
                 )
             seen_lineage.add(segment_id)
         previous_end = end
+
+
+def _validate_revision_cues(directory: Path, cues: list[dict[str, Any]]) -> None:
+    """Validate timeline, unique lineage, and complete immutable-source coverage."""
+    _validate_final_cues(cues)
+    expected = {item["segment_id"] for item in baseline_segments(directory)}
+    actual = {str(segment_id) for cue in cues for segment_id in cue.get("source_segment_ids", [])}
+    if actual != expected:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Final Revision source coverage 不完整；missing={sorted(expected - actual)}, extra={sorted(actual - expected)}",
+        )
 
 
 def _timing_of(cues: list[dict[str, Any]], segment_id: str) -> tuple[int, int] | None:
@@ -810,7 +853,10 @@ def rollback_revision(subtitle_id: str, revision: int, request: Request) -> dict
             raise HTTPException(status_code=404, detail="Revision not found")
         if revision == state["active_revision"]:
             raise HTTPException(status_code=409, detail="此版本已是 Active")
+        if state["candidates"]:
+            raise HTTPException(status_code=409, detail="尚有本輪 Review candidates；發布或清空後才能 rollback")
         cues = [dict(cue) for cue in target["cues"]]
+        _validate_revision_cues(directory, cues)
         number = state["revision"] + 1
         record = {
             "revision": number,
@@ -843,7 +889,8 @@ def export_revision(subtitle_id: str, kind: str, revision: int | None = None) ->
     record = _revision_by_number(state, resolved)
     if record is None:
         raise HTTPException(status_code=404, detail="Revision not found")
-    cues = record["cues"]
+    cues = [dict(cue) for cue in record["cues"]]
+    _validate_revision_cues(directory, cues)
     kind = kind.lower()
     if kind == "srt":
         return Response(render_srt(cues), media_type="application/x-subrip")

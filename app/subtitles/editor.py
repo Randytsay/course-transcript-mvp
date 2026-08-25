@@ -427,6 +427,8 @@ def edit_segment(
     actor = _mutation_actor(request)
     directory, _ = _directory(subtitle_id)
     with _LOCK:
+        from app.subtitles import canonical_state
+        canonical_state.ensure_editor_mutation_allowed(directory)
         segments, state = _current_segments(directory)
         if state["revision"] != payload.expected_revision:
             raise HTTPException(status_code=409, detail="字幕已更新，請重新載入")
@@ -464,6 +466,8 @@ def preview_replace(payload: ReplacePreviewRequest) -> dict[str, Any]:
     revisions: dict[str, int] = {}
     for subtitle_id in payload.subtitle_ids:
         directory, _ = _directory(subtitle_id)
+        from app.subtitles import canonical_state
+        canonical_state.ensure_editor_mutation_allowed(directory)
         segments, state = _current_segments(directory)
         revisions[subtitle_id] = state["revision"]
         for item in segments:
@@ -497,6 +501,8 @@ def apply_replace(payload: ReplaceApplyRequest, request: Request) -> dict[str, A
         loaded: list[tuple[str, Path, list[dict[str, Any]], dict[str, Any]]] = []
         for subtitle_id in payload.subtitle_ids:
             directory, _ = _directory(subtitle_id)
+            from app.subtitles import canonical_state
+            canonical_state.ensure_editor_mutation_allowed(directory)
             segments, state = _current_segments(directory)
             if payload.expected_revisions.get(subtitle_id) != state["revision"]:
                 raise HTTPException(status_code=409, detail=f"{subtitle_id} 已更新，請重新預覽")

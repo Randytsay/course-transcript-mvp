@@ -236,7 +236,7 @@ class CanonicalStateIntegrationTests(unittest.TestCase):
 
         # Cue-aware before snapshot of the Active merged cue.
         full_edit = {
-            "change_type": "cross_segment_reflow",
+            "change_type": "mixed",
             "source_segment_ids": ["seg-0001", "seg-0002"],
             "before": [{
                 "source_segment_ids": ["seg-0001", "seg-0002"],

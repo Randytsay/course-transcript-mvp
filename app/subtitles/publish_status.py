@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel
 
+from app.subtitles import canonical_state
 from app.subtitles import editor as base
 
 
@@ -281,6 +282,23 @@ def get_publish_status(subtitle_id: str) -> dict[str, object]:
 
     directory, kind = base._directory(subtitle_id)
     current_revision, history, editor_invalid = _editor_state(directory)
+    block_reason = canonical_state.editor_mutation_block_reason(directory)
+    if block_reason:
+        return _response(
+            status="ambiguous",
+            job_status=None,
+            batch_status=None,
+            current_revision=current_revision,
+            published_revision=None,
+            drive_publish_status=None,
+            current_event_count=0,
+            total_event_count=0,
+            can_publish=False,
+            message=(
+                f"{block_reason}。目前 Editor revision 不能代表 canonical AI Revision；"
+                "建立 canonical publication identity 前禁止 Drive 回寫。"
+            ),
+        )
     marker, marker_invalid = _marker_state(directory)
     drive_state, drive_invalid, local_render_exists = _drive_state(
         directory,

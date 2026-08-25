@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.jobs.delivery_state import record_delivery_success
 from app.jobs.drive_lock import drive_publish_lock
 from app.jobs.drive_publish import publish_outputs, source_parent_destination
+from app.subtitles import canonical_state
 from app.subtitles import editor as base
 from app.subtitles import editor_hardened as hardened
 
@@ -35,6 +36,7 @@ def publish_reviewed(
             status_code=409,
             detail="Imported subtitle has no original Drive destination",
         )
+    canonical_state.ensure_editor_mutation_allowed(directory)
     record = base._job_record(subtitle_id)
     if not record or not str(record.get("source_path", "")).startswith("gdrive:"):
         raise HTTPException(
