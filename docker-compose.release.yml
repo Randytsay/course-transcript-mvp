@@ -135,10 +135,10 @@ services:
         VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-pipeline-worker:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     environment:
-      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/gcp-sa.json
     volumes:
       - ${COURSE_TRANSCRIPT_DATA_HOST_PATH:?Set COURSE_TRANSCRIPT_DATA_HOST_PATH}:/app/data
-      - ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}:/run/ai-runtime:ro
+      - ${GCP_CREDENTIALS_HOST_PATH:?Set GCP_CREDENTIALS_HOST_PATH}:/run/secrets/gcp-sa.json:ro
 
   billing-worker:
     build:

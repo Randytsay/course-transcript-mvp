@@ -93,7 +93,7 @@ jobs:
               for item in services['api'].get('volumes', [])
           )
 
-          for name in ('infrastructure-test', 'pipeline-worker', 'retention-monitor'):
+          for name in ('infrastructure-test', 'pipeline-worker'):
               service = services[name]
               environment = service.get('environment') or {}
               assert environment.get('GOOGLE_APPLICATION_CREDENTIALS') == (
@@ -104,6 +104,17 @@ jobs:
                   if item.get('target') == '/run/ai-runtime'
               )
               assert runtime.get('read_only') is True, (name, runtime)
+
+          retention = services['retention-monitor']
+          retention_environment = retention.get('environment') or {}
+          assert retention_environment.get('GOOGLE_APPLICATION_CREDENTIALS') == (
+              '/run/secrets/gcp-sa.json'
+          ), retention_environment
+          retention_gcp = next(
+              item for item in retention.get('volumes', [])
+              if item.get('target') == '/run/secrets/gcp-sa.json'
+          )
+          assert retention_gcp.get('read_only') is True, retention_gcp
           PY
       - name: Render retranscription worker overlay
         env:
