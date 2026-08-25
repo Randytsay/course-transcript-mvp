@@ -838,7 +838,121 @@
   }
 }
 
+/* On a narrow desktop the video stays full-width above the transcript. Keep
+   secondary collaboration details quiet and prevent the subtitle header from
+   becoming a floating layer over the video. */
 @media (max-width: 1180px) {
+  .page {
+    padding: 12px;
+  }
+
+  .topbar {
+    grid-template-columns: 1fr auto;
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+
+  .titleBlock {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    text-align: left;
+  }
+
+  .titleBlock h1 {
+    font-size: 17px;
+    white-space: normal;
+  }
+
+  .workspace {
+    height: auto;
+    min-height: 0;
+    grid-template-columns: 1fr;
+  }
+
+  .playerColumn {
+    position: static;
+    overflow: visible;
+  }
+
+  .playerFrame {
+    border-radius: 14px;
+  }
+
+  .sessionCard {
+    margin-top: 8px;
+    padding: 10px 12px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .sessionLabel {
+    font-size: 10px;
+  }
+
+  .sessionCard strong {
+    font-size: 14px;
+  }
+
+  .editorNames,
+  .contributorCard,
+  .helperText {
+    display: none;
+  }
+
+  .reviewActions {
+    margin-top: 8px;
+    gap: 7px;
+  }
+
+  .reviewActions button {
+    min-height: 38px;
+    padding: 0 8px;
+    font-size: 12px;
+  }
+
+  .subtitlePanel {
+    height: auto;
+    min-height: 0;
+    border-radius: 14px;
+    overflow: visible;
+  }
+
+  .subtitleHeader {
+    position: relative;
+    top: auto;
+    padding: 10px 12px;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .interactionHint {
+    gap: 4px 9px;
+    margin-top: 4px;
+    font-size: 10px;
+  }
+
+  .interactionHint span:first-child {
+    display: none;
+  }
+
+  .segment {
+    grid-template-columns: 64px minmax(0, 1fr);
+    padding: 11px 12px;
+  }
+
+  .segmentTextButton {
+    font-size: 15px;
+    line-height: 1.58;
+  }
+
+  .segmentList {
+    max-height: none;
+    overflow: visible;
+    scroll-padding-block: 0;
+  }
+}
+
+@media (max-width: 759px) {
   .page {
     padding: 12px;
   }
@@ -866,6 +980,7 @@
   .subtitlePanel {
     height: 58vh;
     min-height: 460px;
+    overflow: hidden;
   }
 
   .sessionCard {
@@ -873,7 +988,7 @@
   }
 }
 
-@media (max-width: 620px) {
+@media (max-width: 759px) {
   .page {
     padding: 8px;
   }
@@ -945,6 +1060,12 @@
     height: 58vh;
     min-height: 430px;
     border-radius: 14px;
+    overflow: hidden;
+  }
+
+  .segmentList {
+    max-height: none;
+    overflow-y: auto;
   }
 
   .subtitleHeader {
