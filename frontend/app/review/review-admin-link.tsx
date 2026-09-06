@@ -33,6 +33,7 @@ export default function ReviewAdminLink({ className = "" }: { className?: string
     <a
       className={`${styles.portalLink} ${styles.adminPortalLink} ${className}`}
       href="/review-admin"
+      aria-label="開啟管理員入口"
       onClick={openAdminPortal}
     >
       管理員入口 ↗

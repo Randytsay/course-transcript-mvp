@@ -645,6 +645,10 @@
   backdrop-filter: blur(8px);
 }
 
+.mobileHelpLink {
+  display: none;
+}
+
 .portalLink:hover {
   background: #fff;
   transform: translateY(-1px);
@@ -703,6 +707,20 @@
   .loginCard, .accountCard { padding: 22px 18px; }
   .quickLinks { grid-template-columns: 1fr 1fr; }
   .footer { gap: 12px 18px; font-size: 12px; }
+  .mobileHelpLink {
+    position: fixed;
+    top: 15px;
+    right: 68px;
+    z-index: 81;
+    width: 42px;
+    min-height: 42px;
+    padding: 0;
+    font-size: 0;
+  }
+  .mobileHelpLink > span:first-child {
+    font-size: 18px;
+    line-height: 1;
+  }
   .portalDock { right: 10px; bottom: 10px; }
   .portalDock .portalLink { min-height: 38px; padding-inline: 11px; font-size: 11px; }
 }

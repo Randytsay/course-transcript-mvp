@@ -17,12 +17,19 @@ export default function ReviewPortalDock() {
   if (pathname.startsWith("/review/learn/") && !fullPageRoutes.has(pathname)) return null;
 
   return (
-    <nav className={styles.portalDock} aria-label="平台入口">
-      <a className={styles.portalLink} href="/review/help" aria-label="開啟佛學共學平台使用說明">
+    <>
+      <a
+        className={`${styles.portalLink} ${styles.mobileHelpLink}`}
+        href="/review/help"
+        aria-label="開啟佛學共學平台使用說明"
+        title="使用說明"
+      >
         <span aria-hidden="true">?</span>
         <span>使用說明</span>
       </a>
-      <ReviewAdminLink />
-    </nav>
+      <nav className={styles.portalDock} aria-label="平台入口">
+        <ReviewAdminLink />
+      </nav>
+    </>
   );
 }
