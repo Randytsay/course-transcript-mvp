@@ -23,6 +23,7 @@ export default function DashboardPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
 
   const load = useCallback(async () => {
     try {
@@ -43,6 +44,8 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    const query = new URLSearchParams(window.location.search).get("q") ?? "";
+    setSearchQuery(query);
     void load();
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void load();
@@ -55,7 +58,17 @@ export default function DashboardPage() {
   const awaitingConfirmation = jobs.filter((job) => job.status === "awaiting_confirmation").length;
   const firstAwaitingJob = jobs.find((job) => job.status === "awaiting_confirmation");
   const completed = jobs.filter((job) => ["completed", "review", "awaiting_review"].includes(job.status)).length;
-  const visibleJobs = useMemo(() => showAll ? jobs : jobs.slice(0, 4), [jobs, showAll]);
+  const filteredJobs = useMemo(() => {
+    const query = searchQuery.trim().toLocaleLowerCase();
+    if (!query) return jobs;
+    return jobs.filter((job) => [job.id, job.filename, job.course].some((value) => value.toLocaleLowerCase().includes(query)));
+  }, [jobs, searchQuery]);
+  const visibleJobs = useMemo(() => showAll ? filteredJobs : filteredJobs.slice(0, 4), [filteredJobs, showAll]);
+  function handleSearch(query: string) {
+    setSearchQuery(query);
+    window.history.replaceState(null, "", `/?q=${encodeURIComponent(query)}#jobs`);
+    window.requestAnimationFrame(() => document.getElementById("jobs")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
   const metrics = [
     { label: "處理中任務", value: String(active), detail: active ? "後端目前正在處理" : "目前沒有處理中的任務", icon: Activity, tone: "blue" },
     { label: "待人工確認", value: String(reviewing + awaitingConfirmation), detail: awaitingConfirmation ? `${awaitingConfirmation} 個待確認費用` : reviewing ? `${reviewing} 個待內容審查` : "目前沒有待確認項目", icon: TriangleAlert, tone: "amber" },
@@ -64,7 +77,7 @@ export default function DashboardPage() {
   ];
 
   return (
-    <AppShell title="轉錄儀表板" description="掌握長檔辨識進度、人工審查與輸出狀態。" actions={<Link href="/jobs/new" className="button button--primary"><Plus size={17} />新增轉錄任務</Link>}>
+    <AppShell title="轉錄儀表板" description="掌握長檔辨識進度、人工審查與輸出狀態。" onSearch={handleSearch} actions={<Link href="/jobs/new" className="button button--primary"><Plus size={17} />新增轉錄任務</Link>}>
       {firstAwaitingJob && (
         <div style={{ marginBottom: "20px", padding: "16px 20px", background: "#fff7ed", border: "2px solid #f59e0b", borderRadius: "12px", display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px", flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
@@ -144,12 +157,13 @@ export default function DashboardPage() {
           </div>
 
           <div className="panel panel--jobs" id="jobs">
-            <div className="panel-header"><div><h2>最近任務</h2><p>{showAll ? `目前顯示全部 ${jobs.length} 筆工作。` : `目前顯示最近 ${Math.min(4, jobs.length)} 筆工作。`}</p></div>{jobs.length > 4 && <button type="button" className="button button--ghost" onClick={() => setShowAll((current) => !current)}>{showAll ? "收合" : "查看全部"} <ArrowRight size={16} /></button>}</div>
+            <div className="panel-header"><div><h2>最近任務</h2><p>{searchQuery ? `搜尋「${searchQuery}」找到 ${filteredJobs.length} 筆。` : showAll ? `目前顯示全部 ${jobs.length} 筆工作。` : `目前顯示最近 ${Math.min(4, jobs.length)} 筆工作。`}</p></div>{filteredJobs.length > 4 && <button type="button" className="button button--ghost" onClick={() => setShowAll((current) => !current)}>{showAll ? "收合" : "查看全部"} <ArrowRight size={16} /></button>}</div>
             <div className="jobs-table" role="table" aria-label="最近轉錄任務">
               <div className="jobs-table__header" role="row"><span>檔案與課程</span><span>處理進度</span><span>狀態</span><span>更新時間</span><span /></div>
               {loading && <div className="empty-state">正在讀取後端任務資料…</div>}
               {error && <div className="empty-state empty-state--error">後端目前無法連線：{error}</div>}
               {!loading && !error && jobs.length === 0 && <div className="empty-state">尚無已登記的本機任務。</div>}
+              {!loading && !error && jobs.length > 0 && filteredJobs.length === 0 && <div className="empty-state">找不到符合的檔名、課程或任務編號。</div>}
               {visibleJobs.map((job) => (
                 <div className="jobs-table__row" role="row" key={job.id}>
                   <div className="job-file-cell"><div className="file-icon"><FileAudio2 size={20} /></div><div><Link href={`/jobs/${job.id}`} className="job-name">{job.filename}</Link><span>{job.course} · {job.duration}</span></div></div>

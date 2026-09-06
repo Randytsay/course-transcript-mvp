@@ -18,9 +18,10 @@ jobs:
       - name: Create safe placeholders
         run: |
           printf 'RELEASE_ENV_SENTINEL=loaded\n' > /tmp/live.env
-          touch /tmp/rclone.conf /tmp/gcp-sa.json /tmp/billing-sa.json
+          touch /tmp/rclone.conf /tmp/billing-sa.json
+          mkdir -p /tmp/ai-runtime /tmp/ai-accounts
+          touch /tmp/ai-runtime/gcp-sa.json
           mkdir -p /tmp/release-state/data /tmp/release-state/logs /tmp/release-state/tmp
-          mkdir -p /tmp/ai-runtime
       - name: Render release model
         env:
           COURSE_TRANSCRIPT_RELEASE_TAG: ci-release
@@ -30,7 +31,8 @@ jobs:
           COURSE_TRANSCRIPT_DATA_HOST_PATH: /tmp/release-state/data
           COURSE_TRANSCRIPT_LOGS_HOST_PATH: /tmp/release-state/logs
           COURSE_TRANSCRIPT_TMP_HOST_PATH: /tmp/release-state/tmp
-          GCP_CREDENTIALS_HOST_PATH: /tmp/gcp-sa.json
+          AI_RUNTIME_HOST_DIR: /tmp/ai-runtime
+          AI_ACCOUNTS_DIR: /tmp/ai-accounts
           RCLONE_CONFIG_HOST_PATH: /tmp/rclone.conf
           GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH: /dev/null
           BILLING_CREDENTIALS_HOST_PATH: /tmp/billing-sa.json
@@ -46,6 +48,7 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import os
           from pathlib import Path
 
           model = json.loads(Path('/tmp/release-compose.json').read_text())
@@ -88,10 +91,16 @@ jobs:
               data_sources[name] = data.get('source')
           assert set(data_sources.values()) == {'/tmp/release-state/data'}, data_sources
 
-          assert all(
-              'gcp-sa.json' not in str(item)
-              for item in services['api'].get('volumes', [])
+          api_volumes = services['api'].get('volumes', [])
+          api_runtime = next(
+              item for item in api_volumes if item.get('target') == '/run/ai-runtime'
           )
+          assert api_runtime.get('read_only') is not True
+          api_accounts = next(
+              item for item in api_volumes
+              if item.get('target') == os.environ['AI_ACCOUNTS_DIR']
+          )
+          assert api_accounts.get('read_only') is not True
 
           for name in ('infrastructure-test', 'pipeline-worker'):
               service = services[name]
@@ -108,13 +117,13 @@ jobs:
           retention = services['retention-monitor']
           retention_environment = retention.get('environment') or {}
           assert retention_environment.get('GOOGLE_APPLICATION_CREDENTIALS') == (
-              '/run/secrets/gcp-sa.json'
+              '/run/ai-runtime/gcp-sa.json'
           ), retention_environment
-          retention_gcp = next(
+          retention_runtime = next(
               item for item in retention.get('volumes', [])
-              if item.get('target') == '/run/secrets/gcp-sa.json'
+              if item.get('target') == '/run/ai-runtime'
           )
-          assert retention_gcp.get('read_only') is True, retention_gcp
+          assert retention_runtime.get('read_only') is True, retention_runtime
           PY
       - name: Render retranscription worker overlay
         env:

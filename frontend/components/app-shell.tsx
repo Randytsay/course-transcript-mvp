@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   BookOpenText,
   ChevronDown,
@@ -23,7 +23,8 @@ const navigation = [
   { href: "/", label: "儀表板", icon: Gauge, match: (path: string) => path === "/" },
   { href: "/jobs/new", label: "新增任務", icon: Plus, match: (path: string) => path === "/jobs/new" },
   { href: "/#jobs", label: "任務記錄", icon: FileAudio, match: (path: string) => path.startsWith("/jobs/") && path !== "/jobs/new" },
-  { href: "/#glossary", label: "術語庫", icon: Library, match: () => false }
+  { href: "/#glossary", label: "術語庫", icon: Library, match: () => false },
+  { href: "/review-admin/ai-accounts", label: "帳號設定", icon: Settings, match: (path: string) => path.startsWith("/review-admin/ai-accounts") }
 ];
 
 type FontSize = "standard" | "large" | "xlarge";
@@ -37,28 +38,45 @@ export default function AppShell({
   children,
   title,
   description,
-  actions
+  actions,
+  onSearch
 }: {
   children: React.ReactNode;
   title: string;
   description?: string;
   actions?: React.ReactNode;
+  onSearch?: (query: string) => void;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const [fontSize, setFontSize] = useState<FontSize>("standard");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
-    const saved = localStorage.getItem("course-transcript-font-size-v2");
+    const saved = localStorage.getItem("course-transcript-font-size")
+      ?? localStorage.getItem("course-transcript-font-size-v2");
     const initialSize: FontSize = saved === "standard" || saved === "large" || saved === "xlarge" ? saved : "standard";
     setFontSize(initialSize);
     document.documentElement.setAttribute("data-font-size", initialSize);
+    localStorage.setItem("course-transcript-font-size", initialSize);
   }, []);
 
   function handleFontSizeChange(size: FontSize) {
     setFontSize(size);
     document.documentElement.setAttribute("data-font-size", size);
-    localStorage.setItem("course-transcript-font-size-v2", size);
+    localStorage.setItem("course-transcript-font-size", size);
+  }
+
+  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") return;
+    const query = searchQuery.trim();
+    if (!query) return;
+    if (onSearch) {
+      onSearch(query);
+      return;
+    }
+    router.push(`/?q=${encodeURIComponent(query)}#jobs`);
   }
 
   return (
@@ -92,8 +110,8 @@ export default function AppShell({
           <div><strong>私人工作區已啟用</strong><span>實際服務狀態請查看儀表板與任務紀錄</span></div>
         </div>
         <nav className="secondary-nav" aria-label="次要導覽">
-          <a href="#help" className="nav-item"><CircleHelp size={18} /><span>使用說明</span></a>
-          <a href="#settings" className="nav-item"><Settings size={18} /><span>系統設定</span></a>
+          <Link href="/review-admin/help" className="nav-item" onClick={() => setMenuOpen(false)}><CircleHelp size={18} /><span>使用說明</span></Link>
+          <Link href="/review-admin/ai-accounts" className="nav-item" onClick={() => setMenuOpen(false)}><Settings size={18} /><span>系統設定</span></Link>
         </nav>
         <div className="account-row">
           <div className="avatar">R</div>
@@ -107,7 +125,7 @@ export default function AppShell({
       <main className="main-area">
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMenuOpen(true)} aria-label="開啟選單"><Menu size={26} /></button>
-          <div className="search-box"><Search size={20} /><input aria-label="搜尋任務" placeholder="搜尋檔名、課程或任務編號" /><kbd>⌘ K</kbd></div>
+          <div className="search-box"><Search size={20} /><input aria-label="搜尋任務" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={handleSearchKeyDown} placeholder="搜尋檔名、課程或任務編號" /><kbd>⌘ K</kbd></div>
 
           <div className="font-size-switcher" role="group" aria-label="字體大小">
             <span className="font-size-label">字體切換：</span>

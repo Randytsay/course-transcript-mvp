@@ -10,6 +10,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Iterator
 
+from app.sqlite import ClosingConnection
+
 from .store import ReviewConflict, ReviewNotFound, ReviewStore
 
 
@@ -48,7 +50,12 @@ class ReviewAdminStore:
         self.initialize()
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=30, isolation_level=None)
+        connection = sqlite3.connect(
+            self.database_path,
+            timeout=30,
+            isolation_level=None,
+            factory=ClosingConnection,
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")

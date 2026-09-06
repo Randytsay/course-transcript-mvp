@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Literal
 
@@ -509,18 +511,44 @@ AI_RUNTIME_DIR = Path(os.environ.get(
 ))
 
 
+def _active_work_items() -> list[dict[str, Any]]:
+    """Fail closed when a job may still be using the current profile."""
+    db_path = DATA_DIR / "course-transcript.db"
+    if not db_path.exists():
+        return []
+    statuses = (
+        "preflight", "awaiting_confirmation", "queued", "downloading",
+        "normalizing", "transcribing", "merging", "segmenting", "correcting",
+        "exporting", "quality_check", "cancelling",
+    )
+    try:
+        with closing(sqlite3.connect(db_path)) as connection:
+            connection.row_factory = sqlite3.Row
+            rows = connection.execute(
+                f"SELECT id, status, active_stage FROM jobs "
+                f"WHERE status IN ({','.join('?' for _ in statuses)}) "
+                "ORDER BY created_at LIMIT 20",
+                statuses,
+            ).fetchall()
+    except sqlite3.Error:
+        return [{"id": "job-ledger-unavailable", "status": "unknown"}]
+    return [dict(row) for row in rows]
+
+
 def _ai_accounts_store() -> AIAccountStore:
     return AIAccountStore(
         accounts_dir=AI_ACCOUNTS_DIR,
         runtime_dir=AI_RUNTIME_DIR,
         preflight=run_live_checks,
         audit_callback=None,
+        switch_guard=_active_work_items,
     )
 
 
 class AIAccountAddRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     name: str = Field(min_length=1, max_length=64)
+    display_name: str = Field(default="", max_length=64)
     sa_json: dict[str, Any]
     location: str = Field(default="global", max_length=64)
     gcs_bucket: str = Field(default="", max_length=222)
@@ -560,7 +588,7 @@ def ai_accounts_list(request: Request) -> dict[str, Any]:
         "credit_types": list(AIAccountStore.CREDIT_TYPES),
         "credit_statuses": list(AIAccountStore.CREDIT_STATUSES),
         "credit_type_labels": AIAccountStore.CREDIT_TYPE_LABELS,
-        "restart_required_hint": "切換後需重啟 api 與 pipeline-worker 容器才會載入新憑證與 Project",
+        "restart_required_hint": "切換會先安全寫入下一代設定；需由部署流程重新建立 api 與 pipeline-worker，所有 consumer 回報同一 generation 後才算生效。",
         "billing_note": (
             "Vertex 用量與額度主要跟 GCP Project / Billing 設定相關。"
             "切換帳號會同時切換 Service Account 與目標 GCP Project。"
@@ -606,6 +634,7 @@ def ai_accounts_add(payload: AIAccountAddRequest, request: Request) -> dict[str,
     try:
         result = store.save_profile(
             name=payload.name,
+            display_name=payload.display_name,
             sa_json=payload.sa_json,
             location=payload.location,
             gcs_bucket=payload.gcs_bucket,

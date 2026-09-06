@@ -124,7 +124,8 @@ class AIAccountsAPITests(unittest.TestCase):
                              json={"name": "one", "confirm": True})
             self.client.post("/api/v1/review-admin/ai-accounts/switch",
                              json={"name": "two", "confirm": True})
-        r = self.client.post("/api/v1/review-admin/ai-accounts/rollback")
+        with mock.patch.object(am, "run_live_checks", lambda c, m: ok_checks):
+            r = self.client.post("/api/v1/review-admin/ai-accounts/rollback")
         assert r.status_code == 200
         assert r.json()["rolled_back"] is True
         target = json.loads((Path(os.environ["AI_RUNTIME_DIR"]) / "gcp-sa.json").read_text())

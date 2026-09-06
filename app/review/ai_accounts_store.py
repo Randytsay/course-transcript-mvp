@@ -36,12 +36,22 @@ import os
 import re
 import shutil
 import uuid
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows development fallback
+    fcntl = None
 
 SA_REQUIRED_FIELDS = ("client_email", "private_key", "project_id", "type")
 SAFE_NAME = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$")
+PROJECT_ID = re.compile(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]$")
+LOCATION = re.compile(r"^(?:global|[a-z0-9][a-z0-9-]{0,62})$")
+BUCKET = re.compile(r"^[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]$")
+EMAIL = re.compile(r"^[^@\s]+@[^@\s]+$")
 DEFAULT_LOCATION = "global"
 _SECRET_FIELDS = ("private_key", "private_key_id", "token")
 
@@ -95,6 +105,7 @@ class AIAccountStore:
         *,
         preflight: Callable[..., dict[str, Any]] | None = None,
         audit_callback: Callable[..., None] | None = None,
+        switch_guard: Callable[[], list[dict[str, Any]]] | None = None,
     ):
         # accounts_dir: source of truth (profiles / active pointer / staging).
         #   API container: RW. pipeline-worker: never mounted.
@@ -110,6 +121,8 @@ class AIAccountStore:
         self.staging_dir = self.accounts_dir / "staging"
         self._preflight = preflight
         self._audit = audit_callback or (lambda **_: None)
+        self._switch_guard = switch_guard
+        self.lock_file = self.accounts_dir / ".accounts.lock"
 
     # -- layout -----------------------------------------------------------
 
@@ -126,25 +139,70 @@ class AIAccountStore:
 
     @staticmethod
     def validate_credential(payload: dict[str, Any]) -> dict[str, str]:
+        if not isinstance(payload, dict):
+            raise AIAccountError("服務帳戶 JSON 必須是物件")
         missing = [f for f in SA_REQUIRED_FIELDS if not payload.get(f)]
         if missing:
             raise AIAccountError(f"服務帳戶 JSON 缺少必要欄位: {', '.join(missing)}")
         if payload.get("type") != "service_account":
             raise AIAccountError("type 必須為 service_account")
-        return {
-            "client_email": str(payload["client_email"]),
-            "project_id": str(payload["project_id"]),
-        }
+        client_email = str(payload["client_email"]).strip()
+        project_id = str(payload["project_id"]).strip()
+        if not EMAIL.fullmatch(client_email):
+            raise AIAccountError("client_email 格式不正確")
+        if not PROJECT_ID.fullmatch(project_id):
+            raise AIAccountError("project_id 格式不正確")
+        return {"client_email": client_email, "project_id": project_id}
+
+    @staticmethod
+    def _validate_metadata(
+        *, location: str, gcs_bucket: str, credit_type: str,
+        credit_status: str, trial_started_at: str, trial_expires_at: str,
+    ) -> tuple[str, str, tuple[str, str]]:
+        normalized_location = location.strip() or DEFAULT_LOCATION
+        normalized_bucket = gcs_bucket.strip()
+        if not LOCATION.fullmatch(normalized_location):
+            raise AIAccountError("location 只能使用小寫英數字與連字號")
+        if normalized_bucket and not BUCKET.fullmatch(normalized_bucket):
+            raise AIAccountError("GCS bucket 格式不正確")
+        if credit_type not in CREDIT_TYPES:
+            raise AIAccountError(f"credit_type 必須是 {', '.join(CREDIT_TYPES)}")
+        if credit_status not in CREDIT_STATUSES:
+            raise AIAccountError(f"credit_status 必須是 {', '.join(CREDIT_STATUSES)}")
+        return normalized_location, normalized_bucket, AIAccountStore._validate_dates(
+            trial_started_at, trial_expires_at
+        )
 
     # -- persistence -----------------------------------------------------
 
     def _write_atomic(self, path: Path, content: bytes | str, mode: int | None = None) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(path.parent, 0o700)
+        except OSError:
+            pass
         tmp = path.with_name(path.name + f".tmp-{uuid.uuid4().hex[:8]}")
         tmp.write_bytes(content.encode() if isinstance(content, str) else content)
         if mode is not None:
             os.chmod(tmp, mode)
         os.replace(tmp, path)
+
+    @contextmanager
+    def _lock(self) -> Iterator[None]:
+        """Serialize profile mutations across API processes and workers."""
+        self.accounts_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(self.accounts_dir, 0o700)
+        except OSError:
+            pass
+        with self.lock_file.open("a+") as handle:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def save_profile(
         self, *, name: str, sa_json: dict[str, Any], location: str = DEFAULT_LOCATION,
@@ -152,43 +210,54 @@ class AIAccountStore:
         credit_type: str = "unknown", billing_label: str = "", credit_note: str = "",
         credit_status: str = "unknown",
         trial_started_at: str = "", trial_expires_at: str = "",
+        display_name: str = "",
     ) -> dict[str, Any]:
-        pdir = self.profile_dir(name)
-        identity = self.validate_credential(sa_json)
-        existed = pdir.exists()
-        pdir.mkdir(parents=True, exist_ok=True)
-        self._write_atomic(pdir / "credential.json",
-                           json.dumps(sa_json, indent=1), 0o600)
-
-        if credit_type not in CREDIT_TYPES:
-            raise AIAccountError(f"credit_type 必須是 {', '.join(CREDIT_TYPES)}")
-        if credit_status not in CREDIT_STATUSES:
-            raise AIAccountError(f"credit_status 必須是 {', '.join(CREDIT_STATUSES)}")
-        dates = self._validate_dates(trial_started_at, trial_expires_at)
-
-        meta = {
-            "name": name,
-            "client_email": identity["client_email"],
-            "project_id": identity["project_id"],  # from JSON only — frontend can't override
-            "location": (location.strip() or DEFAULT_LOCATION),
-            "gcs_bucket": gcs_bucket.strip(),
-            "uploaded_at": _now(),
-            # billing / credit management metadata (non-secret, advisory only)
-            "credit_type": credit_type,
-            "billing_label": billing_label.strip(),
-            "credit_note": credit_note.strip(),
-            "credit_status": credit_status,      # owner-marked, NOT live billing
-            "trial_started_at": dates[0],
-            "trial_expires_at": dates[1],
-        }
-        self._write_atomic(pdir / "metadata.json", json.dumps(meta, ensure_ascii=False, indent=1))
-        action = "ai_profile_replaced" if existed else "ai_profile_added"
-        self._audit(actor=actor, action=action, entity_id=name,
-                    payload=sanitize({"client_email": identity["client_email"],
-                                      "project_id": identity["project_id"],
-                                      "credit_type": credit_type,
-                                      "billing_label": billing_label.strip()}))
-        return {**meta, "replaced": existed}
+        with self._lock():
+            # Complete validation happens before touching an existing profile.
+            pdir = self.profile_dir(name)
+            if self.get_active_name() == name:
+                raise AIAccountError("目前使用中的設定檔不可直接覆寫，請建立新名稱並完成切換")
+            identity = self.validate_credential(sa_json)
+            normalized_location, normalized_bucket, dates = self._validate_metadata(
+                location=location, gcs_bucket=gcs_bucket, credit_type=credit_type,
+                credit_status=credit_status, trial_started_at=trial_started_at,
+                trial_expires_at=trial_expires_at,
+            )
+            clean_display_name = display_name.strip() or name
+            if len(clean_display_name) > 64 or any(ord(c) < 32 for c in clean_display_name):
+                raise AIAccountError("顯示名稱不可超過 64 字元或包含控制字元")
+            existed = pdir.exists()
+            previous_meta = self._safe_meta(name)
+            revision = int(previous_meta.get("revision") or 0) + 1
+            meta = {
+                "name": name,
+                "display_name": clean_display_name,
+                "client_email": identity["client_email"],
+                "project_id": identity["project_id"],
+                "location": normalized_location,
+                "gcs_bucket": normalized_bucket,
+                "uploaded_at": _now(),
+                "revision": revision,
+                "credit_type": credit_type,
+                "billing_label": billing_label.strip(),
+                "credit_note": credit_note.strip(),
+                "credit_status": credit_status,
+                "trial_started_at": dates[0],
+                "trial_expires_at": dates[1],
+            }
+            pdir.mkdir(parents=True, exist_ok=True)
+            self._write_atomic(pdir / "credential.json", json.dumps(sa_json, indent=1), 0o600)
+            self._write_atomic(
+                pdir / "metadata.json", json.dumps(meta, ensure_ascii=False, indent=1), 0o600
+            )
+            action = "ai_profile_replaced" if existed else "ai_profile_added"
+            self._audit(actor=actor, action=action, entity_id=name,
+                        payload=sanitize({"client_email": identity["client_email"],
+                                          "project_id": identity["project_id"],
+                                          "credit_type": credit_type,
+                                          "billing_label": billing_label.strip(),
+                                          "revision": revision}))
+            return {**meta, "replaced": existed}
 
     @staticmethod
     def _validate_dates(started: str, expires: str) -> tuple[str, str]:
@@ -212,16 +281,19 @@ class AIAccountStore:
         self, *, name: str, credit_status: str, actor: str,
     ) -> dict[str, Any]:
         """Owner marks available/low/exhausted/expired/disabled. Manual only."""
-        if credit_status not in CREDIT_STATUSES:
-            raise AIAccountError(f"credit_status 必須是 {', '.join(CREDIT_STATUSES)}")
-        meta = self.load_metadata(name)
-        previous = meta.get("credit_status", "unknown")
-        meta["credit_status"] = credit_status
-        meta_path = self.profile_dir(name) / "metadata.json"
-        self._write_atomic(meta_path, json.dumps(meta, ensure_ascii=False, indent=1))
-        self._audit(actor=actor, action="ai_profile_credit_status", entity_id=name,
-                    payload={"previous": previous, "new": credit_status})
-        return {"name": name, "credit_status": credit_status, "previous": previous}
+        with self._lock():
+            if credit_status not in CREDIT_STATUSES:
+                raise AIAccountError(f"credit_status 必須是 {', '.join(CREDIT_STATUSES)}")
+            meta = self.load_metadata(name)
+            previous = meta.get("credit_status", "unknown")
+            meta["credit_status"] = credit_status
+            meta["revision"] = int(meta.get("revision") or 0) + 1
+            meta_path = self.profile_dir(name) / "metadata.json"
+            self._write_atomic(meta_path, json.dumps(meta, ensure_ascii=False, indent=1), 0o600)
+            self._audit(actor=actor, action="ai_profile_credit_status", entity_id=name,
+                        payload={"previous": previous, "new": credit_status,
+                                 "revision": meta["revision"]})
+            return {"name": name, "credit_status": credit_status, "previous": previous}
 
     # -- credit / trial helpers ---------------------------------------------
 
@@ -343,28 +415,35 @@ class AIAccountStore:
         bypass is the internal test hook ``_activate_for_tests`` used by unit
         tests without google SDK credentials.
         """
-        meta = self.load_metadata(name)  # raises 404-style error if unknown
-        previous = self.get_active_name()
-        same_project = bool(previous) and (
-            self._safe_meta(previous).get("project_id") == meta["project_id"]
-        )
-
-        checks = self.run_preflight(name)
-        result: dict[str, Any] = {
-            "name": name, "previous": previous,
-            "same_project_warning": same_project,
-            "preflight": checks,
-            "restart_required": ["api", "pipeline-worker"],
-        }
-        if not confirm:
-            result["stage"] = "preflight"
-            return result
-        if not checks.get("ok"):
-            raise AIAccountError(
-                "Preflight 驗證未通過，已取消切換: "
-                + "; ".join(str(e) for e in checks.get("errors") or [])
+        with self._lock():
+            meta = self.load_metadata(name)  # raises 404-style error if unknown
+            previous = self.get_active_name()
+            same_project = bool(previous) and (
+                self._safe_meta(previous).get("project_id") == meta["project_id"]
             )
-        return self._activate(meta, previous=previous, actor=actor, result=result)
+            active_work = self._switch_guard() if self._switch_guard else []
+            if active_work:
+                preview = ", ".join(str(item.get("id") or "未知") for item in active_work[:3])
+                more = "" if len(active_work) <= 3 else f" 等 {len(active_work)} 筆"
+                raise AIAccountError(f"尚有進行中的工作：{preview}{more}。完成或暫停後才能切換帳號")
+
+            checks = self.run_preflight(name)
+            result: dict[str, Any] = {
+                "name": name, "previous": previous,
+                "same_project_warning": same_project,
+                "preflight": checks,
+                "restart_required": ["api", "pipeline-worker"],
+                "activation_policy": "controlled-recreate-required",
+            }
+            if not confirm:
+                result["stage"] = "preflight"
+                return result
+            if not checks.get("ok"):
+                raise AIAccountError(
+                    "Preflight 驗證未通過，已取消切換: "
+                    + "; ".join(str(e) for e in checks.get("errors") or [])
+                )
+            return self._activate(meta, previous=previous, actor=actor, result=result)
 
     def _activate(
         self, meta: dict[str, Any], *, previous: str | None, actor: str,
@@ -381,6 +460,8 @@ class AIAccountStore:
 
         desired = {
             "name": meta["name"], "previous": previous,
+            "generation": generation,
+            "profile_revision": int(meta.get("revision") or 1),
             "switched_at": _now(), "credential_sha256": cred_hash,
             "env_sha256": __import__("hashlib").sha256(
                 self._env_content(meta).encode()).hexdigest(),
@@ -436,12 +517,18 @@ class AIAccountStore:
 
     def _activate_for_tests(self, name: str, *, actor: str = "test") -> dict[str, Any]:
         """Internal test hook: activate without live preflight. Never exposed via API."""
-        meta = self.load_metadata(name)
-        return self._activate(meta, previous=self.get_active_name(), actor=actor, result={})
+        with self._lock():
+            meta = self.load_metadata(name)
+            return self._activate(meta, previous=self.get_active_name(), actor=actor, result={})
 
     # -- crash recovery -------------------------------------------------------
 
     def reconcile(self) -> dict[str, Any]:
+        """Verify committed state while serializing repairs with switches."""
+        with self._lock():
+            return self._reconcile_unlocked()
+
+    def _reconcile_unlocked(self) -> dict[str, Any]:
         """Verify committed state matches on-disk artifacts; repair if possible.
 
         Called at startup (and by the health endpoint). Fail closed on any
@@ -552,6 +639,9 @@ class AIAccountStore:
                          "file_mismatch": {"credential": cred_match, "env": env_match}})
         base.update(sanitize({
             "active": doc["name"], "previous": doc.get("previous"),
+            "generation": doc.get("generation"),
+            "profile_revision": doc.get("profile_revision"),
+            "display_name": meta.get("display_name") or doc["name"],
             "project_id": meta.get("project_id"),
             "location": meta.get("location"),
             "bucket_configured": "yes" if meta.get("gcs_bucket") else "no",
@@ -613,6 +703,11 @@ class AIAccountStore:
                 f"metadata={meta.get('project_id')}"
             )
         checks["location"] = meta.get("location", DEFAULT_LOCATION)
+        if not LOCATION.fullmatch(str(meta.get("location") or DEFAULT_LOCATION)):
+            errors.append("location 格式不正確")
+        bucket = str(meta.get("gcs_bucket") or "")
+        if bucket and not BUCKET.fullmatch(bucket):
+            errors.append("GCS bucket 格式不正確")
 
         if self._preflight is not None:
             live = self._preflight(cred, meta)
@@ -623,26 +718,38 @@ class AIAccountStore:
     # -- deletion -------------------------------------------------------------
 
     def delete_profile(self, *, name: str, actor: str) -> dict[str, Any]:
-        pdir = self.profile_dir(name)
-        if not pdir.exists():
-            raise AIAccountError("找不到這個帳戶")
-        if self.get_active_name() == name:
-            raise AIAccountError("此帳戶目前使用中，請先切換到其他帳戶再刪除")
-        shutil.rmtree(pdir)
-        self._audit(actor=actor, action="ai_profile_deleted", entity_id=name, payload={})
-        return {"name": name, "deleted": True}
+        with self._lock():
+            pdir = self.profile_dir(name)
+            if not pdir.exists():
+                raise AIAccountError("找不到這個帳戶")
+            if self.get_active_name() == name:
+                raise AIAccountError("此帳戶目前使用中，請先切換到其他帳戶再刪除")
+            shutil.rmtree(pdir)
+            self._audit(actor=actor, action="ai_profile_deleted", entity_id=name, payload={})
+            return {"name": name, "deleted": True}
 
     def rollback(self, *, actor: str) -> dict[str, Any]:
-        previous = self.get_previous()
-        if not previous:
-            raise AIAccountError("沒有可回滾的前一個帳戶")
-        meta = self.load_metadata(previous)
-        result = self._activate(meta, previous=self.get_active_name(),
-                                actor=f"{actor} (rollback)", result={"name": previous})
-        self._audit(actor=actor, action="ai_profile_rolled_back", entity_id=previous,
-                    payload={"to_previous": previous})
-        result["rolled_back"] = True
-        return result
+        with self._lock():
+            active_work = self._switch_guard() if self._switch_guard else []
+            if active_work:
+                raise AIAccountError("尚有進行中的工作，完成或暫停後才能回滾帳號")
+            previous = self.get_previous()
+            if not previous:
+                raise AIAccountError("沒有可回滾的前一個帳戶")
+            meta = self.load_metadata(previous)
+            checks = self.run_preflight(previous)
+            if not checks.get("ok"):
+                raise AIAccountError(
+                    "回滾前置檢查未通過: "
+                    + "; ".join(str(e) for e in checks.get("errors") or [])
+                )
+            result = self._activate(meta, previous=self.get_active_name(),
+                                    actor=f"{actor} (rollback)", result={"name": previous})
+            result["preflight"] = checks
+            self._audit(actor=actor, action="ai_profile_rolled_back", entity_id=previous,
+                        payload={"to_previous": previous})
+            result["rolled_back"] = True
+            return result
 
     def _safe_meta(self, name: str | None) -> dict[str, Any]:
         if not name:

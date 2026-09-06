@@ -15,6 +15,8 @@ from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
+from app.sqlite import ClosingConnection
+
 AuthProvider = Literal["google", "line"]
 ReviewRole = Literal["owner", "reviewer"]
 
@@ -65,6 +67,7 @@ class ReviewStore:
             self.database_path,
             timeout=30,
             isolation_level=None,
+            factory=ClosingConnection,
         )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")

@@ -41,6 +41,8 @@ Read `README.md`, `ARCHITECTURE.md`, `RUNBOOK.md`, `DEPLOYMENT.md`, `docs/DYNAMI
 - `app/jobs/drive_publish.py`: resumable pending/verify/backup/promote/final-verify publication transaction.
 - `app/jobs/delivery_worker.py`: retries Drive delivery from existing local artifacts only; it never repeats Chirp or Gemini.
 - `app/jobs/drive_lock.py`: cross-process global Drive lock and shared cooldown. It requires all participating containers to mount the same host `./data` directory at `/app/data`.
+- `app/review/ai_accounts_store.py` and `app/review/ai_accounts_preflight.py`: owner-only, revisioned AI account profiles, read-only provider-capability checks, guarded activation, audit records, and rollback evidence. The account page is `/review-admin/ai-accounts`.
+- `docker-compose.yml` and `docker-compose.release.yml`: API-only writable account/runtime mounts; pipeline runtime is read-only and uses the controlled `/run/ai-runtime` path.
 - `app/subtitles/editor_hardened.py`: strict SRT import, revision-gated editor publication, editor-intent persistence, and protection against delayed pipeline overwrite.
 - `app/api_hardened.py`: installs the hardened subtitle mutation routes without duplicating the read/edit routes.
 
@@ -52,7 +54,10 @@ Do not delete evidence merely because a user-facing format was not selected.
 
 ## Deployment status
 
-GitHub CI is complete. Production VPS deployment and real-provider validation are separate gates.
+GitHub CI validates the account/runtime mount contract as well as the shared
+data mount. Production VPS deployment and real-provider validation are
+separate gates. The running VPS must be checked by release label; the staging
+directory `/opt/course-transcript` is not itself the live checkout.
 
 Before deployment:
 

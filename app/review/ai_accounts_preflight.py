@@ -98,6 +98,44 @@ def run_live_checks(cred: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any
         errors.append(f"無法連線驗證專案權限: {exc.__class__.__name__}")
         checks["project_visible"] = "unavailable"
 
+    # 1b) Billing linkage and required service APIs (read-only metadata calls).
+    try:
+        resp = requests.get(
+            f"https://cloudbilling.googleapis.com/v1/projects/{project_id}/billingInfo",
+            headers=headers, timeout=10,
+        )
+        body = resp.json() if hasattr(resp, "json") else {}
+        billing_enabled = bool(resp.status_code == 200 and body.get("billingEnabled"))
+        if billing_enabled:
+            checks["billing_enabled"] = "ok"
+        else:
+            errors.append(f"專案 {project_id} 尚未確認 Cloud Billing 已啟用")
+            checks["billing_enabled"] = f"fail http {resp.status_code}"
+    except (requests.RequestException, ValueError, AttributeError) as exc:
+        errors.append(f"無法連線驗證 Cloud Billing: {exc.__class__.__name__}")
+        checks["billing_enabled"] = "unavailable"
+
+    for service, label in (
+        ("speech.googleapis.com", "chirp_api"),
+        ("aiplatform.googleapis.com", "vertex_api"),
+    ):
+        try:
+            resp = requests.get(
+                "https://serviceusage.googleapis.com/v1/projects/"
+                f"{project_id}/services/{service}",
+                headers=headers, timeout=10,
+            )
+            body = resp.json() if hasattr(resp, "json") else {}
+            enabled = resp.status_code == 200 and body.get("state") == "ENABLED"
+            if enabled:
+                checks[label] = "ok"
+            else:
+                errors.append(f"{label} 尚未啟用或無法確認 (HTTP {resp.status_code})")
+                checks[label] = f"fail http {resp.status_code}"
+        except (requests.RequestException, ValueError, AttributeError) as exc:
+            errors.append(f"無法連線驗證 {label}: {exc.__class__.__name__}")
+            checks[label] = "unavailable"
+
     # 2) Vertex AI endpoint + permission (locations.get — read-only, free)
     # "global" uses the official global endpoint, NOT "global-aiplatform...".
     location = str(meta.get("location") or "global")

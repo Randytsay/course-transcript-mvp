@@ -6,8 +6,12 @@ the timing layer is complete.
 
 ## Security
 
-- The service-account JSON remains outside this repository at /opt/course-transcript/secrets/gcp-sa.json.
-- Docker mounts it only as /run/secrets/gcp-sa.json:ro.
+- AI account profiles remain outside this repository under
+  `/opt/course-transcript/secrets/ai-accounts`; the active runtime is under
+  `/opt/course-transcript/secrets/ai-runtime`.
+- Only the API can write those dedicated state paths. The pipeline worker
+  receives `/run/ai-runtime:ro`; provider calls continue to run in the worker,
+  never in the web API.
 - Tests create only test-prefixed GCS objects and clean them up.
 - The rclone check records only the root-folder item count, never names.
 - Cloudflare Tunnel credentials are stored only at
@@ -81,6 +85,11 @@ with deterministic evidence for non-paid integration testing.
 
 Read [ARCHITECTURE.md](ARCHITECTURE.md), [RUNBOOK.md](RUNBOOK.md), and
 [HANDOVER.md](HANDOVER.md) before changing or running the pipeline.
+
+Owner account operations are available at `/review-admin/ai-accounts`. The
+screen supports named profiles, read-only preflight checks, guarded switching,
+and rollback. A switch still requires a controlled API/pipeline deployment
+recreate; it is not an in-process credential reload.
 
 ## Dynamic Batch and production health
 

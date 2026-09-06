@@ -359,6 +359,27 @@ class TestCreditMetadata(Base):
                                     credit_type="gcp_free_trial",
                                     trial_expires_at="next-month", actor="owner")
 
+    def test_invalid_metadata_does_not_overwrite_existing_profile(self) -> None:
+        self.add("stable", "proj-a", location="global", local="original")
+        credential = (self.dir / "profiles" / "stable" / "credential.json").read_bytes()
+        metadata = (self.dir / "profiles" / "stable" / "metadata.json").read_bytes()
+        with self.assertRaises(AIAccountError):
+            self.store.save_profile(
+                name="stable", sa_json=sa("proj-b", local="replacement"),
+                location="asia east1", actor="owner",
+            )
+        assert (self.dir / "profiles" / "stable" / "credential.json").read_bytes() == credential
+        assert (self.dir / "profiles" / "stable" / "metadata.json").read_bytes() == metadata
+
+    def test_display_name_is_safe_and_revisioned(self) -> None:
+        self.add("stable", "proj-a")
+        result = self.store.save_profile(
+            name="stable", display_name="新課程 Google 帳號",
+            sa_json=sa("proj-a", local="replacement"), actor="owner",
+        )
+        assert result["display_name"] == "新課程 Google 帳號"
+        assert result["revision"] == 2
+
     def test_sorted_profiles_order(self) -> None:
         self.add("active1", "proj-a")
         self.store._activate_for_tests("active1")
@@ -399,7 +420,8 @@ class TestComposeContract(unittest.TestCase):
 
     def _load(self, name):
         import yaml
-        return yaml.safe_load(open(Path(__file__).parents[1] / name))
+        with open(Path(__file__).parents[1] / name, encoding="utf-8") as handle:
+            return yaml.safe_load(handle)
 
     def test_dev_compose_api_wiring(self) -> None:
         api = self._load("docker-compose.yml")["services"]["api"]
@@ -494,7 +516,7 @@ class TestComposeContract(unittest.TestCase):
         """The same variable must not be used for both a host path and a
         container path anywhere in compose."""
         for name in ("docker-compose.yml", "docker-compose.release.yml"):
-            raw = open(Path(__file__).parents[1] / name).read()
+            raw = (Path(__file__).parents[1] / name).read_text(encoding="utf-8")
             d = self._load(name)
             for svc, cfg in d["services"].items():
                 vols = [v for v in (cfg.get("volumes") or []) if isinstance(v, str)]
@@ -657,6 +679,26 @@ class TestRuntimeDirContract(Base):
 
     def runtime_dir_exists_or_artifacts(self) -> bool:
         return self.target_key_path.exists() or (self.runtime / "ai-active.env").exists()
+
+
+class TestSwitchGuards(Base):
+    def test_active_work_blocks_switch(self) -> None:
+        self.add("old", "proj-a")
+        self.add("new", "proj-b")
+        guarded = AIAccountStore(
+            accounts_dir=self.dir,
+            runtime_dir=self.runtime,
+            preflight=lambda cred, meta: {"ok": True, "errors": [], "checks": {}},
+            switch_guard=lambda: [{"id": "job-1", "status": "transcribing"}],
+        )
+        with self.assertRaisesRegex(AIAccountError, "進行中的工作"):
+            guarded.switch(name="new", actor="owner", confirm=True)
+
+    def test_activation_records_generation_and_revision(self) -> None:
+        self.add("new", "proj-a")
+        self.store._activate_for_tests("new")
+        active = self.store.get_active_doc()
+        assert active and active["generation"] and active["profile_revision"] == 1
 
 
 if __name__ == "__main__":

@@ -11,6 +11,8 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterator
 
+from app.sqlite import ClosingConnection
+
 from .exports import normalize_output_formats
 from .content_context import (
     CONTEXT_VERSION,
@@ -162,6 +164,7 @@ class JobStore:
             self.database_path,
             timeout=30,
             isolation_level=None,
+            factory=ClosingConnection,
         )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")

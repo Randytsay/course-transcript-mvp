@@ -5,6 +5,7 @@ import styles from "./ai-accounts.module.css";
 
 type Profile = {
   name: string;
+  display_name?: string;
   client_email?: string;
   project_id?: string;
   location?: string;
@@ -59,6 +60,27 @@ function dateTime(value: string | null | undefined) {
   }
 }
 
+function runtimeLabel(value: unknown) {
+  const labels: Record<string, string> = {
+    CONFIGURED: "已登記，尚未啟用",
+    PENDING_RESTART: "設定已切換，等待服務重建",
+    ACTIVE: "已生效",
+    FAILED_CLOSED: "已安全停用，需處理",
+  };
+  return labels[String(value)] ?? "尚未確認";
+}
+
+function creditStatusLabel(value: string) {
+  return ({
+    available: "可使用",
+    low: "即將用完",
+    exhausted: "已用完",
+    expired: "已到期",
+    disabled: "已停用",
+    unknown: "尚未確認",
+  } as Record<string, string>)[value] ?? "尚未確認";
+}
+
 export default function AIAccountsPage() {
   const [data, setData] = useState<ListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -67,6 +89,7 @@ export default function AIAccountsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [name, setName] = useState("");
+  const [displayName, setDisplayName] = useState("");
   const [saText, setSaText] = useState("");
   const [location, setLocation] = useState("global");
   const [bucket, setBucket] = useState("");
@@ -118,7 +141,7 @@ export default function AIAccountsPage() {
       const r = await fetch("/api/v1/review-admin/ai-accounts", {
         method: "POST", credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: name.trim(), sa_json: parsed,
+        body: JSON.stringify({ name: name.trim(), display_name: displayName.trim(), sa_json: parsed,
                                location, gcs_bucket: bucket,
                                credit_type: creditType,
                                billing_label: billingLabel,
@@ -130,7 +153,7 @@ export default function AIAccountsPage() {
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.detail || `新增失敗 (${r.status})`);
       setMessage(`已登記帳戶「${body.name}」（Project：${body.project_id}）。`);
-      setSaText(""); setShowForm(false); setBucket(""); setCreditNote("");
+      setSaText(""); setDisplayName(""); setShowForm(false); setBucket(""); setCreditNote("");
       setBillingLabel(""); setCreditStatus("unknown"); setTrialStart(""); setTrialExpire("");
       setCreditType("unknown");
       await load();
@@ -148,11 +171,11 @@ export default function AIAccountsPage() {
         body: JSON.stringify({ name: item.name }),
       });
       const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.detail || `Preflight 失敗 (${r.status})`);
+      if (!r.ok) throw new Error(body.detail || `檢查失敗 (${r.status})`);
       setPreflight(body as PreflightResponse);
       setPendingSwitch(body.ok ? item.name : null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Preflight 失敗");
+      setError(e instanceof Error ? e.message : "檢查失敗");
     } finally { setBusy(null); }
   }
 
@@ -169,7 +192,7 @@ export default function AIAccountsPage() {
       if (!r.ok) throw new Error(body.detail || `切換失敗 (${r.status})`);
       setMessage(
         `已切換到「${body.name}」（Project ${body.project_id} / ${body.location}）。` +
-        `請重啟 api 與 pipeline-worker 容器載入新憑證。`,
+        `請由部署流程重新建立 api 與 pipeline-worker，完成 generation 驗證。`,
       );
       setPreflight(null); setPendingSwitch(null);
       await load();
@@ -187,7 +210,7 @@ export default function AIAccountsPage() {
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.detail || `回滾失敗 (${r.status})`);
-      setMessage(`已回滾到「${body.name}」。請重啟 api 與 pipeline-worker 容器。`);
+      setMessage(`已回滾到「${body.name}」。請由部署流程重新建立 api 與 pipeline-worker。`);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "回滾失敗");
@@ -204,7 +227,7 @@ export default function AIAccountsPage() {
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(body.detail || `標記失敗 (${r.status})`);
-      setMessage(`已將「${item.name}」標記為 ${status}（管理員標記，非 Google 即時帳務）。`);
+      setMessage(`已將「${item.display_name || item.name}」標記為 ${creditStatusLabel(status)}（管理員標記，非 Google 即時帳務）。`);
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "標記失敗");
@@ -270,12 +293,12 @@ export default function AIAccountsPage() {
                 <span>同一個 GCP 專案啟用 Vertex AI API，SA 需有「Vertex AI 使用者」權限。</span></li>
               <li><strong>點右上「+ 新增帳戶」</strong>
                 <span>取名、上傳 JSON，並填寫 Region（預設 global）與 Pipeline 用的 GCS Bucket。</span></li>
-              <li><strong>需要切換時先跑 Preflight</strong>
-                <span>點「切換為使用中」會先做唯讀唯讀驗證（憑證有效、可存取 Project／Bucket），不通過就不會切換。</span></li>
+              <li><strong>需要切換時先做檢查</strong>
+                <span>點「檢查並切換」會先做唯讀驗證（憑證有效、可存取 Project／Bucket），不通過就不會切換。</span></li>
               <li><strong>確認差異後生效</strong>
-                <span>Preflight 通過後會顯示目前與目標的 Project 差異，明確確認才會寫入。</span></li>
-              <li><strong>重啟容器完成切換</strong>
-                <span>重啟 api 與 pipeline-worker 後，新 Project／Region／Bucket 即全面生效。出問題可用「回滾」一步還原。</span></li>
+                <span>檢查通過後會顯示目前與目標的 Project 差異，明確確認才會寫入。</span></li>
+              <li><strong>重新建立服務完成切換</strong>
+                <span>由部署流程重新建立 api 與 pipeline-worker，等所有 consumer 回報同一 generation 後才算生效。出問題可用「回滾」還原。</span></li>
             </ol>
             <p className={styles.hint}>
               💡 安全提醒：私鑰只存伺服器受保護目錄，頁面與 API 都不會再顯示；
@@ -294,7 +317,7 @@ export default function AIAccountsPage() {
               <div><span>目前使用中</span><strong>{data.active ?? "（未設定）"}</strong></div>
               <div><span>運行狀態</span>
                 <strong className={data.runtime_status.status === "FAILED_CLOSED" ? styles.badText : styles.okText}>
-                  {String(data.runtime_status.status ?? "CONFIGURED")}
+                  {runtimeLabel(data.runtime_status.status)}
                 </strong></div>
               <div><span>運行中 Project</span>
                 <small>{String(data.runtime_status.project_id ?? "—")}</small></div>
@@ -306,14 +329,17 @@ export default function AIAccountsPage() {
 
             {showForm ? (
               <section className={styles.formCard}>
-                <label><span>帳戶名稱（英文／數字）</span>
+                <label><span>內部識別名稱（英文／數字）</span>
                   <input value={name} onChange={(e) => setName(e.target.value)} /></label>
+                <label><span>顯示名稱（可使用中文）</span>
+                  <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} placeholder="例如：新課程 Google 帳號" /></label>
                 <label><span>服務帳戶金鑰（JSON 檔）</span>
                   <input accept=".json,application/json" type="file"
                          onChange={(e) => void handleFile(e.target.files?.[0] ?? null)} /></label>
+                <label><span>服務帳戶 JSON 內容</span>
                 <textarea rows={6} value={saText}
                           onChange={(e) => setSaText(e.target.value)}
-                          placeholder="或直接貼上 JSON 內容" />
+                          placeholder="或直接貼上 JSON 內容" /></label>
                 <label><span>GCP Region（例如 global、us-central1、asia-east1）</span>
                   <input value={location} onChange={(e) => setLocation(e.target.value)} /></label>
                 <label><span>Pipeline 用 GCS Bucket（選填，跨專案時建議填）</span>
@@ -344,7 +370,7 @@ export default function AIAccountsPage() {
                 ) : null}
                 <label><span>管理員標記（credit_status，非 Google 即時帳務）</span>
                   <select value={creditStatus} onChange={(e) => setCreditStatus(e.target.value)}>
-                    {data.credit_statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+                    {data.credit_statuses.map((s) => <option key={s} value={s}>{creditStatusLabel(s)}</option>)}
                   </select>
                 </label>
                 <button disabled={busy !== null || !name.trim() || !saText.trim()}
@@ -362,7 +388,7 @@ export default function AIAccountsPage() {
             {preflight ? (
               <section className={`${styles.formCard} ${preflight.ok ? "" : styles.preflightFail}`}>
                 <h3 style={{margin:"0 0 8px"}}>
-                  {preflight.ok ? "✓ Preflight 通過 — 確認切換" : "✗ Preflight 未通過"}
+                  {preflight.ok ? "✓ 檢查通過 — 確認切換" : "✗ 檢查未通過"}
                 </h3>
                 <div className={styles.switchDiff}>
                   <div><span>從</span><strong>{preflight.current ?? "（未設定）"}</strong></div>
@@ -400,11 +426,11 @@ export default function AIAccountsPage() {
                   <li key={item.name}
                       className={`${styles.accountCard} ${item.is_active ? styles.activeCard : ""}`}>
                     <div className={styles.accountMain}>
-                      <strong>{item.name}
+                      <strong>{item.display_name || item.name}
                         {item.is_active ? <b className={styles.activeBadge}>使用中</b> : null}
                         {item.credential_valid === false ? <b className={styles.badText}>格式錯誤</b> : null}
                       </strong>
-                      <small>{item.client_email ?? "—"}</small>
+                      <small>內部識別：{item.name} ・ {item.client_email ?? "—"}</small>
                       <span>
                         Project {item.project_id ?? "—"} ・ Region {item.location ?? "global"}
                         {item.gcs_bucket ? ` ・ Bucket ${item.gcs_bucket}` : ""}
@@ -413,7 +439,7 @@ export default function AIAccountsPage() {
                       <span className={styles.creditMeta}>
                         {item.billing_label ? `${item.billing_label} ・ ` : ""}
                         {item.credit_type_label ?? item.credit_type ?? "unknown"}
-                        {item.credit_type === "google_ai_pro_monthly" ? "（每月 US$10 GenAI & Cloud credit）" : ""}
+                        {item.credit_type === "google_ai_pro_monthly" ? "（GenAI & Cloud credit，依 Google 帳務為準）" : ""}
                         {item.credit_type === "gcp_free_trial" ? "（Google Cloud 新戶 US$300 試用額度）" : ""}
                         {item.trial_expires_at ? ` ・ 到期 ${item.trial_expires_at}` : ""}
                       </span>
@@ -426,7 +452,7 @@ export default function AIAccountsPage() {
                         </span>
                       ) : null}
                       <span className={styles.creditStatusLine}>
-                        剩餘額度：未連線查詢 ・ 管理員標記：{item.credit_status ?? "unknown"}
+                        剩餘額度：未連線查詢 ・ 管理員標記：{creditStatusLabel(item.credit_status ?? "unknown")}
                         {item.credit_status_is_manual ? "（非 Google 即時帳務）" : ""}
                       </span>
                     </div>
@@ -434,7 +460,7 @@ export default function AIAccountsPage() {
                       {!item.is_active && item.credential_valid !== false ? (
                         <button className={styles.switchButton} disabled={busy !== null}
                                 onClick={() => void startPreflight(item)} type="button">
-                          {busy === `switch:${item.name}` ? "Preflight 中…" : "檢查並切換"}
+                          {busy === `switch:${item.name}` ? "檢查中…" : "檢查並切換"}
                         </button>
                       ) : null}
                       <select
@@ -445,7 +471,7 @@ export default function AIAccountsPage() {
                         aria-label={`標記 ${item.name} 額度狀態`}
                       >
                         {(data.credit_statuses ?? []).map((s) => (
-                          <option key={s} value={s}>{s}</option>
+                          <option key={s} value={s}>{creditStatusLabel(s)}</option>
                         ))}
                       </select>
                       {!item.is_active ? (

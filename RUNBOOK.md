@@ -3,7 +3,10 @@
 ## Safety rules
 
 - Never print, copy, or commit service-account JSON, rclone configuration, OAuth tokens, Cloudflare tunnel tokens, or secret environment values.
-- Keep `/opt/course-transcript/secrets/gcp-sa.json` outside Git and mount it read-only.
+- Keep AI account profiles under `/opt/course-transcript/secrets/ai-accounts`
+  and the active runtime under `/opt/course-transcript/secrets/ai-runtime`,
+  both outside Git. The API may write only these dedicated state paths; the
+  pipeline worker mounts the active runtime read-only.
 - Keep `/opt/course-transcript/secrets/cloudflare-tunnel.env` owned by root with mode `600`.
 - Never overwrite or rename the Drive source media.
 - Derived Drive sidecars may be published only after local QA passes and only through the resumable safe-publish implementation.
@@ -93,6 +96,22 @@ GEMINI_MAX_PARALLEL_WINDOWS=2
 The model is `gemini-3.7-flash`. Every paid response is stored under a prompt-version, source-digest, and attempt-unique audit filename. If a structured response is malformed, the parent response must be persisted before the window is split.
 
 Severe deletion, addition, repetition, or likely semantic rewrite triggers fallback to immutable Chirp text. The fallback reason must remain visible in corrected subtitle evidence and `content-qa.json`.
+
+## AI account profiles and controlled switching
+
+The owner-only `/review-admin/ai-accounts` screen stores named service-account
+profiles without exposing private-key contents after submission. Every profile
+must pass the read-only preflight checks for project visibility, Cloud Billing,
+Speech-to-Text API and Vertex AI API before it can become active. The store
+keeps immutable revision metadata, an audit trail, and the previous activation
+for rollback.
+
+Switching is a controlled deployment operation. It is blocked while any job is
+using an active processing state or while the job ledger cannot be inspected.
+After a successful switch, recreate the `api` and `pipeline-worker` services
+from the same release generation and verify the health endpoint plus runtime
+generation before starting paid work. The API never performs a model
+generation during preflight and never returns credential contents.
 
 ## Subtitle segmentation and imports
 
