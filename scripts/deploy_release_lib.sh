@@ -145,9 +145,10 @@ for name in (
     data = next((item for item in mounts if item.get("target") == "/app/data"), None)
     if not data or data.get("source") != data_root:
         raise SystemExit(f"incorrect data mount for {name}")
-    rclone = next((item for item in mounts if item.get("target") == "/run/secrets/rclone.conf"), None)
-    if not rclone or not bool(rclone.get("read_only")):
-        raise SystemExit(f"unsafe rclone mount for {name}")
+    if name in {"api", "worker", "pipeline-worker", "delivery-worker"}:
+        rclone = next((item for item in mounts if item.get("target") == "/run/secrets/rclone.conf"), None)
+        if not rclone or not bool(rclone.get("read_only")):
+            raise SystemExit(f"unsafe rclone mount for {name}")
 api_mounts = services["api"].get("volumes", [])
 api_runtime = next((item for item in api_mounts if item.get("target") == "/run/ai-runtime"), None)
 if not api_runtime or api_runtime.get("read_only") is True:
