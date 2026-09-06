@@ -22,11 +22,14 @@ the lease manager permits only one unexpired source-processing lease globally.
 Each batch persists one immutable processing strategy: `DYNAMIC_BATCHING` for
 economical non-urgent work or `STANDARD_BATCH` for an urgent faster request.
 
-The preflight worker has rclone and FFprobe but no GCP credential mount. It
-copies one source into a controlled temporary directory, records SHA-256,
-duration, format and codec, calculates the application-side estimate, then
-removes the temporary source. Only a revision-checked, exact-total batch
-approval may reserve cost and move jobs to `queued`.
+The API has no provider-call path. It can write only the dedicated AI account
+profile directory and the controlled runtime directory used for activation;
+the pipeline worker receives that runtime directory read-only. The preflight
+worker has rclone and FFprobe but no GCP credential mount. It copies one source
+into a controlled temporary directory, records SHA-256, duration, format and
+codec, calculates the application-side estimate, then removes the temporary
+source. Only a revision-checked, exact-total batch approval may reserve cost
+and move jobs to `queued`.
 
 ```text
 Cloudflare Access
@@ -76,11 +79,12 @@ complete using `gemini-3.7-flash` only: 120 raw per-window responses, one
 global terminology record, and 654 corrected segments across 1,103 readable
 subtitle cues. Do not upload to Drive until QA and explicit user approval.
 
-The web API never performs Drive upload. Mutation requests require Cloudflare
-Access identity plus the exact production Origin. The API and workers share a
-SQLite WAL file; only the pipeline worker receives the read-only GCP credential
-mount. A global lease permits one active source job while up to three chunks of
-that source may run in parallel.
+The web API never performs Drive upload or provider generation. Mutation
+requests require Cloudflare Access identity plus the exact production Origin.
+The API and workers share a SQLite WAL file; the API account manager writes
+only profile/runtime state, while the pipeline worker receives the active
+runtime directory read-only. A global lease permits one active source job
+while up to three chunks of that source may run in parallel.
 
 See `docs/DATABASE_SCHEMA.md`, `docs/STATE_MACHINE.md`, and `docs/API.md` for
 the durable contract.

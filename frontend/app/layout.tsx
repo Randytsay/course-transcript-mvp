@@ -14,18 +14,20 @@ export const metadata: Metadata = {
 const fontPreferenceScript = `
 (() => {
   try {
-    const saved = localStorage.getItem("course-transcript-font-size");
-    const size = saved === "standard" || saved === "large" || saved === "xlarge" ? saved : "large";
+    const saved = localStorage.getItem("course-transcript-font-size")
+      || localStorage.getItem("course-transcript-font-size-v2");
+    const size = saved === "standard" || saved === "large" || saved === "xlarge" ? saved : "standard";
+    localStorage.setItem("course-transcript-font-size", size);
     document.documentElement.setAttribute("data-font-size", size);
   } catch (_) {
-    document.documentElement.setAttribute("data-font-size", "large");
+    document.documentElement.setAttribute("data-font-size", "standard");
   }
 })();
 `;
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="zh-Hant" data-font-size="large" suppressHydrationWarning>
+    <html lang="zh-Hant" data-font-size="standard" suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: fontPreferenceScript }} />
       </head>

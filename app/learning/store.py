@@ -16,6 +16,7 @@ from typing import Any, Iterator, Literal
 
 from app.review.admin_store import ReviewAdminStore
 from app.review.store import ReviewConflict, ReviewNotFound
+from app.sqlite import ClosingConnection
 
 LearningStatus = Literal["not_started", "in_progress", "completed"]
 FlashcardRating = Literal["again", "hard", "good", "easy"]
@@ -51,7 +52,12 @@ class LearningStore:
         self.initialize()
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=30, isolation_level=None)
+        connection = sqlite3.connect(
+            self.database_path,
+            timeout=30,
+            isolation_level=None,
+            factory=ClosingConnection,
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")

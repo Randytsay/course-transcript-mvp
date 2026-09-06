@@ -10,6 +10,7 @@ from typing import Any, Iterator
 from app.review.admin_store import ReviewAdminStore
 from app.review.baseline import ensure_import_baseline
 from app.review.store import ReviewNotFound
+from app.sqlite import ClosingConnection
 
 
 def _iso() -> str:
@@ -25,7 +26,12 @@ class LearningSourceStore:
         self.initialize()
 
     def connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database_path, timeout=30, isolation_level=None)
+        connection = sqlite3.connect(
+            self.database_path,
+            timeout=30,
+            isolation_level=None,
+            factory=ClosingConnection,
+        )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         connection.execute("PRAGMA journal_mode = WAL")

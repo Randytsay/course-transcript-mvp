@@ -15,6 +15,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator, Literal
 
+from app.sqlite import ClosingConnection
+
 from .store import ReviewConflict, ReviewNotFound
 
 OAuthAction = Literal["login", "link"]
@@ -62,6 +64,7 @@ class ReviewAuthStore:
             self.database_path,
             timeout=30,
             isolation_level=None,
+            factory=ClosingConnection,
         )
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")

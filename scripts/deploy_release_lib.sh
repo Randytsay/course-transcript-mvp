@@ -116,7 +116,7 @@ validate_compose_render() {
   chmod 600 "$rendered"
   TMP_FILES+=("$rendered")
   compose config --format json > "$rendered"
-  python3 - "$rendered" "$RELEASE_SHA" "$DATA_ROOT" <<'PY'
+  python3 - "$rendered" "$RELEASE_SHA" "$DATA_ROOT" "${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -124,6 +124,7 @@ from pathlib import Path
 model = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
 sha = sys.argv[2]
 data_root = sys.argv[3]
+accounts_root = sys.argv[4]
 services = model.get("services") or {}
 required = {"api", "worker", "pipeline-worker", "delivery-worker", "frontend"}
 missing = sorted(required - set(services))
@@ -141,8 +142,16 @@ for name in ("api", "worker", "pipeline-worker", "delivery-worker"):
     rclone = next((item for item in mounts if item.get("target") == "/run/secrets/rclone.conf"), None)
     if not rclone or not bool(rclone.get("read_only")):
         raise SystemExit(f"unsafe rclone mount for {name}")
-if any(item.get("target") == "/run/secrets/gcp-sa.json" for item in services["api"].get("volumes", [])):
-    raise SystemExit("API unexpectedly mounts GCP credentials")
+api_mounts = services["api"].get("volumes", [])
+api_runtime = next((item for item in api_mounts if item.get("target") == "/run/ai-runtime"), None)
+if not api_runtime or api_runtime.get("read_only") is True:
+    raise SystemExit("API runtime directory must be writable for controlled activation")
+api_accounts = next((item for item in api_mounts if item.get("target") == accounts_root), None)
+if not api_accounts or api_accounts.get("read_only") is True:
+    raise SystemExit("API account directory must be writable")
+pipeline_runtime = next((item for item in services["pipeline-worker"].get("volumes", []) if item.get("target") == "/run/ai-runtime"), None)
+if not pipeline_runtime or pipeline_runtime.get("read_only") is not True:
+    raise SystemExit("pipeline-worker runtime directory must be read-only")
 ports = services["frontend"].get("ports") or []
 if len(ports) != 1 or ports[0].get("host_ip") != "127.0.0.1" or str(ports[0].get("published")) != "3300":
     raise SystemExit(f"unsafe frontend ports: {ports}")
