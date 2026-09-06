@@ -169,6 +169,8 @@ declare -A LIVE_CONTAINERS=(
   [worker]="course-transcript-source-worker-1"
   [pipeline-worker]="course-transcript-source-pipeline-worker-1"
   [delivery-worker]="course-transcript-source-delivery-worker-1"
+  [health-monitor]="course-transcript-source-health-monitor-1"
+  [retention-monitor]="course-transcript-source-retention-monitor-1"
   [frontend]="course-transcript-source-frontend-1"
 )
 
@@ -177,6 +179,8 @@ declare -A IMAGE_REPOS=(
   [worker]="course-transcript-worker"
   [pipeline-worker]="course-transcript-pipeline-worker"
   [delivery-worker]="course-transcript-delivery-worker"
+  [health-monitor]="course-transcript-pipeline-worker"
+  [retention-monitor]="course-transcript-pipeline-worker"
   [frontend]="course-transcript-frontend"
 )
 
@@ -185,6 +189,8 @@ declare -A NEW_IMAGES=(
   [worker]="course-transcript-worker:${RELEASE_SHA}"
   [pipeline-worker]="course-transcript-pipeline-worker:${RELEASE_SHA}"
   [delivery-worker]="course-transcript-delivery-worker:${RELEASE_SHA}"
+  [health-monitor]="course-transcript-pipeline-worker:${RELEASE_SHA}"
+  [retention-monitor]="course-transcript-pipeline-worker:${RELEASE_SHA}"
   [frontend]="course-transcript-frontend:${RELEASE_SHA}"
 )
 
@@ -270,7 +276,7 @@ fi
 
 # Capture current production identity and create rollback artifacts.
 printf 'service|container_id|image_id|started_at|restart_count\n' > "$EVIDENCE_ROOT/live-before.txt"
-for service in api worker pipeline-worker delivery-worker frontend; do
+for service in api worker pipeline-worker delivery-worker health-monitor retention-monitor frontend; do
   container="${LIVE_CONTAINERS[$service]}"
   docker inspect "$container" >/dev/null
   printf '%s|%s|%s|%s|%s\n' \
@@ -323,7 +329,7 @@ docker exec "${LIVE_CONTAINERS[api]}" python -c \
   "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=3).read()"
 
 # Cut over non-HTTP workers.
-for service in worker pipeline-worker; do
+for service in worker pipeline-worker health-monitor retention-monitor; do
   check_quiescent_jobs "$EVIDENCE_ROOT/jobs-before-${service}.json"
   since="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   compose up -d --no-build --no-deps --force-recreate "$service"
@@ -368,7 +374,7 @@ cmp -s "$EVIDENCE_ROOT/cloudflared-before.txt" "$EVIDENCE_ROOT/cloudflared-after
 
 # Final verification.
 printf 'service|container_id|image_id|state|health|restart_count|revision\n' > "$EVIDENCE_ROOT/live-after.txt"
-for service in api worker pipeline-worker delivery-worker frontend; do
+for service in api worker pipeline-worker delivery-worker health-monitor retention-monitor frontend; do
   verify_exact_service "$service"
   container="${LIVE_CONTAINERS[$service]}"
   state="$(docker inspect --format '{{.State.Status}}' "$container")"
@@ -389,7 +395,7 @@ for service in api worker pipeline-worker delivery-worker frontend; do
 done
 check_quiescent_jobs "$EVIDENCE_ROOT/jobs-final.json"
 
-for service in api worker pipeline-worker delivery-worker frontend; do
+for service in api worker pipeline-worker delivery-worker health-monitor retention-monitor frontend; do
   count="$(docker logs --since "$API_SINCE" "${LIVE_CONTAINERS[$service]}" 2>&1 \
     | grep -Eic 'Traceback|ModuleNotFoundError|ImportError|CRITICAL|FATAL|permission_denied' || true)"
   printf '%s_error_pattern_count=%s\n' "$service" "$count" >> "$EVIDENCE_ROOT/final-log-scan.txt"

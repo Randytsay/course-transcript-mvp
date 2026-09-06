@@ -126,7 +126,10 @@ sha = sys.argv[2]
 data_root = sys.argv[3]
 accounts_root = sys.argv[4]
 services = model.get("services") or {}
-required = {"api", "worker", "pipeline-worker", "delivery-worker", "frontend"}
+required = {
+    "api", "worker", "pipeline-worker", "delivery-worker",
+    "health-monitor", "retention-monitor", "frontend",
+}
 missing = sorted(required - set(services))
 if missing:
     raise SystemExit(f"missing services: {missing}")
@@ -134,7 +137,10 @@ for name in sorted(required):
     image = str(services[name].get("image") or "")
     if not image.endswith(f":{sha}"):
         raise SystemExit(f"incorrect image for {name}: {image}")
-for name in ("api", "worker", "pipeline-worker", "delivery-worker"):
+for name in (
+    "api", "worker", "pipeline-worker", "delivery-worker",
+    "health-monitor", "retention-monitor",
+):
     mounts = services[name].get("volumes") or []
     data = next((item for item in mounts if item.get("target") == "/app/data"), None)
     if not data or data.get("source") != data_root:
@@ -174,7 +180,7 @@ PY
 
 validate_images() {
   local service image arch revision
-  for service in api worker pipeline-worker delivery-worker frontend; do
+  for service in api worker pipeline-worker delivery-worker health-monitor retention-monitor frontend; do
     image="${NEW_IMAGES[$service]}"
     docker image inspect "$image" >/dev/null
     arch="$(docker image inspect --format '{{.Architecture}}' "$image")"
@@ -274,12 +280,12 @@ rollback_all() {
   printf 'ROLLBACK_STARTED=YES\n' | tee -a "$EVIDENCE_ROOT/rollback-result.txt"
   export COURSE_TRANSCRIPT_RELEASE_TAG="$ROLLBACK_TAG"
   local service
-  for service in api worker pipeline-worker delivery-worker frontend; do
+  for service in api worker pipeline-worker delivery-worker health-monitor retention-monitor frontend; do
     compose up -d --no-build --no-deps --force-recreate "$service" \
       >> "$EVIDENCE_ROOT/rollback-result.txt" 2>&1
   done
   sleep 15
-  for service in api worker pipeline-worker delivery-worker frontend; do
+  for service in api worker pipeline-worker delivery-worker health-monitor retention-monitor frontend; do
     local container actual expected state
     container="${LIVE_CONTAINERS[$service]}"
     actual="$(docker inspect --format '{{.Image}}' "$container" 2>/dev/null)"
