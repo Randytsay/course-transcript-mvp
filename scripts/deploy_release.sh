@@ -276,6 +276,7 @@ fi
 
 # Capture current production identity and create rollback artifacts.
 printf 'service|container_id|image_id|started_at|restart_count\n' > "$EVIDENCE_ROOT/live-before.txt"
+declare -A ROLLBACK_TAGGED=()
 for service in api worker pipeline-worker delivery-worker health-monitor retention-monitor frontend; do
   container="${LIVE_CONTAINERS[$service]}"
   docker inspect "$container" >/dev/null
@@ -287,8 +288,11 @@ for service in api worker pipeline-worker delivery-worker health-monitor retenti
     "$(docker inspect --format '{{.RestartCount}}' "$container")" \
     >> "$EVIDENCE_ROOT/live-before.txt"
   rollback_image="${IMAGE_REPOS[$service]}:${ROLLBACK_TAG}"
-  ! docker image inspect "$rollback_image" >/dev/null 2>&1 || fail "rollback tag exists: $rollback_image"
-  docker tag "$(docker inspect --format '{{.Image}}' "$container")" "$rollback_image"
+  if [[ -z "${ROLLBACK_TAGGED[$rollback_image]+x}" ]]; then
+    ! docker image inspect "$rollback_image" >/dev/null 2>&1 || fail "rollback tag exists: $rollback_image"
+    docker tag "$(docker inspect --format '{{.Image}}' "$container")" "$rollback_image"
+    ROLLBACK_TAGGED[$rollback_image]=1
+  fi
 done
 printf '%s\n' "$ROLLBACK_TAG" > "$EVIDENCE_ROOT/rollback-tag.txt"
 
