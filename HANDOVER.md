@@ -45,6 +45,13 @@ Read `README.md`, `ARCHITECTURE.md`, `RUNBOOK.md`, `DEPLOYMENT.md`, `docs/DYNAMI
 - `docker-compose.yml` and `docker-compose.release.yml`: API-only writable account/runtime mounts; pipeline runtime is read-only and uses the controlled `/run/ai-runtime` path.
 - `app/subtitles/editor_hardened.py`: strict SRT import, revision-gated editor publication, editor-intent persistence, and protection against delayed pipeline overwrite.
 - `app/api_hardened.py`: installs the hardened subtitle mutation routes without duplicating the read/edit routes.
+- `app/jobs/preflight.py` / `app/jobs/preflight_observed.py`: keep the
+  non-paid media preflight, then auto-authorize ordinary jobs inside the
+  server-side per-batch and project budget guardrails. Only exceptional cost
+  cases remain `awaiting_confirmation`.
+- `scripts/runtime_revision_guard.py`: fail-closed production check requiring
+  API, frontend, and all worker/monitor containers to share one labelled exact
+  Git SHA; the release script also runs it against the approved release SHA.
 
 ## Required acceptance evidence
 
@@ -67,5 +74,8 @@ Before deployment:
 4. Build ARM64 images on the Oracle host.
 5. Run non-paid health, import, Compose, and restart-persistence checks.
 6. Stop before real Chirp, Gemini, or Drive mutation tests and request explicit approval.
+7. Verify the live runtime with
+   `python3 scripts/runtime_revision_guard.py --expected-sha <release-sha>`;
+   do not repair one production service with a `:local` image.
 
 Follow `docs/VPS_DEPLOY_GATE.md` exactly and return its requested evidence summary. Never print service-account JSON, rclone configuration, OAuth tokens, Cloudflare tunnel tokens, or secret environment values.

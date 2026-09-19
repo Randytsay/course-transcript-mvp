@@ -8,6 +8,9 @@ trap 'rm -rf -- "$TMP"' EXIT
 bash -n "$ROOT/scripts/deploy_release.sh"
 bash -n "$ROOT/scripts/deploy_release_safe.sh"
 python3 -m py_compile "$ROOT/scripts/scan_evidence_credentials.py"
+python3 -m py_compile "$ROOT/scripts/runtime_revision_guard.py"
+runtime_guard_self_test="$(python3 "$ROOT/scripts/runtime_revision_guard.py" --self-test)"
+[[ "$runtime_guard_self_test" == "RUNTIME_REVISION_GUARD_SELF_TEST=PASS" ]]
 
 mkdir "$TMP/clean" "$TMP/dirty"
 printf 'ordinary evidence\n' > "$TMP/clean/result.txt"
@@ -38,5 +41,7 @@ fi
 
 self_test="$(bash "$ROOT/scripts/deploy_release_safe.sh" --self-test)"
 [[ "$self_test" == "SELF_TEST=PASS" ]]
+
+grep -q 'runtime_revision_guard.py.*--expected-sha.*RELEASE_SHA' "$ROOT/scripts/deploy_release.sh"
 
 printf 'DEPLOY_RELEASE_SAFE_TEST=PASS\n'

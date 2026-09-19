@@ -146,6 +146,8 @@ export interface CreatedBatch {
 
 export interface CostSummary {
   projectLimitUsd: string;
+  autoAuthorizeCosts: boolean;
+  autoAuthorizeMaxUsd: string;
   committedEstimatedCostUsd: string;
   recordedActualCostUsd: string;
   remainingEstimatedBudgetUsd: string;

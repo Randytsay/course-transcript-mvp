@@ -51,7 +51,11 @@ may hold an active worker lease. There is no scheduled Drive scan.
   expands one folder, then creates a 30-minute preview.
 - `POST /api/v1/batches`: creates only local preflight jobs.
 - `GET /api/v1/batches/{id}`: returns child jobs, duration, status and estimate.
-- `POST /api/v1/batches/{id}/approve`: revision- and exact-cost-guarded approval.
+- Ordinary jobs auto-authorize after non-paid preflight when the estimate is
+  known and remains inside both the per-batch threshold and project budget.
+- `POST /api/v1/batches/{id}/approve`: retained for exceptional, unknown-cost,
+  over-threshold, or explicitly disabled auto-authorization cases; approval is
+  revision- and exact-cost-guarded.
 
 Production mutations require Cloudflare Access identity headers and the exact
 `https://transcript.randy88.ccwu.cc` Origin. Browser responses never contain

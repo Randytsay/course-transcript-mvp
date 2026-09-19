@@ -21,7 +21,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { FormEvent, useEffect, useMemo, useState } from "react";
-import { getCosts, previewBatch } from "@/lib/api-client";
+import { previewBatch } from "@/lib/api-client";
 import {
   browseDrivePage,
   DriveDirectoryPage,
@@ -36,16 +36,15 @@ import {
 import type {
   BatchPreview,
   ContentMode,
-  CostSummary,
   CreatedBatch,
   DriveEntry,
   OutputFormat,
   ProcessingStrategy,
 } from "@/lib/types";
-import { formatTwd } from "@/lib/currency";
 
 type SelectionMode = "files" | "folder";
 type BusyState = "browse" | "search" | "more" | "preview" | "create" | null;
+type CorrectionMode = "GEMINI" | "M3_FALLBACK" | "CUSTOM";
 
 const DEFAULT_OUTPUT_FORMATS: OutputFormat[] = ["srt", "txt", "csv"];
 
@@ -60,13 +59,6 @@ function displayPath(path: string) {
   return path.replace(/^gdrive:/, "我的雲端硬碟 / ").replaceAll("/", " / ");
 }
 
-function providerLabel(provider: DriveDirectoryPage["provider"] | null) {
-  if (provider === "google_api") return "Google Drive API";
-  if (provider === "rclone_fallback") return "rclone 備援";
-  if (provider === "rclone") return "rclone";
-  return "尚未連線";
-}
-
 export default function NewJobPageDriveApi() {
   const router = useRouter();
   const [directory, setDirectory] = useState<DriveDirectoryPage | null>(null);
@@ -77,12 +69,11 @@ export default function NewJobPageDriveApi() {
   const [selected, setSelected] = useState<Map<string, DriveEntry>>(new Map());
   const [preview, setPreview] = useState<BatchPreview | null>(null);
   const [created, setCreated] = useState<CreatedBatch | null>(null);
-  const [costs, setCosts] = useState<CostSummary | null>(null);
   const [busy, setBusy] = useState<BusyState>(null);
   const [error, setError] = useState<string | null>(null);
   const [chirpMaxParallelChunks, setChirpMaxParallelChunks] = useState(3);
   const [processingStrategy, setProcessingStrategy] = useState<ProcessingStrategy>("DYNAMIC_BATCHING");
-  const [correctionPolicy, setCorrectionPolicy] = useState<CorrectionPolicy>("GEMINI_FIRST");
+  const [correctionMode, setCorrectionMode] = useState<CorrectionMode>("GEMINI");
   const [m3Enabled, setM3Enabled] = useState(false);
   const [m3Configured, setM3Configured] = useState(false);
   const [m3StatusLoaded, setM3StatusLoaded] = useState(false);
@@ -108,6 +99,8 @@ export default function NewJobPageDriveApi() {
   // the API-key provider profile directory. An empty profile is therefore
   // valid for Vertex, but not for OpenRouter/MiniMax.
   const providerNeedsProfile = providerId !== "vertex";
+  const correctionPolicy: CorrectionPolicy =
+    correctionMode === "M3_FALLBACK" ? "M3_FIRST" : "GEMINI_FIRST";
 
   const DEFAULT_MODELS: Record<AIProviderId, string> = {
     vertex: "gemini-3.7-flash",
@@ -260,7 +253,6 @@ export default function NewJobPageDriveApi() {
 
   useEffect(() => {
     void openDirectory("gdrive:");
-    getCosts().then(setCosts).catch(() => null);
     getCorrectionProviderStatus()
       .then((status) => {
         setM3Enabled(status.m3Enabled);
@@ -268,7 +260,9 @@ export default function NewJobPageDriveApi() {
         setM3Model(status.m3Model);
         setM3QuotaLiveCheck(status.quotaLiveCheck);
         setM3QuotaState(status.quotaState);
-        if (!status.m3Enabled || !status.minimaxConfigured) setCorrectionPolicy("GEMINI_FIRST");
+        if (!status.m3Enabled || !status.minimaxConfigured) {
+          setCorrectionMode((current) => current === "M3_FALLBACK" ? "GEMINI" : current);
+        }
       })
       .finally(() => setM3StatusLoaded(true));
   }, []);
@@ -305,14 +299,9 @@ export default function NewJobPageDriveApi() {
     return "可手動啟用；quota 尚未確認時會安全從 Gemini 3.7 開始。";
   }
 
-  function setM3Selection(enabled: boolean) {
-    if (enabled && !m3SelectionAvailable) return;
-    setCorrectionPolicy(enabled ? "M3_FIRST" : "GEMINI_FIRST");
-  }
-
   async function prepareAndCreateBatch() {
     if (!directory || !canPreview) return;
-    if (providerNeedsProfile && !providerProfileId) {
+    if (correctionMode === "CUSTOM" && providerNeedsProfile && !providerProfileId) {
       setError("目前選取的供應商尚未登記設定檔；請先到 AI 模型供應商新增並驗證設定檔。");
       return;
     }
@@ -325,13 +314,25 @@ export default function NewJobPageDriveApi() {
       const nextPreview = await previewBatch(selectionMode, paths);
       setPreview(nextPreview);
       setBusy("create");
-      const nextBatch = await createBatchWithPolicy(nextPreview.batchPreviewId, correctionPolicy, chirpMaxParallelChunks, outputFormats, processingStrategy, contentMode, documentContext, {
-        provider: providerId,
-        provider_profile_id: providerProfileId,
-        model: providerModel,
-        execution_mode: executionMode,
-        fallback_policy: fallbackPolicy,
-      });
+      const customCorrection = correctionMode === "CUSTOM"
+        ? {
+            provider: providerId,
+            provider_profile_id: providerProfileId,
+            model: providerModel,
+            execution_mode: executionMode,
+            fallback_policy: fallbackPolicy,
+          }
+        : undefined;
+      const nextBatch = await createBatchWithPolicy(
+        nextPreview.batchPreviewId,
+        correctionPolicy,
+        chirpMaxParallelChunks,
+        outputFormats,
+        processingStrategy,
+        contentMode,
+        documentContext,
+        customCorrection,
+      );
       setCreated(nextBatch);
       router.push(`/batches/${nextBatch.batchId}`);
     } catch (cause) {
@@ -341,20 +342,20 @@ export default function NewJobPageDriveApi() {
   }
 
   return (
-    <AppShell title="新增轉錄任務" description="使用 Google Drive API 快速搜尋與瀏覽；檔案傳輸仍由 rclone 執行。">
+    <AppShell title="開始辨識" description="從 Google Drive 選好影音檔，系統會先安全檢查，再自動開始辨識。">
       <div className="new-job-layout">
         <section className="form-panel">
           <div className="form-section">
             <div className="section-heading">
               <span className="step-number">1</span>
-              <div><h2>選擇批次方式</h2><p>可選取多個影音檔，或進入一個課程資料夾後選取整個資料夾。</p></div>
+              <div><h2>選擇處理方式</h2><p>可勾選一個或多個影音檔，也可以一次處理整個課程資料夾。</p></div>
             </div>
             <div className="selection-mode-grid">
               <button type="button" className={`selection-mode-card ${selectionMode === "files" ? "selection-mode-card--active" : ""}`} onClick={() => setSelectionMode("files")}>
                 <SquareCheckBig size={21} /><span><strong>選取檔案</strong><small>可跨資料夾保留勾選</small></span>{selectionMode === "files" && <Check size={17} />}
               </button>
               <button type="button" className={`selection-mode-card ${selectionMode === "folder" ? "selection-mode-card--active" : ""}`} onClick={() => setSelectionMode("folder")}>
-                <Folder size={21} /><span><strong>目前整個資料夾</strong><small>建立預覽時由 rclone 遞迴列舉</small></span>{selectionMode === "folder" && <Check size={17} />}
+                <Folder size={21} /><span><strong>目前整個資料夾</strong><small>一次處理資料夾內支援的影音檔</small></span>{selectionMode === "folder" && <Check size={17} />}
               </button>
             </div>
           </div>
@@ -362,7 +363,7 @@ export default function NewJobPageDriveApi() {
           <div className="form-section">
             <div className="section-heading">
               <span className="step-number">2</span>
-              <div><h2>瀏覽與搜尋 Google Drive</h2><p>單次前端請求最多等待 15 秒，支援分頁載入。</p></div>
+              <div><h2>選擇影音檔</h2><p>瀏覽資料夾或直接搜尋檔名，勾選完成後即可開始。</p></div>
             </div>
 
             <form className="drive-path-bar" onSubmit={(event) => { event.preventDefault(); void openDirectory(pathInput); }}>
@@ -381,11 +382,7 @@ export default function NewJobPageDriveApi() {
               </button>
             </form>
 
-            <div style={{ display: "flex", gap: 10, alignItems: "center", margin: "12px 0", flexWrap: "wrap" }}>
-              <span className="status-badge status-badge--completed">瀏覽：{providerLabel(directory?.provider ?? null)}</span>
-              <span style={{ fontSize: 13, color: "var(--muted)" }}>傳輸：rclone</span>
-              {directory?.warning && <span style={{ fontSize: 13, color: "#9a3412" }}>備援原因：{directory.warning}</span>}
-            </div>
+            {directory?.warning && <div className="inline-warning">目前改用備援方式讀取檔案；若選檔受影響再查看系統設定。</div>}
 
             {error && <div className="empty-state empty-state--error"><TriangleAlert size={18} />{error}</div>}
 
@@ -427,7 +424,7 @@ export default function NewJobPageDriveApi() {
           </div>
 
           <div className="form-section document-context-section">
-            <div className="section-heading"><span className="step-number">3</span><div><h2>文件方向與辨識背景</h2><p>設定會隨每個工作保存；不會套用到之後的新文件。</p></div></div>
+            <div className="section-heading"><span className="step-number">3</span><div><h2>辨識內容（選填）</h2><p>提供主題或常見術語，可以讓後續文字校正更貼近內容。</p></div></div>
             <div className="context-mode-grid">
               <button type="button" className={`context-mode-card ${contentMode === "general" ? "context-mode-card--active" : ""}`} onClick={() => setContentMode("general")}>
                 <span><strong>一般文件</strong><small>預設。課程、會議、訪談或其他非特定宗教內容。</small></span>{contentMode === "general" && <Check size={17} />}
@@ -438,46 +435,44 @@ export default function NewJobPageDriveApi() {
             </div>
             <label className="context-textarea-label" htmlFor="document-context">補充說明（選填）</label>
             <textarea id="document-context" className="context-textarea" value={documentContext} maxLength={2400} onChange={(event) => setDocumentContext(event.target.value)} placeholder="例如：能源績效量測驗證課程；講者林佑璇；常見術語包含 M&V、基準線、節能量。" />
-            <div className="context-note"><span>此背景只作校正參考，不會改變原始 Chirp 結果、時間碼或分段。</span><span>{documentContext.length}/2400</span></div>
+            <div className="context-note"><span>這些說明只幫助文字校正，不會改變原始語音辨識與時間碼。</span><span>{documentContext.length}/2400</span></div>
             {selectionMode === "files" && selectedEntries.length > 1 && <p className="context-batch-note">目前會將這個設定套用到已選的 {selectedEntries.length} 個檔案；不同主題請分批建立。</p>}
           </div>
 
-          <div className="form-section">
-            <div className="section-heading"><span className="step-number">4</span><div><h2>AI 文字校正模型</h2><p>這是本批次的選擇，不會改變全域預設；原始 Chirp 文字、時間碼與分段永遠保留。</p></div></div>
-            <div className={`model-route-card ${correctionPolicy === "M3_FIRST" ? "model-route-card--m3" : ""}`}>
-              <div className="model-route-card__icon" aria-hidden="true">
-                {correctionPolicy === "M3_FIRST" ? <Sparkles size={21} /> : <ShieldCheck size={21} />}
-              </div>
-              <div className="model-route-card__copy">
-                <div className="model-route-card__heading"><strong>{correctionPolicy === "M3_FIRST" ? `${m3Model} 優先` : "Gemini 3.7 優先"}</strong><span className="model-route-card__badge">{correctionPolicy === "M3_FIRST" ? "人工抽查模式" : "安全預設"}</span></div>
-                <p>{correctionPolicy === "M3_FIRST" ? `${m3Model} 先處理；quota、回應格式或服務異常時，本批次只會轉到 Gemini 3.7。` : "全程優先使用 Google Vertex AI Gemini 3.7 Flash。"}</p>
-                <small className="model-route-card__status"><Zap size={14} />{describeM3Status()}</small>
-              </div>
-              <div className="model-route-card__control">
-                <span className="model-route-card__control-label">
-                  <strong>{correctionPolicy === "M3_FIRST" ? `目前：${m3Model}` : `可切換：${m3Model}`}</strong>
-                  <small>{m3SelectionAvailable ? "只套用本批次" : "目前不可用"}</small>
-                </span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={correctionPolicy === "M3_FIRST"}
-                  aria-label={`切換 ${m3Model} 人工抽查模式`}
-                  className={`model-toggle ${correctionPolicy === "M3_FIRST" ? "model-toggle--on" : ""}`}
-                  disabled={!m3StatusLoaded || !m3SelectionAvailable}
-                  onClick={() => setM3Selection(correctionPolicy !== "M3_FIRST")}
-                  title={!m3StatusLoaded ? "正在確認 MiniMax M3 狀態" : !m3SelectionAvailable ? describeM3Status() : undefined}
-                >
-                  <span className="model-toggle__thumb" />
-                  <span className="sr-only">{correctionPolicy === "M3_FIRST" ? "已開啟" : "未開啟"}</span>
-                </button>
-              </div>
+          <details className="advanced-settings">
+            <summary><span><strong>進階設定</strong><small>預設值已適合一般課程、會議與訪談</small></span><ChevronRight size={18} /></summary>
+            <div className="form-section advanced-settings__section">
+            <div className="section-heading"><div><h2>文字校正模式</h2><p>一般情況選推薦模式即可；需要指定第三方模型時再使用自訂。</p></div></div>
+            <div className="correction-mode-grid" role="radiogroup" aria-label="文字校正模式">
+              <button type="button" role="radio" aria-checked={correctionMode === "GEMINI"}
+                      className={`correction-mode-card ${correctionMode === "GEMINI" ? "correction-mode-card--active" : ""}`}
+                      onClick={() => setCorrectionMode("GEMINI")}>
+                <ShieldCheck size={22} />
+                <span><strong>Gemini 3.7（推薦）</strong><small>Google Vertex AI 單模型校正，穩定、容易稽核。</small></span>
+                {correctionMode === "GEMINI" && <Check size={17} />}
+              </button>
+              <button type="button" role="radio" aria-checked={correctionMode === "M3_FALLBACK"}
+                      className={`correction-mode-card ${correctionMode === "M3_FALLBACK" ? "correction-mode-card--active" : ""}`}
+                      disabled={!m3StatusLoaded || !m3SelectionAvailable}
+                      title={!m3StatusLoaded ? "正在確認 MiniMax M3 狀態" : !m3SelectionAvailable ? describeM3Status() : undefined}
+                      onClick={() => m3SelectionAvailable && setCorrectionMode("M3_FALLBACK")}>
+                <Sparkles size={22} />
+                <span><strong>{m3Model} + Gemini 備援</strong><small>M3 優先；quota 或服務異常時安全改用 Gemini 3.7。</small></span>
+                {correctionMode === "M3_FALLBACK" && <Check size={17} />}
+              </button>
+              <button type="button" role="radio" aria-checked={correctionMode === "CUSTOM"}
+                      className={`correction-mode-card ${correctionMode === "CUSTOM" ? "correction-mode-card--active" : ""}`}
+                      onClick={() => setCorrectionMode("CUSTOM")}>
+                <Layers3 size={22} />
+                <span><strong>自訂模型</strong><small>指定 Vertex、OpenRouter 或 MiniMax 的模型與執行模式。</small></span>
+                {correctionMode === "CUSTOM" && <Check size={17} />}
+              </button>
             </div>
-            <div className="model-route-note"><ShieldCheck size={15} /><span>開關可選 MiniMax M3 人工抽查模式；關閉就是 Gemini 3.7。設定只影響這一批任務，建立後會把實際請求路由與 fallback 記錄在任務稽核檔。</span></div>
+            <div className="model-route-note"><ShieldCheck size={15} /><span>{correctionMode === "M3_FALLBACK" ? describeM3Status() : "模式只套用本批任務；實際模型、fallback 與結果都會保留在稽核證據中。"}</span></div>
 
-            <div className="model-route-card" data-testid="ai-provider-router">
+            {correctionMode === "CUSTOM" && <div className="model-route-card" data-testid="ai-provider-router">
               <div className="model-route-card__copy" style={{ flex: 1 }}>
-                <div className="model-route-card__heading"><strong>AI 文字校正（Provider Router）</strong><span className="model-route-card__badge">進階</span></div>
+                <div className="model-route-card__heading"><strong>自訂供應商與模型</strong><span className="model-route-card__badge">專家設定</span></div>
                 <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr", marginTop: 10 }}>
                   <label style={{ display: "grid", gap: 4 }}>
                     <span style={{ fontWeight: 700 }}>供應商</span>
@@ -552,11 +547,11 @@ export default function NewJobPageDriveApi() {
                   )}
                 </div>
               </div>
+            </div>}
             </div>
-          </div>
 
-          <div className="form-section">
-            <div className="section-heading"><span className="step-number">5</span><div><h2>輸出與併發</h2><p>建立工作前只做唯讀預覽；付費辨識仍需另行確認費用。</p></div></div>
+            <div className="form-section advanced-settings__section">
+            <div className="section-heading"><div><h2>辨識速度與輸出格式</h2><p>一般情況建議維持經濟模式與預設輸出。</p></div></div>
             <label style={{ display: "block", fontWeight: 700, marginBottom: 8 }}>辨識處理模式</label>
             <div className="selection-mode-grid">
               <button type="button" className={`selection-mode-card ${processingStrategy === "DYNAMIC_BATCHING" ? "selection-mode-card--active" : ""}`} onClick={() => setProcessingStrategy("DYNAMIC_BATCHING")}>
@@ -566,7 +561,7 @@ export default function NewJobPageDriveApi() {
                 <LoaderCircle size={21} /><span><strong>快速模式（Standard Batch）</strong><small>優先較快完成；費用較高，適合急件</small></span>{processingStrategy === "STANDARD_BATCH" && <Check size={17} />}
               </button>
             </div>
-            <p style={{ margin: "8px 0 16px", fontSize: 13, color: "#64748b" }}>模式會寫入每個任務並反映到 preflight 預估費用；付費提交後不能切換。</p>
+            <p className="advanced-note">模式會影響處理時間與預估費用；任務開始後不再切換。</p>
             <label style={{ display: "block", fontWeight: 700, marginBottom: 8 }}>Chirp 同時辨識分段數</label>
             <select value={chirpMaxParallelChunks} onChange={(event) => setChirpMaxParallelChunks(Number(event.target.value))} style={{ width: "100%", padding: 10, borderRadius: 8, border: "1px solid var(--border-strong)" }}>
               {[1, 2, 3, 4, 5].map((value) => <option value={value} key={value}>{value}{value === 3 ? "（建議）" : ""}</option>)}
@@ -576,25 +571,34 @@ export default function NewJobPageDriveApi() {
                 <button type="button" key={format} className={`button ${outputFormats.includes(format) ? "button--primary" : "button--ghost"}`} onClick={() => toggleOutputFormat(format)}>.{format}</button>
               ))}
             </div>
-          </div>
+            </div>
+          </details>
 
-          <div className="form-section">
+          <div className="form-section start-action-section">
             <button type="button" className="button button--primary button--large" disabled={!canPreview || busy !== null} onClick={() => void prepareAndCreateBatch()}>
               {busy === "preview" || busy === "create" ? <LoaderCircle className="spin" size={18} /> : <Check size={18} />}
-              {busy === "preview" ? "檢查檔案中…" : busy === "create" ? "建立 preflight 中…" : "檢查檔案與估價"}
+              {busy === "preview" ? "正在檢查檔案…" : busy === "create" ? "正在建立任務…" : "開始辨識"}
             </button>
-            {providerNeedsProfile && !providerProfileId && (
+            <p className="start-action-note">系統會先做不付費的檔案檢查與估價；符合安全門檻就自動開始，只有異常或較高費用才會停下讓你確認。</p>
+            {correctionMode === "CUSTOM" && providerNeedsProfile && !providerProfileId && (
               <div className="empty-state empty-state--error" style={{ marginTop: 14 }}>
                 目前供應商尚未登記設定檔；完成設定前不能建立這個校正任務。
               </div>
             )}
-            {preview && busy === "create" && <div className="empty-state" style={{ marginTop: 14 }}>已檢查 {preview.itemCount} 個檔案，共 {formatBytes(preview.totalSizeBytes)}；正在建立 preflight 工作。</div>}
-            {created && <div className="empty-state" style={{ marginTop: 14 }}>批次已建立：{created.batchId}。模型：{correctionPolicy === "M3_FIRST" ? `${m3Model} → Gemini 3.7` : "Gemini 3.7"}；模式：{created.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}；尚未啟動付費辨識。</div>}
+            {preview && busy === "create" && <div className="empty-state" style={{ marginTop: 14 }}>已檢查 {preview.itemCount} 個檔案，共 {formatBytes(preview.totalSizeBytes)}；正在準備辨識。</div>}
+            {created && <div className="empty-state" style={{ marginTop: 14 }}>任務已建立：{created.batchId}。前置檢查完成後會自動開始。</div>}
           </div>
         </section>
 
         <aside className="dashboard-side">
-          <div className="panel quick-panel"><h2>Drive 混合架構</h2><p>目錄瀏覽、搜尋與健康檢查使用 Google Drive API；下載、成果上傳、備份與升版仍使用 rclone。</p><small>校正模型：{correctionPolicy === "M3_FIRST" ? `${m3Model} → Gemini 3.7` : "Gemini 3.7"}</small><small>剩餘預估額度：{costs ? formatTwd(costs.remainingEstimatedBudgetTwd) : "讀取中"}</small></div>
+          <div className="panel start-summary">
+            <h2>目前設定</h2>
+            <div><span>已選檔案</span><strong>{selectionMode === "files" ? selectedEntries.length : folderReady ? "整個資料夾" : "尚未選擇"}</strong></div>
+            <div><span>辨識模式</span><strong>{processingStrategy === "DYNAMIC_BATCHING" ? "經濟模式" : "快速模式"}</strong></div>
+            <div><span>文字優化</span><strong>{correctionMode === "M3_FALLBACK" ? `${m3Model} + Gemini 備援` : correctionMode === "CUSTOM" ? `自訂：${providerModel}` : "Gemini 3.7"}</strong></div>
+            <div><span>輸出</span><strong>{outputFormats.map((item) => `.${item}`).join("、")}</strong></div>
+            <small>一般任務不再需要第二次費用確認。</small>
+          </div>
         </aside>
       </div>
     </AppShell>

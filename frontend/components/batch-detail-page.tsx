@@ -86,7 +86,7 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
   return (
     <AppShell
       title={batch?.name ?? "批次任務"}
-      description="逐檔本機檢查、一次費用確認、依序轉錄。"
+      description="系統會先安全檢查檔案，再依序開始辨識；只有超出成本安全門檻時才需要你確認。"
       actions={<Link className="button button--secondary" href="/jobs/new"><ArrowLeft size={15} />返回選檔</Link>}
     >
       {error && <div className="form-error"><TriangleAlert size={17} /><span>{error}</span></div>}
@@ -117,22 +117,21 @@ export default function BatchDetailPage({ batchId }: { batchId: string }) {
 
             <aside className="panel batch-approval-card">
               <div className="approval-icon"><ShieldAlert size={22} /></div>
-              <h2>最後一次付費確認</h2>
-              {batch.status === "preflight" && <p>Worker 正在逐檔檢查格式與時長。完成前不會呼叫 Chirp、Gemini 或其他文字模型。</p>}
+              <h2>開始狀態</h2>
+              {batch.status === "preflight" && <p>正在檢查檔案格式、時長與預估費用。這個階段不會產生辨識費用；符合安全門檻後會自動開始。</p>}
               {batch.status === "awaiting_confirmation" && batch.estimatedCostUsd && (
                 <>
                   <p>
-                    這 {batch.itemCount} 個檔案將依序進入<strong>{batch.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}</strong>。
-                    預估總額為 <strong>{formatTwd(batch.estimatedCostTwd)}</strong>。
+                    這批任務的預估費用 <strong>{formatTwd(batch.estimatedCostTwd)}</strong> 超出目前自動安全門檻，或受專案預算限制，因此沒有自動開始。
                   </p>
                   <button className="button button--primary button--full button--large" disabled={approving} onClick={() => void approve()}>
                     {approving ? <LoaderCircle className="spin" size={16} /> : <CheckCircle2 size={16} />}
-                    確認 {formatTwd(batch.estimatedCostTwd)} 並開始處理
+                    確認費用並開始處理
                   </button>
-                  <small>按下此按鈕即代表你確認估計費用並授權此批次進入付費處理佇列，不再要求第二個核取方塊。</small>
+                  <small>一般任務會自動開始；只有超出安全門檻的批次才會看到這個確認動作。</small>
                 </>
               )}
-              {batch.status === "queued" && <p className="approval-success"><CheckCircle2 size={17} />費用已確認，檔案正在依序等待 Worker。</p>}
+              {batch.status === "queued" && <p className="approval-success"><CheckCircle2 size={17} />安全檢查已通過，檔案正在依序等待辨識。</p>}
               {failedCounts.preflight > 0 && <p className="approval-warning"><TriangleAlert size={17} />有 {failedCounts.preflight} 個檔案未通過本機媒體檢查，不會產生辨識費用。</p>}
               {failedCounts.download > 0 && <p className="approval-warning"><TriangleAlert size={17} />有 {failedCounts.download} 個檔案在來源下載或前處理階段失敗，尚未進入付費辨識，不會產生辨識費用。</p>}
               {failedCounts.other > 0 && <p className="approval-warning"><TriangleAlert size={17} />有 {failedCounts.other} 個檔案在後續處理階段失敗，請查看檔案明細與實際成本紀錄。</p>}

@@ -47,24 +47,26 @@ class DriveBrowsePerformanceTests(unittest.TestCase):
 
     @patch("app.jobs.source.inspect_rclone_source")
     @patch("app.jobs.source._run_lsjson")
-    def test_multi_file_preview_lists_parent_once_instead_of_stat_per_file(
+    def test_multi_file_preview_uses_authoritative_exact_stat_per_file(
         self,
         run_lsjson: Mock,
         inspect_source: Mock,
     ) -> None:
-        run_lsjson.return_value = [
-            {
-                "Path": "第一堂.mp3",
-                "Name": "第一堂.mp3",
-                "Size": 100,
-                "ModTime": "2026-08-01T00:00:00Z",
-            },
-            {
-                "Path": "第二堂.m4a",
-                "Name": "第二堂.m4a",
-                "Size": 200,
-                "ModTime": "2026-08-01T01:00:00Z",
-            },
+        inspect_source.side_effect = [
+            SourceMetadata(
+                source_path="gdrive:課程/第一堂.mp3",
+                name="第一堂.mp3",
+                size_bytes=100,
+                modified_at="2026-08-01T00:00:00Z",
+                mime_type=None,
+            ),
+            SourceMetadata(
+                source_path="gdrive:課程/第二堂.m4a",
+                name="第二堂.m4a",
+                size_bytes=200,
+                modified_at="2026-08-01T01:00:00Z",
+                mime_type=None,
+            ),
         ]
 
         items = inspect_rclone_selection(
@@ -76,8 +78,8 @@ class DriveBrowsePerformanceTests(unittest.TestCase):
         )
 
         self.assertEqual([item.size_bytes for item in items], [100, 200])
-        self.assertEqual(run_lsjson.call_count, 1)
-        inspect_source.assert_not_called()
+        run_lsjson.assert_not_called()
+        self.assertEqual(inspect_source.call_count, 2)
 
     @patch("app.jobs.source.inspect_rclone_source")
     @patch("app.jobs.source._run_lsjson")

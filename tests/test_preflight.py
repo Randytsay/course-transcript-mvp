@@ -63,7 +63,8 @@ class PreflightTests(unittest.TestCase):
                 data_dir=self.data,
                 worker_id="worker-test",
             )
-        self.assertEqual(result["status"], "awaiting_confirmation")
+        self.assertEqual(result["status"], "queued")
+        self.assertIsNotNone(result["approved_at"])
         self.assertEqual(result["source_checksum"], "a" * 64)
         self.assertGreater(float(result["estimated_cost_usd"]), 0)
         copied_files = list((self.data / "tmp" / "preflight").rglob("source.*"))

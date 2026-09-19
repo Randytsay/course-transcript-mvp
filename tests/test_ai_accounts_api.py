@@ -82,6 +82,10 @@ class AIAccountsAPITests(unittest.TestCase):
         listing = self.client.get("/api/v1/review-admin/ai-accounts").json()
         profile = next(p for p in listing["profiles"] if p["name"] == "prof-y")
         assert profile["project_id"] == SA_A["project_id"]
+        assert listing["recommended_switch"]["name"] == "prof-y"
+        assert listing["recommended_switch"]["requires_preflight"] is True
+        assert listing["recommended_switch"]["requires_confirmation"] is True
+        assert "不會自動輪替" in listing["recommendation_note"]
 
     def test_preflight_then_switch_flow(self) -> None:
         self.client.post("/api/v1/review-admin/ai-accounts",

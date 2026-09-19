@@ -23,6 +23,28 @@
 
 Successful hardened jobs finish as `completed`. The legacy `awaiting_review` status remains readable only so older jobs can be delivered or edited safely.
 
+## Automatic start after non-paid preflight
+
+New transcription jobs still perform the complete local, non-paid preflight:
+Drive copy, FFprobe duration/audio validation, checksum, and cost estimation.
+Ordinary jobs then enter the paid queue automatically when both safety
+guardrails pass. The operator no longer confirms every estimate manually.
+
+The server-side controls are:
+
+```dotenv
+COURSE_TRANSCRIPT_AUTO_AUTHORIZE_COSTS=true
+COURSE_TRANSCRIPT_AUTO_AUTHORIZE_MAX_USD=10
+COURSE_TRANSCRIPT_COST_LIMIT_USD=200
+```
+
+`COURSE_TRANSCRIPT_AUTO_AUTHORIZE_MAX_USD` is the maximum estimate that may
+start without another click. The existing project cost limit remains a hard
+cap. A job or whole batch outside either guardrail remains
+`awaiting_confirmation`; unknown/invalid estimates never enter the paid
+pipeline. Disabling `COURSE_TRANSCRIPT_AUTO_AUTHORIZE_COSTS` restores the
+manual-confirmation behavior.
+
 ## Shared-data and locking requirement
 
 `app.jobs.drive_lock` uses Linux `fcntl.flock` on a file below `/app/data`. Cross-container locking is valid only when every process uses the same underlying host directory.
@@ -198,6 +220,19 @@ Follow `docs/VPS_DEPLOY_GATE.md`. The required order is:
 6. run non-paid tests and import checks;
 7. restart services and verify health/restart persistence;
 8. stop and request approval before real provider or Drive mutation tests.
+
+Production services must never be recreated from the base Compose file with
+`:local` images. Use the immutable release path only. After any production
+cutover or controlled service recreation, run:
+
+```bash
+python3 scripts/runtime_revision_guard.py --expected-sha <40-char-release-sha>
+```
+
+The guard fails closed if any API/frontend/worker container is unlabelled,
+stopped, on a different revision, or does not match the expected release SHA.
+The formal release script runs this guard again before declaring cutover
+complete.
 
 Do not treat container health alone as acceptance. Verify database state, artifacts, manifest hashes, event history, and logs.
 

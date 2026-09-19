@@ -33,6 +33,8 @@ def _env_true(name: str, default: bool = False) -> bool:
 @dataclass(frozen=True)
 class CostConfig:
     project_limit_usd: Decimal = Decimal("200")
+    auto_authorize_costs: bool = True
+    auto_authorize_max_usd: Decimal = Decimal("10")
     warning_thresholds_usd: tuple[Decimal, ...] = (
         Decimal("50"),
         Decimal("100"),
@@ -97,12 +99,21 @@ class CostConfig:
         project_limit_usd = Decimal(
             os.environ.get("COURSE_TRANSCRIPT_COST_LIMIT_USD", "200")
         )
+        auto_authorize_max_usd = Decimal(
+            os.environ.get("COURSE_TRANSCRIPT_AUTO_AUTHORIZE_MAX_USD", "10")
+        )
+        if auto_authorize_max_usd < 0:
+            raise ValueError("COURSE_TRANSCRIPT_AUTO_AUTHORIZE_MAX_USD cannot be negative")
         if budget_remaining_twd is not None:
             project_limit_usd = _money(
                 budget_baseline_committed_usd + budget_remaining_twd / usd_to_twd
             )
         return cls(
             project_limit_usd=project_limit_usd,
+            auto_authorize_costs=_env_true(
+                "COURSE_TRANSCRIPT_AUTO_AUTHORIZE_COSTS", default=True
+            ),
+            auto_authorize_max_usd=auto_authorize_max_usd,
             warning_thresholds_usd=thresholds,
             chirp_usd_per_minute=Decimal(
                 os.environ.get(

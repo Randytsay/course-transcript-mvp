@@ -1,7 +1,7 @@
 "use client";
 
 import AppShell from "./app-shell";
-import { approveBatch, decideReviewTerm, getArtifacts, getBatch, getJob, getJobEvents, getReviewTerms, getSegments, pauseJob, resumeJob, retryFailedStage, getJobChunks, getJobChunkTranscript, getJobLiveCost } from "@/lib/api-client";
+import { ApiClientError, approveBatch, decideReviewTerm, getArtifacts, getBatch, getJob, getJobEvents, getReviewTerms, getSegments, pauseJob, resumeJob, retryFailedStage, getJobChunks, getJobChunkTranscript, getJobLiveCost } from "@/lib/api-client";
 import type { Artifact, JobEvent, ReviewTerm, TranscriptJob, TranscriptSegment, ChunkProgressResponse, LiveCost } from "@/lib/types";
 import { formatTwd } from "@/lib/currency";
 import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, Clock3, ExternalLink, FileJson, FileText, FolderUp, Gauge, Headphones, LoaderCircle, Pause, Play, RotateCcw, TriangleAlert, ChevronRight, ChevronDown, Activity, Coins } from "lucide-react";
@@ -34,6 +34,7 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
   const [activeSegmentId, setActiveSegmentId] = useState<string | null>(null);
   const [tab, setTab] = useState<"transcript" | "qa" | "files">("transcript");
   const [error, setError] = useState<string | null>(null);
+  const [jobNotFound, setJobNotFound] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [termDrafts, setTermDrafts] = useState<Record<string, { value: string; scope: "session" | "course" | "instructor" | "global" }>>({});
   const [decidingTerm, setDecidingTerm] = useState<string | null>(null);
@@ -56,8 +57,11 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
     }
     pollController.current = new AbortController();
     try {
-      const [nextJob, nextSegments, nextTerms, nextArtifacts, nextEvents, nextChunks, nextCost] = await Promise.all([
-        getJob(jobId), getSegments(jobId), getReviewTerms(jobId), getArtifacts(jobId), getJobEvents(jobId),
+      // Resolve the canonical job first. If it does not exist, do not fan out
+      // into six dependent endpoints and do not keep polling a stale URL.
+      const nextJob = await getJob(jobId);
+      const [nextSegments, nextTerms, nextArtifacts, nextEvents, nextChunks, nextCost] = await Promise.all([
+        getSegments(jobId), getReviewTerms(jobId), getArtifacts(jobId), getJobEvents(jobId),
         getJobChunks(jobId).catch(() => null), getJobLiveCost(jobId).catch(() => null)
       ]);
       setJob(nextJob); setSegments(nextSegments); setReviewTerms(nextTerms); setArtifacts(nextArtifacts); setEvents(nextEvents); 
@@ -65,15 +69,22 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
       if (!isPolling) setTermDrafts(Object.fromEntries(nextTerms.map((term) => [term.id, { value: term.approvedValue ?? term.suggestion, scope: term.scope ?? "session" }])));
       setChunksRes(nextChunks);
       setLiveCost(nextCost);
+      setJobNotFound(false);
       setError(null);
     } catch (cause: unknown) {
       if ((cause as Error).name !== 'AbortError') {
+        if (cause instanceof ApiClientError && cause.status === 404) {
+          setJobNotFound(true);
+          setError("這筆任務沒有成功建立，或已不存在。");
+          return;
+        }
         setError(cause instanceof Error ? cause.message : "無法讀取任務");
       }
     }
   }, [jobId, activeSegmentId]);
 
   useEffect(() => {
+    if (jobNotFound) return;
     void loadData(false);
     let timer: number | null = null;
     
@@ -113,7 +124,7 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
       if (pollController.current) pollController.current.abort();
       document.removeEventListener("visibilitychange", handleVisibility);
     };
-  }, [loadData]);
+  }, [jobNotFound, loadData]);
 
   useEffect(() => {
     if (!segmentJumpTargetId || tab !== "transcript") return;
@@ -216,7 +227,8 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
     setSegmentJumpTargetId(matchingSegment.id);
     setTab("transcript");
   }
-  if (error) return <AppShell title="任務不可用" description={error}><div className="empty-state empty-state--error">此任務不存在，或後端 API 暫時無法讀取。</div></AppShell>;
+  if (jobNotFound) return <AppShell title="任務未建立" description={error ?? undefined}><div className="empty-state empty-state--error"><div>這個網址沒有對應到已建立的任務，因此系統已停止重複查詢。</div><Link href="/jobs/new" className="button button--primary">重新建立辨識任務</Link></div></AppShell>;
+  if (error) return <AppShell title="任務暫時無法讀取" description={error}><div className="empty-state empty-state--error">後端暫時無法讀取這筆任務，請稍後重新整理。</div></AppShell>;
   if (!job) return <AppShell title="載入任務"><div className="empty-state">正在取得真實任務資料…</div></AppShell>;
   const qaStep = job.pipeline.find((step) => step.id === "qa");
 
