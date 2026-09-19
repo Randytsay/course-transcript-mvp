@@ -13,7 +13,13 @@ from typing import Any
 from app.jobs.costs import CostConfig, estimate_job_cost
 from app.jobs.rclone_auth import rclone_environment
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
-from app.jobs.preflight import PreflightError, _check_disk, _probe, _sha256
+from app.jobs.preflight import (
+    PreflightError,
+    _auto_authorize_after_preflight,
+    _check_disk,
+    _probe,
+    _sha256,
+)
 from app.jobs.store import JobConflict, JobStore
 from app.operations.runtime_heartbeat import write_service_heartbeat
 
@@ -117,13 +123,14 @@ def run_preflight(
             checksum = _sha256(local_source)
             probe = _probe(local_source)
             strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
+            base_cost_config = CostConfig.from_env()
             estimate = estimate_job_cost(
                 probe["duration_seconds"],
-                CostConfig.from_env().for_processing_strategy(strategy),
+                base_cost_config.for_processing_strategy(strategy),
             )
         if store.get_job(leased["id"])["status"] in {"cancelled", "cancelling"}:
             raise PreflightCancelled("任務已由使用者取消")
-        return store.record_preflight_result(
+        recorded = store.record_preflight_result(
             job_id=leased["id"],
             duration_seconds=probe["duration_seconds"],
             source_checksum=checksum,
@@ -132,6 +139,12 @@ def run_preflight(
             estimated_cost_usd=estimate.estimated_total_usd,
             pricing_version=estimate.pricing_version,
             worker_id=worker_id,
+        )
+        return _auto_authorize_after_preflight(
+            store,
+            recorded,
+            config=base_cost_config,
+            actor=f"{worker_id}:auto",
         )
     except PreflightCancelled:
         try:

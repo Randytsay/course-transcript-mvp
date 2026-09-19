@@ -403,6 +403,33 @@ class TestCreditMetadata(Base):
         # exhausted last
         assert names.index("exhausted1") == len(names) - 1
 
+    def test_recommendation_prefers_available_trial_on_different_project_without_switching(self) -> None:
+        self.add("active1", "proj-a")
+        self.store._activate_for_tests("active1")
+        self.add("same-project", "proj-a", credit_type="gcp_free_trial",
+                 credit_status="available", trial_expires_at="2099-12-31", local="same")
+        self.add("trial-next", "proj-b", credit_type="gcp_free_trial",
+                 credit_status="available", trial_expires_at="2099-11-30", local="next")
+        self.add("paid-next", "proj-c", credit_type="paid",
+                 credit_status="available", local="paid")
+        before = self.store.get_active_name()
+        recommendation = AIAccountStore.recommend_profile(self.store.list_profiles())
+        assert recommendation is not None
+        assert recommendation["name"] == "trial-next"
+        assert recommendation["project_id"] == "proj-b"
+        assert recommendation["requires_preflight"] is True
+        assert recommendation["requires_confirmation"] is True
+        assert self.store.get_active_name() == before
+
+    def test_recommendation_ignores_expired_or_exhausted_profiles(self) -> None:
+        self.add("active1", "proj-a")
+        self.store._activate_for_tests("active1")
+        self.add("expired", "proj-b", credit_type="gcp_free_trial",
+                 credit_status="available", trial_expires_at="2020-01-01", local="old")
+        self.add("exhausted", "proj-c", credit_type="gcp_free_trial",
+                 credit_status="exhausted", trial_expires_at="2099-12-31", local="spent")
+        assert AIAccountStore.recommend_profile(self.store.list_profiles()) is None
+
     def test_no_automatic_rotation_logic(self) -> None:
         """Store has no method that auto-switches on quota/error."""
         import inspect

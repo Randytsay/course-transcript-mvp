@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,60 @@ from app.jobs.store import JobConflict, JobStore
 
 class PreflightError(RuntimeError):
     pass
+
+
+def _auto_authorize_after_preflight(
+    store: JobStore,
+    record: dict[str, Any],
+    *,
+    config: CostConfig,
+    actor: str,
+) -> dict[str, Any]:
+    """Queue an ordinary job automatically once non-paid preflight is complete.
+
+    Preflight remains non-paid and authoritative. Automatic authorization is
+    intentionally bounded by both a per-batch threshold and the existing
+    project budget cap. Jobs outside those guardrails stay at
+    ``awaiting_confirmation`` for an explicit operator decision.
+    """
+    if not config.auto_authorize_costs:
+        return record
+
+    batch_id = record.get("batch_id")
+    if batch_id:
+        batch = store.get_batch(str(batch_id))
+        if batch["status"] != "awaiting_confirmation" or batch["failed_count"]:
+            return record
+        estimate = Decimal(str(batch.get("estimated_cost_usd") or "0"))
+        if estimate <= 0 or estimate > config.auto_authorize_max_usd:
+            return record
+        try:
+            store.approve_batch(
+                batch_id=batch["id"],
+                expected_revision=batch["revision"],
+                confirmed_estimated_cost_usd=estimate,
+                project_limit_usd=config.project_limit_usd,
+                actor=actor,
+            )
+        except JobConflict:
+            return record
+        return store.get_job(record["id"])
+
+    if record["status"] != "awaiting_confirmation":
+        return record
+    estimate = Decimal(str(record.get("estimated_cost_usd") or "0"))
+    if estimate <= 0 or estimate > config.auto_authorize_max_usd:
+        return record
+    try:
+        return store.approve_job(
+            job_id=record["id"],
+            expected_revision=record["revision"],
+            confirmed_estimated_cost_usd=estimate,
+            project_limit_usd=config.project_limit_usd,
+            actor=actor,
+        )
+    except JobConflict:
+        return record
 
 
 def _run(command: list[str], *, timeout_seconds: int) -> subprocess.CompletedProcess[str]:
@@ -134,11 +189,12 @@ def run_preflight(
             checksum = _sha256(local_source)
             probe = _probe(local_source)
             strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
+            base_cost_config = CostConfig.from_env()
             estimate = estimate_job_cost(
                 probe["duration_seconds"],
-                CostConfig.from_env().for_processing_strategy(strategy),
+                base_cost_config.for_processing_strategy(strategy),
             )
-        return store.record_preflight_result(
+        recorded = store.record_preflight_result(
             job_id=leased["id"],
             duration_seconds=probe["duration_seconds"],
             source_checksum=checksum,
@@ -147,6 +203,12 @@ def run_preflight(
             estimated_cost_usd=estimate.estimated_total_usd,
             pricing_version=estimate.pricing_version,
             worker_id=worker_id,
+        )
+        return _auto_authorize_after_preflight(
+            store,
+            recorded,
+            config=base_cost_config,
+            actor=f"{worker_id}:auto",
         )
     except Exception as exc:
         try:

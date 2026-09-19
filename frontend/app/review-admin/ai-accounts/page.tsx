@@ -29,6 +29,17 @@ type Profile = {
 
 type ListResponse = {
   profiles: Profile[];
+  recommended_switch: {
+    name: string;
+    display_name?: string;
+    project_id?: string;
+    credit_type?: string;
+    credit_status?: string;
+    trial_expires_at?: string;
+    reason: string;
+    requires_preflight: boolean;
+    requires_confirmation: boolean;
+  } | null;
   active: string | null;
   previous: string | null;
   runtime_status: Record<string, unknown>;
@@ -38,6 +49,7 @@ type ListResponse = {
   credit_type_labels: Record<string, string>;
   restart_required_hint: string;
   billing_note: string;
+  recommendation_note: string;
 };
 
 type PreflightResponse = {
@@ -326,6 +338,28 @@ export default function AIAccountsPage() {
             <div className={`${styles.billingNote}`}>
               ℹ️ {data.billing_note}
             </div>
+
+            {data.recommended_switch ? (
+              <section className={styles.recommendationCard}>
+                <div>
+                  <span className={styles.recommendationEyebrow}>系統建議下一個可用 Profile</span>
+                  <strong>{data.recommended_switch.display_name || data.recommended_switch.name}</strong>
+                  <p>
+                    Project {data.recommended_switch.project_id ?? "—"}
+                    {data.recommended_switch.trial_expires_at ? ` ・ 試用到期 ${data.recommended_switch.trial_expires_at}` : ""}
+                  </p>
+                  <small>{data.recommended_switch.reason}</small>
+                </div>
+                <button type="button" className={styles.switchButton} disabled={busy !== null}
+                        onClick={() => {
+                          const profile = data.profiles.find((item) => item.name === data.recommended_switch?.name);
+                          if (profile) void startPreflight(profile);
+                        }}>
+                  {busy === `switch:${data.recommended_switch.name}` ? "檢查中…" : "安全檢查並準備切換"}
+                </button>
+                <p className={styles.recommendationNote}>{data.recommendation_note}</p>
+              </section>
+            ) : null}
 
             {showForm ? (
               <section className={styles.formCard}>

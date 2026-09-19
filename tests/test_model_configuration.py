@@ -20,7 +20,8 @@ ACTIVE_MODEL_FILES = (
     "app/providers/correct_text.py",
     "app/providers/correct_text_cascade.py",
     "deploy/vertex-openai-proxy/litellm-config.yaml",
-    "frontend/components/dashboard-page.tsx",
+    # The operator dashboard is intentionally provider-agnostic; model details
+    # live in job/advanced settings rather than the primary task surface.
     "frontend/components/job-detail-page.tsx",
     "frontend/components/new-job-page.tsx",
 )

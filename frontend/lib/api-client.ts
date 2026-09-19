@@ -21,6 +21,16 @@ import type {
 // already-built absolute localhost URL.
 const baseUrl = (process.env.NEXT_PUBLIC_API_BASE_URL ?? "/api/v1").replace(/\/$/, "");
 
+export class ApiClientError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiClientError";
+    this.status = status;
+  }
+}
+
 type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt" | "updatedAt" | "reviewTerms" | "batchId" | "estimatedCostUsd" | "estimatedCostTwd" | "chirpMaxParallelChunks" | "outputFormats" | "processingStrategy"> & {
   source_path: string;
   duration_seconds: number;
@@ -89,7 +99,10 @@ async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null) as { detail?: string } | null;
-    throw new Error(payload?.detail ?? (response.status === 404 ? "找不到指定資料" : `API 回應 ${response.status}`));
+    throw new ApiClientError(
+      response.status,
+      payload?.detail ?? (response.status === 404 ? "找不到指定資料" : `API 回應 ${response.status}`),
+    );
   }
   return response.json() as Promise<T>;
 }
@@ -372,6 +385,8 @@ export async function createBatch(
 export async function getCosts(): Promise<CostSummary> {
   const result = await fetchJson<{
     project_limit_usd: string;
+    auto_authorize_costs: boolean;
+    auto_authorize_max_usd: string;
     committed_estimated_cost_usd: string;
     recorded_actual_cost_usd: string;
     remaining_estimated_budget_usd: string;
@@ -391,6 +406,8 @@ export async function getCosts(): Promise<CostSummary> {
   }>("/costs");
   return {
     projectLimitUsd: result.project_limit_usd,
+    autoAuthorizeCosts: result.auto_authorize_costs,
+    autoAuthorizeMaxUsd: result.auto_authorize_max_usd,
     committedEstimatedCostUsd: result.committed_estimated_cost_usd,
     recordedActualCostUsd: result.recorded_actual_cost_usd,
     remainingEstimatedBudgetUsd: result.remaining_estimated_budget_usd,

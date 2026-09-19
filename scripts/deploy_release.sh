@@ -435,6 +435,8 @@ for service in api worker pipeline-worker delivery-worker health-monitor retenti
     "$state" "$health" "$restarts" "$revision" \
     >> "$EVIDENCE_ROOT/live-after.txt"
 done
+python3 "$RELEASE_ROOT/scripts/runtime_revision_guard.py" --expected-sha "$RELEASE_SHA" \
+  | tee "$EVIDENCE_ROOT/runtime-revision-guard.txt"
 check_quiescent_jobs "$EVIDENCE_ROOT/jobs-final.json"
 
 for service in api worker pipeline-worker delivery-worker health-monitor retention-monitor frontend; do
@@ -471,6 +473,7 @@ eligible_delivery_candidates=0
 stale_delivery_state_changed=NO
 frontend_health=healthy
 frontend_api_proxy=PASS
+runtime_revision_guard=PASS
 public_http_code=${PUBLIC_CODE}
 cloudflared_changed=NO
 provider_calls_made=NO

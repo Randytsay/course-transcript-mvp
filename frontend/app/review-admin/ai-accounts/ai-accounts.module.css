@@ -54,15 +54,15 @@
 }
 
 .addButton {
-  background: #315c4b;
+  background: #9a650e;
   color: #fff;
   border: 0;
 }
 
 .switchButton {
-  background: #315c4b;
+  background: #9a650e;
   color: #fff;
-  border: 1px solid #315c4b;
+  border: 1px solid #9a650e;
 }
 
 .deleteButton {
@@ -181,7 +181,7 @@
 
 .activeBadge {
   font-size: 12px;
-  background: #315c4b;
+  background: #4e5b4a;
   color: #fff;
   border-radius: 999px;
   padding: 3px 10px;
@@ -289,7 +289,7 @@
   width: 32px;
   height: 32px;
   border-radius: 50%;
-  background: #315c4b;
+  background: #9a650e;
   color: #fff;
   display: flex;
   align-items: center;
@@ -438,8 +438,56 @@
 .page a:focus-visible,
 .page input:focus-visible,
 .page textarea:focus-visible {
-  outline: 3px solid rgba(49, 92, 75, 0.35);
+  outline: 3px solid rgba(185, 129, 30, 0.38);
   outline-offset: 2px;
+}
+
+.recommendationCard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 18px;
+  padding: 20px;
+  border: 1px solid #d9c48f;
+  border-radius: 20px;
+  background: linear-gradient(135deg, #fff8e6 0%, #fffdf6 72%);
+  box-shadow: 0 12px 30px rgba(98, 71, 31, 0.07);
+}
+
+.recommendationCard strong {
+  display: block;
+  margin: 4px 0 5px;
+  color: #3e2d19;
+  font-size: 18px;
+}
+
+.recommendationCard p {
+  margin: 0 0 6px;
+  color: #6c675f;
+  font-size: 14px;
+}
+
+.recommendationCard small {
+  color: #6c675f;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.recommendationEyebrow {
+  color: #8b5a0c;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+
+.recommendationNote {
+  grid-column: 1 / -1;
+  margin: 0 !important;
+  padding-top: 12px;
+  border-top: 1px solid #eadcb9;
+  color: #817a70 !important;
+  font-size: 13px !important;
 }
 
 .page button:disabled {
@@ -454,5 +502,9 @@
 
   .header h1 {
     font-size: 25px;
+  }
+
+  .recommendationCard {
+    grid-template-columns: 1fr;
   }
 }

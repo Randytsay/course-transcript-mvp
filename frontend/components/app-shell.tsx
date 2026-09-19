@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
-  BookOpenText,
   ChevronDown,
   CircleHelp,
   FileAudio,
@@ -13,11 +12,10 @@ import {
   Plus,
   Search,
   Settings,
-  ShieldCheck,
   Sparkles,
   X
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 const navigation = [
   { href: "/", label: "儀表板", icon: Gauge, match: (path: string) => path === "/" },
@@ -26,13 +24,6 @@ const navigation = [
   { href: "/#glossary", label: "術語庫", icon: Library, match: () => false },
   { href: "/review-admin/ai-accounts", label: "帳號設定", icon: Settings, match: (path: string) => path.startsWith("/review-admin/ai-accounts") }
 ];
-
-type FontSize = "standard" | "large" | "xlarge";
-const fontSizes: FontSize[] = ["standard", "large", "xlarge"];
-
-function nextFontSize(current: FontSize): FontSize {
-  return fontSizes[(fontSizes.indexOf(current) + 1) % fontSizes.length];
-}
 
 export default function AppShell({
   children,
@@ -50,23 +41,7 @@ export default function AppShell({
   const pathname = usePathname();
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
-  const [fontSize, setFontSize] = useState<FontSize>("standard");
   const [searchQuery, setSearchQuery] = useState("");
-
-  useEffect(() => {
-    const saved = localStorage.getItem("course-transcript-font-size")
-      ?? localStorage.getItem("course-transcript-font-size-v2");
-    const initialSize: FontSize = saved === "standard" || saved === "large" || saved === "xlarge" ? saved : "standard";
-    setFontSize(initialSize);
-    document.documentElement.setAttribute("data-font-size", initialSize);
-    localStorage.setItem("course-transcript-font-size", initialSize);
-  }, []);
-
-  function handleFontSizeChange(size: FontSize) {
-    setFontSize(size);
-    document.documentElement.setAttribute("data-font-size", size);
-    localStorage.setItem("course-transcript-font-size", size);
-  }
 
   function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
     if (event.key !== "Enter") return;
@@ -105,10 +80,6 @@ export default function AppShell({
         </nav>
 
         <div className="sidebar-spacer" />
-        <div className="pipeline-card">
-          <div className="pipeline-card__icon"><ShieldCheck size={18} /></div>
-          <div><strong>私人工作區已啟用</strong><span>實際服務狀態請查看儀表板與任務紀錄</span></div>
-        </div>
         <nav className="secondary-nav" aria-label="次要導覽">
           <Link href="/review-admin/help" className="nav-item" onClick={() => setMenuOpen(false)}><CircleHelp size={18} /><span>使用說明</span></Link>
           <Link href="/review-admin/ai-accounts" className="nav-item" onClick={() => setMenuOpen(false)}><Settings size={18} /><span>系統設定</span></Link>
@@ -126,29 +97,12 @@ export default function AppShell({
         <header className="topbar">
           <button className="icon-button mobile-menu" onClick={() => setMenuOpen(true)} aria-label="開啟選單"><Menu size={26} /></button>
           <div className="search-box"><Search size={20} /><input aria-label="搜尋任務" value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} onKeyDown={handleSearchKeyDown} placeholder="搜尋檔名、課程或任務編號" /><kbd>⌘ K</kbd></div>
-
-          <div className="font-size-switcher" role="group" aria-label="字體大小">
-            <span className="font-size-label">字體切換：</span>
-            <button type="button" aria-pressed={fontSize === "standard"} className={`font-size-btn ${fontSize === "standard" ? "active" : ""}`} onClick={() => handleFontSizeChange("standard")}>A 標準</button>
-            <button type="button" aria-pressed={fontSize === "large"} className={`font-size-btn ${fontSize === "large" ? "active" : ""}`} onClick={() => handleFontSizeChange("large")}>A+ 大字</button>
-            <button type="button" aria-pressed={fontSize === "xlarge"} className={`font-size-btn ${fontSize === "xlarge" ? "active" : ""}`} onClick={() => handleFontSizeChange("xlarge")}>A++ 特大</button>
-          </div>
-          <button
-            type="button"
-            className="icon-button mobile-font-size-button"
-            aria-label={`目前為${fontSize === "standard" ? "標準" : fontSize === "large" ? "大字" : "特大字"}，點擊切換下一級字體`}
-            onClick={() => handleFontSizeChange(nextFontSize(fontSize))}
-          >
-            <span aria-hidden="true">Aa</span>
-          </button>
-
-          <div className="topbar-status"><span className="status-dot status-dot--success" /><span>私人連線</span></div>
+          <Link href="/review-admin/help" className="topbar-help"><CircleHelp size={17} />使用說明</Link>
         </header>
 
         <div className="content-wrap">
           <div className="page-heading">
             <div>
-              <div className="eyebrow"><BookOpenText size={15} /> AI TRANSCRIPTION WORKSPACE</div>
               <h1>{title}</h1>
               {description && <p>{description}</p>}
             </div>

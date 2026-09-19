@@ -578,9 +578,11 @@ def ai_accounts_list(request: Request) -> dict[str, Any]:
         p["credit_status_is_manual"] = True  # owner-marked, not live billing
         warn = AIAccountStore.trial_warning(p)
         p["trial_warning"] = warn
+    recommended_switch = AIAccountStore.recommend_profile(profiles)
     profiles = AIAccountStore.sorted_profiles(profiles)
     return sanitize({
         "profiles": profiles,
+        "recommended_switch": recommended_switch,
         "active": store.get_active_name(),
         "previous": store.get_previous(),
         "runtime_status": store.runtime_status(),
@@ -599,6 +601,11 @@ def ai_accounts_list(request: Request) -> dict[str, Any]:
             "切換 Profile 會切換 Service Account 與目標 GCP Project；"
             "實際費用與 Credit 由該 Project 所連結的 Cloud Billing Account 決定。"
             "本系統顯示的 credit 狀態為管理員標記，非 Google 即時帳務資料。"
+        ),
+        "recommendation_note": (
+            "系統只依已登記的 Project、試用到期日與管理員標記提出下一個 Profile 建議；"
+            "不會查不到額度時自行猜測，也不會自動輪替帳戶。任何切換仍必須通過唯讀 preflight、"
+            "確認沒有進行中工作，並由管理員明確確認。"
         ),
     })
 

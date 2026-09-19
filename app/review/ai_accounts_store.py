@@ -350,6 +350,85 @@ class AIAccountStore:
 
         return sorted(items, key=_rank)
 
+    @staticmethod
+    def recommend_profile(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Recommend the next owner-managed profile without switching anything.
+
+        This is deliberately advisory.  A recommendation never infers live
+        Google credit balance, never mutates the active pointer, and never
+        bypasses preflight or the explicit owner confirmation gate.  When an
+        active project exists, same-project profiles are excluded because a
+        different service account normally does not change project billing
+        credits.
+        """
+        from datetime import date
+
+        active = next((item for item in items if item.get("is_active")), None)
+        active_project = str((active or {}).get("project_id") or "")
+        candidates: list[dict[str, Any]] = []
+        for item in items:
+            if item.get("is_active") or item.get("credential_valid") is False:
+                continue
+            if active_project and str(item.get("project_id") or "") == active_project:
+                continue
+            status = str(item.get("credit_status") or "unknown")
+            if status in {"exhausted", "expired", "disabled"}:
+                continue
+            if item.get("credit_type") == "gcp_free_trial":
+                expires = str(item.get("trial_expires_at") or "")
+                if expires:
+                    try:
+                        if date.fromisoformat(expires) < date.today():
+                            continue
+                    except ValueError:
+                        continue
+            candidates.append(item)
+        if not candidates:
+            return None
+
+        def _rank(item: dict[str, Any]) -> tuple[int, int, str]:
+            status = str(item.get("credit_status") or "unknown")
+            credit_type = str(item.get("credit_type") or "unknown")
+            if status == "available" and credit_type == "gcp_free_trial":
+                tier = 0
+            elif status == "available":
+                tier = 1
+            elif credit_type == "gcp_free_trial":
+                tier = 2
+            elif credit_type == "google_ai_pro_monthly":
+                tier = 3
+            else:
+                tier = 4
+            expiry = str(item.get("trial_expires_at") or "9999-12-31")
+            try:
+                expiry_ordinal = date.fromisoformat(expiry).toordinal()
+            except ValueError:
+                expiry_ordinal = date.max.toordinal()
+            return tier, expiry_ordinal, str(item.get("name") or "")
+
+        selected = min(candidates, key=_rank)
+        status = str(selected.get("credit_status") or "unknown")
+        credit_type = str(selected.get("credit_type") or "unknown")
+        if credit_type == "gcp_free_trial":
+            reason = "優先使用仍有效的 Google Cloud 新戶試用 Profile；切換前仍會執行唯讀 preflight。"
+        elif status == "available":
+            reason = "此 Profile 已由管理員標記為可用，且使用不同 GCP Project；切換前仍會執行唯讀 preflight。"
+        elif credit_type == "google_ai_pro_monthly":
+            reason = "此 Profile 登記為 Google AI Pro 額度來源，且使用不同 GCP Project；實際額度以 Billing 為準。"
+        else:
+            reason = "這是目前可用的不同 Project Profile；額度狀態未知，必須先完成 preflight 與人工確認。"
+        return {
+            "name": selected.get("name"),
+            "display_name": selected.get("display_name") or selected.get("name"),
+            "project_id": selected.get("project_id"),
+            "credit_type": credit_type,
+            "credit_status": status,
+            "trial_expires_at": selected.get("trial_expires_at") or "",
+            "reason": reason,
+            "requires_preflight": True,
+            "requires_confirmation": True,
+        }
+
     def load_metadata(self, name: str) -> dict[str, Any]:
         try:
             return json.loads((self.profile_dir(name) / "metadata.json").read_text("utf-8"))

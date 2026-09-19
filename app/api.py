@@ -996,6 +996,8 @@ def get_costs() -> dict[str, Any]:
     result = _store().cost_summary(config.project_limit_usd)
     result.update(
         {
+            "auto_authorize_costs": config.auto_authorize_costs,
+            "auto_authorize_max_usd": str(config.auto_authorize_max_usd),
             "warning_thresholds_usd": [
                 str(value) for value in config.warning_thresholds_usd
             ],

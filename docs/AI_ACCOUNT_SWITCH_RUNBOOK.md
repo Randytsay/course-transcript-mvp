@@ -29,10 +29,13 @@ Bucket。真正的扣款與額度仍由該 Project 連結的 Cloud Billing Accou
    下載新的 JSON 金鑰到本機 `Downloads`。
 4. 開啟管理台的 [AI 帳戶管理](/review-admin/ai-accounts)，新增 Profile，匯入
    JSON，填入上表的 Project／Location／Bucket／額度資訊。
-5. 對新 Profile 執行 **唯讀 preflight**。所有 project、billing、API、Vertex、
+5. 管理台會依「不同 Project、管理員額度狀態、試用到期日」提出下一個 Profile
+   建議。這只是排序與提示，不是 Google 即時餘額；系統不會在背景自動換帳戶。
+   可直接從建議卡按 **安全檢查並準備切換**。
+6. 對新 Profile 執行 **唯讀 preflight**。所有 project、billing、API、Vertex、
    bucket 檢查都必須通過；這一步不會產生模型請求或費用。
-6. 按確認切換。切換只寫入下一代設定，畫面出現「等待服務重建」是正常的。
-7. 先確認沒有進行中的轉錄、租約或交付工作，再使用目前 `main` 的精確 SHA
+7. 按確認切換。切換只寫入下一代設定，畫面出現「等待服務重建」是正常的。
+8. 先確認沒有進行中的轉錄、租約或交付工作，再使用目前 `main` 的精確 SHA
    執行不可變 VPS release。部署必須從該 SHA 的 release 工具目錄執行，不能依賴
    `/opt/course-transcript-source` 的舊工作樹：
 
@@ -44,7 +47,7 @@ Bucket。真正的扣款與額度仍由該 Project 連結的 Cloud Billing Accou
      --release-sha "$SHA" --execute --confirm-sha "$SHA"
    ```
 
-8. 完成後確認：API 與 pipeline-worker 的 `GOOGLE_CLOUD_PROJECT`、
+9. 完成後確認：API 與 pipeline-worker 的 `GOOGLE_CLOUD_PROJECT`、
    `GOOGLE_CLOUD_LOCATION`、`GCS_BUCKET` 相同；管理台顯示「已生效」；
    `runtime_status()` 為 `ACTIVE` 且 verification 全部為 true。Cloudflare Access
    外部未登入請求回 `302` 是預期行為。
@@ -111,3 +114,16 @@ release 目錄執行 safe wrapper，才讓 API 與 pipeline-worker 同時達到 
 - 管理台顯示「已生效」，runtime verification 為 `verified=true`，狀態為 `ACTIVE`。
 
 少一項都只算「準備中」，不算新額度已上線。
+
+## 智慧推薦與自動化邊界
+
+- Profile 清單會優先建議仍有效、管理員標記可用、且與目前不同 GCP Project 的
+  Profile；同 Project 的另一把 Service Account 不會被當成「換額度」建議。
+- 推薦邏輯不讀取或猜測候選帳戶的即時 US$300 餘額。現有 Billing Worker 可依
+  Cloud Billing BigQuery standard export 估算一個已設定 target Project 的抵免
+  使用量，但多 Profile／多 Billing Account 並不能在沒有對應匯出與權限時可靠推算。
+- 因此不做 silent rotation：不會因 quota/error 自動把進行中的課程切到另一個
+  Project，也不會用多帳戶輪替去繞過 Google 的資格或用量限制。
+- 已自動化的部分是：候選排序、唯讀 preflight、active-work guard、crash-safe
+  設定切換、rollback，以及 exact-SHA release 的 runtime revision 驗證。真正的
+  Profile 切換仍保留一次管理員明確確認。
