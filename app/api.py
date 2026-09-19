@@ -121,8 +121,9 @@ class CorrectionSelection(BaseModel):
     paid call. Immutable once the job is approved."""
     model_config = ConfigDict(extra="forbid")
     provider: Literal["vertex", "openrouter", "minimax"] | None = None
-    provider_profile_id: str = Field(default="", max_length=48,
-                                     pattern=r"^[a-z0-9][a-z0-9-]{0,47}$")
+    # Vertex uses the managed active account and therefore legitimately has no
+    # provider profile id. Profile-backed providers are checked by the router.
+    provider_profile_id: str = Field(default="", max_length=48)
     model: str = Field(default="", max_length=128)
     execution_mode: Literal["REALTIME", "BATCH"] = "REALTIME"
     fallback_policy: Literal["RAW_CHIRP_FALLBACK"] = "RAW_CHIRP_FALLBACK"

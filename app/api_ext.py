@@ -8,7 +8,7 @@ from typing import Literal
 from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.api import _mutation_actor, _store, app
+from app.api import CorrectionSelection, _correction_fields, _mutation_actor, _store, app
 from app.jobs import JobConflict, JobNotFound, normalize_output_formats
 from app.jobs.content_context import MAX_DOCUMENT_CONTEXT_CHARS
 from app.jobs.correction_policy import (
@@ -57,6 +57,7 @@ class CreateBatchWithParallelismRequest(BaseModel):
     content_mode: Literal["general", "dacheng_buddhist"] = "general"
     document_context: str = Field(default="", max_length=MAX_DOCUMENT_CONTEXT_CHARS)
     correction_policy: Literal["GEMINI_FIRST", "M3_FIRST"] = DEFAULT_CORRECTION_POLICY
+    ai_correction: CorrectionSelection | None = None
 
 
 def _parallelism_limit() -> int:
@@ -174,6 +175,7 @@ def create_batch_with_parallelism(
             content_mode=payload.content_mode,
             document_context=payload.document_context,
             actor=actor,
+            **_correction_fields(payload.ai_correction),
         )
         job_ids = [job["id"] for job in result["jobs"]]
         policy = set_batch_correction_policy(
