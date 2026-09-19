@@ -298,47 +298,18 @@ def list_rclone_directory(source_path: str) -> tuple[str, list[DriveEntry]]:
 
 
 def _metadata_from_directory_entries(source_paths: list[str]) -> list[SourceMetadata]:
-    """Resolve explicit files by listing each parent folder once.
+    """Resolve explicitly selected files without listing their parent folders.
 
-    The browser already navigates these folders, so the short listing cache will
-    usually satisfy this without another Drive request. If a folder is too
-    large, unavailable, or a file changed, the caller falls back to an exact
-    stat for only the unresolved file.
+    The Drive API browser has already resolved the user's selection. Listing a
+    parent folder here is redundant and can be very slow for large/shared
+    folders, causing the same-origin proxy to close the preview request before
+    the API can respond. An exact stat is also the authoritative check needed
+    before creating a preview.
     """
     ordered_candidates = [
         validate_source_path(path, _allowed_prefix()) for path in source_paths
     ]
-    by_parent: dict[str, list[str]] = {}
-    for candidate in ordered_candidates:
-        by_parent.setdefault(_parent_remote_path(candidate), []).append(candidate)
-
-    resolved: dict[str, SourceMetadata] = {}
-    for parent, candidates in by_parent.items():
-        try:
-            _, entries = list_rclone_directory(parent)
-        except SourceInspectionError:
-            entries = []
-        entries_by_path = {entry.source_path: entry for entry in entries}
-        for candidate in candidates:
-            entry = entries_by_path.get(candidate)
-            if (
-                entry is not None
-                and not entry.is_dir
-                and entry.supported_media
-                and entry.size_bytes > 0
-            ):
-                resolved[candidate] = SourceMetadata(
-                    source_path=candidate,
-                    name=entry.name,
-                    size_bytes=entry.size_bytes,
-                    modified_at=entry.modified_at,
-                    mime_type=entry.mime_type,
-                )
-
-    return [
-        resolved.get(candidate) or inspect_rclone_source(candidate)
-        for candidate in ordered_candidates
-    ]
+    return [inspect_rclone_source(candidate) for candidate in ordered_candidates]
 
 
 def inspect_rclone_selection(
