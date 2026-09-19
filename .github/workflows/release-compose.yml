@@ -45,6 +45,8 @@ jobs:
             --profile billing \
             config --format json > /tmp/release-compose.json
       - name: Verify protected env, mounts, and build provenance
+        env:
+          AI_ACCOUNTS_DIR: /tmp/ai-accounts
         run: |
           python - <<'PY'
           import json

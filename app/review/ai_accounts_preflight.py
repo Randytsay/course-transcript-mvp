@@ -10,7 +10,7 @@ All calls are read-only and free:
 - service-account token mint via google-auth with a proper transport Request
 - Cloud Resource Manager ``projects.get`` (project visibility)
 - Vertex AI ``projects.locations`` get (endpoint + permission)
-- GCS ``buckets.get`` (metadata)
+- GCS ``objects.list`` (pipeline bucket access)
 No model generation is ever invoked.
 """
 from __future__ import annotations
@@ -18,7 +18,14 @@ from __future__ import annotations
 import json
 from typing import Any
 
-READONLY_SCOPE = "https://www.googleapis.com/auth/cloud-platform.read-only"
+# Cloud Billing's ``projects.getBillingInfo`` endpoint does not accept the
+# read-only OAuth scope, even though the request itself is read-only.  IAM
+# still limits the service account to the read-only/project and bucket roles
+# configured for the profile; this broader OAuth scope only allows Google API
+# auth to route the metadata request correctly.
+PREFLIGHT_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+# Kept as an alias for callers/tests that imported the old constant.
+READONLY_SCOPE = PREFLIGHT_SCOPE
 
 
 def vertex_endpoint_host(location: str) -> str:
@@ -42,7 +49,7 @@ def _mint_token(cred: dict[str, Any], request: Any) -> str:
     from google.oauth2 import service_account
 
     creds = service_account.Credentials.from_service_account_info(
-        cred, scopes=[READONLY_SCOPE]
+        cred, scopes=[PREFLIGHT_SCOPE]
     )
     creds.refresh(request)  # raises google.auth exceptions on failure
     if not creds.token:
@@ -80,7 +87,14 @@ def run_live_checks(cred: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any
                 "errors": [f"憑證無法取得 token（refresh 失敗）: {exc}"],
                 "checks": {"token_mint": f"fail ({exc.__class__.__name__})"}}
 
-    headers = {"Authorization": f"Bearer {token}"}
+    # Service-account calls made from a local credential do not otherwise carry
+    # a quota/billing project.  Supplying it is required for Cloud Resource
+    # Manager, Cloud Billing, and Service Usage APIs, and keeps quota charges
+    # attached to the candidate project being checked.
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "x-goog-user-project": project_id,
+    }
     import requests
 
     # 1) project visibility
@@ -156,12 +170,16 @@ def run_live_checks(cred: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any
         errors.append(f"無法連線 Vertex AI 端點: {exc.__class__.__name__}")
         checks["vertex_access"] = "unavailable"
 
-    # 3) GCS bucket metadata if configured
+    # 3) GCS object-list access if configured.  The pipeline needs to list and
+    # write objects; bucket metadata (storage.buckets.get) is intentionally not
+    # required by the service-account role set and can be denied even when the
+    # bucket is fully usable by the pipeline.
     bucket = str(meta.get("gcs_bucket") or "")
     if bucket:
         try:
             resp = requests.get(
-                f"https://storage.googleapis.com/storage/v1/b/{bucket}",
+                f"https://storage.googleapis.com/storage/v1/b/{bucket}/o",
+                params={"maxResults": 1},
                 headers=headers, timeout=10,
             )
             if resp.status_code == 200:
