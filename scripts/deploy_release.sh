@@ -154,6 +154,31 @@ export GOOGLE_DRIVE_REFRESH_TOKEN_HOST_PATH="/dev/null"
 export BILLING_CREDENTIALS_HOST_PATH="/opt/course-transcript/secrets/billing-sa.json"
 export DOCKER_DEFAULT_PLATFORM="linux/arm64"
 
+# Compose gives explicit environment entries precedence over env_file values.
+# Resolve the committed active profile so API and workers use the same project,
+# region, and bucket even when the protected fallback .env is stale.
+if [[ -f "$AI_ACCOUNTS_DIR/active.json" ]]; then
+  readarray -t ACTIVE_AI_VALUES < <(python3 - "$AI_ACCOUNTS_DIR" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+accounts = Path(sys.argv[1])
+active = json.loads((accounts / "active.json").read_text("utf-8"))
+name = str(active.get("name") or "")
+if not name:
+    raise SystemExit("active profile name missing")
+meta = json.loads((accounts / "profiles" / name / "metadata.json").read_text("utf-8"))
+for key in ("project_id", "location", "gcs_bucket"):
+    print(meta.get(key) or "")
+PY
+  )
+  GOOGLE_CLOUD_PROJECT="${ACTIVE_AI_VALUES[0]:-}"
+  GOOGLE_CLOUD_LOCATION="${ACTIVE_AI_VALUES[1]:-global}"
+  GCS_BUCKET="${ACTIVE_AI_VALUES[2]:-}"
+  export GOOGLE_CLOUD_PROJECT GOOGLE_CLOUD_LOCATION GCS_BUCKET
+fi
+
 compose() {
   docker compose \
     --project-name "$PROJECT" \

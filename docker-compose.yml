@@ -72,6 +72,9 @@ services:
       MINIMAX_API_BASE_URL: ${MINIMAX_API_BASE_URL:-https://api.minimaxi.com}
       MINIMAX_API_KEY_FILE: /run/secrets/minimax-api-key
       GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
+      GOOGLE_CLOUD_PROJECT: ${GOOGLE_CLOUD_PROJECT:-}
+      GOOGLE_CLOUD_LOCATION: ${GOOGLE_CLOUD_LOCATION:-}
+      GCS_BUCKET: ${GCS_BUCKET:-}
       AI_RUNTIME_DIR: /run/ai-runtime
       AI_RUNTIME_HOST_DIR: ${AI_RUNTIME_HOST_DIR:-/opt/course-transcript/secrets/ai-runtime}
       AI_ACCOUNTS_DIR: ${AI_ACCOUNTS_DIR:-/opt/course-transcript/secrets/ai-accounts}
