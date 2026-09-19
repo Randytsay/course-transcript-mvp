@@ -74,3 +74,40 @@ release 目錄執行 safe wrapper，才讓 API 與 pipeline-worker 同時達到 
 這份 runbook 把資料欄位、最小 IAM、唯讀檢查、精確 SHA 部署、驗證證據和回滾順序
 固定下來。下一次換帳戶不需要重新探索流程，通常只剩 Google Console 操作、管理台
 登記／preflight，以及一次 dry-run／execute release。
+
+## 本次實際踩坑對照表
+
+下表把這次遇到的問題和阻斷方式固定下來。任何一項驗證不符合，都應停止切換，
+不要用手動改 `.env` 或強制重送來「先讓畫面看起來正常」。
+
+| 坑 | 原因 | 以後的預防與驗證 |
+| --- | --- | --- |
+| Console 看似換帳號，實際仍查到舊 Project | Google Console 的 `authuser` 分頁、目前登入帳號、Project selector 可能不同步 | 同時確認登入信箱、Project ID、Billing Account ID；再用服務帳戶做 project／billing／API 唯讀 preflight |
+| 以為換 Service Account 就換了扣款帳號 | Service Account 與 Cloud Billing Account 是不同層 | 切換前在 Billing Console 確認 Project 的 linked billing；Profile 只保存執行身分與 Project，不會自動改 Billing |
+| 內部識別名稱不知道填什麼 | 名稱是本系統 Profile key，不是 Google 顯示名稱 | 使用 `google-<credit>-<days>-<yyyymmdd>`，例如 `google-us300-90d-20260919`；只用英數、點、底線、連字號 |
+| JSON 金鑰與 Profile Project 不一致 | 金鑰的 `project_id`、metadata 的 `project_id`、執行環境的 Project 可能各自不同 | 新增時強制比對三者；JSON 只放在本機 Downloads 和 VPS 保護目錄，絕不貼聊天、進 Git、放 Drive 或建立公開連結 |
+| 舊桶仍可列出但其實不能再用 | 舊 `course-transcript-mvp` 桶屬於另一個 Project，原 Billing 已關閉 | 每個新 Project 建立自己的桶；確認 bucket IAM、object list、Billing 與 Public access prevention，不以「看得到桶」當作可用證據 |
+| API 已切換，pipeline 卻仍用舊設定 | `ai-active.env`、protected `.env`、Compose interpolation 三者優先序不同 | 部署後必須逐一檢查 API 與 pipeline-worker 的 Project／Location／Bucket；兩者不同就判定失敗 |
+| API 落回 `shopclaw-ai` | VPS `/home/ubuntu/.env` 留有歷史值，且使用了舊部署工作樹 | 只從同一 SHA 的 `/opt/course-transcript-releases/<SHA>/scripts/deploy_release_safe.sh` 執行；不要直接使用 `/opt/course-transcript-source` 舊工具 |
+| 切換後畫面顯示等待重建 | Profile 切換是兩階段提交，尚未代表 consumer 已採用 | `PENDING_RESTART` 期間不送付費工作；只有 API、pipeline generation 一致且 runtime `ACTIVE` 才算完成 |
+| 正在轉錄時切換帳戶 | 舊工作可能仍持有舊 Project／Bucket 的 operation 或 lease | 切換前確認 active jobs、live leases、delivery candidates 都是零；不要中途重送或把舊 operation 接到新 Project |
+| 部署 SHA 正確但服務仍不是該版本 | VPS live working tree、release archive、Docker image tag 可能不是同一份 | 先 dry-run，再用同 SHA execute；驗證所有服務 image tag、runtime SHA、health 與 rollback tag |
+| 看到 timeout 就重送切換或發布 | mutation 可能已成功但 response 遺失 | 先查 `active.json`、runtime status、audit、container env 和服務狀態，再決定是否重試 |
+| 外部網址回 302 被誤判為故障 | Cloudflare Access 會把未登入請求導向登入 | 302 是預期的 Access 邊界；管理台登入與校對前台 Google／LINE 登入是兩套 session，不能混為一談 |
+| 額度標籤被當成即時餘額 | 管理台的 `credit_status` 是人工標記 | 額度、到期日、Billing Account 以 Google Cloud Billing Console 為準；管理台只作提醒 |
+| 完成工作直接刪除 | 工作資料可能仍是 audit、raw evidence 或 rollback 依據 | 先查工作狀態，再跑 retention cleanup dry-run；確認報告後才另行 `--apply`，部署流程不自動刪除 |
+
+## 切換完成的唯一判定
+
+下列條件必須全部成立：
+
+- Google Cloud Console 的登入帳號、Project ID、Billing Account 相互對得上。
+- Service Account JSON、Profile metadata、API 容器、pipeline-worker 容器的 Project
+  與 Bucket 完全一致。
+- Profile preflight 全部通過，沒有 active work、lease 或 delivery candidate。
+- 精確 SHA 的 safe release dry-run 與 execute 都通過，Cloudflared 未被重建。
+- API health、worker stability、frontend proxy 通過，且沒有 provider call 或 Drive
+  mutation 的非預期紀錄。
+- 管理台顯示「已生效」，runtime verification 為 `verified=true`，狀態為 `ACTIVE`。
+
+少一項都只算「準備中」，不算新額度已上線。
