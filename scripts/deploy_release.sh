@@ -177,6 +177,19 @@ PY
   COURSE_TRANSCRIPT_ACTIVE_LOCATION="${ACTIVE_AI_VALUES[1]:-global}"
   COURSE_TRANSCRIPT_ACTIVE_BUCKET="${ACTIVE_AI_VALUES[2]:-}"
   export COURSE_TRANSCRIPT_ACTIVE_PROJECT COURSE_TRANSCRIPT_ACTIVE_LOCATION COURSE_TRANSCRIPT_ACTIVE_BUCKET
+  # Keep Compose interpolation and any helper commands aligned with the
+  # profile.  The protected production .env may contain a legacy project;
+  # exporting these standard names makes the active profile win consistently
+  # even when Compose evaluates nested defaults from an env file.
+  if [[ -n "$COURSE_TRANSCRIPT_ACTIVE_PROJECT" ]]; then
+    export GOOGLE_CLOUD_PROJECT="$COURSE_TRANSCRIPT_ACTIVE_PROJECT"
+  fi
+  if [[ -n "$COURSE_TRANSCRIPT_ACTIVE_LOCATION" ]]; then
+    export GOOGLE_CLOUD_LOCATION="$COURSE_TRANSCRIPT_ACTIVE_LOCATION"
+  fi
+  if [[ -n "$COURSE_TRANSCRIPT_ACTIVE_BUCKET" ]]; then
+    export GCS_BUCKET="$COURSE_TRANSCRIPT_ACTIVE_BUCKET"
+  fi
 fi
 
 compose() {
