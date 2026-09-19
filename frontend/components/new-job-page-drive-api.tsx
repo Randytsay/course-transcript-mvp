@@ -104,6 +104,11 @@ export default function NewJobPageDriveApi() {
   const [executionMode, setExecutionMode] = useState<"REALTIME" | "BATCH">("REALTIME");
   const [fallbackPolicy, setFallbackPolicy] = useState<"RAW_CHIRP_FALLBACK">("RAW_CHIRP_FALLBACK");
 
+  // Vertex authenticates through the active AI account runtime, not through
+  // the API-key provider profile directory. An empty profile is therefore
+  // valid for Vertex, but not for OpenRouter/MiniMax.
+  const providerNeedsProfile = providerId !== "vertex";
+
   const DEFAULT_MODELS: Record<AIProviderId, string> = {
     vertex: "gemini-3.7-flash",
     openrouter: "google/gemini-3.7-flash",
@@ -307,6 +312,10 @@ export default function NewJobPageDriveApi() {
 
   async function prepareAndCreateBatch() {
     if (!directory || !canPreview) return;
+    if (providerNeedsProfile && !providerProfileId) {
+      setError("目前選取的供應商尚未登記設定檔；請先到 AI 模型供應商新增並驗證設定檔。");
+      return;
+    }
     setBusy("preview");
     setError(null);
     setPreview(null);
@@ -484,7 +493,9 @@ export default function NewJobPageDriveApi() {
                   </label>
                   <label style={{ display: "grid", gap: 4 }}>
                     <span style={{ fontWeight: 700 }}>帳號／設定檔</span>
-                    {providerProfiles.length ? (
+                    {providerId === "vertex" ? (
+                      <input value="使用目前已生效的 Google AI 帳戶" readOnly />
+                    ) : providerProfiles.length ? (
                       <select value={providerProfileId} onChange={(e) => setProviderProfileId(e.target.value)}>
                         {providerProfiles.map((p) => (
                           <option key={p.id} value={p.id}>{p.name || p.id}</option>
@@ -572,6 +583,11 @@ export default function NewJobPageDriveApi() {
               {busy === "preview" || busy === "create" ? <LoaderCircle className="spin" size={18} /> : <Check size={18} />}
               {busy === "preview" ? "檢查檔案中…" : busy === "create" ? "建立 preflight 中…" : "檢查檔案與估價"}
             </button>
+            {providerNeedsProfile && !providerProfileId && (
+              <div className="empty-state empty-state--error" style={{ marginTop: 14 }}>
+                目前供應商尚未登記設定檔；完成設定前不能建立這個校正任務。
+              </div>
+            )}
             {preview && busy === "create" && <div className="empty-state" style={{ marginTop: 14 }}>已檢查 {preview.itemCount} 個檔案，共 {formatBytes(preview.totalSizeBytes)}；正在建立 preflight 工作。</div>}
             {created && <div className="empty-state" style={{ marginTop: 14 }}>批次已建立：{created.batchId}。模型：{correctionPolicy === "M3_FIRST" ? `${m3Model} → Gemini 3.7` : "Gemini 3.7"}；模式：{created.processingStrategy === "DYNAMIC_BATCHING" ? "經濟 Dynamic Batch" : "快速 Standard Batch"}；尚未啟動付費辨識。</div>}
           </div>

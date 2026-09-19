@@ -750,7 +750,9 @@ def _audit_ai_account(action: str, entity_id: str, payload: dict[str, Any], acto
         )
 
 # ---------------------------------------------------------------------------
-# AI model provider profiles (OpenRouter / MiniMax API keys) — owner only
+# AI model provider profiles (OpenRouter / MiniMax API keys) — owner only.
+# Vertex AI is intentionally absent from this key store: it uses the active
+# Google AI account runtime managed by /review-admin/ai-accounts.
 # ---------------------------------------------------------------------------
 
 from app.providers.correction.registry import (  # noqa: E402
@@ -795,8 +797,10 @@ def ai_providers_list(request: Request) -> dict[str, Any]:
     profiles = store.list_profiles()  # redacted; keys never returned
     return {
         "profiles": profiles,
-        "supported_providers": ["minimax", "openrouter"],
+        "supported_providers": ["vertex", "minimax", "openrouter"],
         "capabilities": {
+            "vertex": {"realtime": True, "batch": False,
+                        "batch_note": "使用目前已生效的 Google AI 帳戶；Vertex Batch 尚未接入目前 worker contract"},
             "openrouter": {"realtime": True, "batch": True,
                            "batch_note": "使用 OpenRouter 官方 Batch API"},
             "minimax": {"realtime": True, "batch": False,
