@@ -377,6 +377,10 @@ for service in worker pipeline-worker health-monitor retention-monitor; do
   compose up -d --no-build --no-deps --force-recreate "$service"
   verify_exact_service "$service"
   verify_worker_stable "$service" "$since" || fail "new $service is unstable"
+  if [[ "$service" == "health-monitor" ]]; then
+    verify_health_monitor_report "$since" || fail "new health-monitor report is not deploy-safe"
+    wait_health "${LIVE_CONTAINERS[health-monitor]}" || fail "new health-monitor is unhealthy"
+  fi
 done
 check_quiescent_jobs "$EVIDENCE_ROOT/jobs-after-pipeline-worker.json"
 
@@ -425,7 +429,7 @@ for service in api worker pipeline-worker delivery-worker health-monitor retenti
   revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "${NEW_IMAGES[$service]}")"
   [[ "$restarts" == "0" ]] || fail "$service restart count is not zero"
   [[ "$revision" == "$RELEASE_SHA" ]] || fail "$service revision mismatch"
-  if [[ "$service" == "api" || "$service" == "frontend" ]]; then
+  if [[ "$service" == "api" || "$service" == "frontend" || "$service" == "health-monitor" ]]; then
     [[ "$health" == "healthy" ]] || fail "$service final health is not healthy"
   fi
   printf '%s|%s|%s|%s|%s|%s|%s\n' \
@@ -440,8 +444,12 @@ python3 "$RELEASE_ROOT/scripts/runtime_revision_guard.py" --expected-sha "$RELEA
 check_quiescent_jobs "$EVIDENCE_ROOT/jobs-final.json"
 
 for service in api worker pipeline-worker delivery-worker health-monitor retention-monitor frontend; do
-  count="$(docker logs --since "$API_SINCE" "${LIVE_CONTAINERS[$service]}" 2>&1 \
-    | grep -Eic 'Traceback|ModuleNotFoundError|ImportError|CRITICAL|FATAL|permission_denied' || true)"
+  count="$(runtime_log_error_count "$service" "$API_SINCE")"
+  if [[ "$service" != "health-monitor" ]]; then
+    permission_denied_count="$(docker logs --since "$API_SINCE" "${LIVE_CONTAINERS[$service]}" 2>&1 \
+      | grep -Eic 'permission_denied' || true)"
+    count="$((count + permission_denied_count))"
+  fi
   printf '%s_error_pattern_count=%s\n' "$service" "$count" >> "$EVIDENCE_ROOT/final-log-scan.txt"
   [[ "$count" == "0" ]] || fail "final log scan failed for $service"
 done

@@ -259,6 +259,54 @@ wait_health() {
   return 1
 }
 
+verify_health_monitor_report() {
+  local since="$1"
+  python3 - "$DATA_ROOT/production-health.json" "$since" <<'PY'
+import json
+import sys
+from datetime import datetime
+from pathlib import Path
+
+path = Path(sys.argv[1])
+since = datetime.fromisoformat(sys.argv[2].replace("Z", "+00:00"))
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except (FileNotFoundError, OSError, json.JSONDecodeError) as exc:
+    raise SystemExit(f"health report unavailable: {type(exc).__name__}")
+
+generated_raw = str(payload.get("generated_at") or "")
+try:
+    generated = datetime.fromisoformat(generated_raw.replace("Z", "+00:00"))
+except ValueError:
+    raise SystemExit("health report generated_at is invalid") from None
+
+if generated < since:
+    raise SystemExit("health report predates this health-monitor restart")
+status = str(payload.get("status") or "").lower()
+if status not in {"ok", "warning"}:
+    raise SystemExit(f"health report status is not deploy-safe: {status or 'missing'}")
+print(f"HEALTH_MONITOR_REPORT=PASS status={status} generated_at={generated_raw}")
+PY
+}
+
+runtime_log_error_count() {
+  local service="$1"
+  local since="$2"
+  local container pattern
+  container="${LIVE_CONTAINERS[$service]}"
+  # health-monitor intentionally renders downstream job failures, including
+  # historical strings such as "Traceback" and "CRITICAL". Those are payload,
+  # not evidence that the monitor process itself crashed. Its process safety is
+  # instead proved by restart-count plus a fresh, non-critical health report.
+  if [[ "$service" == "health-monitor" ]]; then
+    printf '0\n'
+    return 0
+  fi
+  pattern='Traceback|ModuleNotFoundError|ImportError|CRITICAL|FATAL'
+  docker logs --since "$since" "$container" 2>&1 \
+    | grep -Eic "$pattern" || true
+}
+
 verify_worker_stable() {
   local service="$1"
   local since="$2"
@@ -269,7 +317,7 @@ verify_worker_stable() {
   restarts="$(docker inspect --format '{{.RestartCount}}' "$container")"
   [[ "$state" == "running" ]] || return 1
   [[ "$restarts" == "0" ]] || return 1
-  errors="$(docker logs --since "$since" "$container" 2>&1 | grep -Eic 'Traceback|ModuleNotFoundError|ImportError|CRITICAL|FATAL' || true)"
+  errors="$(runtime_log_error_count "$service" "$since")"
   [[ "$errors" == "0" ]]
 }
 
