@@ -570,6 +570,8 @@ def get_job_chunks(job_id: str) -> dict[str, Any]:
         }
 
     record = _database_job(job_id)
+    from app.live_features import effective_chunk_word_counts
+    effective_counts = effective_chunk_word_counts(job_dir)
     chunks_dir = job_dir / "chunks"
     chunks = []
     canary_completed = False
@@ -615,7 +617,10 @@ def get_job_chunks(job_id: str) -> dict[str, Any]:
                         "endMs": m.get("source_end_ms"),
                         "durationMs": m.get("source_end_ms", 0) - m.get("source_start_ms", 0),
                         "status": st,
-                        "wordCount": m.get("word_count", 0),
+                        "wordCount": effective_counts.get(
+                            int(m.get("chunk_index", -1)),
+                            int(m.get("word_count") or 0),
+                        ),
                         "hasTranscript": has_ts,
                         "updatedAt": m.get("created_at"),
                         "error": err_msg

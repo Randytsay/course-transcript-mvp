@@ -356,6 +356,18 @@ def base_chunk_density_reports(
             word_timeline_source = "chunk_words_raw"
         if not isinstance(chunk_words, list):
             chunk_words = []
+        word_count = int(manifest.get("word_count") or 0)
+        for patch_index, patch_item in targeted_items.items():
+            if int(patch_item.get("parent_chunk_index", -1)) != index:
+                continue
+            decision = targeted_decisions.get(patch_index, {})
+            if decision.get("applied") is not True:
+                continue
+            word_count += (
+                int(decision.get("patch_words_inserted") or 0)
+                - int(decision.get("baseline_words_replaced") or 0)
+            )
+        word_count = max(0, word_count)
         gaps = _zero_word_gaps(chunk_words, start_ms, end_ms, minimum_gap_ms)
         gap_ms = sum(item["gap_ms"] for item in gaps)
         effective_ms = max(1, duration_ms_value - gap_ms)
