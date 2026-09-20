@@ -238,6 +238,60 @@ class NewFeatureTests(unittest.TestCase):
             worker._clear_chunk_retry_request(job_dir)
             self.assertEqual(worker._next_due_waiting(store, Path(temp))["id"], job["id"])
 
+    def test_targeted_patch_due_route_preempts_base_recovery(self) -> None:
+        from app.jobs.store import JobStore
+        from app.pipeline import dynamic_worker_hardened as worker
+
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp)
+            store = JobStore(data_dir / "course-transcript.db")
+            preview = store.create_preview(
+                source_path="/data/source.mp3",
+                source_name="source.mp3",
+                size_bytes=1024,
+                modified_at=None,
+                mime_type="audio/mp3",
+                actor="test-user",
+            )
+            job = store.create_preflight_job(
+                preview_id=preview["id"],
+                actor="test-user",
+                language_code="zh-TW",
+                profile="standard",
+                enable_gemini_correction=True,
+                enable_subtitles=True,
+                require_human_review=True,
+            )
+            with store.transaction() as connection:
+                connection.execute(
+                    "UPDATE jobs SET status='transcribing', active_stage='chirp', approved_at='2026-08-01T00:00:00+00:00', reserved_cost_usd='1.00' WHERE id=?",
+                    (job["id"],),
+                )
+            job_dir = data_dir / "jobs" / job["id"]
+            job_dir.mkdir(parents=True, exist_ok=True)
+            (job_dir / "chirp-submitted.json").write_text("{}", encoding="utf-8")
+            (job_dir / "chirp-targeted-patch-submitted.json").write_text(
+                json.dumps({"patch_count": 1, "patch_indices": [900700]}),
+                encoding="utf-8",
+            )
+            (job_dir / "chirp-recovery-state.json").write_text(
+                json.dumps(
+                    {
+                        "last_outcome": "pending",
+                        "last_detail": "targeted_patch_submitted",
+                        "last_checked_at": "2020-01-01T00:00:00+00:00",
+                        "transient_errors": 0,
+                        "next_recovery_at": "2020-01-01T00:00:00+00:00",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            targeted = worker._next_due_targeted_patch(store, data_dir)
+            self.assertIsNotNone(targeted)
+            self.assertEqual(targeted["id"], job["id"])
+            self.assertIsNone(worker._next_due_waiting(store, data_dir))
+
+
 
 if __name__ == "__main__":
     unittest.main()
