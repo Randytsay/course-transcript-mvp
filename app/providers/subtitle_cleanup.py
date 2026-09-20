@@ -33,6 +33,27 @@ BOUNDARY_FILLER_RE = re.compile(rf"^(?:[{FILLERS}][\s，、。！？,.!?]*){{1,4
 BOUNDARY_FILLER_TAIL_RE = re.compile(rf"(?:[\s，、。！？,.!?]*[{FILLERS}]){{1,4}}$")
 TRIPLE_STUTTER_RE = re.compile(r"([\u4e00-\u9fffA-Za-z]{1,3})\1{2,}")
 DOUBLE_STUTTER_RE = re.compile(r"([\u4e00-\u9fffA-Za-z]{1,2})\1")
+DOUBLE_STUTTER_CHAR_RE = re.compile(r"([\u4e00-\u9fff])\1")
+HIGH_CONFIDENCE_DOUBLE_STUTTER_CHARS = frozenset(
+    "我你他她它這那要在有會都得的就還才若令幾資願成慈像以合為"
+)
+DOUBLE_STUTTER_LEFT_BOUNDARY_PROTECT = {
+    "在": ("現在", "存在", "所在", "自在"),
+    "有": ("還有", "沒有", "所有", "只有", "具有", "含有", "擁有"),
+    "以": ("可以", "所以"),
+    "就": ("成就",),
+    "要": ("重要", "需要", "只要", "想要", "主要"),
+    "會": ("法會", "社會", "機會", "學會", "教會", "聚會"),
+    "才": ("剛才",),
+    "資": ("投資", "融資"),
+    "成": ("完成", "形成", "構成", "組成"),
+    "合": ("符合", "結合", "配合", "適合"),
+    "令": ("命令",),
+    "願": ("志願", "心願"),
+}
+MANTRA_DOUBLE_STUTTER_PROTECT_RE = re.compile(
+    r"(?:南[無謨]|阿囉|三藐|佛陀耶|菩提耶|莎訶|梭呵|怛|誐)"
+)
 INTERRUPTION_RE = re.compile(r"(?:音訊|音頻|聲音).{0,4}(?:中斷|斷線|消失)|\[+\s*(?:inaudible|不清楚|聽不清)\s*\]+", re.I)
 
 
@@ -224,8 +245,46 @@ def _timestamp(value: int, separator: str = ",") -> str:
     return f"{hours:02}:{minutes:02}:{seconds:02}{separator}{milliseconds:03}"
 
 
+def _protected_double_stutter_boundary(text: str, start: int, char: str) -> bool:
+    """Protect normal lexical boundaries that happen to spell AA."""
+    prefix = text[: start + 1]
+    return any(
+        prefix.endswith(term)
+        for term in DOUBLE_STUTTER_LEFT_BOUNDARY_PROTECT.get(char, ())
+    )
+
+
+def _collapse_high_confidence_double_stutters(text: str) -> tuple[str, int]:
+    """Collapse only conservative one-character speech disfluencies.
+
+    Ambiguous AA forms are intentionally preserved for the existing review
+    detector.  Closing mantra phonetics are also preserved because repeated
+    syllables may be meaningful or part of a canonicalisation candidate.
+    """
+    if not text or MANTRA_DOUBLE_STUTTER_PROTECT_RE.search(text):
+        return text, 0
+
+    output: list[str] = []
+    cursor = 0
+    collapsed_count = 0
+    for match in DOUBLE_STUTTER_CHAR_RE.finditer(text):
+        char = match.group(1)
+        if char not in HIGH_CONFIDENCE_DOUBLE_STUTTER_CHARS:
+            continue
+        if _protected_double_stutter_boundary(text, match.start(), char):
+            continue
+        output.append(text[cursor:match.start()])
+        output.append(char)
+        cursor = match.end()
+        collapsed_count += 1
+    if not collapsed_count:
+        return text, 0
+    output.append(text[cursor:])
+    return "".join(output), collapsed_count
+
+
 def clean_text(value: str) -> tuple[str, list[str]]:
-    """Remove only high-confidence boundary fillers and triple stutters."""
+    """Remove only high-confidence boundary fillers and speech disfluencies."""
     text = str(value or "").strip()
     actions: list[str] = []
     without_prefix = BOUNDARY_FILLER_RE.sub("", text, count=1).strip()
@@ -239,6 +298,9 @@ def clean_text(value: str) -> tuple[str, list[str]]:
     collapsed = TRIPLE_STUTTER_RE.sub(r"\1", text)
     if collapsed != text:
         actions.append("triple_stutter")
+    collapsed, double_count = _collapse_high_confidence_double_stutters(collapsed)
+    if double_count:
+        actions.append("double_stutter_high_confidence")
     return collapsed.strip(), actions
 
 
