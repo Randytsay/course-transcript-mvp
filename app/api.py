@@ -574,6 +574,18 @@ def get_job_chunks(job_id: str) -> dict[str, Any]:
     chunks = []
     canary_completed = False
     completed_count = 0
+    qa_payload = _read_json(job_dir / "qa-report.json", {})
+    qa_density = qa_payload.get("density", {}) if isinstance(qa_payload, dict) else {}
+    course_chunks = (
+        qa_density.get("course_chunks", [])
+        if isinstance(qa_density, dict)
+        else []
+    )
+    density_by_chunk = {
+        int(item["chunk_index"]): item
+        for item in course_chunks
+        if isinstance(item, dict) and item.get("chunk_index") is not None
+    }
     
     if chunks_dir.is_dir():
         for d in sorted(chunks_dir.iterdir()):
@@ -581,6 +593,8 @@ def get_job_chunks(job_id: str) -> dict[str, Any]:
                 manifest_path = d / "manifest.json"
                 if manifest_path.exists():
                     m = _read_json(manifest_path, {})
+                    if m.get("role", "base") == "patch":
+                        continue
                     st = m.get("status", "WAITING")
                     has_ts = (d / "partial-transcript.json").exists()
                     # Mapped status
@@ -605,6 +619,17 @@ def get_job_chunks(job_id: str) -> dict[str, Any]:
                         "hasTranscript": has_ts,
                         "updatedAt": m.get("created_at"),
                         "error": err_msg
+                    })
+                    density = density_by_chunk.get(int(m.get("chunk_index", -1)), {})
+                    chunks[-1].update({
+                        "wordsPerMinute": density.get("words_per_minute"),
+                        "adjustedWordsPerMinute": density.get("adjusted_words_per_minute"),
+                        "courseMedianWordsPerMinute": density.get("course_median_words_per_minute"),
+                        "densityClassification": density.get("classification"),
+                        "densityReviewRequired": bool(density.get("review_required")),
+                        "densityRecommendedAction": density.get("recommended_action"),
+                        "longZeroWordGapMs": density.get("long_zero_word_gap_ms"),
+                        "timingRepairCount": density.get("timing_repair_count", 0),
                     })
                     if m.get("chunk_index") == 0 and st in ("完成", "完成（無語音）"):
                         canary_completed = True

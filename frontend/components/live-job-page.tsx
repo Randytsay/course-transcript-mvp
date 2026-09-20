@@ -53,6 +53,14 @@ type ChunkItem = {
   hasTranscript: boolean;
   updatedAt?: string | null;
   error?: string | null;
+  wordsPerMinute?: number | null;
+  adjustedWordsPerMinute?: number | null;
+  courseMedianWordsPerMinute?: number | null;
+  densityClassification?: string | null;
+  densityReviewRequired?: boolean;
+  densityRecommendedAction?: string | null;
+  longZeroWordGapMs?: number | null;
+  timingRepairCount?: number;
 };
 
 type ChunkResponse = {
@@ -190,6 +198,42 @@ function statusClass(status: string): string {
   if (status === "SUCCEEDED" || status === "EMPTY_SILENCE") return `${styles.status} ${styles.statusSuccess}`;
   if (["SUBMITTED", "RUNNING", "RECOVERING"].includes(status)) return `${styles.status} ${styles.statusRunning}`;
   return `${styles.status} ${styles.statusWaiting}`;
+}
+function densityInsight(chunk: ChunkItem): { label: string; detail: string; review: boolean } | null {
+  if (chunk.wordsPerMinute == null || !chunk.densityClassification) return null;
+  const rate = chunk.wordsPerMinute.toFixed(1);
+  const median = chunk.courseMedianWordsPerMinute?.toFixed(1);
+  const adjusted = chunk.adjustedWordsPerMinute?.toFixed(1);
+  switch (chunk.densityClassification) {
+    case "normal":
+      return { label: "語速一致", detail: `${rate} 字詞/分${median ? ` · 同課中位 ${median}` : ""}`, review: false };
+    case "explained_by_long_gap":
+      return { label: "長空檔可解釋", detail: `${rate} → ${adjusted ?? rate} 字詞/分（扣除長空檔）`, review: false };
+    case "explained_by_audible_zero_word_gap":
+      return {
+        label: "需確認有聲空檔",
+        detail: `${rate} → ${adjusted ?? rate} 字詞/分 · 有聲無詞 ${formatTime(chunk.longZeroWordGapMs ?? 0)}${chunk.timingRepairCount ? ` · 時間戳修復 ${chunk.timingRepairCount}` : ""}`,
+        review: true,
+      };
+    case "repaired_by_targeted_patch":
+      return {
+        label: "局部辨識已修復",
+        detail: `${rate} 字詞/分 · 已用小範圍 Chirp patch 補回可信時間軸`,
+        review: false,
+      };
+    case "targeted_patch_no_lexical_tokens":
+      return {
+        label: "局部重辨仍無可辨語詞",
+        detail: `${rate} → ${adjusted ?? rate} 字詞/分 · 不再自動付費重試，請播放確認`,
+        review: true,
+      };
+    case "unexplained_low_density":
+      return { label: "字數偏低，需檢查", detail: `${rate} 字詞/分${median ? ` · 同課中位 ${median}` : ""}`, review: true };
+    case "unexplained_high_density":
+      return { label: "字數偏高，需檢查", detail: `${rate} 字詞/分${median ? ` · 同課中位 ${median}` : ""}`, review: true };
+    default:
+      return { label: chunk.densityReviewRequired ? "需人工確認" : "已分析", detail: `${rate} 字詞/分${median ? ` · 同課中位 ${median}` : ""}`, review: Boolean(chunk.densityReviewRequired) };
+  }
 }
 
 function StatusIcon({ status }: { status: string }) {
@@ -549,7 +593,17 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
               <article className={styles.chunkItem} key={chunk.chunkIndex}>
                 <div className={styles.chunkTop}>
                   <div className={styles.chunkTitle}>第 {chunk.chunkIndex + 1} 段</div>
-                  <div className={styles.chunkMeta}>{formatTime(chunk.startMs)}–{formatTime(chunk.endMs)} · {chunk.wordCount.toLocaleString("zh-TW")} 字詞</div>
+                  <div className={styles.chunkMetaBlock}>
+                    <div className={styles.chunkMeta}>
+                      {formatTime(chunk.startMs)}–{formatTime(chunk.endMs)} · {chunk.wordCount.toLocaleString("zh-TW")} 字詞
+                    </div>
+                    {densityInsight(chunk) && (
+                      <div className={densityInsight(chunk)?.review ? styles.densityReview : styles.densityNormal}>
+                        <strong>{densityInsight(chunk)?.label}</strong>
+                        <span>{densityInsight(chunk)?.detail}</span>
+                      </div>
+                    )}
+                  </div>
                   <span className={statusClass(chunk.status)}><StatusIcon status={chunk.status} />{statusLabel(chunk.status)}</span>
                   <div className={styles.chunkActions}>
                     {chunk.status === "FAILED" && (

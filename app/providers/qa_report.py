@@ -264,6 +264,36 @@ def base_chunk_density_reports(
     high_ratio = float(os.environ.get("CHIRP_COURSE_DENSITY_HIGH_RATIO", "1.25"))
     reports: list[dict[str, object]] = []
 
+    targeted_plan = {}
+    targeted_complete = {}
+    try:
+        targeted_plan = json.loads(
+            (job / "chirp-targeted-patch-plan.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        targeted_plan = {}
+    try:
+        targeted_complete = json.loads(
+            (job / "chirp-targeted-patch-complete.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        targeted_complete = {}
+    targeted_items = {
+        int(item["patch_index"]): item
+        for item in targeted_plan.get("items", [])
+        if isinstance(item, dict) and item.get("patch_index") is not None
+    } if isinstance(targeted_plan, dict) else {}
+    targeted_verdicts = {
+        int(item["patch_index"]): item
+        for item in targeted_complete.get("verdicts", [])
+        if isinstance(item, dict) and item.get("patch_index") is not None
+    } if isinstance(targeted_complete, dict) else {}
+    targeted_decisions = {
+        int(item["chunk_index"]): item
+        for item in targeted_complete.get("patch_decisions", [])
+        if isinstance(item, dict) and item.get("chunk_index") is not None
+    } if isinstance(targeted_complete, dict) else {}
+
     repaired_words_by_chunk: dict[int, list[dict[str, object]]] = {}
     timing_repairs_by_chunk: dict[int, list[dict[str, object]]] = {}
     try:
@@ -377,6 +407,56 @@ def base_chunk_density_reports(
         item["classification"] = "normal"
         item["review_required"] = False
         item["recommended_action"] = "none"
+        targeted_evidence = []
+        for patch_index, patch_item in targeted_items.items():
+            if int(patch_item.get("parent_chunk_index", -1)) != int(item["chunk_index"]):
+                continue
+            verdict = targeted_verdicts.get(patch_index, {})
+            decision = targeted_decisions.get(patch_index, {})
+            targeted_evidence.append(
+                {
+                    "patch_index": patch_index,
+                    "source_start_ms": patch_item.get("source_start_ms"),
+                    "source_end_ms": patch_item.get("source_end_ms"),
+                    "target_gap_word_count": verdict.get("target_gap_word_count"),
+                    "patch_word_count": verdict.get("word_count"),
+                    "patch_verdict": verdict.get("patch_verdict"),
+                    "operation_name": verdict.get("operation_name"),
+                    "merge_applied": bool(decision.get("applied")),
+                    "patch_words_inserted": int(decision.get("patch_words_inserted") or 0),
+                }
+            )
+        item["targeted_patch_evidence"] = targeted_evidence
+        repaired_patch = next(
+            (
+                evidence
+                for evidence in targeted_evidence
+                if int(evidence.get("target_gap_word_count") or 0) > 0
+                and evidence.get("merge_applied") is True
+            ),
+            None,
+        )
+        verified_nonlexical = next(
+            (
+                evidence
+                for evidence in targeted_evidence
+                if evidence.get("operation_name")
+                and int(evidence.get("target_gap_word_count") or 0) == 0
+            ),
+            None,
+        )
+        if repaired_patch is not None:
+            item["classification"] = "repaired_by_targeted_patch"
+            item["review_required"] = False
+            item["recommended_action"] = "no_retry"
+            continue
+        if verified_nonlexical is not None:
+            item["classification"] = "targeted_patch_no_lexical_tokens"
+            item["review_required"] = True
+            item["recommended_action"] = (
+                "inspect_gap_media; do not auto-retry the same recognizer again"
+            )
+            continue
 
         if raw_ratio is None or adjusted_ratio is None:
             continue

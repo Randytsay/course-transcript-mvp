@@ -20,6 +20,7 @@ from app.jobs.cancellation import next_cancelling_job
 from app.jobs.completion import install_completion_patch
 from app.jobs.drive_publish import DrivePublishError
 from app.jobs.performance_enhanced import build_performance_summary as enhanced_performance_summary
+from app.jobs.performance import CostConfig, estimated_accrued_cost
 from app.jobs.correction_policy import get_job_correction_policy
 from app.jobs.store import JobConflict, JobStore
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, is_dynamic_batching
@@ -28,6 +29,7 @@ from app.pipeline import worker as base
 from app.pipeline import worker_observed as observed
 from app.pipeline.recovery_schedule import is_due, schedule
 from app.providers.correction_evidence import summarize_routing
+from app.providers.targeted_patch import build_plan as build_targeted_patch_plan
 
 install_completion_patch(JobStore)
 install_artifact_patch(base)
@@ -706,6 +708,241 @@ def _recover_ai_batch(
         return store.get_job(leased["id"])
 
 
+
+def _targeted_patch_inflight(job_dir: Path) -> bool:
+    return (
+        (job_dir / "chirp-targeted-patch-submitted.json").is_file()
+        and not (job_dir / "chirp-targeted-patch-complete.json").is_file()
+    )
+
+
+def _targeted_patch_budget(
+    record: dict[str, Any],
+    *,
+    data_dir: Path,
+    plan: dict[str, Any],
+) -> tuple[bool, Decimal, Decimal, Decimal]:
+    strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
+    config = CostConfig.from_env().for_processing_strategy(strategy)
+    extra = (
+        Decimal(int(plan.get("total_duration_ms") or 0))
+        / Decimal("60000")
+        * config.chirp_usd_per_minute
+    ).quantize(Decimal("0.0001"))
+    accrued = estimated_accrued_cost(
+        data_dir / "course-transcript.db",
+        data_dir,
+        record["id"],
+    )
+    reserved = Decimal(str(record.get("reserved_cost_usd") or "0"))
+    return accrued + extra <= reserved, accrued, extra, reserved
+
+
+def _stored_qa_targeted_patch_seed(job_dir: Path) -> bool:
+    try:
+        report = json.loads((job_dir / "qa-report.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    density = report.get("density", {}) if isinstance(report, dict) else {}
+    chunks = density.get("course_chunks", []) if isinstance(density, dict) else []
+    if not isinstance(chunks, list):
+        return False
+    for item in chunks:
+        if not isinstance(item, dict):
+            continue
+        if item.get("classification") != "explained_by_audible_zero_word_gap":
+            continue
+        if int(item.get("timing_repair_count") or 0) <= 0:
+            continue
+        gaps = item.get("zero_word_gaps", [])
+        if isinstance(gaps, list) and any(
+            isinstance(gap, dict) and gap.get("audible") is True for gap in gaps
+        ):
+            return True
+    return False
+
+
+def _restore_audio_for_targeted_patch_if_needed(
+    store: JobStore,
+    leased: dict[str, Any],
+    *,
+    data_dir: Path,
+    worker_id: str,
+) -> None:
+    job_dir = data_dir / "jobs" / leased["id"]
+    if (job_dir / "normalized.flac").is_file():
+        return
+    if not _stored_qa_targeted_patch_seed(job_dir):
+        return
+    source = base._download_source(store, leased, data_dir, worker_id)
+    base._normalize(store, leased, source, data_dir, worker_id)
+
+
+def _submit_targeted_patch_if_needed(
+    store: JobStore,
+    leased: dict[str, Any],
+    *,
+    data_dir: Path,
+    worker_id: str,
+) -> dict[str, Any] | None:
+    job_dir = data_dir / "jobs" / leased["id"]
+    if (job_dir / "chirp-targeted-patch-complete.json").is_file():
+        return None
+    if _env_true("CHIRP_AUTO_TARGETED_PATCH", default=True):
+        _restore_audio_for_targeted_patch_if_needed(
+            store, leased, data_dir=data_dir, worker_id=worker_id
+        )
+    plan = build_targeted_patch_plan(job_dir)
+    items = plan.get("items") if isinstance(plan, dict) else []
+    if not isinstance(items, list) or not items:
+        return None
+    if not _env_true("CHIRP_AUTO_TARGETED_PATCH", default=True):
+        plan["auto_submit"] = False
+        plan["auto_submit_blocked_reason"] = "disabled"
+        base._atomic_json(job_dir / "chirp-targeted-patch-plan.json", plan)
+        return None
+
+    allowed, accrued, extra, reserved = _targeted_patch_budget(
+        leased, data_dir=data_dir, plan=plan
+    )
+    plan.update(
+        {
+            "auto_submit": allowed,
+            "estimated_accrued_before_patch_usd": str(accrued),
+            "estimated_patch_cost_usd": str(extra),
+            "reserved_cost_usd": str(reserved),
+            "projected_cost_usd": str(accrued + extra),
+            "auto_submit_blocked_reason": None if allowed else "reserved_budget_exceeded",
+        }
+    )
+    base._atomic_json(job_dir / "chirp-targeted-patch-plan.json", plan)
+    if not allowed:
+        return None
+
+    env = base._module_env(leased, job_dir)
+    env.update(
+        {
+            "CHIRP_DYNAMIC_BATCHING": "true",
+            "CHIRP_PATCH_ACTION": "submit",
+        }
+    )
+    returncode, stdout, stderr = _run_allow_pending(
+        [sys.executable, "-m", "app.providers.targeted_patch"],
+        store=store,
+        job_id=leased["id"],
+        worker_id=worker_id,
+        timeout_seconds=3_600,
+        env=env,
+    )
+    if stdout:
+        print(stdout)
+    if returncode not in {0, 75, 76}:
+        raise base.PipelineError(
+            base._command_failure_message(returncode, stdout, stderr)
+        )
+    if returncode == 0:
+        return None
+
+    schedule(job_dir, "pending", detail="targeted_patch_submitted")
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    with store.transaction() as connection:
+        store._require_lease(connection, leased["id"], worker_id)
+        connection.execute(
+            """
+            UPDATE jobs
+            SET status='transcribing', active_stage='chirp',
+                stage_detail=?, progress=?, updated_at=?, revision=revision+1
+            WHERE id=?
+            """,
+            (
+                f"Chirp 智慧局部驗證等待中：{len(items)} 個區間",
+                61,
+                now,
+                leased["id"],
+            ),
+        )
+        store._event(
+            connection,
+            leased["id"],
+            "targeted_patch_submitted",
+            worker_id,
+            {
+                "patch_count": len(items),
+                "estimated_patch_cost_usd": str(extra),
+                "projected_cost_usd": str(accrued + extra),
+                "reserved_cost_usd": str(reserved),
+            },
+        )
+        store._clear_lease(connection, leased["id"], worker_id)
+    return store.get_job(leased["id"])
+
+def _record_targeted_patch_usage(
+    store: JobStore,
+    record: dict[str, Any],
+    *,
+    data_dir: Path,
+    worker_id: str,
+) -> None:
+    job_dir = data_dir / "jobs" / record["id"]
+    try:
+        plan = json.loads(
+            (job_dir / "chirp-targeted-patch-plan.json").read_text(encoding="utf-8")
+        )
+        complete = json.loads(
+            (job_dir / "chirp-targeted-patch-complete.json").read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError):
+        return
+    items = plan.get("items", []) if isinstance(plan, dict) else []
+    verdicts = complete.get("verdicts", []) if isinstance(complete, dict) else []
+    if not isinstance(items, list) or not isinstance(verdicts, list):
+        return
+    verdict_by_index = {
+        int(item["patch_index"]): item
+        for item in verdicts
+        if isinstance(item, dict) and item.get("patch_index") is not None
+    }
+    strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
+    config = CostConfig.from_env().for_processing_strategy(strategy)
+    for item in items:
+        if not isinstance(item, dict) or item.get("patch_index") is None:
+            continue
+        patch_index = int(item["patch_index"])
+        verdict = verdict_by_index.get(patch_index, {})
+        operation_name = str(verdict.get("operation_name") or "")
+        if not operation_name:
+            continue
+        duration_ms = max(0, int(item.get("duration_ms") or 0))
+        estimated = (
+            Decimal(duration_ms)
+            / Decimal("60000")
+            * config.chirp_usd_per_minute
+        ).quantize(Decimal("0.0001"))
+        store.record_usage(
+            job_id=record["id"],
+            dedupe_key=f"chirp-targeted-patch-{patch_index}",
+            provider="google-cloud-speech",
+            model="chirp_3",
+            input_units=round(duration_ms / 1000),
+            output_units=int(verdict.get("word_count") or 0),
+            estimated_cost_usd=estimated,
+            usage={
+                "unit": "estimated_billable_audio_seconds",
+                "role": "patch",
+                "patch_index": patch_index,
+                "operation_name": operation_name,
+                "target_gap_word_count": int(
+                    verdict.get("target_gap_word_count") or 0
+                ),
+                "accounting_note": (
+                    "Application estimate for targeted patch; "
+                    "Cloud Billing is authoritative."
+                ),
+            },
+            worker_id=worker_id,
+        )
+
+
 def _finish_after_chirp(
     store: JobStore,
     leased: dict[str, Any],
@@ -721,6 +958,21 @@ def _finish_after_chirp(
         str(leased.get("correction_provider") or "")
         and not fake_provider
     )
+    patch_waiting = _submit_targeted_patch_if_needed(
+        store, leased, data_dir=data_dir, worker_id=worker_id
+    )
+    if patch_waiting is not None:
+        return patch_waiting
+    patch_complete = (job_dir / "chirp-targeted-patch-complete.json").is_file()
+    patch_complete_payload: dict[str, Any] = {}
+    if patch_complete:
+        try:
+            patch_complete_payload = json.loads(
+                (job_dir / "chirp-targeted-patch-complete.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            patch_complete_payload = {}
+    patch_changed = bool(patch_complete_payload.get("changed_merged_words"))
     if str(leased.get("active_stage") or "") == "chirp":
         base._complete(
             store,
@@ -737,6 +989,7 @@ def _finish_after_chirp(
         progress_start=63, progress_end=72,
         module="app.providers.build_srt", timeout_seconds=600,
         evidence=("subtitles.json", "subtitles.srt", "subtitles.vtt"),
+        force=patch_changed,
     )
     if leased["enable_gemini_correction"]:
         if (
@@ -761,6 +1014,7 @@ def _finish_after_chirp(
                           if use_router else "app.providers.correct_text_hardened")),
             timeout_seconds=14_400,
             evidence=("glossary/global-terms.json", "subtitles-corrected.json", "review-terms.json", "terminology-consistency.json"),
+            force=patch_changed,
         )
     base._run_module_stage(
         store, leased, data_dir, worker_id,
@@ -769,6 +1023,7 @@ def _finish_after_chirp(
         progress_start=89, progress_end=90,
         module="app.providers.subtitle_cleanup", timeout_seconds=600,
         evidence=("subtitles-cleaned.json", "subtitles-cleaned.srt", "transcript-cleaned.txt", "cleanup-review.json"),
+        force=patch_changed,
     )
     base._run_module_stage(
         store, leased, data_dir, worker_id,
@@ -777,6 +1032,7 @@ def _finish_after_chirp(
         progress_start=90, progress_end=94,
         module="app.providers.export_formats", timeout_seconds=600,
         evidence=("export-manifest.json",),
+        force=patch_changed,
     )
     base._run_module_stage(
         store, leased, data_dir, worker_id,
@@ -785,6 +1041,7 @@ def _finish_after_chirp(
         progress_start=95, progress_end=98,
         module="app.providers.qa_report", timeout_seconds=600,
         evidence=("qa-report.json", "qa-report.md", "density-retry-plan.json"),
+        force=patch_complete,
     )
     base._run_module_stage(
         store, leased, data_dir, worker_id,
@@ -793,6 +1050,10 @@ def _finish_after_chirp(
         progress_start=98, progress_end=99,
         module="app.providers.validate_outputs_hardened", timeout_seconds=600,
         evidence=("qa-report.json", "export-manifest.json", "content-qa.json"),
+        force=patch_complete,
+    )
+    _record_targeted_patch_usage(
+        store, leased, data_dir=data_dir, worker_id=worker_id
     )
     base._record_usage_evidence(store, leased, data_dir, worker_id)
     publication = None
@@ -848,8 +1109,19 @@ def _recover_job(
         "CHIRP_RECOVER_ONCE": "1",
     })
     try:
+        targeted_recovery = _targeted_patch_inflight(job_dir)
+        if targeted_recovery:
+            env["CHIRP_PATCH_ACTION"] = "recover"
         returncode, stdout, stderr = _run_allow_pending(
-            [sys.executable, "-m", "app.providers.run_chirp_pipeline_hardened"],
+            [
+                sys.executable,
+                "-m",
+                (
+                    "app.providers.targeted_patch"
+                    if targeted_recovery
+                    else "app.providers.run_chirp_pipeline_hardened"
+                ),
+            ],
             store=store, job_id=leased["id"], worker_id=worker_id,
             timeout_seconds=3_600, env=env,
         )
@@ -862,9 +1134,15 @@ def _recover_job(
             now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
             with store.transaction() as connection:
                 store._require_lease(connection, leased["id"], worker_id)
+                detail = (
+                    "Chirp 智慧局部驗證等待中"
+                    if targeted_recovery
+                    else f"Chirp 動態批次等待中：{completed}/{total} 分段完成"
+                )
+                progress = 61 if targeted_recovery else min(61, 45 + round(16 * completed / max(1, total)))
                 connection.execute(
                     "UPDATE jobs SET stage_detail=?, progress=?, updated_at=?, revision=revision+1 WHERE id=?",
-                    (f"Chirp 動態批次等待中：{completed}/{total} 分段完成", min(61, 45 + round(16 * completed / max(1, total))), now, leased["id"]),
+                    (detail, progress, now, leased["id"]),
                 )
                 store._clear_lease(connection, leased["id"], worker_id)
             return store.get_job(leased["id"])
