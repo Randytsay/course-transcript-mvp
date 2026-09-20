@@ -570,7 +570,7 @@ class TestGlobalEndpoint(Base):
             def __init__(self):
                 self.status_code = status
 
-        def fake_get(url, headers=None, timeout=None):
+        def fake_get(url, headers=None, timeout=None, params=None):
             captured["url"] = url
             return FakeResp()
 

@@ -40,6 +40,7 @@ type JobSummary = {
   parallelism: number;
   geminiEnabled: boolean;
   revision?: number;
+  error?: string | null;
 };
 
 type ChunkItem = {
@@ -125,6 +126,39 @@ function mapJob(raw: Record<string, unknown>): JobSummary {
     parallelism: Number(raw.chirp_max_parallel_chunks ?? 3),
     geminiEnabled: raw.enable_gemini_correction !== false,
     revision: Number(raw.revision ?? 1),
+    error: raw.error ? String(raw.error) : null,
+  };
+}
+
+function jobStatusLabel(status: string): string {
+  return {
+    failed: "處理失敗",
+    transcribing: "語音辨識中",
+    queued: "等待處理",
+    awaiting_review: "待審查",
+    review: "待審查",
+    completed: "已完成",
+    paused: "已暫停",
+    cancelled: "已取消",
+  }[status] ?? status;
+}
+
+function failureInfo(job: JobSummary) {
+  const raw = job.error ?? "";
+  const speechIam = /speech\.recognizers\.recognize|IAM_PERMISSION_DENIED|PERMISSION_DENIED|PermissionDenied/i.test(raw);
+  if (speechIam) {
+    return {
+      speechIam: true,
+      title: "Google Speech 權限不足，Chirp 尚未開始",
+      description:
+        "目前 GCP 服務帳戶沒有 Chirp 辨識所需權限。先在帳號設定確認 Cloud Speech Client 權限，再重新送出；原始音檔與分段計畫都會保留。",
+    };
+  }
+  return {
+    speechIam: false,
+    title: (job.activeStage === "chirp" ? "Chirp 辨識" : job.activeStage ?? "處理") + "失敗",
+    description:
+      job.stageDetail ?? "系統已停止目前階段，修正原因後可從這個階段重新送出，不需要重建整個任務。",
   };
 }
 
@@ -196,7 +230,6 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
   const [transcripts, setTranscripts] = useState<Record<number, ChunkTranscript>>({});
   const [loadingTranscript, setLoadingTranscript] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
   const [manualRefresh, setManualRefresh] = useState(0);
   const [busyRetry, setBusyRetry] = useState(false);
   const [retryingChunk, setRetryingChunk] = useState<number | null>(null);
@@ -348,7 +381,6 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
         setJob(nextJob);
         setChunks(nextChunks);
         setCost(nextCost);
-        setLastUpdated(new Date());
         setError(null);
         retryDelay = 3000;
         const terminal = terminalJobStatuses.has(nextJob.status);
@@ -387,6 +419,7 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
     () => formalSegments.length > 0 && Boolean(job && (terminalJobStatuses.has(job.status) || job.progress >= 72)),
     [formalSegments.length, job],
   );
+  const failure = job?.status === "failed" ? failureInfo(job) : null;
 
   async function toggleTranscript(chunk: ChunkItem) {
     setExpanded((current) => {
@@ -427,26 +460,52 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
     >
       {error && <div className={styles.error} role="alert">{error}</div>}
 
+      {job && failure && (
+        <section className={styles.failureBanner} role="alert" aria-labelledby="job-failure-title">
+          <div className={styles.failureIcon}><AlertTriangle size={22} aria-hidden="true" /></div>
+          <div className={styles.failureCopy}>
+            <span className={styles.failureEyebrow}>需要處理</span>
+            <h2 id="job-failure-title">{failure.title}</h2>
+            <p>{failure.description}</p>
+            <div className={styles.failureActions}>
+              <button
+                type="button"
+                className={styles.primaryRetryButton}
+                disabled={busyRetry}
+                onClick={() => void handleRetryStage()}
+              >
+                {busyRetry ? <LoaderCircle className="spin" size={17} /> : <RotateCcw size={17} />}
+                {failure.speechIam ? "權限修正後重新送出" : "重新送出失敗階段"}
+              </button>
+              {failure.speechIam && (
+                <Link className={styles.accountLink} href="/review-admin/ai-accounts">
+                  檢查 AI 帳號設定
+                </Link>
+              )}
+            </div>
+            <details className={styles.technicalDetails}>
+              <summary>查看技術細節</summary>
+              <pre>{job.error ?? job.stageDetail ?? "沒有更多錯誤資訊"}</pre>
+            </details>
+          </div>
+        </section>
+      )}
+
       <section className={styles.summaryGrid} aria-label="任務即時摘要">
         <article className={styles.card}>
           <span className={styles.cardLabel}>任務狀態</span>
-          <strong className={styles.cardValue}>{job?.status ?? "讀取中"}</strong>
+          <strong className={styles.cardValue}>{job ? jobStatusLabel(job.status) : "讀取中"}</strong>
           <span className={styles.cardDetail}>{job?.stageDetail ?? "正在取得最新狀態"}</span>
         </article>
         <article className={styles.card}>
-          <span className={styles.cardLabel}>Chirp 分段併發</span>
-          <strong className={styles.cardValue}>{chunks?.parallelism ?? job?.parallelism ?? 3}</strong>
-          <span className={styles.cardDetail}>第一段 Canary；來源檔仍一次處理一支</span>
+          <span className={styles.cardLabel}>分段進度</span>
+          <strong className={styles.cardValue}>{chunks?.completedCount ?? 0} / {chunks?.totalCount ?? 0}</strong>
+          <span className={styles.cardDetail}>已完成的 Chirp 分段</span>
         </article>
         <article className={styles.card}>
-          <span className={styles.cardLabel}>本任務即時預估費用</span>
-          <strong className={styles.cardValue}>{formatTwd(cost?.estimatedAccruedTwd)}</strong>
-          <span className={styles.cardDetail}>完整預估 {formatTwd(cost?.estimatedTotalTwd)}；剩餘 {formatTwd(cost?.estimatedRemainingTwd)}</span>
-        </article>
-        <article className={styles.card}>
-          <span className={styles.cardLabel}>最後畫面更新</span>
-          <strong className={styles.cardValue}>{lastUpdated ? lastUpdated.toLocaleTimeString("zh-TW") : "—"}</strong>
-          <span className={styles.cardDetail}>前景處理中約每 3 秒更新；錯誤時最長退避 30 秒</span>
+          <span className={styles.cardLabel}>完整預估費用</span>
+          <strong className={styles.cardValue}>{formatTwd(cost?.estimatedTotalTwd)}</strong>
+          <span className={styles.cardDetail}>已估用 {formatTwd(cost?.estimatedAccruedTwd)}；剩餘 {formatTwd(cost?.estimatedRemainingTwd)}</span>
         </article>
       </section>
 
@@ -465,21 +524,10 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
       <section className={styles.section} aria-labelledby="chunk-progress-heading">
         <header className={styles.sectionHeader}>
           <div>
-            <h2 id="chunk-progress-heading">第一層｜分段進度</h2>
-            <p>每段顯示等待中、辨識中、恢復中、完成或失敗。</p>
+            <h2 id="chunk-progress-heading">分段進度</h2>
+            <p>先看整體進度；只有需要處理的分段才顯示操作。</p>
           </div>
           <div className={styles.headerControls}>
-            {job?.status === "failed" && (
-              <button
-                type="button"
-                className={styles.headerRetryButton}
-                disabled={busyRetry}
-                onClick={() => void handleRetryStage()}
-              >
-                {busyRetry ? <LoaderCircle className="spin" size={16} /> : <RotateCcw size={16} />}
-                重試失敗階段{job.activeStage ? ` (${job.activeStage})` : ""}
-              </button>
-            )}
             <span className={styles.progressText}>{chunks?.completedCount ?? 0} / {chunks?.totalCount ?? 0} 分段完成</span>
           </div>
         </header>
@@ -504,36 +552,52 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
                   <div className={styles.chunkMeta}>{formatTime(chunk.startMs)}–{formatTime(chunk.endMs)} · {chunk.wordCount.toLocaleString("zh-TW")} 字詞</div>
                   <span className={statusClass(chunk.status)}><StatusIcon status={chunk.status} />{statusLabel(chunk.status)}</span>
                   <div className={styles.chunkActions}>
-                    <button
-                      type="button"
-                      className={chunk.status === "FAILED" ? styles.retryChunkButton : styles.actionButton}
-                      disabled={retryingChunk === chunk.chunkIndex}
-                      onClick={() => void retryChunk(chunk.chunkIndex)}
-                      title="重新觸發此分段的 Chirp 語音辨識"
-                    >
-                      {retryingChunk === chunk.chunkIndex ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}
-                      {chunk.status === "FAILED" ? "重試此分段" : "重新辨識"}
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.actionButton}
-                      disabled={recalculatingChunk === chunk.chunkIndex}
-                      onClick={() => void handleRecalculate(chunk.chunkIndex)}
-                      title="從已完成的辨識結果本地重算此分段字詞統計（不會重新呼叫 Chirp，零費用）"
-                    >
-                      {recalculatingChunk === chunk.chunkIndex ? <LoaderCircle className="spin" size={15} /> : <Sigma size={15} />}
-                      重算字數
-                    </button>
-                    <button
-                      type="button"
-                      className={styles.actionButton}
-                      disabled={!chunk.hasTranscript || loadingTranscript === chunk.chunkIndex}
-                      onClick={() => void toggleTranscript(chunk)}
-                      aria-expanded={expanded.has(chunk.chunkIndex)}
-                    >
-                      {loadingTranscript === chunk.chunkIndex ? <LoaderCircle size={17} /> : expanded.has(chunk.chunkIndex) ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
-                      {expanded.has(chunk.chunkIndex) ? "收合原始稿" : "展開原始稿"}
-                    </button>
+                    {chunk.status === "FAILED" && (
+                      <button
+                        type="button"
+                        className={styles.retryChunkButton}
+                        disabled={retryingChunk === chunk.chunkIndex}
+                        onClick={() => void retryChunk(chunk.chunkIndex)}
+                      >
+                        {retryingChunk === chunk.chunkIndex ? <LoaderCircle className="spin" size={15} /> : <RotateCcw size={15} />}
+                        重試此分段
+                      </button>
+                    )}
+                    {chunk.hasTranscript && (
+                      <button
+                        type="button"
+                        className={styles.actionButton}
+                        disabled={loadingTranscript === chunk.chunkIndex}
+                        onClick={() => void toggleTranscript(chunk)}
+                        aria-expanded={expanded.has(chunk.chunkIndex)}
+                      >
+                        {loadingTranscript === chunk.chunkIndex ? <LoaderCircle size={17} /> : expanded.has(chunk.chunkIndex) ? <ChevronDown size={17} /> : <ChevronRight size={17} />}
+                        {expanded.has(chunk.chunkIndex) ? "收合原始稿" : "查看原始稿"}
+                      </button>
+                    )}
+                    {["SUCCEEDED", "EMPTY_SILENCE"].includes(chunk.status) && (
+                      <details className={styles.chunkMore}>
+                        <summary>更多</summary>
+                        <div className={styles.chunkMoreMenu}>
+                          <button
+                            type="button"
+                            disabled={recalculatingChunk === chunk.chunkIndex}
+                            onClick={() => void handleRecalculate(chunk.chunkIndex)}
+                          >
+                            <Sigma size={15} />
+                            重算字數
+                          </button>
+                          <button
+                            type="button"
+                            disabled={retryingChunk === chunk.chunkIndex}
+                            onClick={() => void retryChunk(chunk.chunkIndex)}
+                          >
+                            <RotateCcw size={15} />
+                            重新辨識
+                          </button>
+                        </div>
+                      </details>
+                    )}
                   </div>
                 </div>
                 {chunk.error && <div className={styles.error}>{chunk.error}</div>}
@@ -555,7 +619,7 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
       <section className={styles.section} aria-labelledby="live-transcript-heading">
         <header className={styles.sectionHeader}>
           <div>
-            <h2 id="live-transcript-heading">第二層｜即時 Chirp 原始稿</h2>
+            <h2 id="live-transcript-heading">Chirp 原始稿</h2>
             <p>完成一段即可在上方展開；每段獨立顯示，避免 10 秒重疊內容被誤認為正式稿。</p>
           </div>
         </header>
@@ -565,7 +629,7 @@ export default function LiveJobPage({ jobId }: { jobId: string }) {
       <section className={styles.section} aria-labelledby="formal-transcript-heading">
         <header className={styles.sectionHeader}>
           <div>
-            <h2 id="formal-transcript-heading">第三層｜正式逐字稿</h2>
+            <h2 id="formal-transcript-heading">正式逐字稿</h2>
             <p>全部 Chirp 分段接合，並依任務設定完成 Gemini 校正與 QA 後才顯示。</p>
           </div>
           <button type="button" className={styles.actionButton} onClick={() => setManualRefresh((value) => value + 1)}><RefreshCw size={16} />重新整理</button>

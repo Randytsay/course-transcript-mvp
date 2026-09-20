@@ -1,6 +1,6 @@
 "use client";
 
-import { Ban, ChevronDown, LoaderCircle, Pause, Play, RotateCcw, SlidersHorizontal, X } from "lucide-react";
+import { Ban, ChevronDown, LoaderCircle, Pause, Play, SlidersHorizontal, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import styles from "./job-controls.module.css";
 
@@ -83,9 +83,9 @@ async function requestJson(path: string, init?: RequestInit): Promise<unknown> {
 
 export default function JobControls({ jobId }: { jobId: string }) {
   const [job, setJob] = useState<JobState | null>(null);
-  const [busy, setBusy] = useState<"pause" | "resume" | "retry" | "cancel" | null>(null);
+  const [busy, setBusy] = useState<"pause" | "resume" | "cancel" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [minimized, setMinimized] = useState(false);
+  const [minimized, setMinimized] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [reason, setReason] = useState("來源檔或設定需要重新確認");
   const [cleanupTemporary, setCleanupTemporary] = useState(false);
@@ -128,30 +128,6 @@ export default function JobControls({ jobId }: { jobId: string }) {
     }
   }
 
-  async function retryStage() {
-    if (!job || job.revision < 1) return;
-    setBusy("retry");
-    setError(null);
-    try {
-      const payload = await requestJson(
-        `/jobs/${encodeURIComponent(jobId)}/retry-stage`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            expected_revision: job.revision,
-            stage: job.activeStage ?? "chirp",
-            force: true,
-          }),
-        },
-      );
-      setJob(mapJob(payload));
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "重試失敗階段失敗");
-      await refresh();
-    } finally {
-      setBusy(null);
-    }
-  }
 
   async function cancelJob() {
     if (!job || job.revision < 1 || !reason.trim()) return;
@@ -189,7 +165,7 @@ export default function JobControls({ jobId }: { jobId: string }) {
         onClick={() => setMinimized(false)}
         title="點擊展開任務控制項"
       >
-        <SlidersHorizontal size={16} /> 任務控制 ({job.status})
+        <SlidersHorizontal size={16} /> 任務操作
       </button>
     );
   }
@@ -199,31 +175,20 @@ export default function JobControls({ jobId }: { jobId: string }) {
       <div className={styles.wrapper} aria-live="polite">
       <div className={styles.statusCopy}>
         <div>
-          <strong>任務控制</strong>
+          <strong>任務操作</strong>
           <button
             type="button"
             className={styles.toggleMinimize}
             onClick={() => setMinimized(true)}
             title="縮小控制欄以獲得更大閱讀空間"
           >
-            <ChevronDown size={14} /> 隱藏底欄
+            <ChevronDown size={14} /> 收合
           </button>
         </div>
         <span>{job.status}{job.stageDetail ? `｜${job.stageDetail}` : ""}</span>
         {error && <span className={styles.error}>{error}</span>}
       </div>
       <div className={styles.actions}>
-        {job.status === "failed" && (
-          <button
-            type="button"
-            className="button button--primary"
-            disabled={busy !== null}
-            onClick={() => void retryStage()}
-          >
-            {busy === "retry" ? <LoaderCircle className="spin" size={18} /> : <RotateCcw size={18} />}
-            重試失敗階段{job.activeStage ? ` (${job.activeStage})` : ""}
-          </button>
-        )}
         {pausable.has(job.status) && (
           <button
             type="button"

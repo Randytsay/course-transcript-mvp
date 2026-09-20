@@ -151,7 +151,7 @@ def submit_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
         return (
             index,
             False,
-            f"{message}\n{(result.stderr or '')[:500]}".strip(),
+            f"{message}\n{base._diagnostic_excerpt(result.stderr or '')}".strip(),
         )
     return index, True, message
 
@@ -197,7 +197,7 @@ def recover_chunk_once(
     return (
         index,
         "failed",
-        f"{message}\n{(result.stderr or '')[:500]}".strip(),
+        f"{message}\n{base._diagnostic_excerpt(result.stderr or '')}".strip(),
     )
 
 

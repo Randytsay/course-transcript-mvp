@@ -232,20 +232,85 @@ class StoreTests(unittest.TestCase):
             input_checksum="b" * 64,
             worker_id="pipeline-worker",
         )
+        with self.store.connect() as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS performance_stage_attempts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    job_id TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    attempt_number INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    active_duration_ms INTEGER,
+                    error TEXT
+                )
+                """
+            )
+            connection.execute(
+                """
+                INSERT INTO performance_stage_attempts(
+                    job_id, stage, attempt_number, status, started_at
+                ) VALUES (?, 'export', 1, 'running', ?)
+                """,
+                (job["id"], "2026-09-20T00:00:00+00:00"),
+            )
+            connection.commit()
         failed = self.store.fail_job(
             job_id=job["id"],
             stage="export",
             error="synthetic failure",
             worker_id="pipeline-worker",
         )
+        with self.store.connect() as connection:
+            failed_stage = connection.execute(
+                "SELECT status, completed_at, error FROM stage_runs WHERE job_id = ? AND stage = 'export'",
+                (job["id"],),
+            ).fetchone()
+        self.assertEqual(failed_stage["status"], "failed")
+        self.assertIsNotNone(failed_stage["completed_at"])
+        self.assertEqual(failed_stage["error"], "synthetic failure")
+        with self.store.connect() as connection:
+            performance_attempt = connection.execute(
+                """
+                SELECT status, completed_at, error
+                FROM performance_stage_attempts
+                WHERE job_id = ? AND stage = 'export'
+                """,
+                (job["id"],),
+            ).fetchone()
+        self.assertEqual(performance_attempt["status"], "failed")
+        self.assertIsNotNone(performance_attempt["completed_at"])
+        self.assertEqual(performance_attempt["error"], "synthetic failure")
+        # Long provider tracebacks keep the terminal root cause instead of an
+        # unhelpful stack-trace prefix.
+        self.store.acquire_lease(job["id"], "pipeline-worker")
+        long_failure = ("stack frame\n" * 200) + "speech.recognizers.recognize IAM_PERMISSION_DENIED"
+        tail_failed = self.store.fail_job(
+            job_id=job["id"],
+            stage="export",
+            error=long_failure,
+            worker_id="pipeline-worker",
+        )
+        self.assertIn("speech.recognizers.recognize", tail_failed["error"])
+        self.assertIn("IAM_PERMISSION_DENIED", tail_failed["error"])
         retried = self.store.retry_failed_stage(
             job_id=job["id"],
-            expected_revision=failed["revision"],
+            expected_revision=tail_failed["revision"],
             stage="export",
             actor="owner@example.test",
         )
         self.assertEqual(retried["status"], "queued")
         self.assertIsNotNone(retried["approved_at"])
+        with self.store.connect() as connection:
+            pending_stage = connection.execute(
+                "SELECT status, completed_at, error FROM stage_runs WHERE job_id = ? AND stage = 'export'",
+                (job["id"],),
+            ).fetchone()
+        self.assertEqual(pending_stage["status"], "pending")
+        self.assertIsNone(pending_stage["completed_at"])
+        self.assertIsNone(pending_stage["error"])
 
     def test_review_qa_retry_is_local_only(self) -> None:
         job = self._create_job()
