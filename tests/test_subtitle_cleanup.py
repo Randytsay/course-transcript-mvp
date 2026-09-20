@@ -13,6 +13,44 @@ class SubtitleCleanupTests(unittest.TestCase):
         self.assertIn("boundary_filler_prefix", actions)
         self.assertIn("triple_stutter", actions)
 
+    def test_triple_cleanup_preserves_legitimate_reduplication(self) -> None:
+        cases = {
+            "慢慢慢慢的增上,": "慢慢的增上,",
+            "通通通通滿我們的願,": "通通滿我們的願,",
+            "剛剛剛剛這些都是拖我們下六道輪迴,": "剛剛這些都是拖我們下六道輪迴,",
+            "我們常常常常講,": "我們常常講,",
+            "我們天天天天在睡覺,": "我們天天在睡覺,",
+            "種種種種的現象,": "種種的現象,",
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                cleaned, actions = clean_text(source)
+                self.assertEqual(cleaned, expected)
+                self.assertIn("triple_stutter", actions)
+
+    def test_triple_cleanup_preserves_left_word_plus_reduplication(self) -> None:
+        source = "六種神通通通成就。"
+        cleaned, actions = clean_text(source)
+        self.assertEqual(cleaned, source)
+        self.assertNotIn("triple_stutter", actions)
+
+    def test_triple_cleanup_keeps_human_approved_single_char_collapse(self) -> None:
+        cleaned, actions = clean_text("我們的新新新年的新課程,")
+        self.assertEqual(cleaned, "我們的新年的新課程,")
+        self.assertIn("triple_stutter", actions)
+
+    def test_multi_character_repetition_is_review_only(self) -> None:
+        source = "這個這個這個因緣,有沒有有沒有有沒有自性?"
+        cleaned, actions = clean_text(source)
+        self.assertEqual(cleaned, source)
+        self.assertNotIn("triple_stutter", actions)
+        report = build_report(
+            "subtitles-corrected.json",
+            [{"segment_id": "seg-1", "start_ms": 0, "end_ms": 3000, "raw_text": source, "corrected_text": source}],
+        )
+        reasons = report["review_required"][0]["reasons"]
+        self.assertIn("possible_repeated_phrase", reasons)
+
     def test_collapses_high_confidence_single_character_stutters(self) -> None:
         cases = {
             "就是這這種布施,": "就是這種布施,",
@@ -35,6 +73,10 @@ class SubtitleCleanupTests(unittest.TestCase):
             "有沒有有沒有自性?",
             "還有有時候五位,",
             "不是自己成就就成就就好,",
+            "因為為什麼要回向?",
+            "作為為護法的規範,",
+            "不是世間人所得得見的,",
+            "般若若能照見五蘊皆空,",
             "那慢慢慈悲親人之後,",
             "如來通通有教授,",
             "自己迷迷糊糊,",

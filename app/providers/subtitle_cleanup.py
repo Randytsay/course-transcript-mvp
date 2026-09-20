@@ -31,25 +31,44 @@ JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 FILLERS = "嗯呃欸誒啊喔哦哎嘿"
 BOUNDARY_FILLER_RE = re.compile(rf"^(?:[{FILLERS}][\s，、。！？,.!?]*){{1,4}}")
 BOUNDARY_FILLER_TAIL_RE = re.compile(rf"(?:[\s，、。！？,.!?]*[{FILLERS}]){{1,4}}$")
-TRIPLE_STUTTER_RE = re.compile(r"([\u4e00-\u9fffA-Za-z]{1,3})\1{2,}")
+TRIPLE_STUTTER_RE = re.compile(r"([\u4e00-\u9fffA-Za-z])\1{2,}")
 DOUBLE_STUTTER_RE = re.compile(r"([\u4e00-\u9fffA-Za-z]{1,2})\1")
 DOUBLE_STUTTER_CHAR_RE = re.compile(r"([\u4e00-\u9fff])\1")
+REPEATED_PHRASE_RE = re.compile(r"([\u4e00-\u9fffA-Za-z]{2,6})(?:\1){2,}")
+LEGITIMATE_REDUPLICATION_CHARS = frozenset("慢通剛常天人種一點某連")
+TRIPLE_LEFT_BOUNDARY_PROTECT = {
+    "通": ("神通", "交通", "流通", "普通", "精通"),
+    "天": ("諸天", "梵天", "上天", "升天"),
+    "人": ("世人", "凡人", "眾人", "他人"),
+    "種": ("各種", "多種", "一種"),
+    "一": ("唯一", "第一", "十一"),
+    "點": ("重點", "一點", "地點"),
+    "連": ("相連", "接連"),
+}
 HIGH_CONFIDENCE_DOUBLE_STUTTER_CHARS = frozenset(
     "我你他她它這那要在有會都得的就還才若令幾資願成慈像以合為"
 )
 DOUBLE_STUTTER_LEFT_BOUNDARY_PROTECT = {
-    "在": ("現在", "存在", "所在", "自在"),
-    "有": ("還有", "沒有", "所有", "只有", "具有", "含有", "擁有"),
-    "以": ("可以", "所以"),
+    "在": ("現在", "存在", "所在", "自在", "實在"),
+    "有": ("還有", "沒有", "所有", "只有", "具有", "含有", "擁有", "持有", "保有"),
+    "以": ("可以", "所以", "予以"),
     "就": ("成就",),
-    "要": ("重要", "需要", "只要", "想要", "主要"),
-    "會": ("法會", "社會", "機會", "學會", "教會", "聚會"),
-    "才": ("剛才",),
-    "資": ("投資", "融資"),
+    "要": ("重要", "需要", "只要", "想要", "主要", "必要", "次要"),
+    "會": ("法會", "社會", "機會", "學會", "教會", "聚會", "大會"),
+    "得": ("所得", "獲得", "取得", "值得"),
+    "的": ("目的", "標的"),
+    "還": ("歸還", "返還", "償還"),
+    "才": ("剛才", "人才"),
+    "若": ("般若",),
+    "幾": ("第幾",),
+    "資": ("投資", "融資", "物資"),
+    "願": ("志願", "心願", "發願"),
     "成": ("完成", "形成", "構成", "組成"),
-    "合": ("符合", "結合", "配合", "適合"),
+    "慈": ("大慈",),
+    "像": ("影像",),
+    "合": ("符合", "結合", "配合", "適合", "集合"),
+    "為": ("因為", "作為", "成為", "認為", "所為", "無為"),
     "令": ("命令",),
-    "願": ("志願", "心願"),
 }
 MANTRA_DOUBLE_STUTTER_PROTECT_RE = re.compile(
     r"(?:南[無謨]|阿囉|三藐|佛陀耶|菩提耶|莎訶|梭呵|怛|誐)"
@@ -283,6 +302,47 @@ def _collapse_high_confidence_double_stutters(text: str) -> tuple[str, int]:
     return "".join(output), collapsed_count
 
 
+def _triple_left_boundary_consumes_one(text: str, start: int, char: str) -> bool:
+    """Whether the first char in an AAA+ run completes a normal left word."""
+    prefix_with_first = text[: start + 1]
+    return any(
+        prefix_with_first.endswith(term)
+        for term in TRIPLE_LEFT_BOUNDARY_PROTECT.get(char, ())
+    )
+
+
+def _collapse_high_confidence_triple_stutters(text: str) -> tuple[str, int]:
+    """Collapse single-character AAA+ runs without destroying real reduplication.
+
+    Multi-character phrase repetition is deliberately excluded from automatic
+    cleanup.  Some Chinese lexical items are genuinely reduplicated (慢慢、通通、
+    剛剛...), so those runs retain AA.  If the first repeated character belongs
+    to a normal left word (神通 + 通通), preserve that boundary character too.
+    """
+    if not text or MANTRA_DOUBLE_STUTTER_PROTECT_RE.search(text):
+        return text, 0
+    output: list[str] = []
+    cursor = 0
+    collapsed_count = 0
+    for match in TRIPLE_STUTTER_RE.finditer(text):
+        char = match.group(1)
+        run_length = match.end() - match.start()
+        keep = 1
+        if char in LEGITIMATE_REDUPLICATION_CHARS:
+            keep = 2
+            if _triple_left_boundary_consumes_one(text, match.start(), char):
+                keep = 3
+        keep = min(keep, run_length)
+        output.append(text[cursor:match.start()])
+        output.append(char * keep)
+        cursor = match.end()
+        collapsed_count += run_length - keep
+    if not collapsed_count:
+        return text, 0
+    output.append(text[cursor:])
+    return "".join(output), collapsed_count
+
+
 def clean_text(value: str) -> tuple[str, list[str]]:
     """Remove only high-confidence boundary fillers and speech disfluencies."""
     text = str(value or "").strip()
@@ -295,8 +355,8 @@ def clean_text(value: str) -> tuple[str, list[str]]:
     if without_suffix != text:
         actions.append("boundary_filler_suffix")
     text = without_suffix
-    collapsed = TRIPLE_STUTTER_RE.sub(r"\1", text)
-    if collapsed != text:
+    collapsed, triple_count = _collapse_high_confidence_triple_stutters(text)
+    if triple_count:
         actions.append("triple_stutter")
     collapsed, double_count = _collapse_high_confidence_double_stutters(collapsed)
     if double_count:
@@ -352,6 +412,8 @@ def build_report(
             reasons.append("cleanup_would_make_segment_empty")
         if DOUBLE_STUTTER_RE.search(cleaned_text) and not TRIPLE_STUTTER_RE.search(cleaned_text):
             reasons.append("possible_double_stutter")
+        if REPEATED_PHRASE_RE.search(cleaned_text):
+            reasons.append("possible_repeated_phrase")
         if FILLERS and re.search(rf"[{FILLERS}]", cleaned_text[1:-1] if len(cleaned_text) > 2 else ""):
             reasons.append("inner_filler_review")
         if INTERRUPTION_RE.search(cleaned_text):
