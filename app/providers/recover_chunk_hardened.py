@@ -221,6 +221,15 @@ def _cleanup(
     }
 
 
+def empty_result_policy(prior: dict[str, Any], audible: bool) -> tuple[str, str | None]:
+    """Classify an empty provider result without conflating sound with speech."""
+    if not audible:
+        return "EMPTY_SILENCE", None
+    if str(prior.get("role") or "base") == "patch":
+        return "SUCCEEDED", "audible_no_lexical_tokens"
+    return "FAILED", None
+
+
 def main() -> int:
     index = int(os.environ.get("CHUNK_INDEX", "0"))
     start = float(os.environ.get("CHUNK_START_SECONDS", "0"))
@@ -348,6 +357,7 @@ def main() -> int:
             )
 
     audio = chunk / "audio.flac"
+    patch_verdict: str | None = None
     if not words:
         if not audio.exists():
             subprocess.run(
@@ -368,7 +378,8 @@ def main() -> int:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
             )
-        if has_speech(audio):
+        status, patch_verdict = empty_result_policy(prior, has_speech(audio))
+        if status == "FAILED":
             prior.update(
                 status="FAILED",
                 error={
@@ -380,7 +391,8 @@ def main() -> int:
             atomic_json(manifest_path, prior)
             print(f"RECOVER_{name}=TERMINAL empty result for audible audio")
             return TERMINAL_EXIT
-    status = "SUCCEEDED" if words else "EMPTY_SILENCE"
+    else:
+        status = "SUCCEEDED"
     recovered_at = iso()
     raw_text = words_to_text(words)
     atomic_json(
@@ -424,6 +436,7 @@ def main() -> int:
         total_wall_ms=_elapsed_ms(prior.get("submitted_at"), recovered_at),
         gcs_cleanup={"status": "pending", "deleted": []},
         last_recovery_error=None,
+        patch_verdict=patch_verdict,
     )
     atomic_json(manifest_path, prior)
 

@@ -327,6 +327,48 @@
   font-weight: 760;
 }
 
+.chunkMetaBlock {
+  min-width: 0;
+  display: grid;
+  gap: 0.38rem;
+}
+
+.densityNormal,
+.densityReview {
+  width: fit-content;
+  max-width: 100%;
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.55rem;
+  padding: 0.28rem 0.55rem;
+  border-radius: 0.55rem;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.densityNormal {
+  color: #355247;
+  background: #edf5ef;
+}
+
+.densityReview {
+  color: #7a4b08;
+  background: #fff3d6;
+  box-shadow: inset 0 0 0 1px #e5c779;
+}
+
+.densityNormal strong,
+.densityReview strong {
+  font-weight: 800;
+}
+
+.densityNormal span,
+.densityReview span {
+  color: inherit;
+  opacity: 0.86;
+}
+
 .status {
   display: inline-flex;
   align-items: center;

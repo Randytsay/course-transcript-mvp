@@ -61,6 +61,16 @@ test("failed job page is task-oriented and hides noisy waiting-chunk actions", (
   assert.doesNotMatch(liveJob, /第二層｜即時 Chirp 原始稿/);
 });
 
+test("chunk progress explains course-relative speech density instead of raw counts alone", () => {
+  assert.match(liveJob, /語速一致/);
+  assert.match(liveJob, /需確認有聲空檔/);
+  assert.match(liveJob, /同課中位/);
+  assert.match(liveJob, /扣除長空檔/);
+  assert.match(liveJob, /時間戳修復/);
+  assert.match(liveJob, /局部辨識已修復/);
+  assert.match(liveJob, /局部重辨仍無可辨語詞/);
+});
+
 test("task controls default to a compact bottom-right launcher", () => {
   assert.match(jobControls, /useState\(true\)/);
   assert.match(jobControls, /任務操作/);
