@@ -181,6 +181,20 @@ def run_subprocess(
     )
 
 
+def _diagnostic_excerpt(value: str, limit: int = 1800) -> str:
+    """Keep traceback context and the provider's terminal root cause."""
+    text = (value or "").strip()
+    if len(text) <= limit:
+        return text
+    head_size = min(320, max(0, limit // 4))
+    tail_size = max(0, limit - head_size - 42)
+    return (
+        text[:head_size]
+        + "\n...[provider diagnostic truncated]...\n"
+        + text[-tail_size:]
+    )
+
+
 def env_with(chunk_env: dict[str, str]) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if key in KEEP_ENV}
     env.update(chunk_env)
@@ -260,7 +274,7 @@ def submit_chunk(index: int, start: float, end: float) -> tuple[int, bool, str]:
     )
     message = (result.stdout or "").strip()
     if result.returncode != 0:
-        message = f"{message}\n{(result.stderr or '')[:500]}".strip()
+        message = f"{message}\n{_diagnostic_excerpt(result.stderr or '')}".strip()
         return index, False, message
     return index, True, message
 
@@ -283,7 +297,7 @@ def recover_chunk_once(index: int, start: float, end: float) -> tuple[int, str, 
         return index, "done", message
     if result.returncode == 75:
         return index, "pending", message or f"chunk-{index:03d}: pending"
-    message = f"{message}\n{(result.stderr or '')[:500]}".strip()
+    message = f"{message}\n{_diagnostic_excerpt(result.stderr or '')}".strip()
     return index, "failed", message
 
 
@@ -313,7 +327,7 @@ def _merge() -> int:
     result = run_subprocess("app.providers.merge_chunks", env_with({}), timeout=120)
     print(result.stdout)
     if result.stderr:
-        print(f"STDERR: {result.stderr[:500]}")
+        print(f"STDERR: {_diagnostic_excerpt(result.stderr)}")
     if result.returncode != 0:
         print("\nPIPELINE=FAIL merge failed")
         return 1

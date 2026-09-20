@@ -1052,7 +1052,10 @@ class JobStore:
         error: str,
         worker_id: str,
     ) -> dict[str, Any]:
-        safe_error = error[:1000]
+        # Provider SDKs typically put the actionable root cause at the end of
+        # a traceback. Keep the tail so IAM/quota/provider reason codes survive
+        # persistence and remain visible to the task-focused failure UI.
+        safe_error = error[-1000:]
         now = _iso()
         with self.transaction() as connection:
             self._require_lease(connection, job_id, worker_id)
@@ -1061,6 +1064,31 @@ class JobStore:
             ).fetchone()
             if row is None:
                 raise JobNotFound("Job not found")
+            connection.execute(
+                """
+                UPDATE stage_runs
+                SET status = 'failed', completed_at = ?, error = ?
+                WHERE job_id = ? AND stage = ? AND status = 'running'
+                """,
+                (now, safe_error, job_id, stage),
+            )
+            performance_table = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'performance_stage_attempts'"
+            ).fetchone()
+            if performance_table is not None:
+                connection.execute(
+                    """
+                    UPDATE performance_stage_attempts
+                    SET status = 'failed', completed_at = ?, error = ?
+                    WHERE id = (
+                        SELECT id FROM performance_stage_attempts
+                        WHERE job_id = ? AND stage = ? AND status = 'running'
+                        ORDER BY attempt_number DESC
+                        LIMIT 1
+                    )
+                    """,
+                    (now, safe_error, job_id, stage),
+                )
             connection.execute(
                 """
                 UPDATE jobs
@@ -1714,7 +1742,7 @@ class JobStore:
             connection.execute(
                 """
                 UPDATE stage_runs
-                SET status = 'pending', error = NULL
+                SET status = 'pending', completed_at = NULL, error = NULL
                 WHERE job_id = ? AND stage IN ('chirp', 'segment', 'correction', 'export', 'qa', 'validation')
                 """,
                 (job_id,),

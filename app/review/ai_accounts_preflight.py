@@ -10,6 +10,9 @@ All calls are read-only and free:
 - service-account token mint via google-auth with a proper transport Request
 - Cloud Resource Manager ``projects.get`` (project visibility)
 - Vertex AI ``projects.locations`` get (endpoint + permission)
+- Speech-to-Text ``recognizers.list`` in the production ``us`` region
+- Cloud Resource Manager ``projects.testIamPermissions`` for the exact
+  ``speech.recognizers.recognize`` permission used by paid Chirp submission
 - GCS ``objects.list`` (pipeline bucket access)
 No model generation is ever invoked.
 """
@@ -150,7 +153,55 @@ def run_live_checks(cred: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any
             errors.append(f"無法連線驗證 {label}: {exc.__class__.__name__}")
             checks[label] = "unavailable"
 
-    # 2) Vertex AI endpoint + permission (locations.get — read-only, free)
+    # 2) Speech-to-Text data-plane IAM. Service Usage only proves that the API
+    # is enabled; it does not prove this service account can use recognizers.
+    try:
+        resp = requests.get(
+            f"https://us-speech.googleapis.com/v2/projects/{project_id}"
+            "/locations/us/recognizers",
+            params={"pageSize": 1},
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code == 200:
+            checks["speech_access"] = "ok"
+        else:
+            errors.append(
+                "Cloud Speech IAM 存取失敗 "
+                f"(HTTP {resp.status_code})；請確認服務帳戶具有 Cloud Speech Client"
+            )
+            checks["speech_access"] = f"fail http {resp.status_code}"
+    except requests.RequestException as exc:
+        errors.append(f"無法連線驗證 Cloud Speech IAM: {exc.__class__.__name__}")
+        checks["speech_access"] = "unavailable"
+
+    # 2b) Exact permission used by BatchRecognize. A recognizers.list success
+    # alone is not sufficient evidence that paid recognition can be submitted.
+    if checks.get("speech_access") == "ok":
+        try:
+            resp = requests.post(
+                f"https://cloudresourcemanager.googleapis.com/v1/projects/{project_id}:testIamPermissions",
+                headers={**headers, "Content-Type": "application/json"},
+                json={"permissions": ["speech.recognizers.recognize"]},
+                timeout=10,
+            )
+            body = resp.json() if hasattr(resp, "json") else {}
+            granted = set(body.get("permissions") or []) if resp.status_code == 200 else set()
+            if "speech.recognizers.recognize" in granted:
+                checks["speech_recognize_permission"] = "ok"
+            else:
+                errors.append(
+                    "Cloud Speech 辨識權限不足；服務帳戶缺少 "
+                    "speech.recognizers.recognize（Cloud Speech Client）"
+                )
+                checks["speech_recognize_permission"] = (
+                    f"fail http {resp.status_code}" if resp.status_code != 200 else "missing"
+                )
+        except requests.RequestException as exc:
+            errors.append(f"無法驗證 Cloud Speech 辨識權限: {exc.__class__.__name__}")
+            checks["speech_recognize_permission"] = "unavailable"
+
+    # 3) Vertex AI endpoint + permission (locations.get — read-only, free)
     # "global" uses the official global endpoint, NOT "global-aiplatform...".
     location = str(meta.get("location") or "global")
     vertex_host = vertex_endpoint_host(location)
@@ -170,7 +221,7 @@ def run_live_checks(cred: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any
         errors.append(f"無法連線 Vertex AI 端點: {exc.__class__.__name__}")
         checks["vertex_access"] = "unavailable"
 
-    # 3) GCS object-list access if configured.  The pipeline needs to list and
+    # 4) GCS object-list access if configured.  The pipeline needs to list and
     # write objects; bucket metadata (storage.buckets.get) is intentionally not
     # required by the service-account role set and can be denied even when the
     # bucket is fully usable by the pipeline.

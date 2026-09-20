@@ -1,8 +1,115 @@
 .summaryGrid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
   margin-bottom: 1.25rem;
+}
+
+.failureBanner {
+  display: grid;
+  grid-template-columns: 46px minmax(0, 1fr);
+  gap: 1rem;
+  margin-bottom: 1.25rem;
+  padding: 1.15rem 1.25rem;
+  border: 1px solid #d6b76f;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, #fff8e8 0%, #fffdf6 72%);
+  box-shadow: var(--shadow-sm);
+}
+
+.failureIcon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  color: #8b5a0c;
+  background: #f7e7ba;
+}
+
+.failureCopy h2,
+.failureCopy p { margin: 0; }
+
+.failureCopy h2 {
+  margin-top: 0.2rem;
+  color: #3e2d19;
+  font-size: 1.2rem;
+  line-height: 1.35;
+}
+
+.failureCopy p {
+  margin-top: 0.45rem;
+  max-width: 76rem;
+  color: #665a49;
+  font-size: 0.95rem;
+  line-height: 1.65;
+}
+
+.failureEyebrow {
+  color: #8b5a0c;
+  font-size: 0.78rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+}
+
+.failureActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  margin-top: 0.9rem;
+}
+
+.primaryRetryButton,
+.accountLink {
+  min-height: 2.65rem;
+  padding: 0 1rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  border-radius: 0.7rem;
+  font-size: 0.92rem;
+  font-weight: 780;
+}
+
+.primaryRetryButton {
+  border: 1px solid #8b5a0c;
+  color: #fff;
+  background: linear-gradient(135deg, #9b680e, #7f4f08);
+  box-shadow: 0 6px 16px rgba(139, 90, 12, 0.2);
+  cursor: pointer;
+}
+
+.primaryRetryButton:disabled { cursor: not-allowed; opacity: 0.55; }
+
+.accountLink {
+  border: 1px solid #b9c7bf;
+  color: #203f34;
+  background: #f5f8f5;
+}
+
+.technicalDetails { margin-top: 0.8rem; color: #665a49; }
+
+.technicalDetails summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.technicalDetails pre {
+  max-height: 13rem;
+  margin: 0.65rem 0 0;
+  padding: 0.8rem;
+  overflow: auto;
+  border: 1px solid #e3d7bc;
+  border-radius: 0.65rem;
+  color: #4a4033;
+  background: #fffdf8;
+  font: 0.78rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .card,
@@ -101,32 +208,6 @@
   flex-wrap: wrap;
 }
 
-.headerRetryButton {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.5rem;
-  min-height: 2.5rem;
-  padding: 0 1rem;
-  border: 1px solid #3730a3;
-  border-radius: 0.65rem;
-  background: #3730a3;
-  color: #ffffff;
-  font-size: 0.95rem;
-  font-weight: 750;
-  cursor: pointer;
-  box-shadow: 0 2px 8px rgba(55, 48, 163, 0.25);
-  transition: background 0.15s ease, transform 0.1s ease;
-}
-
-.headerRetryButton:hover {
-  background: #312e81;
-}
-
-.headerRetryButton:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
 .progressText {
   flex: 0 0 auto;
   padding: 0.5rem 0.75rem;
@@ -160,8 +241,62 @@
 .chunkActions {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 0.5rem;
 }
+
+.chunkMore { position: relative; }
+
+.chunkMore > summary {
+  min-height: 2.5rem;
+  padding: 0 0.8rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 0.65rem;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+  color: var(--brand-dark);
+  background: #fff;
+  font-size: 0.9rem;
+  font-weight: 720;
+  list-style: none;
+}
+
+.chunkMore > summary::-webkit-details-marker { display: none; }
+
+.chunkMoreMenu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  z-index: 12;
+  min-width: 9.5rem;
+  padding: 0.35rem;
+  border: 1px solid #d8cfbd;
+  border-radius: 0.7rem;
+  display: grid;
+  gap: 0.2rem;
+  background: #fffdf8;
+  box-shadow: 0 10px 28px rgba(62, 45, 25, 0.14);
+}
+
+.chunkMoreMenu button {
+  min-height: 2.35rem;
+  padding: 0 0.7rem;
+  border: 0;
+  border-radius: 0.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  cursor: pointer;
+  color: #3e2d19;
+  background: transparent;
+  font: inherit;
+  font-size: 0.88rem;
+  text-align: left;
+}
+
+.chunkMoreMenu button:hover { background: #f7f1e3; }
+
 
 .retryChunkButton {
   display: inline-flex;
@@ -345,8 +480,12 @@
 
 @media (max-width: 680px) {
   .summaryGrid { grid-template-columns: 1fr; }
+  .failureBanner { grid-template-columns: 1fr; }
+  .failureActions, .primaryRetryButton, .accountLink { width: 100%; }
   .sectionHeader { flex-direction: column; }
   .chunkTop { grid-template-columns: 1fr; }
+  .chunkActions { justify-content: flex-start; }
+  .chunkMoreMenu { left: 0; right: auto; }
   .formalSegment { grid-template-columns: 1fr; gap: 0.4rem; }
   .actionButton, .primaryLink { width: 100%; }
 }

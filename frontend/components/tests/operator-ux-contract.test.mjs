@@ -6,6 +6,9 @@ const newJob = readFileSync(new URL("../new-job-page-drive-api.tsx", import.meta
 const dashboard = readFileSync(new URL("../dashboard-page.tsx", import.meta.url), "utf8");
 const shell = readFileSync(new URL("../app-shell.tsx", import.meta.url), "utf8");
 const css = readFileSync(new URL("../../app/globals.css", import.meta.url), "utf8");
+const liveJob = readFileSync(new URL("../live-job-page.tsx", import.meta.url), "utf8");
+const jobControls = readFileSync(new URL("../job-controls.tsx", import.meta.url), "utf8");
+const jobControlsCss = readFileSync(new URL("../job-controls.module.css", import.meta.url), "utf8");
 
 test("primary transcription flow is user intent first", () => {
   assert.match(newJob, /title="開始辨識"/);
@@ -47,4 +50,21 @@ test("operator workspace follows the formal course and proofreading brand", () =
   assert.match(css, /\.sidebar \{ background: #203f34/);
   assert.match(css, /#d8a62e/);
   assert.match(css, /#4e5b4a/);
+});
+
+test("failed job page is task-oriented and hides noisy waiting-chunk actions", () => {
+  assert.match(liveJob, /Google Speech 權限不足，Chirp 尚未開始/);
+  assert.match(liveJob, /權限修正後重新送出/);
+  assert.match(liveJob, /chunk\.status === "FAILED"/);
+  assert.match(liveJob, /\["SUCCEEDED", "EMPTY_SILENCE"\]\.includes\(chunk\.status\)/);
+  assert.doesNotMatch(liveJob, /第一層｜分段進度/);
+  assert.doesNotMatch(liveJob, /第二層｜即時 Chirp 原始稿/);
+});
+
+test("task controls default to a compact bottom-right launcher", () => {
+  assert.match(jobControls, /useState\(true\)/);
+  assert.match(jobControls, /任務操作/);
+  assert.doesNotMatch(jobControls, /重試失敗階段/);
+  assert.match(jobControlsCss, /width: min\(390px, calc\(100vw - 32px\)\)/);
+  assert.doesNotMatch(jobControlsCss, /left: max\(18px/);
 });
