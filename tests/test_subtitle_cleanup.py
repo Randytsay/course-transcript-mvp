@@ -13,6 +13,47 @@ class SubtitleCleanupTests(unittest.TestCase):
         self.assertIn("boundary_filler_prefix", actions)
         self.assertIn("triple_stutter", actions)
 
+    def test_collapses_high_confidence_single_character_stutters(self) -> None:
+        cases = {
+            "就是這這種布施,": "就是這種布施,",
+            "我我會我會三寶法員嘛,": "我會我會三寶法員嘛,",
+            "要要念觀世音菩薩嘛,": "要念觀世音菩薩嘛,",
+            "不一定會知,他他離苦,": "不一定會知,他離苦,",
+            "沒有一些資資糧很痛苦,": "沒有一些資糧很痛苦,",
+            "就是慢慢的慈慈悲心擴大。": "就是慢慢的慈悲心擴大。",
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                cleaned, actions = clean_text(source)
+                self.assertEqual(cleaned, expected)
+                self.assertIn("double_stutter_high_confidence", actions)
+
+    def test_protects_lexical_boundaries_and_legitimate_reduplication(self) -> None:
+        cases = (
+            "我現在在修一日一夜,",
+            "可以以此發願,以此觀想,",
+            "有沒有有沒有自性?",
+            "還有有時候五位,",
+            "不是自己成就就成就就好,",
+            "那慢慢慈悲親人之後,",
+            "如來通通有教授,",
+            "自己迷迷糊糊,",
+            "弟子某某,",
+            "這些我們會產生一點點的驕慢,",
+            "自己就災難連連啊,",
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                cleaned, actions = clean_text(source)
+                self.assertEqual(cleaned, source)
+                self.assertNotIn("double_stutter_high_confidence", actions)
+
+    def test_does_not_destutter_mantra_phonetics(self) -> None:
+        source = "南無那丹那丹那耶耶,阿囉囉帝三藐三佛陀耶,"
+        cleaned, actions = clean_text(source)
+        self.assertEqual(cleaned, source)
+        self.assertNotIn("double_stutter_high_confidence", actions)
+
     def test_keeps_inner_filler_for_review(self) -> None:
         cleaned, actions = clean_text("這是啊一段內容")
         self.assertEqual(cleaned, "這是啊一段內容")
