@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import statistics
 import subprocess
 from html import escape
 from datetime import UTC, datetime
@@ -161,54 +162,400 @@ def segment_quality(segments: list[dict[str, object]]) -> tuple[list[str], dict[
     }
 
 
-def density_windows(segments: list[dict[str, object]], audio_ms: int) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-    """Measure transcript characters in fixed 15-minute windows.
+def _long_gap_ms(
+    segments: list[dict[str, object]],
+    start_ms: int,
+    end_ms: int,
+    minimum_gap_ms: int,
+) -> int:
+    total = 0
+    ordered = sorted(
+        (
+            item
+            for item in segments
+            if int(item.get("end_ms", 0)) > start_ms
+            and int(item.get("start_ms", 0)) < end_ms
+        ),
+        key=lambda item: int(item.get("start_ms", 0)),
+    )
+    for before, after in zip(ordered, ordered[1:]):
+        raw_start = int(before.get("end_ms", 0))
+        raw_end = int(after.get("start_ms", 0))
+        if raw_end - raw_start < minimum_gap_ms:
+            continue
+        gap_start = max(start_ms, raw_start)
+        gap_end = min(end_ms, raw_end)
+        if gap_end > gap_start:
+            total += gap_end - gap_start
+    return total
 
-    The final partial window is reported but not failed unless it reaches the
-    minimum evaluation duration; this avoids treating a short tail as a bad
-    recognition.  Each outlier becomes a durable, operator-reviewable patch
-    plan rather than an automatic paid submission.
-    """
+
+def _zero_word_gaps(
+    words: list[dict[str, object]],
+    start_ms: int,
+    end_ms: int,
+    minimum_gap_ms: int,
+) -> list[dict[str, int]]:
+    ordered = sorted(
+        (
+            item
+            for item in words
+            if int(item.get("end_ms", 0)) > start_ms
+            and int(item.get("start_ms", 0)) < end_ms
+        ),
+        key=lambda item: int(item.get("start_ms", 0)),
+    )
+    boundaries: list[tuple[int, int]] = []
+    cursor = start_ms
+    for item in ordered:
+        item_start = max(start_ms, int(item.get("start_ms", 0)))
+        if item_start - cursor >= minimum_gap_ms:
+            boundaries.append((cursor, item_start))
+        cursor = max(cursor, min(end_ms, int(item.get("end_ms", 0))))
+    if end_ms - cursor >= minimum_gap_ms:
+        boundaries.append((cursor, end_ms))
+    return [
+        {"start_ms": gap_start, "end_ms": gap_end, "gap_ms": gap_end - gap_start}
+        for gap_start, gap_end in boundaries
+    ]
+
+
+def tail_coverage_assessment(
+    end_ms: int,
+    audio_ms: int,
+    review_max_ms: int,
+    audibility_probe=audible_between,
+) -> dict[str, object]:
+    uncovered = max(0, audio_ms - end_ms)
+    tolerated_end = min(audio_ms, end_ms + max(0, review_max_ms))
+    within_tolerance = (
+        audibility_probe(end_ms, tolerated_end) if tolerated_end > end_ms else False
+    )
+    beyond_tolerance = (
+        audibility_probe(tolerated_end, audio_ms) if audio_ms > tolerated_end else False
+    )
+    return {
+        "uncovered_ms": uncovered,
+        "review_max_ms": review_max_ms,
+        "tolerated_end_ms": tolerated_end,
+        "within_tolerance_audible": within_tolerance,
+        "beyond_tolerance_audible": beyond_tolerance,
+    }
+
+
+def base_chunk_density_reports(
+    job: Path,
+    audio_ms: int,
+    audibility_probe=audible_between,
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Compare base Chirp chunks against this lecture's own speech-rate median."""
+    try:
+        plan = json.loads((job / "chunk-plan.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return [], []
+    chunks = plan.get("chunks", []) if isinstance(plan, dict) else []
+    if not isinstance(chunks, list):
+        return [], []
+
+    minimum_gap_ms = int(
+        os.environ.get("CHIRP_DENSITY_EXPLAIN_GAP_SECONDS", "30")
+    ) * 1000
+    low_ratio = float(os.environ.get("CHIRP_COURSE_DENSITY_LOW_RATIO", "0.75"))
+    high_ratio = float(os.environ.get("CHIRP_COURSE_DENSITY_HIGH_RATIO", "1.25"))
+    reports: list[dict[str, object]] = []
+
+    repaired_words_by_chunk: dict[int, list[dict[str, object]]] = {}
+    timing_repairs_by_chunk: dict[int, list[dict[str, object]]] = {}
+    try:
+        pre_merge = json.loads((job / "pre-merge-words.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pre_merge = {}
+    if isinstance(pre_merge, dict):
+        for entry in pre_merge.get("chunks", []):
+            if not isinstance(entry, dict):
+                continue
+            try:
+                chunk_index = int(entry.get("chunk_index"))
+            except (TypeError, ValueError):
+                continue
+            chunk_words = entry.get("words", [])
+            if isinstance(chunk_words, list):
+                repaired_words_by_chunk[chunk_index] = chunk_words
+        for repair in pre_merge.get("timing_repairs", []):
+            if not isinstance(repair, dict):
+                continue
+            try:
+                chunk_index = int(repair.get("chunk_index"))
+            except (TypeError, ValueError):
+                continue
+            timing_repairs_by_chunk.setdefault(chunk_index, []).append(repair)
+
+    for planned in chunks:
+        if not isinstance(planned, dict):
+            continue
+        try:
+            index = int(planned.get("chunk_index"))
+            start_ms = int(planned.get("source_start_ms", 0))
+            end_ms = int(planned.get("source_end_ms", 0))
+        except (TypeError, ValueError):
+            continue
+        manifest_path = job / "chunks" / f"chunk-{index:03d}" / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if (
+            not isinstance(manifest, dict)
+            or manifest.get("role") not in {None, "base"}
+            or manifest.get("status") not in {"SUCCEEDED", "EMPTY_SILENCE"}
+        ):
+            continue
+        duration_ms_value = max(0, end_ms - start_ms)
+        word_count = int(manifest.get("word_count") or 0)
+        chunk_words = repaired_words_by_chunk.get(index)
+        word_timeline_source = "pre_merge_repaired"
+        if not isinstance(chunk_words, list):
+            words_path = manifest_path.with_name("words.json")
+            try:
+                payload = json.loads(words_path.read_text(encoding="utf-8"))
+                chunk_words = payload.get("words", []) if isinstance(payload, dict) else []
+            except (OSError, json.JSONDecodeError):
+                chunk_words = []
+            word_timeline_source = "chunk_words_raw"
+        if not isinstance(chunk_words, list):
+            chunk_words = []
+        gaps = _zero_word_gaps(chunk_words, start_ms, end_ms, minimum_gap_ms)
+        gap_ms = sum(item["gap_ms"] for item in gaps)
+        effective_ms = max(1, duration_ms_value - gap_ms)
+        raw_wpm = (
+            word_count * 60_000 / duration_ms_value if duration_ms_value > 0 else 0.0
+        )
+        adjusted_wpm = word_count * 60_000 / effective_ms
+        reports.append(
+            {
+                "chunk_index": index,
+                "status": manifest.get("status"),
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "duration_ms": duration_ms_value,
+                "word_count": word_count,
+                "words_per_minute": round(raw_wpm, 2),
+                "long_zero_word_gap_ms": gap_ms,
+                "effective_speech_window_ms": effective_ms,
+                "adjusted_words_per_minute": round(adjusted_wpm, 2),
+                "zero_word_gaps": gaps,
+                "word_timeline_source": word_timeline_source,
+                "timing_repair_count": len(timing_repairs_by_chunk.get(index, [])),
+                "timing_repairs": timing_repairs_by_chunk.get(index, []),
+            }
+        )
+
+    rates = [
+        float(item["words_per_minute"])
+        for item in reports
+        if int(item["duration_ms"]) >= 300_000 and float(item["words_per_minute"]) > 0
+    ]
+    if not rates:
+        return reports, []
+    baseline = statistics.median(rates)
+    plans: list[dict[str, object]] = []
+
+    for item in reports:
+        raw_ratio = float(item["words_per_minute"]) / baseline if baseline > 0 else None
+        adjusted_ratio = (
+            float(item["adjusted_words_per_minute"]) / baseline if baseline > 0 else None
+        )
+        item["course_median_words_per_minute"] = round(baseline, 2)
+        item["rate_ratio_to_course_median"] = (
+            round(raw_ratio, 3) if raw_ratio is not None else None
+        )
+        item["adjusted_ratio_to_course_median"] = (
+            round(adjusted_ratio, 3) if adjusted_ratio is not None else None
+        )
+        item["low_ratio"] = low_ratio
+        item["high_ratio"] = high_ratio
+        item["classification"] = "normal"
+        item["review_required"] = False
+        item["recommended_action"] = "none"
+
+        if raw_ratio is None or adjusted_ratio is None:
+            continue
+        if raw_ratio < low_ratio and low_ratio <= adjusted_ratio <= high_ratio:
+            audible_gaps = []
+            for gap in item["zero_word_gaps"]:
+                audible = audibility_probe(int(gap["start_ms"]), int(gap["end_ms"]))
+                gap["audible"] = audible
+                if audible is True:
+                    audible_gaps.append(gap)
+            if audible_gaps:
+                item["classification"] = "explained_by_audible_zero_word_gap"
+                item["review_required"] = True
+                item["recommended_action"] = (
+                    "inspect_gap_media; use targeted alternate recognition only if speech is confirmed"
+                )
+            else:
+                item["classification"] = "explained_by_long_gap"
+                item["recommended_action"] = "no_retry"
+        elif raw_ratio < low_ratio or adjusted_ratio < low_ratio:
+            item["classification"] = "unexplained_low_density"
+            item["review_required"] = True
+            item["recommended_action"] = "targeted_review_before_paid_retry"
+            plans.append(
+                {
+                    "plan_id": f"course-density-{len(plans) + 1:03d}",
+                    "reason": "course_relative_chunk_density",
+                    "detail": (
+                        f"chunk {item['chunk_index']} adjusted rate "
+                        f"{item['adjusted_words_per_minute']}/min is "
+                        f"{adjusted_ratio:.2f}x course median {baseline:.2f}/min"
+                    ),
+                    "chunk_index": item["chunk_index"],
+                    "start_ms": max(0, int(item["start_ms"]) - 10_000),
+                    "end_ms": min(audio_ms, int(item["end_ms"]) + 10_000),
+                    "automatic_paid_retry": False,
+                }
+            )
+        elif raw_ratio > high_ratio or adjusted_ratio > high_ratio:
+            item["classification"] = "unexplained_high_density"
+            item["review_required"] = True
+            item["recommended_action"] = "check_duplicates_or_timing_before_retry"
+            plans.append(
+                {
+                    "plan_id": f"course-density-{len(plans) + 1:03d}",
+                    "reason": "course_relative_chunk_density",
+                    "detail": (
+                        f"chunk {item['chunk_index']} rate "
+                        f"{item['words_per_minute']}/min is "
+                        f"{raw_ratio:.2f}x course median {baseline:.2f}/min"
+                    ),
+                    "chunk_index": item["chunk_index"],
+                    "start_ms": max(0, int(item["start_ms"]) - 10_000),
+                    "end_ms": min(audio_ms, int(item["end_ms"]) + 10_000),
+                    "automatic_paid_retry": False,
+                }
+            )
+    return reports, plans
+
+
+def density_windows(segments: list[dict[str, object]], audio_ms: int) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Measure 15-minute density against this lecture's own speaking baseline."""
     window_ms = int(os.environ.get("CHIRP_DENSITY_WINDOW_SECONDS", "900")) * 1000
     low = int(os.environ.get("CHIRP_DENSITY_LOW_CHARS", "2500"))
     high = int(os.environ.get("CHIRP_DENSITY_HIGH_CHARS", "3500"))
     minimum = int(os.environ.get("CHIRP_DENSITY_MIN_EVALUATED_SECONDS", "600")) * 1000
+    explain_gap_ms = int(
+        os.environ.get("CHIRP_DENSITY_EXPLAIN_GAP_SECONDS", "30")
+    ) * 1000
+    low_ratio = float(os.environ.get("CHIRP_COURSE_DENSITY_LOW_RATIO", "0.75"))
+    high_ratio = float(os.environ.get("CHIRP_COURSE_DENSITY_HIGH_RATIO", "1.25"))
+    baseline_min_windows = int(
+        os.environ.get("CHIRP_DENSITY_BASELINE_MIN_WINDOWS", "3")
+    )
     windows: list[dict[str, object]] = []
-    plans: list[dict[str, object]] = []
+
     for start in range(0, max(audio_ms, 1), window_ms):
         end = min(audio_ms, start + window_ms)
         chars = 0
-        for item in segments:
-            midpoint = (int(item.get("start_ms", 0)) + int(item.get("end_ms", 0))) // 2
+        for segment in segments:
+            midpoint = (
+                int(segment.get("start_ms", 0)) + int(segment.get("end_ms", 0))
+            ) // 2
             if start <= midpoint < end:
-                chars += len(str(item.get("cleaned_text") or item.get("corrected_text") or item.get("raw_text") or item.get("text") or ""))
-        evaluated = (end - start) >= minimum or end >= audio_ms and (end - start) >= minimum
+                chars += len(
+                    str(
+                        segment.get("cleaned_text")
+                        or segment.get("corrected_text")
+                        or segment.get("raw_text")
+                        or segment.get("text")
+                        or ""
+                    )
+                )
+        duration = end - start
+        evaluated = duration >= minimum
+        long_gap_ms = _long_gap_ms(segments, start, end, explain_gap_ms)
+        effective_ms = max(1, duration - long_gap_ms)
+        rate = chars * 60_000 / duration if duration > 0 else 0.0
+        adjusted_rate = chars * 60_000 / effective_ms
+        windows.append(
+            {
+                "window_index": len(windows) + 1,
+                "start_ms": start,
+                "end_ms": end,
+                "duration_ms": duration,
+                "char_count": chars,
+                "chars_per_minute": round(rate, 2),
+                "long_gap_ms": long_gap_ms,
+                "effective_speech_window_ms": effective_ms,
+                "adjusted_chars_per_minute": round(adjusted_rate, 2),
+                "low_chars": low,
+                "high_chars": high,
+                "evaluated": evaluated,
+                "reason": None,
+                "classification": "not_evaluated" if not evaluated else "normal",
+            }
+        )
+
+    comparable = [
+        float(item["adjusted_chars_per_minute"])
+        for item in windows
+        if item["evaluated"] and float(item["adjusted_chars_per_minute"]) > 0
+    ]
+    baseline = (
+        statistics.median(comparable)
+        if len(comparable) >= baseline_min_windows
+        else None
+    )
+    plans: list[dict[str, object]] = []
+    for item in windows:
+        if not item["evaluated"]:
+            continue
         reason = None
-        if evaluated and chars < low:
-            reason = f"char_count={chars}<{low}"
-        elif evaluated and chars > high:
-            reason = f"char_count={chars}>{high}"
-        item = {
-            "window_index": len(windows) + 1,
-            "start_ms": start,
-            "end_ms": end,
-            "duration_ms": end - start,
-            "char_count": chars,
-            "low_chars": low,
-            "high_chars": high,
-            "evaluated": evaluated,
-            "reason": reason,
-        }
-        windows.append(item)
+        if baseline is not None and baseline > 0:
+            raw_ratio = float(item["chars_per_minute"]) / baseline
+            adjusted_ratio = float(item["adjusted_chars_per_minute"]) / baseline
+            item["course_median_chars_per_minute"] = round(baseline, 2)
+            item["rate_ratio_to_course_median"] = round(raw_ratio, 3)
+            item["adjusted_ratio_to_course_median"] = round(adjusted_ratio, 3)
+            item["low_ratio"] = low_ratio
+            item["high_ratio"] = high_ratio
+            if adjusted_ratio < low_ratio:
+                reason = (
+                    f"adjusted_chars_per_minute={item['adjusted_chars_per_minute']} "
+                    f"<{low_ratio:.2f}x course_median={baseline:.2f}"
+                )
+                item["classification"] = "unexplained_low_density"
+            elif adjusted_ratio > high_ratio:
+                reason = (
+                    f"adjusted_chars_per_minute={item['adjusted_chars_per_minute']} "
+                    f">{high_ratio:.2f}x course_median={baseline:.2f}"
+                )
+                item["classification"] = "unexplained_high_density"
+            elif (
+                (raw_ratio < low_ratio or raw_ratio > high_ratio)
+                and int(item["long_gap_ms"]) >= explain_gap_ms
+            ):
+                item["classification"] = "explained_by_long_gap"
+        else:
+            chars = int(item["char_count"])
+            if chars < low:
+                reason = f"char_count={chars}<{low}"
+                item["classification"] = "absolute_low_density"
+            elif chars > high:
+                reason = f"char_count={chars}>{high}"
+                item["classification"] = "absolute_high_density"
+        item["reason"] = reason
         if reason:
-            plans.append({
-                "plan_id": f"density-{len(plans)+1:03d}",
-                "reason": "density_out_of_range",
-                "detail": reason,
-                "start_ms": max(0, start - 10_000),
-                "end_ms": min(audio_ms, end + 10_000),
-                "window_index": item["window_index"],
-            })
+            plans.append(
+                {
+                    "plan_id": f"density-{len(plans)+1:03d}",
+                    "reason": "density_out_of_range",
+                    "detail": reason,
+                    "start_ms": max(0, int(item["start_ms"]) - 10_000),
+                    "end_ms": min(audio_ms, int(item["end_ms"]) + 10_000),
+                    "window_index": item["window_index"],
+                    "automatic_paid_retry": False,
+                }
+            )
     return windows, plans
 
 
@@ -380,13 +727,33 @@ def main() -> int:
         warnings.append(f"audible-gap measurements completed: {len(audible_gaps)} mid-file gaps")
     density, density_plans = density_windows(segments, audio)
     density_failures = [item for item in density if item.get("reason")]
-    review_required.extend([f"15-minute character density out of range: window {item['window_index']} ({item['reason']})" for item in density_failures])
+    review_required.extend(
+        [
+            "15-minute course-relative density requires review: "
+            f"window {item['window_index']} ({item['reason']})"
+            for item in density_failures
+        ]
+    )
+    chunk_density, chunk_density_plans = base_chunk_density_reports(JOB, audio)
+    chunk_density_reviews = [
+        item for item in chunk_density if item.get("review_required")
+    ]
+    review_required.extend(
+        [
+            "course-relative Chirp chunk requires review: "
+            f"chunk {item['chunk_index']} "
+            f"({item['classification']}; "
+            f"{item['words_per_minute']}/min, "
+            f"course median {item['course_median_words_per_minute']}/min)"
+            for item in chunk_density_reviews
+        ]
+    )
     patch_density, patch_density_plans = patch_density_reports(JOB, len(words), audio)
     review_required.extend([
         f"patch word density requires review: {item.get('chunk_index')} ({item.get('detail')})"
         for item in patch_density_plans
     ])
-    retry_items = density_plans + gap_plans + patch_density_plans
+    retry_items = density_plans + gap_plans + chunk_density_plans + patch_density_plans
     atomic(JOB / "density-retry-plan.json", {
         "version": "density-retry-plan-v1",
         "generated_at": datetime.now(UTC).isoformat(),
@@ -414,26 +781,46 @@ def main() -> int:
             "merged words exceed audio duration: "
             f"{len(overrun_words)} words beyond {overrun_limit}ms tolerance"
         )
+    tail_analysis = None
     if uncovered > 1000:
-        tail_audible = audible_between(end, audio)
         tail_review_max_ms = int(
             os.environ.get("CHIRP_TAIL_REVIEW_MAX_MS", "3000")
         )
-        if tail_audible is True and tail_patch_verified(end, audio):
+        tail_analysis = tail_coverage_assessment(end, audio, tail_review_max_ms)
+        within_audible = tail_analysis["within_tolerance_audible"]
+        beyond_audible = tail_analysis["beyond_tolerance_audible"]
+        if tail_patch_verified(end, audio):
             warnings.append(
-                f"audible audio tail verified by targeted Chirp patch: {uncovered}ms"
+                f"audio tail verified by targeted Chirp patch: {uncovered}ms"
             )
         elif uncovered <= tail_review_max_ms:
             review_required.append(
                 f"uncovered audio tail requires review: {uncovered}ms "
-                f"(audible={tail_audible})"
+                f"(audible={within_audible})"
             )
-        elif tail_audible is True:
-            errors.append(f"audible audio tail uncovered: {uncovered}ms")
-        elif tail_audible is False:
+        elif beyond_audible is True:
+            errors.append(
+                "audible audio remains beyond tail tolerance: "
+                f"{uncovered}ms uncovered, tolerance={tail_review_max_ms}ms"
+            )
+        elif beyond_audible is False and within_audible is True:
+            review_required.append(
+                "short audible residual followed by silence: "
+                f"{uncovered}ms file tail, audible content confined to first "
+                f"{tail_review_max_ms}ms"
+            )
+        elif beyond_audible is False and within_audible is False:
             warnings.append(f"silent audio tail not subtitled: {uncovered}ms")
+        elif beyond_audible is False:
+            review_required.append(
+                "audio tail beyond tolerance is silent but the immediate "
+                f"{tail_review_max_ms}ms residual could not be measured"
+            )
         else:
-            errors.append(f"unable to verify uncovered audio tail: {uncovered}ms")
+            errors.append(
+                "unable to verify audio beyond tail tolerance: "
+                f"{uncovered}ms uncovered"
+            )
     correction_invariant = None
     if corrected:
         correction_invariant = len(corrected["segments"]) == len(segments) and all((a["segment_id"], a["start_ms"], a["end_ms"]) == (b["segment_id"], b["start_ms"], b["end_ms"]) for a, b in zip(segments, corrected["segments"]))
@@ -459,7 +846,7 @@ def main() -> int:
     else:
         errors.append("missing cleanup-review.json")
     status = "FAIL" if errors else "REVIEW" if review_required else "PASS"
-    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": status, "errors": errors, "warnings": warnings, "review_required": review_required, "policy": {"long_low_word_count": "review_only", "tail_review_max_ms": int(os.environ.get("CHIRP_TAIL_REVIEW_MAX_MS", "3000")), "paid_retry": "plan_only_no_automatic_paid_retry"}, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "patch_windows": patch_density, "patch_failure_count": len(patch_density_plans), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.7-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
+    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": status, "errors": errors, "warnings": warnings, "review_required": review_required, "policy": {"long_low_word_count": "review_only", "tail_review_max_ms": int(os.environ.get("CHIRP_TAIL_REVIEW_MAX_MS", "3000")), "course_density_low_ratio": float(os.environ.get("CHIRP_COURSE_DENSITY_LOW_RATIO", "0.75")), "course_density_high_ratio": float(os.environ.get("CHIRP_COURSE_DENSITY_HIGH_RATIO", "1.25")), "paid_retry": "plan_only_no_automatic_paid_retry"}, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "tail_analysis": tail_analysis, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "course_chunks": chunk_density, "course_chunk_review_count": len(chunk_density_reviews), "course_chunk_plan_count": len(chunk_density_plans), "patch_windows": patch_density, "patch_failure_count": len(patch_density_plans), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.7-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
     atomic(JOB / "qa-report.json", report)
     md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Review required"] + ([f"- {item}" for item in review_required] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
     temporary = JOB / "qa-report.md.tmp"; temporary.write_text("\n".join(md) + "\n", encoding="utf-8"); temporary.replace(JOB / "qa-report.md")
