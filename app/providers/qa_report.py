@@ -10,6 +10,8 @@ from html import escape
 from datetime import UTC, datetime
 from pathlib import Path
 
+from app.providers.boundary_integrity import scan_boundary_integrity
+
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 
@@ -775,8 +777,39 @@ def main() -> int:
     raw = json.loads((JOB / "subtitles.json").read_text(encoding="utf-8"))
     corrected_path = JOB / "subtitles-corrected.json"
     corrected = json.loads(corrected_path.read_text(encoding="utf-8")) if corrected_path.exists() else None
+    cleaned_path = JOB / "subtitles-cleaned.json"
+    cleaned = json.loads(cleaned_path.read_text(encoding="utf-8")) if cleaned_path.exists() else None
     words, segments = merged["words"], raw["segments"]
     errors, warnings, review_required = [], [], []
+    boundary_segments = (
+        cleaned.get("display_segments") or cleaned.get("segments") or []
+        if isinstance(cleaned, dict)
+        else (corrected.get("segments") or [] if isinstance(corrected, dict) else segments)
+    )
+    boundary_integrity = scan_boundary_integrity(
+        [item for item in boundary_segments if isinstance(item, dict)]
+    )
+    review_required.extend(
+        [
+            "subtitle term split across cue boundary: "
+            f"{item['term']} ({item['before_segment_id']}->{item['after_segment_id']})"
+            for item in boundary_integrity.get("split_candidates", [])
+        ]
+    )
+    review_required.extend(
+        [
+            "subtitle begins with punctuation: "
+            f"{item['segment_id']}"
+            for item in boundary_integrity.get("leading_punctuation", [])
+        ]
+    )
+    review_required.extend(
+        [
+            "subtitle contains repeated punctuation: "
+            f"{item['segment_id']}"
+            for item in boundary_integrity.get("repeated_punctuation", [])
+        ]
+    )
     if any(int(word["end_ms"]) <= int(word["start_ms"]) for word in words): errors.append("merged words contain non-positive durations")
     if any(next_word["start_ms"] < word["start_ms"] for word, next_word in zip(words, words[1:])): errors.append("merged word starts regress")
     ids = [item.get("segment_id") for item in segments]
@@ -926,7 +959,7 @@ def main() -> int:
     else:
         errors.append("missing cleanup-review.json")
     status = "FAIL" if errors else "REVIEW" if review_required else "PASS"
-    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": status, "errors": errors, "warnings": warnings, "review_required": review_required, "policy": {"long_low_word_count": "review_only", "tail_review_max_ms": int(os.environ.get("CHIRP_TAIL_REVIEW_MAX_MS", "3000")), "course_density_low_ratio": float(os.environ.get("CHIRP_COURSE_DENSITY_LOW_RATIO", "0.75")), "course_density_high_ratio": float(os.environ.get("CHIRP_COURSE_DENSITY_HIGH_RATIO", "1.25")), "paid_retry": "plan_only_no_automatic_paid_retry"}, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "tail_analysis": tail_analysis, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "course_chunks": chunk_density, "course_chunk_review_count": len(chunk_density_reviews), "course_chunk_plan_count": len(chunk_density_plans), "patch_windows": patch_density, "patch_failure_count": len(patch_density_plans), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.7-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report}
+    report = {"generated_at": datetime.now(UTC).isoformat(), "job": JOB.name, "status": status, "errors": errors, "warnings": warnings, "review_required": review_required, "policy": {"long_low_word_count": "review_only", "tail_review_max_ms": int(os.environ.get("CHIRP_TAIL_REVIEW_MAX_MS", "3000")), "course_density_low_ratio": float(os.environ.get("CHIRP_COURSE_DENSITY_LOW_RATIO", "0.75")), "course_density_high_ratio": float(os.environ.get("CHIRP_COURSE_DENSITY_HIGH_RATIO", "1.25")), "paid_retry": "plan_only_no_automatic_paid_retry"}, "audio": {"duration_ms": audio}, "chirp": {"model": "chirp_3", "word_count": len(words), "timeline_end_ms": merged.get("total_duration_ms"), "dropped_anomaly_count": merged.get("dropped_anomaly_count", 0), "timing_repair_count": merged.get("timing_repair_count", 0), "timeline_overrun_word_count": len(overrun_words)}, "subtitles": {"segment_count": len(segments), "end_ms": end, "uncovered_tail_ms": uncovered, "tail_analysis": tail_analysis, "overlaps": overlaps, "long_gaps": long_gaps, "audible_gaps": audible_gaps, "segment_quality": segment_quality_report}, "density": {"windows": density, "failure_count": len(density_failures), "course_chunks": chunk_density, "course_chunk_review_count": len(chunk_density_reviews), "course_chunk_plan_count": len(chunk_density_plans), "patch_windows": patch_density, "patch_failure_count": len(patch_density_plans), "retry_plan_count": len(retry_items)}, "correction": {"model": "gemini-3.7-flash" if corrected else None, "immutable_structure_preserved": correction_invariant}, "cleanup": cleanup_report, "boundary_integrity": boundary_integrity}
     atomic(JOB / "qa-report.json", report)
     md = [f"# QA Report: {JOB.name}", "", f"Status: **{report['status']}**", "", "## Errors"] + ([f"- {item}" for item in errors] or ["- None"]) + ["", "## Review required"] + ([f"- {item}" for item in review_required] or ["- None"]) + ["", "## Warnings"] + ([f"- {item}" for item in warnings] or ["- None"])
     temporary = JOB / "qa-report.md.tmp"; temporary.write_text("\n".join(md) + "\n", encoding="utf-8"); temporary.replace(JOB / "qa-report.md")

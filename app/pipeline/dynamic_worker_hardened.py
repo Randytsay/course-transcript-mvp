@@ -280,6 +280,8 @@ def _next_due_waiting(store: JobStore, data_dir: Path) -> dict[str, Any] | None:
         if str(record.get("active_stage") or "") != "chirp":
             continue
         job_dir = data_dir / "jobs" / record["id"]
+        if _targeted_patch_inflight(job_dir):
+            continue
         if (
             not _chunk_retry_requested(job_dir)
             and (job_dir / "chirp-submitted.json").is_file()
@@ -716,6 +718,16 @@ def _targeted_patch_inflight(job_dir: Path) -> bool:
     )
 
 
+def _next_due_targeted_patch(store: JobStore, data_dir: Path) -> dict[str, Any] | None:
+    for record in _available_rows(store, ("transcribing",)):
+        if str(record.get("active_stage") or "") != "chirp":
+            continue
+        job_dir = data_dir / "jobs" / record["id"]
+        if _targeted_patch_inflight(job_dir) and is_due(job_dir):
+            return record
+    return None
+
+
 def _targeted_patch_budget(
     record: dict[str, Any],
     *,
@@ -1096,6 +1108,7 @@ def _recover_job(
     *,
     data_dir: Path,
     worker_id: str,
+    force_targeted: bool = False,
 ) -> dict[str, Any]:
     leased = store.acquire_lease(record["id"], worker_id, lease_seconds=300)
     job_dir = data_dir / "jobs" / leased["id"]
@@ -1109,7 +1122,7 @@ def _recover_job(
         "CHIRP_RECOVER_ONCE": "1",
     })
     try:
-        targeted_recovery = _targeted_patch_inflight(job_dir)
+        targeted_recovery = force_targeted or _targeted_patch_inflight(job_dir)
         if targeted_recovery:
             env["CHIRP_PATCH_ACTION"] = "recover"
         returncode, stdout, stderr = _run_allow_pending(
@@ -1238,6 +1251,20 @@ def run_once(store: JobStore, *, data_dir: Path, worker_id: str) -> bool:
         try:
             _recover_ai_batch(
                 store, ai_batch, data_dir=data_dir, worker_id=worker_id
+            )
+        except JobConflict:
+            return False
+        return True
+
+    targeted_due = _next_due_targeted_patch(store, data_dir)
+    if targeted_due is not None:
+        try:
+            _recover_job(
+                store,
+                targeted_due,
+                data_dir=data_dir,
+                worker_id=worker_id,
+                force_targeted=True,
             )
         except JobConflict:
             return False
