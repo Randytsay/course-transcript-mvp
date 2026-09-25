@@ -24,6 +24,7 @@ from app.jobs.performance import CostConfig, estimated_accrued_cost
 from app.jobs.correction_policy import get_job_correction_policy
 from app.jobs.store import JobConflict, JobStore
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, is_dynamic_batching
+from app.jobs.workflow_mode import CHATGPT_HANDOFF, CHIRP_ONLY, normalize_workflow_mode
 from app.operations.runtime_heartbeat import write_service_heartbeat
 from app.pipeline import worker as base
 from app.pipeline import worker_observed as observed
@@ -1003,6 +1004,145 @@ def _finish_after_chirp(
         evidence=("subtitles.json", "subtitles.srt", "subtitles.vtt"),
         force=patch_changed,
     )
+    workflow_mode = normalize_workflow_mode(leased.get("workflow_mode"))
+    handoff_imported = (
+        job_dir / "chatgpt-handoff" / "import-audit.json"
+    ).is_file()
+    if workflow_mode == CHATGPT_HANDOFF and not handoff_imported:
+        base._run_module_stage(
+            store, leased, data_dir, worker_id,
+            stage="chirp_completeness", status="quality_check",
+            detail="Chirp 完整性 Gate：檢查漏辨識、異常密度、可疑有聲空窗與尾端覆蓋",
+            progress_start=72, progress_end=72,
+            module="app.providers.chirp_completeness_gate", timeout_seconds=900,
+            evidence=("chirp-completeness.json", "chirp-completeness-repair-plan.json"),
+            force=patch_changed,
+        )
+        completeness = {}
+        try:
+            completeness = json.loads(
+                (job_dir / "chirp-completeness.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            completeness = {}
+        if completeness.get("handoff_allowed") is not True:
+            blocker_count = int(
+                (completeness.get("summary") or {}).get("blocker_count") or 1
+            )
+            _record_targeted_patch_usage(
+                store, leased, data_dir=data_dir, worker_id=worker_id
+            )
+            base._record_usage_evidence(store, leased, data_dir, worker_id)
+            manifest = {
+                "job_id": leased["id"],
+                "status": "CHIRP_COMPLETENESS_BLOCKED",
+                "workflow_mode": workflow_mode,
+                "chirp_model": "chirp_3",
+                "chirp_processing_strategy": "DYNAMIC_BATCHING",
+                "correction_model": None,
+                "drive_upload_started": False,
+                "drive_publication_status": "blocked_before_chatgpt_handoff",
+                "drive_publication_error": None,
+                "source_media_preserved_in_drive": True,
+                "human_review_blocking": True,
+                "subtitle_review_status": "chirp_completeness_blocked",
+                "chirp_completeness": completeness,
+                "fake_provider": fake_provider,
+                "artifacts": base._artifact_evidence(job_dir),
+            }
+            base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
+            base._atomic_json(job_dir / "processing_manifest.json", manifest)
+            schedule(job_dir, "chirp-completeness-blocked")
+            observed._write_report_safely(data_dir, leased["id"])
+            return store.finish_for_chirp_completeness_review(
+                job_id=leased["id"],
+                worker_id=worker_id,
+                blocker_count=blocker_count,
+            )
+    if workflow_mode == CHATGPT_HANDOFF and not handoff_imported:
+        base._run_module_stage(
+            store, leased, data_dir, worker_id,
+            stage="handoff", status="quality_check",
+            detail="建立 ChatGPT 校稿交接包",
+            progress_start=72, progress_end=73,
+            module="app.providers.chatgpt_handoff", timeout_seconds=600,
+            evidence=(
+                "chatgpt-handoff/handoff-manifest.json",
+                "chatgpt-handoff/chirp-raw.srt",
+                "chatgpt-handoff/raw-transcript.txt",
+            ),
+            force=patch_changed,
+        )
+        _record_targeted_patch_usage(
+            store, leased, data_dir=data_dir, worker_id=worker_id
+        )
+        base._record_usage_evidence(store, leased, data_dir, worker_id)
+        manifest = {
+            "job_id": leased["id"],
+            "status": "AWAITING_CHATGPT",
+            "workflow_mode": workflow_mode,
+            "chirp_model": "chirp_3",
+            "chirp_processing_strategy": "DYNAMIC_BATCHING",
+            "correction_model": None,
+            "drive_upload_started": False,
+            "drive_publication_status": "awaiting_chatgpt_handoff",
+            "drive_publication_error": None,
+            "source_media_preserved_in_drive": True,
+            "human_review_blocking": True,
+            "subtitle_review_status": "awaiting_chatgpt",
+            "fake_provider": fake_provider,
+            "artifacts": base._artifact_evidence(job_dir),
+        }
+        base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
+        base._atomic_json(job_dir / "processing_manifest.json", manifest)
+        base.cleanup_completed_audio(job_dir)
+        schedule(job_dir, "awaiting-chatgpt")
+        observed._write_report_safely(data_dir, leased["id"])
+        return store.finish_for_handoff(
+            job_id=leased["id"],
+            worker_id=worker_id,
+            workflow_mode=workflow_mode,
+        )
+    if workflow_mode == CHIRP_ONLY:
+        base._run_module_stage(
+            store, leased, data_dir, worker_id,
+            stage="export", status="exporting",
+            detail="依 Chirp 3 原始文字產生選定格式",
+            progress_start=73, progress_end=94,
+            module="app.providers.export_formats", timeout_seconds=600,
+            evidence=("export-manifest.json",),
+            force=patch_changed,
+        )
+        _record_targeted_patch_usage(
+            store, leased, data_dir=data_dir, worker_id=worker_id
+        )
+        base._record_usage_evidence(store, leased, data_dir, worker_id)
+        manifest = {
+            "job_id": leased["id"],
+            "status": "CHIRP_ONLY_READY",
+            "workflow_mode": workflow_mode,
+            "chirp_model": "chirp_3",
+            "chirp_processing_strategy": "DYNAMIC_BATCHING",
+            "correction_model": None,
+            "drive_upload_started": False,
+            "drive_publication_status": "not_requested",
+            "drive_publication_error": None,
+            "source_media_preserved_in_drive": True,
+            "human_review_blocking": True,
+            "subtitle_review_status": "raw_chirp_only",
+            "fake_provider": fake_provider,
+            "artifacts": base._artifact_evidence(job_dir),
+        }
+        base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
+        base._atomic_json(job_dir / "processing_manifest.json", manifest)
+        base.cleanup_completed_audio(job_dir)
+        schedule(job_dir, "chirp-only-ready")
+        observed._write_report_safely(data_dir, leased["id"])
+        return store.finish_for_handoff(
+            job_id=leased["id"],
+            worker_id=worker_id,
+            workflow_mode=workflow_mode,
+        )
     if leased["enable_gemini_correction"]:
         if (
             use_router
@@ -1079,6 +1219,7 @@ def _finish_after_chirp(
         "status": "COMPLETED",
         "chirp_model": "chirp_3",
         "chirp_processing_strategy": "DYNAMIC_BATCHING",
+        "workflow_mode": workflow_mode,
         **_correction_manifest_fields(job_dir, bool(leased["enable_gemini_correction"])),
         "drive_upload_started": publication is not None,
         "drive_publication_status": publication.get("status") if publication else "pending_retry" if publication_error else "not_requested",

@@ -20,7 +20,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.jobs import CostConfig, JobConflict, JobNotFound, JobStore, normalize_output_formats
+from app.jobs import (
+    FULL_AUTO,
+    CostConfig,
+    JobConflict,
+    JobNotFound,
+    JobStore,
+    normalize_output_formats,
+)
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, DYNAMIC_BATCHING, STANDARD_BATCH
 from app.jobs.source import (
     SourceInspectionError,
@@ -76,6 +83,8 @@ ARTIFACT_ALLOWLIST = frozenset(
         "join-qa.json",
         "cleanup-review.json",
         "density-retry-plan.json",
+        "chirp-completeness.json",
+        "chirp-completeness-repair-plan.json",
         "audio-cleanup.json",
         "retention-report.json",
     }
@@ -145,6 +154,7 @@ class CreateJobRequest(BaseModel):
     preview_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     language_code: str = Field(default="cmn-Hant-TW", pattern=r"^[A-Za-z-]{2,24}$")
     profile: str = Field(default="highest_accuracy", pattern=r"^highest_accuracy$")
+    workflow_mode: Literal["FULL_AUTO", "CHATGPT_HANDOFF", "CHIRP_ONLY"] = FULL_AUTO
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = True
@@ -158,6 +168,7 @@ class CreateBatchRequest(BaseModel):
     batch_preview_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     language_code: str = Field(default="cmn-Hant-TW", pattern=r"^[A-Za-z-]{2,24}$")
     profile: str = Field(default="highest_accuracy", pattern=r"^highest_accuracy$")
+    workflow_mode: Literal["FULL_AUTO", "CHATGPT_HANDOFF", "CHIRP_ONLY"] = FULL_AUTO
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = True
@@ -303,6 +314,9 @@ def _pipeline(directory: Path, qa: dict[str, Any] | None) -> list[dict[str, str]
     merged = (directory / "merged-words.json").exists()
     subtitles = (directory / "subtitles.json").exists()
     corrected = (directory / "subtitles-corrected.json").exists()
+    completeness = _read_json(directory / "chirp-completeness.json", {})
+    completeness = completeness if isinstance(completeness, dict) else {}
+    completeness_status = str(completeness.get("status") or "")
     qa_exists = (directory / "qa-report.json").exists()
     qa_unsafe = bool(qa and qa.get("status") not in {None, "PASS"})
 
@@ -318,6 +332,7 @@ def _pipeline(directory: Path, qa: dict[str, Any] | None) -> list[dict[str, str]
         {"id": "chirp", "label": "Chirp 時間軸", "detail": f"{succeeded} / {chunk_total} 分段完成" if chunk_total else "尚未建立分段", "status": state(chunk_total > 0 and succeeded == chunk_total, chunk_total > succeeded)},
         {"id": "merge", "label": "字詞接合", "detail": "已建立合併時間軸" if merged else "等待 Chirp 完成", "status": state(merged, chunk_total > 0 and succeeded == chunk_total and not merged)},
         {"id": "subtitles", "label": "固定字幕", "detail": "已建立固定字幕段" if subtitles else "等待接合", "status": state(subtitles, merged and not subtitles)},
+        {"id": "chirp_gate", "label": "Chirp 完整性 Gate", "detail": ("完整性檢查通過" if completeness_status == "PASS" else "發現需先處理的辨識完整性問題" if completeness_status == "BLOCKED" else "等待固定字幕完成"), "status": state(completeness_status == "PASS", subtitles and not completeness_status, completeness_status == "BLOCKED")},
         {"id": "gemini", "label": "Gemini 校正", "detail": "校正結果已保留" if corrected else "尚未開始或待重建", "status": state(corrected, subtitles and not corrected)},
         {"id": "qa", "label": "QA 審查", "detail": "需修正後再人工審查" if qa_unsafe else ("已產生 QA 報告，等待人工確認" if qa_exists else "等待輸出"), "status": state(qa_exists and not qa_unsafe, corrected and not qa_exists, qa_unsafe)},
     ]
@@ -400,6 +415,7 @@ def _database_pipeline(record: dict[str, Any]) -> list[dict[str, str]]:
         {"id": "chirp", "label": "Chirp 時間軸", "detail": "尚未開始", "status": "pending"},
         {"id": "merge", "label": "字詞接合", "detail": "等待 Chirp", "status": "pending"},
         {"id": "subtitles", "label": "固定字幕", "detail": "等待接合", "status": "pending"},
+        {"id": "chirp_gate", "label": "Chirp 完整性 Gate", "detail": "等待固定字幕", "status": "pending"},
         {"id": "gemini", "label": "Gemini 校正", "detail": "等待固定字幕", "status": "pending"},
         {"id": "qa", "label": "QA 審查", "detail": "等待輸出", "status": "pending"},
     ]
@@ -418,6 +434,7 @@ def _database_job_summary(
         _read_json(directory / "pipeline-manifest.json") if directory.is_dir() else None
     )
     manifest = manifest if isinstance(manifest, dict) else {}
+    workflow_mode = record.get("workflow_mode") or FULL_AUTO
     pipeline = (
         _pipeline(directory, qa)
         if directory.is_dir()
@@ -425,12 +442,34 @@ def _database_job_summary(
         not in {"preflight", "awaiting_confirmation", "queued", "failed"}
         else _database_pipeline(record)
     )
+    if workflow_mode != "CHATGPT_HANDOFF":
+        pipeline = [item for item in pipeline if item.get("id") != "chirp_gate"]
+    correction_step = next((item for item in pipeline if item.get("id") == "gemini"), None)
+    if correction_step is not None and workflow_mode == "CHATGPT_HANDOFF":
+        correction_step["label"] = "ChatGPT 校稿"
+        import_ready = (directory / "chatgpt-handoff" / "import-audit.json").is_file()
+        if import_ready:
+            correction_step["status"] = "completed"
+            correction_step["detail"] = "ChatGPT 文字校正已回灌；Chirp 時間碼維持不變"
+        elif record.get("active_stage") == "chatgpt_handoff":
+            correction_step["status"] = "warning"
+            correction_step["detail"] = record.get("stage_detail") or "等待 ChatGPT 純文字校稿回灌"
+        elif record.get("active_stage") == "handoff":
+            correction_step["status"] = "running"
+            correction_step["detail"] = record.get("stage_detail") or "建立 ChatGPT 校稿交接包"
+    elif correction_step is not None and workflow_mode == "CHIRP_ONLY":
+        correction_step["label"] = "LLM 校正（略過）"
+        correction_step["status"] = "completed"
+        correction_step["detail"] = "此任務只使用 Chirp 3，不呼叫文字校正模型"
     active_to_pipeline = {
         "download": "source",
         "normalize": "source",
         "chirp": "chirp",
         "merge": "merge",
         "segment": "subtitles",
+        "chirp_completeness": "chirp_gate",
+        "handoff": "gemini",
+        "chatgpt_handoff": "gemini",
         "correction": "gemini",
         "export": "qa",
         "qa": "qa",
@@ -458,7 +497,14 @@ def _database_job_summary(
         "created_at": record["created_at"],
         "updated_at": record["updated_at"],
         "language": record["language_code"],
-        "model": "Chirp 3 + Gemini 3.7 Flash",
+        "model": (
+            "Chirp 3 + ChatGPT Handoff"
+            if record.get("workflow_mode") == "CHATGPT_HANDOFF"
+            else "Chirp 3 Only"
+            if record.get("workflow_mode") == "CHIRP_ONLY"
+            else "Chirp 3 + Gemini 3.7 Flash"
+        ),
+        "workflow_mode": record.get("workflow_mode") or FULL_AUTO,
         "words": int((qa or {}).get("chirp", {}).get("word_count", 0) or 0),
         "review_terms": len(_read_json(directory / "review-terms.json", []) or []),
         "pipeline": pipeline,
@@ -1162,7 +1208,10 @@ def create_batch(
             batch_preview_id=payload.batch_preview_id,
             language_code=payload.language_code,
             profile=payload.profile,
-            enable_gemini_correction=payload.enable_gemini_correction,
+            workflow_mode=payload.workflow_mode,
+            enable_gemini_correction=(
+                payload.enable_gemini_correction and payload.workflow_mode == FULL_AUTO
+            ),
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
             processing_strategy=payload.processing_strategy,
@@ -1182,6 +1231,7 @@ def create_batch(
         "status": batch["status"],
         "item_count": batch["item_count"],
         "processing_strategy": batch["processing_strategy"],
+        "workflow_mode": payload.workflow_mode,
         "job_ids": [job["id"] for job in result["jobs"]],
         "created_at": batch["created_at"],
         "paid_operation_started": False,
@@ -1213,6 +1263,11 @@ def get_batch(batch_id: str) -> dict[str, Any]:
         "updated_at": batch["updated_at"],
         "revision": batch["revision"],
         "processing_strategy": batch["processing_strategy"],
+        "workflow_mode": (
+            batch["jobs"][0].get("workflow_mode") or FULL_AUTO
+            if batch.get("jobs")
+            else FULL_AUTO
+        ),
         "total_duration_seconds": sum(
             float(job["duration_seconds"] or 0) for job in batch["jobs"]
         ),
@@ -1257,7 +1312,10 @@ def create_job(payload: CreateJobRequest, request: Request) -> dict[str, Any]:
             preview_id=payload.preview_id,
             language_code=payload.language_code,
             profile=payload.profile,
-            enable_gemini_correction=payload.enable_gemini_correction,
+            workflow_mode=payload.workflow_mode,
+            enable_gemini_correction=(
+                payload.enable_gemini_correction and payload.workflow_mode == FULL_AUTO
+            ),
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
             processing_strategy=payload.processing_strategy,
@@ -1275,6 +1333,7 @@ def create_job(payload: CreateJobRequest, request: Request) -> dict[str, Any]:
         "job_id": record["id"],
         "status": record["status"],
         "processing_strategy": record["processing_strategy"],
+        "workflow_mode": record.get("workflow_mode") or FULL_AUTO,
         "created_at": record["created_at"],
         "paid_operation_started": False,
         "next_action": "等待本機 preflight 取得音訊長度與預估費用",

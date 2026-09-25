@@ -13,6 +13,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from app.canonical.alignment import mantra_pair_display_layer, scripture_display_layer
+from app.canonical.defaults import MANTRA_KEY, SCRIPTURE_KEY
+from app.canonical.golden_rules import audit_golden_variants
+from app.canonical.store import active_canonical
+
 try:
     from app.providers.mantra_context import MANTRA_LINES, MANTRA_TITLE
 except ImportError:  # keep local cleanup/QA usable without optional Chirp SDK
@@ -35,6 +40,11 @@ TRIPLE_STUTTER_RE = re.compile(r"([\u4e00-\u9fffA-Za-z])\1{2,}")
 DOUBLE_STUTTER_RE = re.compile(r"([\u4e00-\u9fffA-Za-z]{1,2})\1")
 DOUBLE_STUTTER_CHAR_RE = re.compile(r"([\u4e00-\u9fff])\1")
 REPEATED_PHRASE_RE = re.compile(r"([\u4e00-\u9fffA-Za-z]{2,6})(?:\1){2,}")
+MANTRA_REPEAT_PROTECT_RE = re.compile(
+    r"(?:南[無謨]|阿囉|三藐|佛陀耶|菩提耶|莎訶|梭呵|怛|誐|"
+    r"彌[多達]|薩摩|三摩|娑囉|尾娑囉|冒馱|昧咄|昧怛|莎剛|"
+    r"梭來|威梭|摩囉|婆囉|波哩|底多|帝都)"
+)
 LEGITIMATE_REDUPLICATION_CHARS = frozenset("慢通剛常天人種一點某連")
 TRIPLE_LEFT_BOUNDARY_PROTECT = {
     "通": ("神通", "交通", "流通", "普通", "精通"),
@@ -343,6 +353,38 @@ def _collapse_high_confidence_triple_stutters(text: str) -> tuple[str, int]:
     return "".join(output), collapsed_count
 
 
+def _collapse_adjacent_phrase_repetitions(text: str) -> tuple[str, int]:
+    """Collapse exact adjacent spoken-phrase repetitions for readable output.
+
+    Raw ASR remains unchanged elsewhere.  This only affects the cleaned
+    publication layer.  Single-character reduplication is handled by the
+    existing stutter logic; mantra phonetics are excluded entirely.
+    """
+    mantra_tokens = MANTRA_REPEAT_PROTECT_RE.findall(text)
+    looks_like_mantra = (
+        text.startswith(("南無", "南謨"))
+        or MANTRA_TITLE in text
+        or len(mantra_tokens) >= 2
+    )
+    if not text or looks_like_mantra:
+        return text, 0
+    collapsed = text
+    total = 0
+    # Prefer short units first so 沒有沒有、很多很多、這個這個 and
+    # 我們要我們要 all collapse naturally. Repeat until stable because a
+    # longer run may contain more than two copies.
+    for unit_len in range(2, 9):
+        pattern = re.compile(
+            rf"([\u4e00-\u9fffA-Za-z]{{{unit_len}}})(?:\1)+"
+        )
+        while True:
+            collapsed, count = pattern.subn(r"\1", collapsed)
+            if not count:
+                break
+            total += count
+    return collapsed, total
+
+
 def clean_text(value: str) -> tuple[str, list[str]]:
     """Remove only high-confidence boundary fillers and speech disfluencies."""
     text = str(value or "").strip()
@@ -361,6 +403,9 @@ def clean_text(value: str) -> tuple[str, list[str]]:
     collapsed, double_count = _collapse_high_confidence_double_stutters(collapsed)
     if double_count:
         actions.append("double_stutter_high_confidence")
+    collapsed, phrase_count = _collapse_adjacent_phrase_repetitions(collapsed)
+    if phrase_count:
+        actions.append("adjacent_phrase_repetition")
     return collapsed.strip(), actions
 
 
@@ -457,10 +502,37 @@ def build_report(
                 "reasons": ["possible_duplicate_cue"],
             })
 
-    display_segments, mantra = _mantra_display_layer(
-        cleaned,
-        content_mode or os.environ.get("CONTENT_MODE", "legacy_unspecified").strip().lower(),
-    )
+    mode = content_mode or os.environ.get("CONTENT_MODE", "legacy_unspecified").strip().lower()
+    display_segments = [{**item, "source_segment_ids": [item["segment_id"]]} for item in cleaned]
+    scripture: dict[str, Any] = {"applied": False, "reason": "content_mode_not_buddhist", "review_required": False}
+    mantra: dict[str, Any] = {"applied": False, "reason": "content_mode_not_buddhist", "review_required": False}
+    golden_transcript: dict[str, Any] = {
+        "schema_version": 1,
+        "mode": "report_only",
+        "timestamps_modified": False,
+        "segments_modified": False,
+        "issue_count": 0,
+        "issues": [],
+    }
+    if mode == "dacheng_buddhist":
+        scripture_doc = active_canonical(DATA_DIR, SCRIPTURE_KEY)
+        mantra_doc = active_canonical(DATA_DIR, MANTRA_KEY)
+        display_segments, scripture = scripture_display_layer(cleaned, scripture_doc)
+        display_segments, mantra = mantra_pair_display_layer(display_segments, mantra_doc)
+        golden_transcript = audit_golden_variants(cleaned)
+        for kind, metadata in (("scripture", scripture), ("mantra", mantra)):
+            if not metadata.get("review_required"):
+                continue
+            review.append(
+                {
+                    "segment_id": f"canonical-{kind}",
+                    "start_ms": int(cleaned[0].get("start_ms", 0)) if cleaned else 0,
+                    "end_ms": int(cleaned[-1].get("end_ms", 0)) if cleaned else 0,
+                    "text": "",
+                    "reasons": [str(metadata.get("reason") or f"{kind}_canonical_review")],
+                    "canonical_metadata": metadata,
+                }
+            )
 
     return {
         "version": "cleanup-v2-display-layer",
@@ -474,12 +546,17 @@ def build_report(
             "review_count": len(review),
             "possible_duplicate_cue_count": duplicate_count,
             "total_cleaned_chars": sum(len(str(item["cleaned_text"])) for item in cleaned),
+            "scripture": scripture,
             "mantra": mantra,
+            "golden_transcript": golden_transcript,
         },
         "segments": cleaned,
         "display_segments": display_segments,
         "review_required": review,
+        "scripture": scripture,
         "mantra": mantra,
+        "golden_transcript": golden_transcript,
+        "canonical": {"scripture": scripture, "mantra": mantra},
     }
 
 

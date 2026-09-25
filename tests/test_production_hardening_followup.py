@@ -86,8 +86,8 @@ class ProductionHardeningFollowupTests(unittest.TestCase):
                 "generate_json",
                 return_value=(response, metrics),
             ) as generated:
-                first = hardened.correct_window([item], [])
-                second = hardened.correct_window([item], [])
+                first = hardened.correct_window([item], [], {"applied": False})
+                second = hardened.correct_window([item], [], {"applied": False})
             self.assertEqual(first, second)
             self.assertEqual(generated.call_count, 1)
             self.assertEqual(legacy.read_text(encoding="utf-8"), '{"legacy":true}\n')

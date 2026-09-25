@@ -9,7 +9,7 @@ from fastapi import HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.api import CorrectionSelection, _correction_fields, _mutation_actor, _store, app
-from app.jobs import JobConflict, JobNotFound, normalize_output_formats
+from app.jobs import FULL_AUTO, JobConflict, JobNotFound, normalize_output_formats
 from app.jobs.content_context import MAX_DOCUMENT_CONTEXT_CHARS
 from app.jobs.correction_policy import (
     DEFAULT_CORRECTION_POLICY,
@@ -32,6 +32,7 @@ class CreateJobWithParallelismRequest(BaseModel):
     preview_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     language_code: str = Field(default="cmn-Hant-TW", pattern=r"^[A-Za-z-]{2,24}$")
     profile: Literal["highest_accuracy"] = "highest_accuracy"
+    workflow_mode: Literal["FULL_AUTO", "CHATGPT_HANDOFF", "CHIRP_ONLY"] = FULL_AUTO
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = False
@@ -48,6 +49,7 @@ class CreateBatchWithParallelismRequest(BaseModel):
     batch_preview_id: str = Field(pattern=r"^[a-f0-9]{32}$")
     language_code: str = Field(default="cmn-Hant-TW", pattern=r"^[A-Za-z-]{2,24}$")
     profile: Literal["highest_accuracy"] = "highest_accuracy"
+    workflow_mode: Literal["FULL_AUTO", "CHATGPT_HANDOFF", "CHIRP_ONLY"] = FULL_AUTO
     enable_gemini_correction: bool = True
     enable_subtitles: bool = True
     require_human_review: bool = False
@@ -166,7 +168,10 @@ def create_batch_with_parallelism(
             batch_preview_id=payload.batch_preview_id,
             language_code=payload.language_code,
             profile=payload.profile,
-            enable_gemini_correction=payload.enable_gemini_correction,
+            workflow_mode=payload.workflow_mode,
+            enable_gemini_correction=(
+                payload.enable_gemini_correction and payload.workflow_mode == FULL_AUTO
+            ),
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
             processing_strategy=payload.processing_strategy,
@@ -196,6 +201,7 @@ def create_batch_with_parallelism(
         "status": batch["status"],
         "item_count": batch["item_count"],
         "processing_strategy": batch["processing_strategy"],
+        "workflow_mode": payload.workflow_mode,
         "correction_policy": policy,
         "job_ids": job_ids,
         "chirp_max_parallel_chunks": parallelism,
@@ -219,7 +225,10 @@ def create_job_with_parallelism(
             preview_id=payload.preview_id,
             language_code=payload.language_code,
             profile=payload.profile,
-            enable_gemini_correction=payload.enable_gemini_correction,
+            workflow_mode=payload.workflow_mode,
+            enable_gemini_correction=(
+                payload.enable_gemini_correction and payload.workflow_mode == FULL_AUTO
+            ),
             enable_subtitles=payload.enable_subtitles,
             require_human_review=payload.require_human_review,
             processing_strategy=payload.processing_strategy,
@@ -245,6 +254,7 @@ def create_job_with_parallelism(
         "job_id": record["id"],
         "status": record["status"],
         "processing_strategy": record["processing_strategy"],
+        "workflow_mode": payload.workflow_mode,
         "correction_policy": policy,
         "chirp_max_parallel_chunks": parallelism,
         "output_formats": normalize_output_formats(payload.output_formats),

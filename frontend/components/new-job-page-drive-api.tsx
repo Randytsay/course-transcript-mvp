@@ -40,11 +40,13 @@ import type {
   DriveEntry,
   OutputFormat,
   ProcessingStrategy,
+  WorkflowMode,
 } from "@/lib/types";
 
 type SelectionMode = "files" | "folder";
 type BusyState = "browse" | "search" | "more" | "preview" | "create" | null;
 type CorrectionMode = "GEMINI" | "M3_FALLBACK" | "CUSTOM";
+type CanonicalReadiness = { scripture: boolean; mantra: boolean; scriptureVersion: number | null; mantraVersion: number | null };
 
 const DEFAULT_OUTPUT_FORMATS: OutputFormat[] = ["srt", "txt", "csv"];
 
@@ -73,6 +75,7 @@ export default function NewJobPageDriveApi() {
   const [error, setError] = useState<string | null>(null);
   const [chirpMaxParallelChunks, setChirpMaxParallelChunks] = useState(3);
   const [processingStrategy, setProcessingStrategy] = useState<ProcessingStrategy>("DYNAMIC_BATCHING");
+  const [workflowMode, setWorkflowMode] = useState<WorkflowMode>("FULL_AUTO");
   const [correctionMode, setCorrectionMode] = useState<CorrectionMode>("GEMINI");
   const [m3Enabled, setM3Enabled] = useState(false);
   const [m3Configured, setM3Configured] = useState(false);
@@ -83,6 +86,7 @@ export default function NewJobPageDriveApi() {
   const [outputFormats, setOutputFormats] = useState<OutputFormat[]>(DEFAULT_OUTPUT_FORMATS);
   const [contentMode, setContentMode] = useState<ContentMode>("general");
   const [documentContext, setDocumentContext] = useState("");
+  const [canonicalReadiness, setCanonicalReadiness] = useState<CanonicalReadiness>({ scripture: false, mantra: false, scriptureVersion: null, mantraVersion: null });
 
   // Provider router per-job selection
   type ProviderProfileLite = { id: string; name?: string; provider?: string; default_model?: string };
@@ -127,6 +131,26 @@ export default function NewJobPageDriveApi() {
   }, []);
 
   // When switching provider: default model, clear model list (vertex/minimax
+
+  useEffect(() => {
+    let alive = true;
+    fetch("/api/v1/review-admin/canonical-texts", { cache: "no-store", credentials: "same-origin" })
+      .then((response) => response.ok ? response.json() : { documents: [] })
+      .then((body: { documents?: Array<{ document_key: string; active?: boolean; active_version?: number | null }> }) => {
+        if (!alive) return;
+        const documents = body.documents ?? [];
+        const scripture = documents.find((item) => item.document_key === "dacheng_scripture");
+        const mantra = documents.find((item) => item.document_key === "dacheng_mantra");
+        setCanonicalReadiness({
+          scripture: scripture?.active === true,
+          mantra: mantra?.active === true,
+          scriptureVersion: scripture?.active_version ?? null,
+          mantraVersion: mantra?.active_version ?? null,
+        });
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
   // have fixed defaults; openrouter loads from its models endpoint).
   useEffect(() => {
     setExecutionMode("REALTIME");
@@ -287,21 +311,26 @@ export default function NewJobPageDriveApi() {
     });
   }
 
-  const m3SelectionAvailable = m3StatusLoaded && m3Enabled && m3Configured && m3QuotaLiveCheck;
+  // Selection depends on the feature flag and mounted MiniMax credential only.
+  // Quota is a runtime routing signal: when the live quota check is disabled,
+  // unknown, or unavailable, the backend already fails closed to Gemini 3.7.
+  // Requiring quotaLiveCheck here made the M3 + Gemini fallback option
+  // permanently unselectable even though the fallback contract was safe.
+  const m3SelectionAvailable = m3StatusLoaded && m3Enabled && m3Configured;
 
   function describeM3Status() {
     if (!m3StatusLoaded) return "正在確認 M3 服務與 quota 狀態…";
     if (!m3Enabled) return "伺服器尚未開放 M3；目前所有任務仍會使用 Gemini 3.7。";
     if (!m3Configured) return "MiniMax key 尚未掛載；開啟前請先完成服務設定。";
-    if (!m3QuotaLiveCheck) return "M3 quota 檢查尚未開啟；為安全起見會使用 Gemini 3.7。";
-    if (m3QuotaState === "available") return "可手動啟用；目前 quota 可用，異常時本課程會單向轉 Gemini 3.7。";
-    if (m3QuotaState === "unavailable") return "目前 quota 不可用；即使選取 M3，本課程也會安全從 Gemini 3.7 開始。";
-    return "可手動啟用；quota 尚未確認時會安全從 Gemini 3.7 開始。";
+    if (!m3QuotaLiveCheck) return "可選用 M3；目前未啟用即時 quota 檢查，執行時若 quota 無法確認會安全改用 Gemini 3.7。";
+    if (m3QuotaState === "available") return "可選用 M3；目前 quota 可用，異常時本課程會單向轉 Gemini 3.7。";
+    if (m3QuotaState === "unavailable") return "可選用 M3；目前 quota 不可用，執行時會安全從 Gemini 3.7 開始。";
+    return "可選用 M3；quota 尚未確認時會安全從 Gemini 3.7 開始。";
   }
 
   async function prepareAndCreateBatch() {
     if (!directory || !canPreview) return;
-    if (correctionMode === "CUSTOM" && providerNeedsProfile && !providerProfileId) {
+    if (workflowMode === "FULL_AUTO" && correctionMode === "CUSTOM" && providerNeedsProfile && !providerProfileId) {
       setError("目前選取的供應商尚未登記設定檔；請先到 AI 模型供應商新增並驗證設定檔。");
       return;
     }
@@ -314,7 +343,7 @@ export default function NewJobPageDriveApi() {
       const nextPreview = await previewBatch(selectionMode, paths);
       setPreview(nextPreview);
       setBusy("create");
-      const customCorrection = correctionMode === "CUSTOM"
+      const customCorrection = workflowMode === "FULL_AUTO" && correctionMode === "CUSTOM"
         ? {
             provider: providerId,
             provider_profile_id: providerProfileId,
@@ -332,6 +361,7 @@ export default function NewJobPageDriveApi() {
         contentMode,
         documentContext,
         customCorrection,
+        workflowMode,
       );
       setCreated(nextBatch);
       router.push(`/batches/${nextBatch.batchId}`);
@@ -430,18 +460,53 @@ export default function NewJobPageDriveApi() {
                 <span><strong>一般文件</strong><small>預設。課程、會議、訪談或其他非特定宗教內容。</small></span>{contentMode === "general" && <Check size={17} />}
               </button>
               <button type="button" className={`context-mode-card ${contentMode === "dacheng_buddhist" ? "context-mode-card--active" : ""}`} onClick={() => setContentMode("dacheng_buddhist")}>
-                <span><strong>大成佛經</strong><small>使用固定咒語拼寫；講師與大眾完整重複時只在輸出字幕保留一次。</small></span>{contentMode === "dacheng_buddhist" && <Check size={17} />}
+                <span><strong>大成佛經</strong><small>前段依正式經文對齊；結尾依正式咒語將講師一句＋大眾跟一句折成一次。</small></span>{contentMode === "dacheng_buddhist" && <Check size={17} />}
               </button>
             </div>
             <label className="context-textarea-label" htmlFor="document-context">補充說明（選填）</label>
+            {contentMode === "dacheng_buddhist" && (
+              <div className={canonicalReadiness.scripture && canonicalReadiness.mantra ? "context-note" : "inline-warning"} style={{ marginTop: 10 }}>
+                <span>正式經文：{canonicalReadiness.scripture ? `已啟用 v${canonicalReadiness.scriptureVersion}` : "尚未設定，前段共誦只會標人工複核"}</span>
+                <span>正式咒語：{canonicalReadiness.mantra ? `已啟用 v${canonicalReadiness.mantraVersion}` : "尚未設定，結尾咒語不會自動猜寫"}</span>
+              </div>
+            )}
             <textarea id="document-context" className="context-textarea" value={documentContext} maxLength={2400} onChange={(event) => setDocumentContext(event.target.value)} placeholder="例如：能源績效量測驗證課程；講者林佑璇；常見術語包含 M&V、基準線、節能量。" />
             <div className="context-note"><span>這些說明只幫助文字校正，不會改變原始語音辨識與時間碼。</span><span>{documentContext.length}/2400</span></div>
             {selectionMode === "files" && selectedEntries.length > 1 && <p className="context-batch-note">目前會將這個設定套用到已選的 {selectedEntries.length} 個檔案；不同主題請分批建立。</p>}
           </div>
 
+          <div className="form-section workflow-mode-section">
+            <div className="section-heading"><span className="step-number">4</span><div><h2>後續處理模式</h2><p>決定 Chirp 3 完成後，由伺服器自動校正、交給 ChatGPT，或直接保留原始字幕。</p></div></div>
+            <div className="correction-mode-grid" role="radiogroup" aria-label="後續處理模式">
+              <button type="button" role="radio" aria-checked={workflowMode === "FULL_AUTO"}
+                      className={`correction-mode-card ${workflowMode === "FULL_AUTO" ? "correction-mode-card--active" : ""}`}
+                      onClick={() => setWorkflowMode("FULL_AUTO")}>
+                <ShieldCheck size={22} />
+                <span><strong>完整自動</strong><small>Chirp 3 後由 VPS 的 Gemini／M3 完成校正、QA 與輸出。</small></span>
+                {workflowMode === "FULL_AUTO" && <Check size={17} />}
+              </button>
+              <button type="button" role="radio" aria-checked={workflowMode === "CHATGPT_HANDOFF"}
+                      className={`correction-mode-card ${workflowMode === "CHATGPT_HANDOFF" ? "correction-mode-card--active" : ""}`}
+                      onClick={() => setWorkflowMode("CHATGPT_HANDOFF")}>
+                <Sparkles size={22} />
+                <span><strong>Chirp 3 + ChatGPT 校稿</strong><small>VPS 不呼叫 LLM；產生交接包後停止，交由 ChatGPT 依參考逐字稿校正，再回灌 QA。</small></span>
+                {workflowMode === "CHATGPT_HANDOFF" && <Check size={17} />}
+              </button>
+              <button type="button" role="radio" aria-checked={workflowMode === "CHIRP_ONLY"}
+                      className={`correction-mode-card ${workflowMode === "CHIRP_ONLY" ? "correction-mode-card--active" : ""}`}
+                      onClick={() => setWorkflowMode("CHIRP_ONLY")}>
+                <FileAudio size={22} />
+                <span><strong>只做 Chirp 3</strong><small>只保留 Chirp 原始字幕與逐字稿，不執行任何 LLM 文字校正。</small></span>
+                {workflowMode === "CHIRP_ONLY" && <Check size={17} />}
+              </button>
+            </div>
+            {workflowMode === "CHATGPT_HANDOFF" && <div className="model-route-note"><ShieldCheck size={15} /><span>此模式的 VPS LLM token = 0；Chirp 時間碼固定不變。你提供參考逐字稿後，ChatGPT 只允許修改每個 cue 的文字。</span></div>}
+            {workflowMode === "CHIRP_ONLY" && <div className="model-route-note"><FileAudio size={15} /><span>此模式在 Chirp 3 建立原始 SRT 後即停止，不執行 cleanup、Golden Rules 或 LLM 校正。</span></div>}
+          </div>
+
           <details className="advanced-settings">
             <summary><span><strong>進階設定</strong><small>預設值已適合一般課程、會議與訪談</small></span><ChevronRight size={18} /></summary>
-            <div className="form-section advanced-settings__section">
+            <div className="form-section advanced-settings__section" style={{ display: workflowMode === "FULL_AUTO" ? undefined : "none" }} aria-hidden={workflowMode !== "FULL_AUTO"}>
             <div className="section-heading"><div><h2>文字校正模式</h2><p>一般情況選推薦模式即可；需要指定第三方模型時再使用自訂。</p></div></div>
             <div className="correction-mode-grid" role="radiogroup" aria-label="文字校正模式">
               <button type="button" role="radio" aria-checked={correctionMode === "GEMINI"}
@@ -579,8 +644,8 @@ export default function NewJobPageDriveApi() {
               {busy === "preview" || busy === "create" ? <LoaderCircle className="spin" size={18} /> : <Check size={18} />}
               {busy === "preview" ? "正在檢查檔案…" : busy === "create" ? "正在建立任務…" : "開始辨識"}
             </button>
-            <p className="start-action-note">系統會先做不付費的檔案檢查與估價；符合安全門檻就自動開始，只有異常或較高費用才會停下讓你確認。</p>
-            {correctionMode === "CUSTOM" && providerNeedsProfile && !providerProfileId && (
+            <p className="start-action-note">{workflowMode === "CHATGPT_HANDOFF" ? "系統只估算 Chirp 3 與必要儲存成本；Chirp 完成後會停在『等待 ChatGPT 校稿』，不呼叫 VPS LLM。" : workflowMode === "CHIRP_ONLY" ? "系統只估算 Chirp 3 與必要儲存成本；完成原始字幕後停止。" : "系統會先做不付費的檔案檢查與估價；符合安全門檻就自動開始，只有異常或較高費用才會停下讓你確認。"}</p>
+            {workflowMode === "FULL_AUTO" && correctionMode === "CUSTOM" && providerNeedsProfile && !providerProfileId && (
               <div className="empty-state empty-state--error" style={{ marginTop: 14 }}>
                 目前供應商尚未登記設定檔；完成設定前不能建立這個校正任務。
               </div>
@@ -595,7 +660,7 @@ export default function NewJobPageDriveApi() {
             <h2>目前設定</h2>
             <div><span>已選檔案</span><strong>{selectionMode === "files" ? selectedEntries.length : folderReady ? "整個資料夾" : "尚未選擇"}</strong></div>
             <div><span>辨識模式</span><strong>{processingStrategy === "DYNAMIC_BATCHING" ? "經濟模式" : "快速模式"}</strong></div>
-            <div><span>文字優化</span><strong>{correctionMode === "M3_FALLBACK" ? `${m3Model} + Gemini 備援` : correctionMode === "CUSTOM" ? `自訂：${providerModel}` : "Gemini 3.7"}</strong></div>
+            <div><span>後續處理</span><strong>{workflowMode === "CHATGPT_HANDOFF" ? "Chirp 3 + ChatGPT 校稿" : workflowMode === "CHIRP_ONLY" ? "只做 Chirp 3" : correctionMode === "M3_FALLBACK" ? `${m3Model} + Gemini 備援` : correctionMode === "CUSTOM" ? `自訂：${providerModel}` : "完整自動：Gemini 3.7"}</strong></div>
             <div><span>輸出</span><strong>{outputFormats.map((item) => `.${item}`).join("、")}</strong></div>
             <small>一般任務不再需要第二次費用確認。</small>
           </div>

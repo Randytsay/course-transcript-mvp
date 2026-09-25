@@ -13,6 +13,7 @@ import type {
   ProcessingStrategy,
   TranscriptJob,
   TranscriptSegment,
+  WorkflowMode,
 } from "./types";
 
 // Production and local `next dev` both use the same-origin rewrite. Keeping the
@@ -47,6 +48,7 @@ type ApiJob = Omit<TranscriptJob, "sourcePath" | "durationSeconds" | "createdAt"
   chirp_max_parallel_chunks?: number;
   output_formats?: OutputFormat[];
   processing_strategy?: ProcessingStrategy;
+  workflow_mode?: WorkflowMode;
   content_mode?: ContentMode | "legacy_unspecified";
   document_context?: string;
   pipeline: Array<{ id: string; label: string; detail: string; status: PipelineStep["status"] }>;
@@ -79,6 +81,7 @@ function mapJob(job: ApiJob): TranscriptJob {
     revision: job.revision,
     batchId: job.batch_id ?? null,
     processingStrategy: job.processing_strategy ?? "DYNAMIC_BATCHING",
+    workflowMode: job.workflow_mode ?? "FULL_AUTO",
     estimatedCostUsd: job.estimated_cost_usd ?? null,
     estimatedCostTwd: job.estimated_cost_twd ?? null,
     chirpMaxParallelChunks: job.chirp_max_parallel_chunks ?? 3,

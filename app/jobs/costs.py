@@ -243,7 +243,12 @@ class CostEstimate:
         return payload
 
 
-def estimate_job_cost(duration_seconds: float, config: CostConfig) -> CostEstimate:
+def estimate_job_cost(
+    duration_seconds: float,
+    config: CostConfig,
+    *,
+    include_gemini: bool = True,
+) -> CostEstimate:
     if not math.isfinite(duration_seconds) or duration_seconds <= 0:
         raise ValueError("duration_seconds must be a positive finite number")
 
@@ -252,8 +257,16 @@ def estimate_job_cost(duration_seconds: float, config: CostConfig) -> CostEstima
         audio_minutes * config.chirp_retry_and_overlap_multiplier
     ).quantize(Decimal("0.01"), rounding=ROUND_UP)
     whole_audio_minutes = math.ceil(duration_seconds / 60)
-    input_tokens = whole_audio_minutes * config.estimated_input_tokens_per_audio_minute
-    output_tokens = whole_audio_minutes * config.estimated_output_tokens_per_audio_minute
+    input_tokens = (
+        whole_audio_minutes * config.estimated_input_tokens_per_audio_minute
+        if include_gemini
+        else 0
+    )
+    output_tokens = (
+        whole_audio_minutes * config.estimated_output_tokens_per_audio_minute
+        if include_gemini
+        else 0
+    )
 
     chirp_usd = _money(billable_minutes * config.chirp_usd_per_minute)
     gemini_input_usd = _money(

@@ -343,7 +343,6 @@ def base_chunk_density_reports(
         ):
             continue
         duration_ms_value = max(0, end_ms - start_ms)
-        word_count = int(manifest.get("word_count") or 0)
         chunk_words = repaired_words_by_chunk.get(index)
         word_timeline_source = "pre_merge_repaired"
         if not isinstance(chunk_words, list):
@@ -960,12 +959,20 @@ def main() -> int:
                     "status": loaded.get("status"),
                     "summary": loaded.get("summary", {}),
                     "review_required": loaded.get("review_required", []),
+                    "canonical": loaded.get("canonical", {}),
                 }
                 review_count = int(
                     (cleanup_report.get("summary") or {}).get("review_count", 0)
                 )
                 if review_count:
                     warnings.append(f"automatic cleanup requires review: {review_count} segments")
+                canonical = loaded.get("canonical") or {}
+                if isinstance(canonical, dict):
+                    for kind in ("scripture", "mantra"):
+                        metadata = canonical.get(kind) or {}
+                        if isinstance(metadata, dict) and metadata.get("review_required"):
+                            reason = str(metadata.get("reason") or f"{kind}_canonical_review")
+                            review_required.append(f"dacheng canonical {kind} review: {reason}")
         except (OSError, ValueError, TypeError):
             errors.append("cleanup-review.json is invalid")
     else:

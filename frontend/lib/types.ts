@@ -22,6 +22,7 @@ export type PipelineStepStatus = "completed" | "running" | "pending" | "warning"
 export type OutputFormat = "srt" | "txt" | "csv" | "json" | "vtt" | "ass" | "docx" | "pdf";
 export type ProcessingStrategy = "DYNAMIC_BATCHING" | "STANDARD_BATCH";
 export type ContentMode = "general" | "dacheng_buddhist";
+export type WorkflowMode = "FULL_AUTO" | "CHATGPT_HANDOFF" | "CHIRP_ONLY";
 
 export interface PipelineStep {
   id: string;
@@ -80,6 +81,7 @@ export interface TranscriptJob {
   revision: number;
   batchId?: string | null;
   processingStrategy: ProcessingStrategy;
+  workflowMode?: WorkflowMode;
   estimatedCostUsd?: string | null;
   estimatedCostTwd?: string | null;
   chirpMaxParallelChunks?: number;
@@ -142,6 +144,7 @@ export interface CreatedBatch {
   paidOperationStarted: false;
   nextAction: string;
   processingStrategy: ProcessingStrategy;
+  workflowMode?: WorkflowMode;
 }
 
 export interface CostSummary {

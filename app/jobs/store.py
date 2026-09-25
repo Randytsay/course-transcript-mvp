@@ -21,6 +21,12 @@ from .content_context import (
     normalize_document_context,
 )
 from .strategy import DEFAULT_PROCESSING_STRATEGY, normalize_processing_strategy
+from .workflow_mode import (
+    CHATGPT_HANDOFF,
+    CHIRP_ONLY,
+    DEFAULT_WORKFLOW_MODE,
+    normalize_workflow_mode,
+)
 
 
 ACTIVE_STATUSES = frozenset(
@@ -248,6 +254,7 @@ class JobStore:
                     source_size_bytes INTEGER NOT NULL,
                     language_code TEXT NOT NULL,
                     profile TEXT NOT NULL,
+                    workflow_mode TEXT NOT NULL DEFAULT 'FULL_AUTO',
                     enable_gemini_correction INTEGER NOT NULL,
                     enable_subtitles INTEGER NOT NULL,
                     require_human_review INTEGER NOT NULL,
@@ -409,6 +416,12 @@ class JobStore:
             self._ensure_column(connection, "jobs", "correction_execution_mode", "TEXT NOT NULL DEFAULT 'REALTIME'")
             self._ensure_column(connection, "jobs", "correction_fallback_policy", "TEXT NOT NULL DEFAULT 'RAW_CHIRP_FALLBACK'")
             self._ensure_column(connection, "jobs", "pricing_snapshot_json", "TEXT NOT NULL DEFAULT '{}'")
+            self._ensure_column(
+                connection,
+                "jobs",
+                "workflow_mode",
+                "TEXT NOT NULL DEFAULT 'FULL_AUTO'",
+            )
             self._ensure_column(connection, "jobs", "context_digest", "TEXT")
             self._ensure_column(
                 connection,
@@ -604,6 +617,7 @@ class JobStore:
         content_mode: str = "general",
         document_context: str = "",
         actor: str,
+        workflow_mode: str = DEFAULT_WORKFLOW_MODE,
         correction_provider: str = "",
         correction_provider_profile_id: str = "",
         correction_model: str = "",
@@ -615,6 +629,7 @@ class JobStore:
         processing_strategy = normalize_processing_strategy(processing_strategy)
         content_mode = normalize_content_mode(content_mode)
         document_context = normalize_document_context(document_context)
+        workflow_mode = normalize_workflow_mode(workflow_mode)
         digest = context_digest(mode=content_mode, document_context=document_context)
         now = _iso()
         with self.transaction() as connection:
@@ -672,13 +687,13 @@ class JobStore:
                     """
                     INSERT INTO jobs(
                         id, preview_id, batch_id, queue_position, source_path,
-                        source_name, source_size_bytes, language_code, profile,
+                        source_name, source_size_bytes, language_code, profile, workflow_mode,
                         enable_gemini_correction, enable_subtitles,
                         require_human_review, processing_strategy, chirp_max_parallel_chunks, output_formats_json,
                         content_mode, document_context, context_version, context_digest,
                         status, active_stage, stage_detail,
                         created_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                         'preflight', 'source', '等待安全下載與媒體檢查',
                         ?, ?, ?)
                     """,
@@ -692,6 +707,7 @@ class JobStore:
                         item["size_bytes"],
                         language_code,
                         profile,
+                        workflow_mode,
                         int(enable_gemini_correction),
                         int(enable_subtitles),
                         int(require_human_review),
@@ -794,6 +810,7 @@ class JobStore:
         content_mode: str = "general",
         document_context: str = "",
         actor: str,
+        workflow_mode: str = DEFAULT_WORKFLOW_MODE,
         # B23: per-job provider selection, persisted and immutable post-approval
         correction_provider: str = "",
         correction_provider_profile_id: str = "",
@@ -806,6 +823,7 @@ class JobStore:
         processing_strategy = normalize_processing_strategy(processing_strategy)
         content_mode = normalize_content_mode(content_mode)
         document_context = normalize_document_context(document_context)
+        workflow_mode = normalize_workflow_mode(workflow_mode)
         digest = context_digest(mode=content_mode, document_context=document_context)
         now = _iso()
         with self.transaction() as connection:
@@ -830,12 +848,12 @@ class JobStore:
                 """
                 INSERT INTO jobs(
                     id, preview_id, source_path, source_name, source_size_bytes,
-                    language_code, profile, enable_gemini_correction,
+                    language_code, profile, workflow_mode, enable_gemini_correction,
                     enable_subtitles, require_human_review, processing_strategy, chirp_max_parallel_chunks, output_formats_json,
                     content_mode, document_context, context_version, context_digest,
                     status, active_stage,
                     stage_detail, created_by, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preflight',
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preflight',
                     'source', '等待安全下載與媒體檢查', ?, ?, ?)
                 """,
                 (
@@ -846,6 +864,7 @@ class JobStore:
                     preview["size_bytes"],
                     language_code,
                     profile,
+                    workflow_mode,
                     int(enable_gemini_correction),
                     int(enable_subtitles),
                     int(require_human_review),
@@ -1469,6 +1488,190 @@ class JobStore:
                 actor,
                 {"reserved_cost_usd": str(estimate)},
             )
+        return self.get_job(job_id)
+
+    def finish_for_chirp_completeness_review(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        blocker_count: int,
+    ) -> dict[str, Any]:
+        now = _iso()
+        with self.transaction() as connection:
+            self._require_lease(connection, job_id, worker_id)
+            row = connection.execute(
+                "SELECT batch_id, workflow_mode FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise JobNotFound("Job not found")
+            if normalize_workflow_mode(row["workflow_mode"]) != CHATGPT_HANDOFF:
+                raise JobConflict("只有 ChatGPT Handoff 任務可停在 Chirp 完整性 Gate")
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status='awaiting_review', active_stage='chirp_completeness',
+                    stage_detail=?, progress=72, error=NULL,
+                    updated_at=?, revision=revision+1
+                WHERE id=?
+                """,
+                (
+                    f"Chirp 完整性 Gate 發現 {max(1, int(blocker_count))} 項需先處理，尚未交給 ChatGPT",
+                    now,
+                    job_id,
+                ),
+            )
+            self._clear_lease(connection, job_id, worker_id)
+            self._event(
+                connection,
+                job_id,
+                "chirp_completeness_blocked",
+                worker_id,
+                {
+                    "workflow_mode": CHATGPT_HANDOFF,
+                    "blocker_count": max(1, int(blocker_count)),
+                    "chatgpt_handoff_created": False,
+                },
+            )
+            if row["batch_id"]:
+                self._refresh_batch_state(connection, row["batch_id"], now)
+        return self.get_job(job_id)
+
+    def requeue_chirp_completeness(
+        self,
+        *,
+        job_id: str,
+        expected_revision: int,
+        actor: str,
+    ) -> dict[str, Any]:
+        now = _iso()
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise JobNotFound("Job not found")
+            if int(row["revision"]) != int(expected_revision):
+                raise JobConflict("任務已更新，請重新載入後再重新檢查")
+            if normalize_workflow_mode(row["workflow_mode"]) != CHATGPT_HANDOFF:
+                raise JobConflict("此任務不是 ChatGPT Handoff 模式")
+            if row["status"] != "awaiting_review" or row["active_stage"] != "chirp_completeness":
+                raise JobConflict("任務目前不在 Chirp 完整性 Gate 待處理狀態")
+            if not row["approved_at"]:
+                raise JobConflict("未核准的任務不可重新排入處理")
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status='queued', active_stage='segment',
+                    stage_detail='重新建立字幕並重跑 Chirp 完整性 Gate',
+                    error=NULL, locked_by=NULL, lease_expires_at=NULL,
+                    last_heartbeat_at=NULL, updated_at=?, revision=revision+1
+                WHERE id=?
+                """,
+                (now, job_id),
+            )
+            self._event(
+                connection,
+                job_id,
+                "chirp_completeness_recheck_queued",
+                actor,
+                {"workflow_mode": CHATGPT_HANDOFF},
+            )
+            if row["batch_id"]:
+                self._refresh_batch_state(connection, row["batch_id"], now)
+        return self.get_job(job_id)
+
+    def finish_for_handoff(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        workflow_mode: str,
+    ) -> dict[str, Any]:
+        mode = normalize_workflow_mode(workflow_mode)
+        if mode not in {CHATGPT_HANDOFF, CHIRP_ONLY}:
+            raise JobConflict("只有 ChatGPT Handoff 或 Chirp Only 任務可在此階段停止")
+        now = _iso()
+        stage = "chatgpt_handoff" if mode == CHATGPT_HANDOFF else "review"
+        progress = 73 if mode == CHATGPT_HANDOFF else 100
+        detail = (
+            "Chirp 3 與原始字幕已完成，等待 ChatGPT 純文字校稿回灌"
+            if mode == CHATGPT_HANDOFF
+            else "Chirp 3 原始字幕已完成"
+        )
+        event_type = "chatgpt_handoff_ready" if mode == CHATGPT_HANDOFF else "chirp_only_ready"
+        with self.transaction() as connection:
+            self._require_lease(connection, job_id, worker_id)
+            row = connection.execute(
+                "SELECT batch_id, workflow_mode FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise JobNotFound("Job not found")
+            if normalize_workflow_mode(row["workflow_mode"]) != mode:
+                raise JobConflict("Job workflow mode changed before handoff completion")
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status='awaiting_review', active_stage=?, stage_detail=?,
+                    progress=?, error=NULL, updated_at=?, revision=revision+1
+                WHERE id=?
+                """,
+                (stage, detail, progress, now, job_id),
+            )
+            self._clear_lease(connection, job_id, worker_id)
+            self._event(
+                connection,
+                job_id,
+                event_type,
+                worker_id,
+                {"workflow_mode": mode, "provider_calls_after_chirp": False},
+            )
+            if row["batch_id"]:
+                self._refresh_batch_state(connection, row["batch_id"], now)
+        return self.get_job(job_id)
+
+    def resume_after_chatgpt_handoff(
+        self,
+        *,
+        job_id: str,
+        expected_revision: int,
+        actor: str,
+    ) -> dict[str, Any]:
+        now = _iso()
+        with self.transaction() as connection:
+            row = connection.execute(
+                "SELECT * FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if row is None:
+                raise JobNotFound("Job not found")
+            if int(row["revision"]) != int(expected_revision):
+                raise JobConflict("任務已更新，請重新載入後再回灌 ChatGPT 字幕")
+            if normalize_workflow_mode(row["workflow_mode"]) != CHATGPT_HANDOFF:
+                raise JobConflict("此任務不是 ChatGPT Handoff 模式")
+            if row["status"] != "awaiting_review" or row["active_stage"] != "chatgpt_handoff":
+                raise JobConflict("任務目前不在等待 ChatGPT 回灌階段")
+            if not row["approved_at"]:
+                raise JobConflict("未核准的任務不可進入後處理")
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status='queued', active_stage='cleanup',
+                    stage_detail='ChatGPT 字幕已驗證，等待本機 cleanup / Golden Rules / QA',
+                    error=NULL, locked_by=NULL, lease_expires_at=NULL,
+                    last_heartbeat_at=NULL, updated_at=?, revision=revision+1
+                WHERE id=?
+                """,
+                (now, job_id),
+            )
+            self._event(
+                connection,
+                job_id,
+                "chatgpt_handoff_imported",
+                actor,
+                {"workflow_mode": CHATGPT_HANDOFF, "timestamps_immutable": True},
+            )
+            if row["batch_id"]:
+                self._refresh_batch_state(connection, row["batch_id"], now)
         return self.get_job(job_id)
 
     def acquire_lease(

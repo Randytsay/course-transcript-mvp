@@ -21,7 +21,20 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-from app.providers.mantra_context import MANTRA_TEXT
+from app.canonical.defaults import MANTRA_KEY, SCRIPTURE_KEY
+from app.canonical.golden_corpus import (
+    DEFAULT_CORPUS_RELATIVE_PATH,
+    corpus_digest,
+    error_memory_reference,
+    golden_corpus_reference,
+)
+from app.canonical.golden_rules import golden_reference_instruction, merge_golden_terms
+from app.canonical.lesson_context import (
+    build_lesson_scripture_context,
+    correction_reference_text,
+    window_scripture_hint,
+)
+from app.canonical.store import active_canonical
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
@@ -29,7 +42,7 @@ WORK = JOB / "correction-v2"
 MODEL = "gemini-3.7-flash"
 WINDOW_MS = max(15_000, int(os.environ.get("GEMINI_CORRECTION_WINDOW_MS", "60000")))
 MAX_WORKERS = max(1, int(os.environ.get("GEMINI_MAX_PARALLEL_WINDOWS", "2")))
-PROMPT_VERSION = "fixed-segments-v6-gemini-3.7-job-context"
+PROMPT_VERSION = "fixed-segments-v9-gemini-3.7-golden-corpus-error-memory"
 _CLIENTS = threading.local()
 
 TERMS_SCHEMA = {
@@ -175,7 +188,10 @@ def generate_terms(raw_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if cache.exists():
         cached = json.loads(cache.read_text(encoding="utf-8"))
         if cached.get("source_sha256") == source_sha256:
-            return cached.get("terms", [])
+            terms = cached.get("terms", [])
+            if os.environ.get("CONTENT_MODE", "").strip().lower() == "dacheng_buddhist":
+                return merge_golden_terms(terms if isinstance(terms, list) else [])
+            return terms
     prompt = (
         "Extract only repeated or domain-specific terminology from this Traditional "
         "Chinese ASR transcript. Do not rewrite the transcript. For each term return "
@@ -214,6 +230,8 @@ def generate_terms(raw_segments: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     "confidence": term.get("confidence", ""),
                 }
             )
+    if os.environ.get("CONTENT_MODE", "").strip().lower() == "dacheng_buddhist":
+        return merge_golden_terms(record["terms"])
     return record["terms"]
 
 
@@ -261,13 +279,20 @@ def correction_context_instruction() -> str:
         "that conflict with the fixed-segment JSON contract."
     ]
     if mode == "dacheng_buddhist":
+        mantra = active_canonical(DATA_DIR, MANTRA_KEY)
+        canonical_mantra = ""
+        if mantra is not None:
+            canonical_mantra = f"{mantra.get('title')}\n{mantra.get('body_text')}"
         parts.append(
-            "This is a 大成佛經 lesson and may contain collective chanting. "
-            "When a single segment clearly contains part of the supplied mantra, "
-            "use the matching canonical spelling. Preserve every input segment; "
-            "do not remove leader/congregation repetition here because deterministic "
-            "subtitle publication handles that separately. Canonical mantra:\n" + MANTRA_TEXT
+            "This is a 《佛說彌勒大成佛經》 ritual lesson. The opening may contain "
+            "collective scripture recitation and the closing contains the leader/congregation "
+            "《得見彌勒根本大明神咒》 pattern. Preserve every input segment and timestamp. "
+            "Do not delete leader/congregation repetition here; deterministic publication "
+            "handles folding later. Never invent scripture wording from phonetic similarity. "
+            "When a segment clearly contains the supplied mantra, use only the canonical spelling."
+            + (" Canonical mantra:\n" + canonical_mantra if canonical_mantra else " Canonical mantra is unavailable; do not guess it.")
         )
+        parts.append(golden_reference_instruction())
     elif mode == "general":
         parts.append("This is a general recording. Do not assume religious, Buddhist, or chanting content.")
     else:
@@ -280,6 +305,7 @@ def correction_context_instruction() -> str:
 def correct_window(
     items: list[dict[str, Any]],
     terms: list[dict[str, Any]],
+    lesson_scripture_context: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     first = str(items[0]["segment_id"])
     path = WORK / f"{first}.json"
@@ -287,12 +313,20 @@ def correct_window(
         {"segment_id": item["segment_id"], "raw_text": item["raw_text"]}
         for item in items
     ]
+    lesson_context_digest = str((lesson_scripture_context or {}).get("context_digest") or "")
+    golden_corpus_digest = (
+        corpus_digest(DATA_DIR / DEFAULT_CORPUS_RELATIVE_PATH)
+        if os.environ.get("CONTENT_MODE", "").strip().lower() == "dacheng_buddhist"
+        else ""
+    )
     if path.exists():
         record = json.loads(path.read_text(encoding="utf-8"))
         if (
             record.get("model") == MODEL
             and record.get("source_segments") == source_segments
             and record.get("prompt_version") == PROMPT_VERSION
+            and str(record.get("lesson_context_digest") or "") == lesson_context_digest
+            and str(record.get("golden_corpus_digest") or "") == golden_corpus_digest
         ):
             cached = {
                 str(entry["segment_id"]): entry
@@ -302,6 +336,13 @@ def correct_window(
             if set(cached) == {str(item["segment_id"]) for item in items}:
                 return cached
 
+    scripture_hint = window_scripture_hint(items, lesson_scripture_context)
+    scripture_reference = correction_reference_text(lesson_scripture_context, scripture_hint)
+    corpus_reference = ""
+    memory_reference = ""
+    if os.environ.get("CONTENT_MODE", "").strip().lower() == "dacheng_buddhist":
+        corpus_reference = golden_corpus_reference(items, DATA_DIR)
+        memory_reference = error_memory_reference(items)
     prompt = (
         "Correct Traditional-Chinese ASR text only. Preserve meaning; do not "
         "summarize, add information, split, merge, reorder, or alter segment IDs/"
@@ -309,6 +350,9 @@ def correct_window(
         "every input segment with the same segment_id. uncertain_terms must list "
         "unresolved terms.\n\n"
         + correction_context_instruction()
+        + ("\n\n" + scripture_reference if scripture_reference else "")
+        + ("\n\n" + corpus_reference if corpus_reference else "")
+        + ("\n\n" + memory_reference if memory_reference else "")
         + "\n\nGlobal terminology:\n"
         + json.dumps(terms, ensure_ascii=False)
         + "\n\nSegments:\n"
@@ -335,8 +379,8 @@ def correct_window(
 
     if not response_valid and len(items) > 1:
         midpoint = len(items) // 2
-        left = correct_window(items[:midpoint], terms)
-        right = correct_window(items[midpoint:], terms)
+        left = correct_window(items[:midpoint], terms, lesson_scripture_context)
+        right = correct_window(items[midpoint:], terms, lesson_scripture_context)
         return {**left, **right}
 
     if not response_valid:
@@ -371,6 +415,11 @@ def correct_window(
         "source_start_ms": items[0]["start_ms"],
         "source_end_ms": items[-1]["end_ms"],
         "source_segments": source_segments,
+        "lesson_context_digest": lesson_context_digest,
+        "golden_corpus_digest": golden_corpus_digest,
+        "golden_corpus_reference_used": bool(corpus_reference),
+        "error_memory_reference_used": bool(memory_reference),
+        "lesson_scripture_hint": scripture_hint,
         "source_sha256": hashlib.sha256(
             json.dumps(
                 source_segments,
@@ -466,10 +515,29 @@ def main() -> int:
         print("CORRECT=FAIL invalid raw subtitle segments")
         return 1
     WORK.mkdir(parents=True, exist_ok=True)
+    lesson_scripture_context: dict[str, Any] = {
+        "applied": False,
+        "reason": "content_mode_not_buddhist",
+        "review_required": False,
+    }
+    if os.environ.get("CONTENT_MODE", "legacy_unspecified").strip().lower() == "dacheng_buddhist":
+        lesson_scripture_context = build_lesson_scripture_context(
+            raw,
+            active_canonical(DATA_DIR, SCRIPTURE_KEY),
+        )
+        atomic_text(
+            JOB / "lesson-scripture-context.json",
+            json.dumps(lesson_scripture_context, ensure_ascii=False, indent=2) + "\n",
+        )
     terms = generate_terms(raw)
     groups = windows(raw)
     with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        results = list(pool.map(lambda group: correct_window(group, terms), groups))
+        results = list(
+            pool.map(
+                lambda group: correct_window(group, terms, lesson_scripture_context),
+                groups,
+            )
+        )
     corrected = {key: value for result in results for key, value in result.items()}
     expected_ids = {str(item["segment_id"]) for item in raw}
     if set(corrected) != expected_ids:
@@ -499,6 +567,11 @@ def main() -> int:
         "segment_count": len(final),
         "corrected_count": sum(item["corrected"] for item in final),
         "fallback_count": sum(item["correction_fallback"] for item in final),
+        "lesson_scripture_context": {
+            key: value
+            for key, value in lesson_scripture_context.items()
+            if key not in {"canonical_lines", "vocabulary"}
+        },
         "total_duration_ms": final[-1]["end_ms"],
         "segments": final,
     }

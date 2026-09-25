@@ -380,6 +380,7 @@ def _module_env(record: dict[str, Any], job_dir: Path) -> dict[str, str]:
             "CHIRP_MAX_PARALLEL_CHUNKS": str(effective_parallelism),
             "CONTENT_MODE": str(record.get("content_mode") or "legacy_unspecified"),
             "DOCUMENT_CONTEXT": str(record.get("document_context") or ""),
+            "WORKFLOW_MODE": str(record.get("workflow_mode") or "FULL_AUTO"),
         }
     )
     return env
