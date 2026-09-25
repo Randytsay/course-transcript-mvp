@@ -1559,6 +1559,19 @@ class JobStore:
                 raise JobConflict("任務目前不在 Chirp 完整性 Gate 待處理狀態")
             if not row["approved_at"]:
                 raise JobConflict("未核准的任務不可重新排入處理")
+            job_dir = self.database_path.parent / "jobs" / job_id
+            job_dir.mkdir(parents=True, exist_ok=True)
+            _atomic_json(
+                job_dir / "chirp-completeness-recheck-request.json",
+                {
+                    "requested_at": now,
+                    "actor": actor,
+                    "expected_revision": int(expected_revision),
+                    "workflow_mode": CHATGPT_HANDOFF,
+                    "force_segment_rerun": True,
+                    "force_gate_rerun": True,
+                },
+            )
             connection.execute(
                 """
                 UPDATE jobs
@@ -1575,7 +1588,11 @@ class JobStore:
                 job_id,
                 "chirp_completeness_recheck_queued",
                 actor,
-                {"workflow_mode": CHATGPT_HANDOFF},
+                {
+                    "workflow_mode": CHATGPT_HANDOFF,
+                    "force_segment_rerun": True,
+                    "force_gate_rerun": True,
+                },
             )
             if row["batch_id"]:
                 self._refresh_batch_state(connection, row["batch_id"], now)

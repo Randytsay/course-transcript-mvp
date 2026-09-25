@@ -95,7 +95,7 @@ class StoreTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def _create_job(self) -> dict:
+    def _create_job(self, *, workflow_mode: str = "FULL_AUTO") -> dict:
         preview = self.store.create_preview(
             source_path="gdrive:課程/第一堂.mp3",
             source_name="第一堂.mp3",
@@ -112,7 +112,54 @@ class StoreTests(unittest.TestCase):
             enable_subtitles=True,
             require_human_review=True,
             actor="owner@example.test",
+            workflow_mode=workflow_mode,
         )
+
+    def test_chirp_completeness_recheck_writes_force_rerun_marker(self) -> None:
+        job = self._create_job(workflow_mode="CHATGPT_HANDOFF")
+        self.store.acquire_lease(job["id"], "preflight-worker")
+        estimated = self.store.record_preflight_result(
+            job_id=job["id"],
+            duration_seconds=120,
+            source_checksum="d" * 64,
+            media_format="mp3",
+            audio_codec="mp3",
+            estimated_cost_usd=Decimal("0.25"),
+            pricing_version="test",
+            worker_id="preflight-worker",
+        )
+        approved = self.store.approve_job(
+            job_id=job["id"],
+            expected_revision=estimated["revision"],
+            confirmed_estimated_cost_usd=Decimal("0.25"),
+            project_limit_usd=Decimal("200"),
+            actor="owner@example.test",
+        )
+        self.store.acquire_lease(approved["id"], "pipeline-worker")
+        blocked = self.store.finish_for_chirp_completeness_review(
+            job_id=approved["id"],
+            worker_id="pipeline-worker",
+            blocker_count=3,
+        )
+        requeued = self.store.requeue_chirp_completeness(
+            job_id=approved["id"],
+            expected_revision=blocked["revision"],
+            actor="owner@example.test",
+        )
+        self.assertEqual(requeued["status"], "queued")
+        self.assertEqual(requeued["active_stage"], "segment")
+        marker = (
+            Path(self.tmp.name)
+            / "jobs"
+            / approved["id"]
+            / "chirp-completeness-recheck-request.json"
+        )
+        self.assertTrue(marker.is_file())
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+        self.assertTrue(payload["force_segment_rerun"])
+        self.assertTrue(payload["force_gate_rerun"])
+        self.assertEqual(payload["expected_revision"], blocked["revision"])
+
 
     def test_single_active_job_and_lease_ownership(self) -> None:
         job = self._create_job()

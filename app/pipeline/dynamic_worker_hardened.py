@@ -1005,6 +1005,8 @@ def _finish_after_chirp(
     worker_id: str,
 ) -> dict[str, Any]:
     job_dir = data_dir / "jobs" / leased["id"]
+    recheck_request = job_dir / "chirp-completeness-recheck-request.json"
+    recheck_requested = recheck_request.is_file()
     fake_provider = _env_true("COURSE_TRANSCRIPT_FAKE_PROVIDER")
     # Per-job provider router only kicks in when the legacy correction policy
     # env (CORRECTION_REQUESTED_POLICY) is NOT already set for legacy jobs.
@@ -1043,7 +1045,7 @@ def _finish_after_chirp(
         progress_start=63, progress_end=72,
         module="app.providers.build_srt", timeout_seconds=600,
         evidence=("subtitles.json", "subtitles.srt", "subtitles.vtt"),
-        force=patch_changed,
+        force=patch_changed or recheck_requested,
     )
     workflow_mode = normalize_workflow_mode(leased.get("workflow_mode"))
     handoff_imported = (
@@ -1057,8 +1059,10 @@ def _finish_after_chirp(
             progress_start=72, progress_end=72,
             module="app.providers.chirp_completeness_gate", timeout_seconds=900,
             evidence=("chirp-completeness.json", "chirp-completeness-repair-plan.json"),
-            force=patch_changed,
+            force=patch_changed or recheck_requested,
         )
+        if recheck_requested:
+            recheck_request.unlink(missing_ok=True)
         completeness = {}
         try:
             completeness = json.loads(
