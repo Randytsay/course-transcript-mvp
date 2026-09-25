@@ -318,6 +318,16 @@ class GoldenRulesTests(unittest.TestCase):
             } <= found
         )
 
+    def test_twentieth_lesson_gold_terms_are_auditable(self) -> None:
+        report = audit_golden_variants(
+            [
+                {"segment_id": "a", "corrected_text": "是否末乘來集會的大眾"},
+                {"segment_id": "b", "corrected_text": "稽首皈依俱嚕悉地"},
+            ]
+        )
+        found = {item["canonical"] for item in report["issues"]}
+        self.assertTrue({"翅頭末城", "蘇悉帝"} <= found)
+
     def test_audit_counts_one_variant_per_term_per_segment(self) -> None:
         report = audit_golden_variants(
             [{"segment_id": "a", "corrected_text": "如觀掌中阿摩羅國"}]

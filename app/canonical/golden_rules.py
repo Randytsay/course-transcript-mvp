@@ -9,7 +9,7 @@ segment identity, and timestamps are never modified here.
 from typing import Any, Iterable
 
 
-GOLDEN_RULESET_VERSION = "dacheng-golden-v16-20260308-20260816"
+GOLDEN_RULESET_VERSION = "dacheng-golden-v17-20260308-20260823"
 
 
 _TERMS: tuple[dict[str, Any], ...] = (
@@ -42,7 +42,7 @@ _TERMS: tuple[dict[str, Any], ...] = (
     {"canonical": "瞋癡", "variants": ["嗔痴"], "confidence": "high", "scope": "buddhist_orthography", "lessons": ["20260405"]},
     {"canonical": "迴向", "variants": ["回向"], "confidence": "high", "scope": "buddhist_orthography", "lessons": ["20260405"]},
     {"canonical": "讚歎", "variants": ["贊嘆"], "confidence": "high", "scope": "buddhist_orthography", "lessons": ["20260405"]},
-    {"canonical": "翅頭末城", "variants": ["四頭抹塵", "刺頭末城"], "confidence": "high", "scope": "scripture_name", "lessons": ["20260405", "20260419"]},
+    {"canonical": "翅頭末城", "variants": ["四頭抹塵", "刺頭末城", "是否末乘"], "confidence": "high", "scope": "scripture_name", "lessons": ["20260405", "20260419", "20260823"]},
     {"canonical": "淨命", "variants": ["記命"], "confidence": "high", "scope": "buddhist_term", "lessons": ["20260412"]},
     {"canonical": "初會龍華", "variants": ["出會龍華"], "confidence": "high", "scope": "dacheng_course", "lessons": ["20260412"]},
     {"canonical": "由旬", "variants": ["遊旬"], "confidence": "high", "scope": "buddhist_measure", "lessons": ["20260412"]},
@@ -145,6 +145,7 @@ _TERMS: tuple[dict[str, Any], ...] = (
     {"canonical": "毘婆尸佛", "variants": ["毗婆屍佛"], "confidence": "high", "scope": "buddhist_name", "lessons": ["20260816"]},
     {"canonical": "尸棄佛", "variants": ["屍棄佛"], "confidence": "high", "scope": "buddhist_name", "lessons": ["20260816"]},
     {"canonical": "毘舍浮佛", "variants": ["毗舍浮佛"], "confidence": "high", "scope": "buddhist_name", "lessons": ["20260816"]},
+    {"canonical": "蘇悉帝", "variants": ["俱嚕悉地"], "confidence": "high", "scope": "buddhist_term", "lessons": ["20260823"]},
 )
 
 
