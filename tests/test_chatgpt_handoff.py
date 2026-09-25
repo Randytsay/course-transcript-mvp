@@ -19,6 +19,11 @@ from app.providers.chatgpt_handoff import (
     write_bundle,
 )
 from app.providers.chirp_completeness_gate import evaluate as evaluate_completeness
+from app.pipeline.dynamic_worker_hardened import (
+    _CHATGPT_HANDOFF_PREEXPORT_EVIDENCE,
+    _CHIRP_COMPLETENESS_PREEXPORT_EVIDENCE,
+    _preexport_artifact_evidence,
+)
 
 
 def _raw_segments() -> list[dict[str, object]]:
@@ -251,3 +256,37 @@ def test_verified_nonlexical_targeted_patch_does_not_loop_forever(tmp_path: Path
         item["reason"] == "audible_gap_verified_nonlexical_by_targeted_patch"
         for item in report["warnings"]
     )
+
+
+def test_preexport_evidence_does_not_require_export_manifest(tmp_path: Path) -> None:
+    job_dir = tmp_path / "preexport"
+    _write_job(job_dir)
+    (job_dir / "chirp-completeness-repair-plan.json").write_text(
+        json.dumps({"status": "needs_review", "items": []}),
+        encoding="utf-8",
+    )
+    evidence = _preexport_artifact_evidence(
+        job_dir,
+        _CHIRP_COMPLETENESS_PREEXPORT_EVIDENCE,
+    )
+    names = {item["name"] for item in evidence}
+    assert "chirp-completeness.json" in names
+    assert "subtitles.srt" in names
+    assert "export-manifest.json" not in names
+
+
+def test_handoff_preexport_evidence_accepts_nested_bundle_paths(tmp_path: Path) -> None:
+    job_dir = tmp_path / "handoff-evidence"
+    _write_job(job_dir)
+    bundle = job_dir / "chatgpt-handoff"
+    bundle.mkdir()
+    for name in ("handoff-manifest.json", "chirp-raw.srt", "raw-transcript.txt"):
+        (bundle / name).write_text("evidence\n", encoding="utf-8")
+    evidence = _preexport_artifact_evidence(
+        job_dir,
+        _CHATGPT_HANDOFF_PREEXPORT_EVIDENCE,
+    )
+    names = {item["name"] for item in evidence}
+    assert "chatgpt-handoff/handoff-manifest.json" in names
+    assert "chatgpt-handoff/chirp-raw.srt" in names
+    assert "chatgpt-handoff/raw-transcript.txt" in names
