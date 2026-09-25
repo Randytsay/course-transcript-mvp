@@ -302,4 +302,48 @@ class CanonicalTextStore:
 
 
 def active_canonical(data_dir: Path, document_key: str) -> dict[str, Any] | None:
-    return CanonicalTextStore(Path(data_dir) / "course-transcript.db").get_active(document_key)
+    """Read the active canonical document without creating or migrating schema.
+
+    Correction/cleanup paths are readers. If the production DB is unavailable,
+    missing, or predates the canonical tables, fail closed and return ``None``
+    instead of creating directories or mutating the database as a side effect.
+    Explicit admin/import flows still use ``CanonicalTextStore`` and own schema
+    creation/migration.
+    """
+    key = str(document_key or "").strip()
+    if key not in SUPPORTED_KEYS:
+        raise ValueError(f"unsupported canonical document key: {key}")
+    db_path = Path(data_dir) / "course-transcript.db"
+    if not db_path.is_file():
+        return None
+    try:
+        connection = sqlite3.connect(
+            f"file:{db_path}?mode=ro",
+            uri=True,
+            timeout=30,
+        )
+        connection.row_factory = sqlite3.Row
+        with closing(connection):
+            row = connection.execute(
+                """
+                SELECT d.document_key, d.title, d.active_version, d.active_checksum,
+                       d.updated_at, d.updated_by,
+                       v.body_text, v.note, v.source_json, v.created_at, v.created_by
+                FROM canonical_documents d
+                LEFT JOIN canonical_document_versions v
+                  ON v.document_key=d.document_key AND v.version=d.active_version
+                WHERE d.document_key=?
+                """,
+                (key,),
+            ).fetchone()
+    except sqlite3.Error:
+        return None
+    if row is None or row["active_version"] is None:
+        return None
+    result = dict(row)
+    try:
+        result["source"] = json.loads(str(result.pop("source_json") or "{}"))
+    except (TypeError, ValueError):
+        result["source"] = {}
+        result.pop("source_json", None)
+    return result
