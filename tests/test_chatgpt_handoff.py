@@ -218,6 +218,82 @@ def test_chirp_completeness_gate_blocks_audible_mid_gap(tmp_path: Path) -> None:
     assert any(item["reason"] == "audible_subtitle_gap" for item in report["blockers"])
 
 
+def test_chirp_completeness_gate_downgrades_robust_vad_nonspeech(tmp_path: Path) -> None:
+    job_dir = tmp_path / "gate-vad-nonspeech"
+    _write_job(job_dir)
+    payload = json.loads((job_dir / "subtitles.json").read_text("utf-8"))
+    payload["segments"][1]["start_ms"] = 10_000
+    payload["segments"][1]["end_ms"] = 12_000
+    (job_dir / "subtitles.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({"duration_seconds": 12.0, "chunks": []}), encoding="utf-8"
+    )
+    report = evaluate_completeness(
+        job_dir,
+        audibility_probe=lambda _start, _end: True,
+        speech_probe=lambda _start, _end: {
+            "engine": "webrtcvad",
+            "mode0_speech_ratio": 0.05,
+            "mode3_speech_ratio": 0.02,
+            "rms_dbfs": -40.0,
+            "robust_non_speech": True,
+        },
+    )
+    assert report["status"] == "PASS"
+    assert report["handoff_allowed"] is True
+    warning = next(
+        item for item in report["warnings"]
+        if item["reason"] == "audible_gap_vad_verified_non_speech"
+    )
+    assert warning["recommended_action"] == "no_paid_retry_required"
+    assert warning["vad"]["robust_non_speech"] is True
+
+
+def test_chirp_completeness_gate_keeps_uncertain_vad_gap_blocking(tmp_path: Path) -> None:
+    job_dir = tmp_path / "gate-vad-uncertain"
+    _write_job(job_dir)
+    payload = json.loads((job_dir / "subtitles.json").read_text("utf-8"))
+    payload["segments"][1]["start_ms"] = 10_000
+    payload["segments"][1]["end_ms"] = 12_000
+    (job_dir / "subtitles.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({"duration_seconds": 12.0, "chunks": []}), encoding="utf-8"
+    )
+    report = evaluate_completeness(
+        job_dir,
+        audibility_probe=lambda _start, _end: True,
+        speech_probe=lambda _start, _end: {
+            "engine": "webrtcvad",
+            "mode0_speech_ratio": 0.35,
+            "mode3_speech_ratio": 0.22,
+            "rms_dbfs": -30.0,
+            "robust_non_speech": False,
+        },
+    )
+    assert report["status"] == "BLOCKED"
+    blocker = next(item for item in report["blockers"] if item["reason"] == "audible_subtitle_gap")
+    assert blocker["vad"]["robust_non_speech"] is False
+
+
+def test_chirp_completeness_gate_vad_failure_remains_fail_closed(tmp_path: Path) -> None:
+    job_dir = tmp_path / "gate-vad-unavailable"
+    _write_job(job_dir)
+    payload = json.loads((job_dir / "subtitles.json").read_text("utf-8"))
+    payload["segments"][1]["start_ms"] = 10_000
+    payload["segments"][1]["end_ms"] = 12_000
+    (job_dir / "subtitles.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({"duration_seconds": 12.0, "chunks": []}), encoding="utf-8"
+    )
+    report = evaluate_completeness(
+        job_dir,
+        audibility_probe=lambda _start, _end: True,
+        speech_probe=lambda _start, _end: None,
+    )
+    assert report["status"] == "BLOCKED"
+    assert any(item["reason"] == "audible_subtitle_gap" for item in report["blockers"])
+
+
 def test_verified_nonlexical_targeted_patch_does_not_loop_forever(tmp_path: Path) -> None:
     job_dir = tmp_path / "gate-verified-no-words"
     _write_job(job_dir)
