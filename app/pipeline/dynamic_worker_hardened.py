@@ -40,6 +40,47 @@ observed.build_performance_summary = enhanced_performance_summary
 # routing is recorded separately from correction-routing.json.
 GEMINI_CORRECTION_BASELINE_MODEL = "gemini-3.7-flash"
 
+_CHIRP_COMPLETENESS_PREEXPORT_EVIDENCE = (
+    "merged-words.json",
+    "subtitles.json",
+    "subtitles.srt",
+    "chirp-completeness.json",
+    "chirp-completeness-repair-plan.json",
+)
+_CHATGPT_HANDOFF_PREEXPORT_EVIDENCE = (
+    *_CHIRP_COMPLETENESS_PREEXPORT_EVIDENCE,
+    "chatgpt-handoff/handoff-manifest.json",
+    "chatgpt-handoff/chirp-raw.srt",
+    "chatgpt-handoff/raw-transcript.txt",
+)
+
+
+def _preexport_artifact_evidence(
+    job_dir: Path,
+    names: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Record intermediate evidence before export-manifest exists."""
+    evidence: list[dict[str, Any]] = []
+    for name in names:
+        relative = Path(name)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError(f"不安全的 pre-export artifact 路徑：{name}")
+        path = job_dir / relative
+        if not path.is_file() or path.stat().st_size <= 0:
+            continue
+        evidence.append(
+            {
+                "name": relative.as_posix(),
+                "size_bytes": path.stat().st_size,
+                "sha256": base._sha256(path),
+                "source": "pre-export Chirp / handoff evidence",
+                "public": False,
+            }
+        )
+    if not evidence:
+        raise RuntimeError("缺少可用的 pre-export pipeline evidence")
+    return evidence
+
 _ORIGINAL_MODULE_ENV = base._module_env
 _ACTIVE_RESUMABLE = (
     "downloading",
@@ -1048,7 +1089,10 @@ def _finish_after_chirp(
                 "subtitle_review_status": "chirp_completeness_blocked",
                 "chirp_completeness": completeness,
                 "fake_provider": fake_provider,
-                "artifacts": base._artifact_evidence(job_dir),
+                "artifacts": _preexport_artifact_evidence(
+                    job_dir,
+                    _CHIRP_COMPLETENESS_PREEXPORT_EVIDENCE,
+                ),
             }
             base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
             base._atomic_json(job_dir / "processing_manifest.json", manifest)
@@ -1091,7 +1135,10 @@ def _finish_after_chirp(
             "human_review_blocking": True,
             "subtitle_review_status": "awaiting_chatgpt",
             "fake_provider": fake_provider,
-            "artifacts": base._artifact_evidence(job_dir),
+            "artifacts": _preexport_artifact_evidence(
+                job_dir,
+                _CHATGPT_HANDOFF_PREEXPORT_EVIDENCE,
+            ),
         }
         base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
         base._atomic_json(job_dir / "processing_manifest.json", manifest)
