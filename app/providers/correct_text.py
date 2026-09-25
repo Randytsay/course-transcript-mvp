@@ -21,7 +21,7 @@ from typing import Any
 from google import genai
 from google.genai import types
 
-from app.canonical.defaults import MANTRA_KEY, SCRIPTURE_KEY
+from app.canonical.defaults import MANTRA_BODY, MANTRA_KEY, MANTRA_TITLE, SCRIPTURE_KEY
 from app.canonical.golden_corpus import (
     DEFAULT_CORPUS_RELATIVE_PATH,
     corpus_digest,
@@ -280,9 +280,11 @@ def correction_context_instruction() -> str:
     ]
     if mode == "dacheng_buddhist":
         mantra = active_canonical(DATA_DIR, MANTRA_KEY)
-        canonical_mantra = ""
-        if mantra is not None:
-            canonical_mantra = f"{mantra.get('title')}\n{mantra.get('body_text')}"
+        canonical_mantra = (
+            f"{mantra.get('title')}\n{mantra.get('body_text')}"
+            if mantra is not None
+            else f"{MANTRA_TITLE}\n{MANTRA_BODY}"
+        )
         parts.append(
             "This is a 《佛說彌勒大成佛經》 ritual lesson. The opening may contain "
             "collective scripture recitation and the closing contains the leader/congregation "

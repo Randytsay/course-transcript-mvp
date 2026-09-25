@@ -117,6 +117,20 @@ GEMINI_MAX_PARALLEL_WINDOWS=2
 
 The model is `gemini-3.7-flash`. Every paid response is stored under a prompt-version, source-digest, and attempt-unique audit filename. If a structured response is malformed, the parent response must be persisted before the window is split.
 
+### Dacheng Golden Corpus / Error Memory
+
+For `content_mode=dacheng_buddhist`, correction may read human-reviewed historical evidence from `/app/data/canonical/golden-corpus.jsonl` and deterministic typo evidence from `/app/data/canonical/golden-error-memory.json`. These sources are reference-only: current audio/ASR and current canonical scripture context have higher priority, and retrieval must never add, delete, split, merge, reorder, or retime segments.
+
+Rebuild without provider calls:
+
+```bash
+PYTHONPATH=. python scripts/build_golden_corpus.py \
+  --input-dir /path/to/reviewed-srts \
+  --data-dir /opt/course-transcript-source/data
+```
+
+The correction cache includes the corpus digest. `app.canonical.omission_detection` is report-only and screens both `human_missing` and `source_missing` candidates; it never edits raw ASR or human gold.
+
 Severe deletion, addition, repetition, or likely semantic rewrite triggers fallback to immutable Chirp text. The fallback reason must remain visible in corrected subtitle evidence and `content-qa.json`.
 
 ## AI account profiles and controlled switching

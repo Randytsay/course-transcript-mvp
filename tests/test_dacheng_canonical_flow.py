@@ -13,7 +13,7 @@ from app.canonical.lesson_context import (
     correction_reference_text,
     window_scripture_hint,
 )
-from app.canonical.store import CanonicalTextStore
+from app.canonical.store import CanonicalTextStore, active_canonical
 
 
 def _segment(index: int, text: str, *, start_ms: int | None = None) -> dict[str, object]:
@@ -31,6 +31,24 @@ def _segment(index: int, text: str, *, start_ms: int | None = None) -> dict[str,
 
 
 class CanonicalTextStoreTests(unittest.TestCase):
+    def test_active_lookup_missing_db_is_read_only_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp) / "missing-data-dir"
+            self.assertIsNone(active_canonical(data_dir, SCRIPTURE_KEY))
+            self.assertFalse(data_dir.exists())
+
+    def test_active_lookup_old_db_without_canonical_tables_is_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = Path(temp)
+            db_path = data_dir / "course-transcript.db"
+            connection = sqlite3.connect(db_path)
+            connection.execute("CREATE TABLE legacy_only(id INTEGER PRIMARY KEY)")
+            connection.commit()
+            connection.close()
+            before = db_path.read_bytes()
+            self.assertIsNone(active_canonical(data_dir, SCRIPTURE_KEY))
+            self.assertEqual(db_path.read_bytes(), before)
+
     def test_registry_seeds_mantra_but_requires_operator_scripture(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             store = CanonicalTextStore(Path(temp) / "course-transcript.db")

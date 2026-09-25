@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from app.canonical.alignment import mantra_pair_display_layer, scripture_display_layer
-from app.canonical.defaults import MANTRA_KEY, SCRIPTURE_KEY
+from app.canonical.defaults import MANTRA_BODY, MANTRA_KEY, MANTRA_TITLE as DEFAULT_MANTRA_TITLE, SCRIPTURE_KEY
 from app.canonical.golden_rules import audit_golden_variants
 from app.canonical.store import active_canonical
 
@@ -516,7 +516,13 @@ def build_report(
     }
     if mode == "dacheng_buddhist":
         scripture_doc = active_canonical(DATA_DIR, SCRIPTURE_KEY)
-        mantra_doc = active_canonical(DATA_DIR, MANTRA_KEY)
+        mantra_doc = active_canonical(DATA_DIR, MANTRA_KEY) or {
+            "title": DEFAULT_MANTRA_TITLE,
+            "body_text": MANTRA_BODY,
+            "active_version": 0,
+            "active_checksum": None,
+            "source": {"source_type": "builtin_canonical_fallback"},
+        }
         display_segments, scripture = scripture_display_layer(cleaned, scripture_doc)
         display_segments, mantra = mantra_pair_display_layer(display_segments, mantra_doc)
         golden_transcript = audit_golden_variants(cleaned)
