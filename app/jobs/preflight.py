@@ -193,6 +193,7 @@ def run_preflight(
             estimate = estimate_job_cost(
                 probe["duration_seconds"],
                 base_cost_config.for_processing_strategy(strategy),
+                include_gemini=bool(record.get("enable_gemini_correction")),
             )
         recorded = store.record_preflight_result(
             job_id=leased["id"],

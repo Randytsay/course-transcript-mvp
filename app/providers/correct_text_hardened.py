@@ -36,12 +36,13 @@ def correction_cascade_enabled() -> bool:
 def correct_window(
     items: list[dict[str, Any]],
     terms: list[dict[str, Any]],
+    lesson_scripture_context: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Run the legacy hardened window while preserving patch compatibility."""
     original_generate = legacy.generate_json
     legacy.generate_json = generate_json
     try:
-        return legacy.correct_window(items, terms)
+        return legacy.correct_window(items, terms, lesson_scripture_context)
     finally:
         legacy.generate_json = original_generate
 

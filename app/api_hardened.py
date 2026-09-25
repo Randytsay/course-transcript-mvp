@@ -5,6 +5,8 @@ from collections.abc import Iterable
 from typing import Any
 
 from app.api_observed import app
+from app.canonical.admin import router as canonical_admin_router
+from app.chatgpt_handoff_routes import router as chatgpt_handoff_router
 from app.drive_api_routes import router as drive_api_router
 from app.learning.admin import router as learning_admin_router
 from app.learning.routes import router as learning_router
@@ -147,6 +149,9 @@ app.include_router(drive_api_router)
 # as the existing operator API. They never perform a paid call inside the API
 # request; confirmed candidates are consumed later by the durable worker.
 app.include_router(retranscription_router)
+# ChatGPT handoff re-entry is owner-controlled. Preferred imports are
+# segment_id + corrected_text only; legacy SRT imports must preserve every Chirp timestamp.
+app.include_router(chatgpt_handoff_router)
 # Reviewer auth is deliberately independent from the Cloudflare Access operator
 # identity. Edge policy must allow these paths on the reviewer-facing origin.
 app.include_router(review_auth_router)
@@ -158,6 +163,7 @@ app.include_router(learning_router)
 # Owner/admin review routes stay on the Cloudflare Access protected admin origin.
 app.include_router(review_admin_router)
 app.include_router(learning_admin_router)
+app.include_router(canonical_admin_router)
 # YouTube owner import stays on a separate review-admin path and therefore keeps
 # the existing Cloudflare Access mutation boundary rather than reviewer auth.
 app.include_router(review_youtube_import_router)

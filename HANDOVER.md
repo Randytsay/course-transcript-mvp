@@ -26,7 +26,7 @@ Read `README.md`, `ARCHITECTURE.md`, `RUNBOOK.md`, `DEPLOYMENT.md`, `docs/DYNAMI
 - Long audio with word timestamps must be chunked according to the current planner; do not assume every chunk is exactly 15 minutes.
 - GCS `BatchRecognizeFileResult` old fields are deprecated.
 - Dynamic batching is non-blocking: submitted jobs remain `status=transcribing`, `active_stage=chirp` while the worker lease is released.
-- Successful hardened jobs finish as `completed`; `awaiting_review` is retained only for compatibility with older jobs and delivery recovery.
+- Successful full-auto hardened jobs finish as `completed` when human review is not required. `CHATGPT_HANDOFF` first runs a provider-free Chirp completeness gate. A blocked gate stops at `awaiting_review` / `active_stage=chirp_completeness`; a passed gate stops at `awaiting_review` / `active_stage=chatgpt_handoff` until text corrections are explicitly returned.
 
 ## Current implementation
 
@@ -35,9 +35,15 @@ Read `README.md`, `ARCHITECTURE.md`, `RUNBOOK.md`, `DEPLOYMENT.md`, `docs/DYNAMI
 - `app/providers/run_chirp_pipeline_hardened.py`: preserves compatible retained standard/dynamic plans and merges only after every chunk is recovered.
 - `app/pipeline/dynamic_worker_production.py`: production paid runner with leases, non-blocking dynamic submission, retained-standard compatibility, actual-strategy accounting, restart resume, and locked Drive publication.
 - `app/providers/build_srt.py`: lexical Chinese subtitle segmentation with immutable timings.
+- `app/jobs/workflow_mode.py`: stable `FULL_AUTO` / `CHATGPT_HANDOFF` / `CHIRP_ONLY` contract. Existing jobs default to `FULL_AUTO`.
+- `app/providers/chirp_completeness_gate.py`: provider-free pre-Handoff gate for structural timing integrity, course-relative density, audible mid-file gaps and tail coverage. Existing verified-nonlexical targeted patches suppress repeat-loop false positives; ambiguous repairs block Handoff instead of automatically spending.
+- `app/providers/chatgpt_handoff.py`: creates the Chirp evidence bundle only after the completeness gate passes. Preferred re-entry is `segment_id + corrected_text` with no model-supplied timestamps; legacy SRT import remains strict. Dacheng bundles include Golden Rules plus active canonical scripture/mantra context.
+- `app/chatgpt_handoff_routes.py`: owner-only revision-gated Handoff status, completeness recheck, and text re-entry endpoints. Preferred imports contain no timestamps. Recheck itself starts no paid provider call; import rollback restores prior artifacts on a race or rejected state transition.
 - `app/providers/correct_text_hardened.py`: `gemini-3.7-flash` text-only correction, 60-second windows, immutable per-attempt audit evidence, adaptive split, and severe-drift fallback to raw Chirp text.
 - `app/providers/validate_outputs_hardened.py`: structural validation plus content-drift QA; `content-qa.json` is checksummed in the export manifest.
 - `app/providers/subtitle_cleanup.py`: deterministic high-confidence filler/stutter cleanup with immutable timing and a `cleanup-review.json` manual-review list.
+- `app/canonical/lesson_context.py`: for `dacheng_buddhist`, conservatively locates the opening T0456 passage from raw ASR, derives lesson-only canonical vocabulary, and tracks the most likely scripture line being explained in each later correction window. It is bias-only: lecture paraphrases are never force-replaced with scripture text.
+- `scripts/reprocess_dacheng_history.py`: read-only historical Dacheng dry-run/audit. It identifies the new canonical cleanup result and marks that true text recorrection requires a separately authorized paid Gemini rerun; raw provider evidence and timestamps are never modified.
 - `app/jobs/drive_publish.py`: resumable pending/verify/backup/promote/final-verify publication transaction.
 - `app/jobs/delivery_worker.py`: retries Drive delivery from existing local artifacts only; it never repeats Chirp or Gemini.
 - `app/jobs/drive_lock.py`: cross-process global Drive lock and shared cooldown. It requires all participating containers to mount the same host `./data` directory at `/app/data`.
@@ -48,7 +54,9 @@ Read `README.md`, `ARCHITECTURE.md`, `RUNBOOK.md`, `DEPLOYMENT.md`, `docs/DYNAMI
 - `app/jobs/preflight.py` / `app/jobs/preflight_observed.py`: keep the
   non-paid media preflight, then auto-authorize ordinary jobs inside the
   server-side per-batch and project budget guardrails. Only exceptional cost
-  cases remain `awaiting_confirmation`.
+  cases remain `awaiting_confirmation`. When server-side correction is disabled
+  by `CHATGPT_HANDOFF` or `CHIRP_ONLY`, Gemini token estimates and Gemini
+  estimated cost are zero.
 - `scripts/runtime_revision_guard.py`: fail-closed production check requiring
   API, frontend, and all worker/monitor containers to share one labelled exact
   Git SHA; the release script also runs it against the approved release SHA.

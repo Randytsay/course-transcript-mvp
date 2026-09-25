@@ -343,7 +343,6 @@ def base_chunk_density_reports(
         ):
             continue
         duration_ms_value = max(0, end_ms - start_ms)
-        word_count = int(manifest.get("word_count") or 0)
         chunk_words = repaired_words_by_chunk.get(index)
         word_timeline_source = "pre_merge_repaired"
         if not isinstance(chunk_words, list):
@@ -356,6 +355,18 @@ def base_chunk_density_reports(
             word_timeline_source = "chunk_words_raw"
         if not isinstance(chunk_words, list):
             chunk_words = []
+        word_count = int(manifest.get("word_count") or 0)
+        for patch_index, patch_item in targeted_items.items():
+            if int(patch_item.get("parent_chunk_index", -1)) != index:
+                continue
+            decision = targeted_decisions.get(patch_index, {})
+            if decision.get("applied") is not True:
+                continue
+            word_count += (
+                int(decision.get("patch_words_inserted") or 0)
+                - int(decision.get("baseline_words_replaced") or 0)
+            )
+        word_count = max(0, word_count)
         gaps = _zero_word_gaps(chunk_words, start_ms, end_ms, minimum_gap_ms)
         gap_ms = sum(item["gap_ms"] for item in gaps)
         effective_ms = max(1, duration_ms_value - gap_ms)
@@ -948,12 +959,20 @@ def main() -> int:
                     "status": loaded.get("status"),
                     "summary": loaded.get("summary", {}),
                     "review_required": loaded.get("review_required", []),
+                    "canonical": loaded.get("canonical", {}),
                 }
                 review_count = int(
                     (cleanup_report.get("summary") or {}).get("review_count", 0)
                 )
                 if review_count:
                     warnings.append(f"automatic cleanup requires review: {review_count} segments")
+                canonical = loaded.get("canonical") or {}
+                if isinstance(canonical, dict):
+                    for kind in ("scripture", "mantra"):
+                        metadata = canonical.get(kind) or {}
+                        if isinstance(metadata, dict) and metadata.get("review_required"):
+                            reason = str(metadata.get("reason") or f"{kind}_canonical_review")
+                            review_required.append(f"dacheng canonical {kind} review: {reason}")
         except (OSError, ValueError, TypeError):
             errors.append("cleanup-review.json is invalid")
     else:

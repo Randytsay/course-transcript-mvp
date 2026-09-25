@@ -140,6 +140,7 @@ def _cached_window(
 def correct_window(
     items: list[dict[str, Any]],
     terms: list[dict[str, Any]],
+    lesson_scripture_context: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     source_segments = _source_segments(items)
     source_sha256 = _source_digest(source_segments)

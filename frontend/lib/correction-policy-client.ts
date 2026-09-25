@@ -3,6 +3,7 @@ import type {
   CreatedBatch,
   OutputFormat,
   ProcessingStrategy,
+  WorkflowMode,
 } from "./types";
 
 export type CorrectionPolicy = "GEMINI_FIRST" | "M3_FIRST";
@@ -44,6 +45,7 @@ export async function createBatchWithPolicy(
   contentMode: ContentMode = "general",
   documentContext: string = "",
   aiCorrection?: CorrectionSelection,
+  workflowMode: WorkflowMode = "FULL_AUTO",
 ): Promise<CreatedBatch & { correctionPolicy: CorrectionPolicy }> {
   const result = await postJson<{
     batch_id: string;
@@ -55,11 +57,13 @@ export async function createBatchWithPolicy(
     next_action: string;
     processing_strategy: ProcessingStrategy;
     correction_policy: CorrectionPolicy;
+    workflow_mode: WorkflowMode;
   }>("/batches", {
     batch_preview_id: batchPreviewId,
     language_code: "cmn-Hant-TW",
     profile: "highest_accuracy",
-    enable_gemini_correction: true,
+    workflow_mode: workflowMode,
+    enable_gemini_correction: workflowMode === "FULL_AUTO",
     enable_subtitles: true,
     require_human_review: true,
     processing_strategy: processingStrategy,
@@ -68,7 +72,7 @@ export async function createBatchWithPolicy(
     content_mode: contentMode,
     document_context: documentContext,
     correction_policy: correctionPolicy,
-    ...(aiCorrection
+    ...(workflowMode === "FULL_AUTO" && aiCorrection
       ? {
           ai_correction: {
             provider: aiCorrection.provider,
@@ -89,6 +93,7 @@ export async function createBatchWithPolicy(
     paidOperationStarted: result.paid_operation_started,
     nextAction: result.next_action,
     processingStrategy: result.processing_strategy,
+    workflowMode: result.workflow_mode,
     correctionPolicy: result.correction_policy,
   };
 }

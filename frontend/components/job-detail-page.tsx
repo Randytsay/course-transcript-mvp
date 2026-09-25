@@ -4,7 +4,7 @@ import AppShell from "./app-shell";
 import { ApiClientError, approveBatch, decideReviewTerm, getArtifacts, getBatch, getJob, getJobEvents, getReviewTerms, getSegments, pauseJob, resumeJob, retryFailedStage, getJobChunks, getJobChunkTranscript, getJobLiveCost } from "@/lib/api-client";
 import type { Artifact, JobEvent, ReviewTerm, TranscriptJob, TranscriptSegment, ChunkProgressResponse, LiveCost } from "@/lib/types";
 import { formatTwd } from "@/lib/currency";
-import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, Clock3, ExternalLink, FileJson, FileText, FolderUp, Gauge, Headphones, LoaderCircle, Pause, Play, RotateCcw, TriangleAlert, ChevronRight, ChevronDown, Activity, Coins } from "lucide-react";
+import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Circle, Clock3, ExternalLink, FileJson, FileText, FolderUp, Gauge, Headphones, LoaderCircle, Pause, Play, RotateCcw, TriangleAlert, ChevronRight, ChevronDown, Activity, Coins, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import StatusBadge from "./status-badge";
@@ -239,6 +239,18 @@ export default function JobDetailPage({ jobId }: { jobId: string }) {
       <div className="job-overview-main"><StatusBadge status={job.status} /><span className="job-id">Job ID: {job.id}</span><span className="job-meta"><Clock3 size={15} />更新於 {job.updatedAt}</span></div>
       <div className="job-overview-stats"><div><span>字詞數</span><strong>{job.words.toLocaleString()}</strong></div><div><span>待確認</span><strong className="text-warning">{pendingCount}</strong></div><div><span>時間軸</span><strong className={qaStep?.status === "warning" ? "text-warning" : "text-success"}>{qaStep?.status === "warning" ? "需修正" : "待 QA"}</strong></div></div>
     </section>
+    {job.workflowMode === "CHATGPT_HANDOFF" && job.activeStage === "chirp_completeness" && (
+      <div className="qa-notice" style={{ marginBottom: 16 }}>
+        <TriangleAlert size={22} className="text-warning" />
+        <div><strong>Chirp 完整性 Gate 尚未通過</strong><div>偵測到疑似漏辨識、異常字數密度、有聲字幕空窗或尾端覆蓋問題。系統不會把這份字幕交給 ChatGPT，先查看 ASR Quality／修復建議。</div><Link href={`/jobs/${job.id}/asr-quality`} className="button button--secondary" style={{ marginTop: 8 }}>查看 ASR Quality</Link></div>
+      </div>
+    )}
+    {job.workflowMode === "CHATGPT_HANDOFF" && job.activeStage === "chatgpt_handoff" && (
+      <div className="empty-state" style={{ marginBottom: 16 }}>
+        <Sparkles size={20} />
+        <div><strong>Chirp 3 完整性 Gate 已通過，等待 ChatGPT 校稿</strong><div>把參考逐字稿交給 ChatGPT，並指定 Job ID：{job.id}。ChatGPT 優先只回傳 segment_id + corrected_text，不提交時間碼；Chirp 時間證據保持不可變。</div></div>
+      </div>
+    )}
 
     {job.status === "awaiting_confirmation" && (
       <section className="qa-notice" style={{ marginBottom: "16px", padding: "18px", background: "#fff7ed", border: "2px solid #f59e0b", borderRadius: "12px" }}>

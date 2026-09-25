@@ -127,6 +127,7 @@ def run_preflight(
             estimate = estimate_job_cost(
                 probe["duration_seconds"],
                 base_cost_config.for_processing_strategy(strategy),
+                include_gemini=bool(record.get("enable_gemini_correction")),
             )
         if store.get_job(leased["id"])["status"] in {"cancelled", "cancelling"}:
             raise PreflightCancelled("任務已由使用者取消")

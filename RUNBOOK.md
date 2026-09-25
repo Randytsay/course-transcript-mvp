@@ -279,3 +279,42 @@ heartbeat、Dynamic Batch 逾時與 Drive delivery retry。
 `retention-monitor` 每日產生唯讀的 `retention-report.json`，列出可處理的 GCS
 孤兒與 Drive backup。它不會自行刪除；仍需人工檢視報告後，以明確的 `--apply`
 執行清理。
+
+## 大成佛經本堂經文上下文
+
+`dacheng_buddhist` 任務在 Gemini 文字校正前，會先以 raw Chirp 文字對
+`dacheng_scripture` active canonical 做保守的 ordered exact-anchor 定位。
+只有達到最小錨點、匹配字數與來源覆蓋率門檻時，才會產生
+`lesson-scripture-context.json`。內容包含 canonical version/checksum/source、
+本堂實際誦讀的 canonical line range、alignment confidence、lesson vocabulary
+與 evidence。定位失敗時不套佛經 bias，只留下 review reason。
+
+後續每個 Gemini correction window 會在本堂已定位的經文範圍內追蹤最可能正在
+逐句解釋的 canonical line，並只把該句附近經文與本堂詞彙當作「拼寫／術語
+優先參考」。它不得把講師的白話解釋、譬喻、例子或改述強制替換成經文原句。
+每個 correction audit JSON 會保存 lesson context digest 與該 window 的
+scripture hint，方便追溯為何某個佛教專有詞被優先採用。
+
+歷史《大成佛經》課程可先執行唯讀 dry-run：
+
+    python scripts/reprocess_dacheng_history.py --data-dir /app/data --output /app/data/dacheng-history-audit.json
+
+此工具不修改 raw Chirp、provider response、時間碼、既有輸出或 Drive。
+若要讓舊課程真正受益於新的「本堂詞彙＋逐句追蹤」文字校正，必須另外逐案
+估算 Gemini 成本並依既有 paid-provider gate 明確核准後再執行。
+
+## Chirp 3 / ChatGPT Handoff 工作模式
+
+建立任務時可選三種 workflow_mode：
+
+- FULL_AUTO：既有完整流程。Chirp 3 後由已選定的 server-side correction provider（Gemini / approved router）完成文字校正，再執行 cleanup、QA 與輸出。
+- CHATGPT_HANDOFF：Chirp 3、merge、固定字幕後先執行 Chirp 完整性 Gate。Gate PASS 才建立 jobs/<job-id>/chatgpt-handoff/ 交接包；Gate BLOCKED 時停在 awaiting_review，禁止進入 ChatGPT 校稿。Server-side LLM correction 強制關閉，preflight 的 Gemini token / cost 估算為 0。
+- CHIRP_ONLY：只使用 Chirp 3 文字與時間軸；不執行 LLM correction。deterministic export 仍會依使用者選定格式產生輸出。
+
+CHATGPT_HANDOFF 交接包至少包含：chirp-raw.srt、segments.json、merged-words.json、chirp-completeness.json、raw-transcript.txt、golden-rules.json、canonical-context.json、INSTRUCTIONS.txt、handoff-manifest.json。完整性 Gate 會檢查 course-relative chunk density、15 分鐘密度、可疑有聲字幕空窗、尾端覆蓋與時間軸結構。既有 high-confidence targeted patch 仍可依既有 budget gate 自動執行；其餘疑點只產生 repair plan 並阻擋 Handoff，不會自行新增付費重辨識。
+
+Gate BLOCKED 後若已完成局部 ASR 修復，可呼叫 POST /api/v1/jobs/{job_id}/chirp-completeness/recheck，帶最新 expected_revision。此 API 本身不送付費 provider；它只把任務重新排入字幕重建與完整性檢查，既有可重用 Chirp／patch evidence 仍由 worker 保留。
+
+dacheng_buddhist 任務會把 active canonical 經文／咒語版本與 Golden Rules 版本寫入交接包。使用者另外提供的參考逐字稿只可作為拼字與上下文證據，不可用來補寫 Gate 尚未確認的漏辨識。Chirp word timestamps 與 source segment timing 是不可變 ASR 證據；最終顯示 cue 的合併／拆分屬於獨立 deterministic rendering concern，不可採用 ChatGPT 自行發明的時間碼。
+
+ChatGPT 完成校稿後，以 owner-only endpoint POST /api/v1/jobs/{job_id}/chatgpt-handoff/import 回灌。首選 payload 是最新 expected_revision 加完整 segment_edits，每筆只含 segment_id 與 corrected_text，不含時間碼；必須完整覆蓋原始 segment IDs、順序一致、不得缺漏或重複。Legacy srt_text 仍相容，但 cue 數量與每個 start/end timestamp 必須完全相同。通過後任務只續跑 deterministic cleanup、Golden Rules audit、export、QA 與 validation，不會重新呼叫 Gemini / M3。若 revision race 發生，回灌 artifacts 會回復到操作前狀態。

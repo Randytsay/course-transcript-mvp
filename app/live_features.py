@@ -196,6 +196,49 @@ def _manifest(job_dir: Path, index: int) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
+def effective_chunk_word_counts(job_dir: Path) -> dict[int, int]:
+    """Return post-merge effective word counts for base chunks."""
+    counts: dict[int, int] = {}
+    merge = _read_json(job_dir / "merge-decisions.json", {})
+    for manifest_path in (job_dir / "chunks").glob("chunk-*/manifest.json"):
+        manifest = _read_json(manifest_path, {})
+        if not isinstance(manifest, dict) or manifest.get("role") == "patch":
+            continue
+        try:
+            index = int(manifest["chunk_index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        counts[index] = int(manifest.get("word_count") or 0)
+
+    targeted = _read_json(job_dir / "chirp-targeted-patch-plan.json", {})
+    parent_by_patch: dict[int, int] = {}
+    if isinstance(targeted, dict):
+        for item in targeted.get("items", []):
+            if not isinstance(item, dict):
+                continue
+            try:
+                parent_by_patch[int(item["patch_index"])] = int(item["parent_chunk_index"])
+            except (KeyError, TypeError, ValueError):
+                continue
+
+    if isinstance(merge, dict):
+        for item in merge.get("patch_decisions", []):
+            if not isinstance(item, dict) or item.get("applied") is not True:
+                continue
+            try:
+                patch_index = int(item["chunk_index"])
+                parent_index = parent_by_patch[patch_index]
+                inserted = int(item.get("patch_words_inserted") or 0)
+                replaced = int(item.get("baseline_words_replaced") or 0)
+            except (KeyError, TypeError, ValueError):
+                continue
+            counts[parent_index] = max(
+                0,
+                int(counts.get(parent_index, 0)) - replaced + inserted,
+            )
+    return counts
+
+
 def _partial_from_words(job_dir: Path, plan_item: dict[str, Any]) -> dict[str, Any] | None:
     index = int(plan_item["chunkIndex"])
     chunk_dir = job_dir / "chunks" / f"chunk-{index:03d}"
@@ -252,6 +295,7 @@ def build_chunk_progress(job_id: str) -> dict[str, Any]:
             "chunks": [],
         }
     plan = _chunk_plan(job_dir)
+    effective_counts = effective_chunk_word_counts(job_dir)
     chunks: list[dict[str, Any]] = []
     completed_count = 0
     canary_completed = False
@@ -282,7 +326,9 @@ def build_chunk_progress(job_id: str) -> dict[str, Any]:
                 "endMs": int(item["endMs"]),
                 "durationMs": int(item["endMs"]) - int(item["startMs"]),
                 "status": status,
-                "wordCount": int(manifest.get("word_count") or 0),
+                "wordCount": int(
+                    effective_counts.get(index, int(manifest.get("word_count") or 0))
+                ),
                 "hasTranscript": (
                     status == "SUCCEEDED" and partial_path.is_file()
                 ),

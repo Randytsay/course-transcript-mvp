@@ -287,8 +287,12 @@ def get_asr_quality(job_id: str) -> dict[str, Any]:
     job_dir = JOBS_DIR / job_id
     if not job_dir.is_dir():
         raise HTTPException(status_code=404, detail="Job artifacts not found")
+    completeness = _read_json(job_dir / "chirp-completeness.json", None)
+    repair_plan = _read_json(job_dir / "chirp-completeness-repair-plan.json", None)
     return {
         **analyze_job(job_dir),
+        "chirp_completeness": completeness if isinstance(completeness, dict) else None,
+        "chirp_completeness_repair_plan": repair_plan if isinstance(repair_plan, dict) else None,
         "retranscription_enabled": _retranscription_enabled(),
     }
 

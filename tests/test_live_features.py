@@ -161,6 +161,55 @@ class LiveChunkTests(unittest.TestCase):
         )
         self.assertEqual(partial["rawText"], "美安 OPC 3。")
 
+    def test_chunk_progress_uses_repaired_effective_word_count(self) -> None:
+        self.create_plan()
+        self.write_json(
+            self.job_dir / "chunks/chunk-001/manifest.json",
+            {
+                "chunk_index": 1,
+                "source_start_ms": 890000,
+                "source_end_ms": 1790000,
+                "status": "SUCCEEDED",
+                "word_count": 1925,
+            },
+        )
+        self.write_json(
+            self.job_dir / "chunks/chunk-001/words.json",
+            {"words": [{"word": "舊", "start_ms": 900000, "end_ms": 900100}]},
+        )
+        self.write_json(
+            self.job_dir / "merge-decisions.json",
+            {
+                "decisions": [{"chunk_index": 1, "kept_word_count": 1910}],
+                "patch_decisions": [
+                    {
+                        "chunk_index": 900100,
+                        "baseline_words_replaced": 12,
+                        "patch_words_inserted": 1068,
+                        "applied": True,
+                    }
+                ],
+            },
+        )
+        self.write_json(
+            self.job_dir / "chirp-targeted-patch-plan.json",
+            {"items": [{"patch_index": 900100, "parent_chunk_index": 1}]},
+        )
+
+        result = live_features.build_chunk_progress(self.job_id)
+        chunk = next(item for item in result["chunks"] if item["chunkIndex"] == 1)
+        self.assertEqual(chunk["wordCount"], 2981)
+
+    def test_effective_word_count_falls_back_before_merge(self) -> None:
+        self.write_json(
+            self.job_dir / "chunks/chunk-003/manifest.json",
+            {"chunk_index": 3, "status": "SUCCEEDED", "word_count": 3076},
+        )
+        self.assertEqual(
+            live_features.effective_chunk_word_counts(self.job_dir)[3],
+            3076,
+        )
+
     def test_unfinished_chunk_cannot_serve_stale_partial(self) -> None:
         self.create_plan()
         self.write_json(

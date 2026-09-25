@@ -2,6 +2,10 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
+
+from app.canonical.defaults import MANTRA_KEY
+from app.canonical.store import active_canonical
 
 from google.cloud.speech_v2.types import cloud_speech
 
@@ -28,14 +32,24 @@ MANTRA_LINES = (
 MANTRA_TEXT = "\n".join((MANTRA_TITLE, *MANTRA_LINES))
 
 
+def _active_mantra() -> tuple[str, tuple[str, ...]]:
+    data_dir = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
+    active = active_canonical(data_dir, MANTRA_KEY)
+    if active is None:
+        return MANTRA_TITLE, MANTRA_LINES
+    title = str(active.get("title") or MANTRA_TITLE)
+    lines = tuple(line.strip() for line in str(active.get("body_text") or "").splitlines() if line.strip())
+    return (title, lines or MANTRA_LINES)
+
 def speech_adaptation() -> cloud_speech.SpeechAdaptation:
     """Bias Chirp toward the supplied, non-translated mantra spellings."""
+    title, lines = _active_mantra()
     phrase_set = cloud_speech.PhraseSet(
         phrases=[
-            cloud_speech.PhraseSet.Phrase(value=MANTRA_TITLE, boost=12),
+            cloud_speech.PhraseSet.Phrase(value=title, boost=12),
             *(
                 cloud_speech.PhraseSet.Phrase(value=line, boost=12)
-                for line in MANTRA_LINES
+                for line in lines
             ),
         ],
         boost=10,

@@ -11,6 +11,15 @@ from .strategy import (
     provider_processing_strategy,
     strategy_label,
 )
+from .workflow_mode import (
+    CHATGPT_HANDOFF,
+    CHIRP_ONLY,
+    DEFAULT_WORKFLOW_MODE,
+    FULL_AUTO,
+    WORKFLOW_MODES,
+    normalize_workflow_mode,
+    uses_server_llm,
+)
 
 __all__ = [
     "CostConfig",
@@ -23,9 +32,16 @@ __all__ = [
     "DEFAULT_PROCESSING_STRATEGY",
     "DYNAMIC_BATCHING",
     "STANDARD_BATCH",
+    "FULL_AUTO",
+    "CHATGPT_HANDOFF",
+    "CHIRP_ONLY",
+    "DEFAULT_WORKFLOW_MODE",
+    "WORKFLOW_MODES",
     "normalize_processing_strategy",
+    "normalize_workflow_mode",
     "provider_processing_strategy",
     "strategy_label",
+    "uses_server_llm",
     "estimate_job_cost",
     "normalize_output_formats",
 ]

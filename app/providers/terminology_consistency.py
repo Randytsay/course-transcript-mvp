@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from app.canonical.golden_rules import audit_golden_variants
+
 def _load(path,default):
     try:return json.loads(path.read_text())
     except (FileNotFoundError,OSError,json.JSONDecodeError):return default
@@ -29,7 +31,8 @@ def build_report(job_dir:Path)->dict[str,Any]:
                 for sid in values:
                     if sid and sid not in ids:ids.append(sid)
             issues.append({"canonical":canonical,"variants":list(observed),"occurrences":{k:len(v) for k,v in observed.items()},"segment_ids":ids,"confidence":str(term.get("confidence") or "low"),"suggested_action":"review"})
-    return {"schema_version":1,"mode":"report_only","provider_independent":True,"timestamps_modified":False,"segments_modified":False,"issue_count":len(issues),"issues":issues}
+    golden=audit_golden_variants(segments)
+    return {"schema_version":2,"mode":"report_only","provider_independent":True,"timestamps_modified":False,"segments_modified":False,"issue_count":len(issues)+int(golden.get("issue_count",0)),"issues":issues,"golden_transcript":golden}
 
 def run_terminology_consistency(job_dir:Path)->dict[str,Any]:
     report=build_report(job_dir); path=job_dir/"terminology-consistency.json"; tmp=path.with_suffix(path.suffix+".tmp"); tmp.write_text(json.dumps(report,ensure_ascii=False,indent=2)+"\n"); tmp.replace(path); return report
