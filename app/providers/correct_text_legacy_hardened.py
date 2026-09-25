@@ -14,7 +14,7 @@ from google.genai import types
 from app.providers import correct_text as base
 from app.providers.correction_guard import content_guard
 
-PROMPT_VERSION = "fixed-segments-v4-production-hardening"
+PROMPT_VERSION = "fixed-segments-v5-production-hardening-golden-context"
 SAFE_PROMPT_VERSION = re.sub(r"[^A-Za-z0-9._-]+", "-", PROMPT_VERSION).strip("-")
 
 
@@ -107,6 +107,8 @@ def _cached_window(
     items: list[dict[str, Any]],
     source_segments: list[dict[str, Any]],
     source_sha256: str,
+    lesson_context_digest: str,
+    golden_corpus_digest: str,
 ) -> dict[str, dict[str, Any]] | None:
     expected = {str(item["segment_id"]) for item in items}
     pattern = f"{_record_prefix(items, source_sha256)}.*.json"
@@ -124,6 +126,8 @@ def _cached_window(
             or record.get("source_segments") != source_segments
             or record.get("source_sha256") != source_sha256
             or record.get("prompt_version") != PROMPT_VERSION
+            or str(record.get("lesson_context_digest") or "") != lesson_context_digest
+            or str(record.get("golden_corpus_digest") or "") != golden_corpus_digest
             or not record.get("response_valid")
         ):
             continue
@@ -144,9 +148,34 @@ def correct_window(
 ) -> dict[str, dict[str, Any]]:
     source_segments = _source_segments(items)
     source_sha256 = _source_digest(source_segments)
-    cached = _cached_window(items, source_segments, source_sha256)
+    lesson_context_digest = str(
+        (lesson_scripture_context or {}).get("context_digest") or ""
+    )
+    golden_corpus_digest = (
+        base.corpus_digest(base.DATA_DIR / base.DEFAULT_CORPUS_RELATIVE_PATH)
+        if base.os.environ.get("CONTENT_MODE", "").strip().lower() == "dacheng_buddhist"
+        else ""
+    )
+    cached = _cached_window(
+        items,
+        source_segments,
+        source_sha256,
+        lesson_context_digest,
+        golden_corpus_digest,
+    )
     if cached is not None:
         return cached
+
+    scripture_hint = base.window_scripture_hint(items, lesson_scripture_context)
+    scripture_reference = base.correction_reference_text(
+        lesson_scripture_context,
+        scripture_hint,
+    )
+    corpus_reference = ""
+    memory_reference = ""
+    if base.os.environ.get("CONTENT_MODE", "").strip().lower() == "dacheng_buddhist":
+        corpus_reference = base.golden_corpus_reference(items, base.DATA_DIR)
+        memory_reference = base.error_memory_reference(items)
 
     prompt = (
         "Correct Traditional-Chinese ASR text only. Preserve meaning; do not "
@@ -155,6 +184,9 @@ def correct_window(
         "every input segment with the same segment_id. uncertain_terms must list "
         "unresolved terms. JSON only.\n\n"
         + base.correction_context_instruction()
+        + ("\n\n" + scripture_reference if scripture_reference else "")
+        + ("\n\n" + corpus_reference if corpus_reference else "")
+        + ("\n\n" + memory_reference if memory_reference else "")
         + "\n\nGlobal terminology:\n"
         + json.dumps(terms, ensure_ascii=False)
         + "\n\nSegments:\n"
@@ -188,6 +220,11 @@ def correct_window(
         "source_end_ms": items[-1]["end_ms"],
         "source_segments": source_segments,
         "source_sha256": source_sha256,
+        "lesson_context_digest": lesson_context_digest,
+        "lesson_scripture_hint": scripture_hint,
+        "golden_corpus_digest": golden_corpus_digest,
+        "golden_corpus_reference_used": bool(corpus_reference),
+        "error_memory_reference_used": bool(memory_reference),
         "usage_metadata": base._usage(response),
         "raw_response": raw_response,
         "response_segment_count": len(received),
@@ -216,8 +253,16 @@ def correct_window(
         )
         midpoint = len(items) // 2
         return {
-            **correct_window(items[:midpoint], terms),
-            **correct_window(items[midpoint:], terms),
+            **correct_window(
+                items[:midpoint],
+                terms,
+                lesson_scripture_context,
+            ),
+            **correct_window(
+                items[midpoint:],
+                terms,
+                lesson_scripture_context,
+            ),
         }
 
     final: list[dict[str, Any]]
