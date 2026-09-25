@@ -180,7 +180,6 @@ class LiveChunkTests(unittest.TestCase):
         self.write_json(
             self.job_dir / "merge-decisions.json",
             {
-                "decisions": [{"chunk_index": 1, "kept_word_count": 1910}],
                 "patch_decisions": [
                     {
                         "chunk_index": 900100,

@@ -197,7 +197,7 @@ def _manifest(job_dir: Path, index: int) -> dict[str, Any]:
 
 
 def effective_chunk_word_counts(job_dir: Path) -> dict[int, int]:
-    """Return post-merge effective word counts for base chunks."""
+    """Return post-patch effective word counts for base chunks."""
     counts: dict[int, int] = {}
     merge = _read_json(job_dir / "merge-decisions.json", {})
     for manifest_path in (job_dir / "chunks").glob("chunk-*/manifest.json"):
