@@ -93,7 +93,7 @@ class ProductionHardeningFollowupTests(unittest.TestCase):
             self.assertEqual(legacy.read_text(encoding="utf-8"), '{"legacy":true}\n')
             records = list(
                 work.glob(
-                    "a.fixed-segments-v4-production-hardening.*.json"
+                    "a.fixed-segments-v5-production-hardening-golden-context.*.json"
                 )
             )
             self.assertEqual(len(records), 1)
@@ -103,6 +103,79 @@ class ProductionHardeningFollowupTests(unittest.TestCase):
                 hardened.PROMPT_VERSION,
             )
             self.assertTrue(record["raw_response"])
+
+    def test_hardened_dacheng_prompt_uses_lesson_corpus_and_error_memory(self) -> None:
+        from app.providers import correct_text_hardened as hardened
+
+        item = {
+            "segment_id": "a",
+            "start_ms": 0,
+            "end_ms": 1000,
+            "raw_text": "阿加尼吒天跟阿楚佛",
+        }
+        response = SimpleNamespace(
+            text=json.dumps(
+                {
+                    "segments": [
+                        {
+                            "segment_id": "a",
+                            "corrected_text": "阿迦膩吒天跟阿閦佛",
+                            "uncertain_terms": [],
+                        }
+                    ]
+                }
+            ),
+            usage_metadata=None,
+        )
+        metrics = {
+            "request_started_at": "2026-09-26T00:00:00+00:00",
+            "response_completed_at": "2026-09-26T00:00:01+00:00",
+            "latency_ms": 1000,
+            "attempt_count": 1,
+            "retry_events": [],
+        }
+        lesson_context = {"applied": True, "context_digest": "lesson-sha"}
+
+        with tempfile.TemporaryDirectory() as temp, patch.dict(
+            "os.environ",
+            {"CONTENT_MODE": "dacheng_buddhist"},
+            clear=False,
+        ), patch.object(
+            hardened.base,
+            "WORK",
+            Path(temp),
+        ), patch.object(
+            hardened.base,
+            "corpus_digest",
+            return_value="corpus-sha",
+        ), patch.object(
+            hardened.base,
+            "window_scripture_hint",
+            return_value={"applied": True, "canonical_line": 9},
+        ), patch.object(
+            hardened.base,
+            "correction_reference_text",
+            return_value="SCRIPTURE_REFERENCE",
+        ), patch.object(
+            hardened.base,
+            "golden_corpus_reference",
+            return_value="GOLDEN_CORPUS_REFERENCE",
+        ), patch.object(
+            hardened.base,
+            "error_memory_reference",
+            return_value="ERROR_MEMORY_REFERENCE",
+        ), patch.object(
+            hardened,
+            "generate_json",
+            return_value=(response, metrics),
+        ) as generated:
+            result = hardened.correct_window([item], [], lesson_context)
+
+        self.assertEqual(result["a"]["corrected_text"], "阿迦膩吒天跟阿閦佛")
+        prompt_text = generated.call_args.args[0]
+        self.assertIn("SCRIPTURE_REFERENCE", prompt_text)
+        self.assertIn("GOLDEN_CORPUS_REFERENCE", prompt_text)
+        self.assertIn("ERROR_MEMORY_REFERENCE", prompt_text)
 
     def test_delivery_worker_respects_all_editor_owned_states(self) -> None:
         from app.jobs.delivery_worker import _superseded
