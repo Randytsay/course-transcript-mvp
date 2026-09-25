@@ -7,9 +7,12 @@ completeness is materially uncertain.
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
+import sys
+from array import array
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -83,6 +86,96 @@ def _audible(job_dir: Path, start_ms: int, end_ms: int) -> bool | None:
     return float(match.group(1)) > threshold
 
 
+def _vad_assessment(job_dir: Path, start_ms: int, end_ms: int) -> dict[str, Any] | None:
+    """Return conservative local speech evidence for an audible subtitle gap.
+
+    This is intentionally fail-closed: missing dependencies, ffmpeg failures,
+    short/invalid PCM, or VAD errors return ``None`` so the existing audible
+    gap remains blocking. A gap is downgraded only when both permissive and
+    aggressive WebRTC VAD modes agree that speech occupancy is very low and
+    the RMS level is also low.
+    """
+    if end_ms <= start_ms:
+        return None
+    source = job_dir / "normalized.flac"
+    if not source.is_file():
+        return None
+    try:
+        import webrtcvad
+    except ImportError:
+        return None
+
+    result = subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-ss", f"{start_ms / 1000:.3f}",
+            "-i", str(source),
+            "-t", f"{(end_ms - start_ms) / 1000:.3f}",
+            "-ac", "1", "-ar", "16000", "-f", "s16le", "pipe:1",
+        ],
+        capture_output=True,
+        check=False,
+        timeout=180,
+    )
+    if result.returncode != 0 or not result.stdout:
+        return None
+
+    frame_ms = 30
+    sample_rate = 16_000
+    frame_bytes = sample_rate * frame_ms // 1000 * 2
+    frame_count = len(result.stdout) // frame_bytes
+    if frame_count < 10:
+        return None
+    pcm = result.stdout[: frame_count * frame_bytes]
+    try:
+        vad0 = webrtcvad.Vad(0)
+        vad3 = webrtcvad.Vad(3)
+        speech0 = 0
+        speech3 = 0
+        for index in range(frame_count):
+            frame = pcm[index * frame_bytes : (index + 1) * frame_bytes]
+            speech0 += int(vad0.is_speech(frame, sample_rate))
+            speech3 += int(vad3.is_speech(frame, sample_rate))
+    except Exception:
+        return None
+
+    samples = array("h")
+    samples.frombytes(pcm)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return None
+    mean_square = sum(int(sample) * int(sample) for sample in samples) / len(samples)
+    rms = math.sqrt(mean_square)
+    rms_dbfs = 20 * math.log10(rms / 32768) if rms > 0 else -120.0
+
+    mode0_ratio = speech0 / frame_count
+    mode3_ratio = speech3 / frame_count
+    mode0_max = float(os.environ.get("CHIRP_VAD_NONSPEECH_MODE0_MAX", "0.15"))
+    mode3_max = float(os.environ.get("CHIRP_VAD_NONSPEECH_MODE3_MAX", "0.08"))
+    rms_max_dbfs = float(os.environ.get("CHIRP_VAD_NONSPEECH_RMS_MAX_DBFS", "-35"))
+    robust_non_speech = (
+        mode0_ratio < mode0_max
+        and mode3_ratio < mode3_max
+        and rms_dbfs <= rms_max_dbfs
+    )
+    return {
+        "engine": "webrtcvad",
+        "sample_rate_hz": sample_rate,
+        "frame_ms": frame_ms,
+        "frame_count": frame_count,
+        "mode0_speech_ratio": round(mode0_ratio, 4),
+        "mode3_speech_ratio": round(mode3_ratio, 4),
+        "rms_dbfs": round(rms_dbfs, 2),
+        "thresholds": {
+            "mode0_max": mode0_max,
+            "mode3_max": mode3_max,
+            "rms_max_dbfs": rms_max_dbfs,
+        },
+        "robust_non_speech": robust_non_speech,
+    }
+
+
 def _verified_nonlexical_windows(job_dir: Path) -> list[dict[str, int]]:
     plan = _read_json(job_dir / "chirp-targeted-patch-plan.json", {})
     complete = _read_json(job_dir / "chirp-targeted-patch-complete.json", {})
@@ -123,7 +216,7 @@ def _covered_by_verified_nonlexical(start_ms: int, end_ms: int, windows: list[di
     return False
 
 
-def evaluate(job_dir: Path = JOB, *, audibility_probe=None) -> dict[str, Any]:
+def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -> dict[str, Any]:
     raw = _read_json(job_dir / "subtitles.json", {})
     merged = _read_json(job_dir / "merged-words.json", {})
     segments = raw.get("segments", []) if isinstance(raw, dict) else []
@@ -133,6 +226,7 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None) -> dict[str, Any]:
 
     audio_ms = _audio_ms(job_dir)
     probe = audibility_probe or (lambda start, end: _audible(job_dir, start, end))
+    vad_probe = speech_probe or (lambda start, end: _vad_assessment(job_dir, start, end))
     blockers: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     repair_items: list[dict[str, Any]] = []
@@ -197,6 +291,7 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None) -> dict[str, Any]:
             )
             continue
         audible = probe(start_ms, end_ms)
+        vad = vad_probe(start_ms, end_ms) if audible is True else None
         entry = {
             "reason": "audible_subtitle_gap" if audible is True else "unverified_subtitle_gap",
             "start_ms": max(0, start_ms - 10_000),
@@ -208,6 +303,17 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None) -> dict[str, Any]:
             "before_segment_id": before.get("segment_id"),
             "after_segment_id": after.get("segment_id"),
         }
+        if vad is not None:
+            entry["vad"] = vad
+        if audible is True and isinstance(vad, dict) and vad.get("robust_non_speech") is True:
+            warnings.append(
+                {
+                    **entry,
+                    "reason": "audible_gap_vad_verified_non_speech",
+                    "recommended_action": "no_paid_retry_required",
+                }
+            )
+            continue
         if audible is True or (audible is None and gap_ms >= unverified_gap_block_ms):
             blockers.append(entry)
             repair_items.append(entry)
@@ -256,7 +362,7 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None) -> dict[str, Any]:
 
     status = "BLOCKED" if blockers else "PASS"
     report = {
-        "schema_version": "chirp-completeness-v1",
+        "schema_version": "chirp-completeness-v2",
         "generated_at": datetime.now(UTC).isoformat(),
         "job_id": job_dir.name,
         "status": status,
@@ -267,6 +373,8 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None) -> dict[str, Any]:
             "auto_paid_retry": "existing_high_confidence_targeted_patch_only",
             "other_repairs": "block_and_review_before_handoff",
             "chirp_word_timestamps_authoritative": True,
+            "local_vad_fail_closed": True,
+            "vad_verified_nonspeech_is_nonblocking": True,
         },
         "summary": {
             "word_count": len(words),
