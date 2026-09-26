@@ -162,18 +162,32 @@ def _marker_state(directory: Path) -> tuple[dict[str, Any] | None, bool]:
 def _drive_state(
     directory: Path,
     revision: int,
+    *,
+    publication_key: str | None = None,
 ) -> tuple[dict[str, Any] | None, bool, bool]:
-    publish_dir = directory / "editor-publish" / f"revision-{revision}"
-    kind, payload = _read_json_state(publish_dir / "drive-publish-state.json")
-    if kind == "missing":
+    publish_dirs: list[Path] = []
+    if publication_key:
+        publish_dirs.append(
+            directory
+            / "editor-publish"
+            / f"canonical-{publication_key.replace(':', '-')}"
+        )
+    publish_dirs.append(directory / "editor-publish" / f"revision-{revision}")
+
+    saw_local_render = False
+    for publish_dir in publish_dirs:
+        kind, payload = _read_json_state(publish_dir / "drive-publish-state.json")
         local_render_exists = publish_dir.is_dir() and any(
             (publish_dir / name).is_file()
             for name in ("subtitles-corrected.srt", "transcript-corrected.txt")
         )
-        return None, False, local_render_exists
-    if kind == "invalid" or not isinstance(payload, dict):
-        return None, True, True
-    return payload, False, True
+        saw_local_render = saw_local_render or local_render_exists
+        if kind == "missing":
+            continue
+        if kind == "invalid" or not isinstance(payload, dict):
+            return None, True, True
+        return payload, False, True
+    return None, False, saw_local_render
 
 
 def _revision(value: object) -> int | None:
@@ -477,6 +491,7 @@ def get_publish_status(subtitle_id: str) -> dict[str, object]:
     drive_state, drive_invalid, local_render_exists = _drive_state(
         directory,
         current_revision,
+        publication_key=str(identity.get("publication_key") or "") or None,
     )
     record, batch_status, events, database_invalid = _read_database(
         base.DATA_DIR / "course-transcript.db",

@@ -174,6 +174,28 @@ class PublishStatusTests(unittest.TestCase):
             },
         )
 
+    def write_canonical_drive_state(
+        self,
+        directory: Path,
+        publication_key: str,
+        *,
+        status: str = "completed",
+    ) -> None:
+        self.write_json(
+            directory
+            / "editor-publish"
+            / f"canonical-{publication_key.replace(':', '-')}"
+            / "drive-publish-state.json",
+            {
+                "version": 2,
+                "status": status,
+                "files": {
+                    "srt": {"status": "completed", "phase": "completed"},
+                    "txt": {"status": "completed", "phase": "completed"},
+                },
+            },
+        )
+
     def test_idle_revision_zero_allows_first_publish(self) -> None:
         self.create_job()
 
@@ -224,6 +246,38 @@ class PublishStatusTests(unittest.TestCase):
             status="completed",
             srt_status="completed",
             txt_status="completed",
+        )
+
+        result = get_publish_status("job-1")
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["published_revision"], 0)
+        self.assertTrue(result["zero_edit_review"])
+        self.assertFalse(result["can_publish"])
+
+    def test_completed_accepts_canonical_editor_publish_directory(self) -> None:
+        history = [
+            {
+                "revision": 0,
+                "published_snapshot_revision": 0,
+                "type": "drive_publish",
+                "zero_edit_review": True,
+            }
+        ]
+        directory = self.create_job(
+            job_status="completed",
+            batch_status="completed",
+            history=history,
+        )
+        self.add_event("job-1", 0)
+        self.write_marker(directory, "superseded_by_editor", 0)
+
+        from app.subtitles import canonical_state
+
+        identity = canonical_state.publication_identity(directory)
+        self.write_canonical_drive_state(
+            directory,
+            str(identity["publication_key"]),
         )
 
         result = get_publish_status("job-1")
