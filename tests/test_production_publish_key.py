@@ -255,6 +255,38 @@ class ProductionPublishKeyTests(unittest.TestCase):
         self.assertEqual(self._event_keys().count(key_r1), before_events)
         self.assertEqual(self._history_keys().count(key_r1), before_history)
 
+    def test_same_key_replay_repairs_missing_db_completion_without_drive_write(self) -> None:
+        key_r1 = self.build_ai_r1()
+        first, _ = self.publish_via_production_route(key_r1)
+        self.assertEqual(first.status_code, 200)
+
+        with sqlite3.connect(self.data / "course-transcript.db") as connection:
+            connection.execute(
+                "DELETE FROM job_events WHERE job_id='job-1' AND event_type='job_drive_editor_published'"
+            )
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status='awaiting_review', active_stage='review',
+                    stage_detail='waiting', progress=100
+                WHERE id='job-1'
+                """
+            )
+
+        replay, drive_calls = self.publish_via_production_route(key_r1)
+        self.assertEqual(replay.status_code, 200, replay.text)
+        self.assertTrue(replay.json().get("idempotent_replay"))
+        self.assertEqual(replay.json().get("job_status"), "completed")
+        self.assertEqual(drive_calls, 0)
+        self.assertEqual(self._event_keys().count(key_r1), 1)
+        self.assertEqual(self._history_keys().count(key_r1), 1)
+
+        with sqlite3.connect(self.data / "course-transcript.db") as connection:
+            status = connection.execute(
+                "SELECT status FROM jobs WHERE id='job-1'"
+            ).fetchone()[0]
+        self.assertEqual(status, "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

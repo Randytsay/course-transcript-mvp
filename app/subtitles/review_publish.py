@@ -104,8 +104,52 @@ def publish_reviewed(
             str(marker.get("publication_key") or "") == publication_key
             and str(marker.get("status")) in {"completed", "superseded_by_editor"}
         ):
+            prior_state = base._read_json(
+                publish_dir / "drive-publish-state.json",
+                {},
+            )
+            backup_count = (
+                int(prior_state.get("backup_count", 0))
+                if isinstance(prior_state, dict)
+                else 0
+            )
+            completed = record_delivery_success(
+                base.DATA_DIR / "course-transcript.db",
+                job_id=subtitle_id,
+                actor=actor,
+                source="editor",
+                backup_count=backup_count,
+                published_revision=snapshot_revision,
+                publication_key=publication_key,
+            )
+            with base._LOCK:
+                latest = base._edit_state(directory)
+                if not any(
+                    item.get("type") == "drive_publish"
+                    and item.get("publication_key") == publication_key
+                    for item in latest["history"]
+                    if isinstance(item, dict)
+                ):
+                    latest["history"].append(
+                        {
+                            "revision": int(latest["revision"]),
+                            "published_snapshot_revision": snapshot_revision,
+                            "publication_key": publication_key,
+                            "canonical_source": identity["canonical_source"],
+                            "canonical_revision": identity["canonical_revision"],
+                            "type": "drive_publish",
+                            "actor": actor,
+                            "created_at": base._iso(),
+                            "output_formats": payload.output_formats,
+                            "backup_count": backup_count,
+                            "revision_changed_during_publish": False,
+                            "zero_edit_review": snapshot_revision == 0,
+                        }
+                    )
+                    base._save_state(directory, latest)
             return {
                 "status": "completed",
+                "job_status": completed.get("status"),
                 "publication_key": publication_key,
                 "canonical_source": identity["canonical_source"],
                 "canonical_revision": identity["canonical_revision"],
@@ -113,7 +157,7 @@ def publish_reviewed(
                 "current_revision": snapshot_revision,
                 "revision_changed_during_publish": False,
                 "zero_edit_review": snapshot_revision == 0,
-                "backup_count": int(marker.get("backup_count", 0)),
+                "backup_count": backup_count,
                 "files": {},
                 "idempotent_replay": True,
             }
