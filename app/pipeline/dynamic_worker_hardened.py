@@ -8,6 +8,7 @@ import os
 import shutil
 import signal
 import subprocess
+import tempfile
 import sys
 import time
 import uuid
@@ -180,37 +181,41 @@ def _run_allow_pending(
     timeout_seconds: int,
     env: dict[str, str],
 ) -> tuple[int, str, str]:
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
-        start_new_session=True,
-    )
-    started = time.monotonic()
-    last_heartbeat = started
-    last_state_check = started
-    while process.poll() is None:
-        now = time.monotonic()
-        if now - started > timeout_seconds:
-            _terminate(process)
-            raise base.PipelineError("動態批次回收檢查超過安全期限")
-        if now - last_state_check >= 2:
-            status = str(store.get_job(job_id)["status"])
-            if status in {"paused", "cancelling", "cancelled"}:
+    with tempfile.TemporaryFile() as stdout_capture, tempfile.TemporaryFile() as stderr_capture:
+        process = subprocess.Popen(
+            command,
+            stdout=stdout_capture,
+            stderr=stderr_capture,
+            env=env,
+            start_new_session=True,
+        )
+        started = time.monotonic()
+        last_heartbeat = started
+        last_state_check = started
+        while process.poll() is None:
+            now = time.monotonic()
+            if now - started > timeout_seconds:
                 _terminate(process)
-                raise base.PipelinePaused("任務已由使用者停止")
-            last_state_check = now
-        if now - last_heartbeat >= 15:
-            heartbeat = store.heartbeat(job_id, worker_id, lease_seconds=300)
-            if heartbeat["status"] in {"paused", "cancelling", "cancelled"}:
-                _terminate(process)
-                raise base.PipelinePaused("任務已由使用者停止")
-            last_heartbeat = now
-        time.sleep(0.5)
-    stdout, stderr = process.communicate()
-    return int(process.returncode or 0), stdout.strip(), stderr.strip()
+                raise base.PipelineError("動態批次回收檢查超過安全期限")
+            if now - last_state_check >= 2:
+                status = str(store.get_job(job_id)["status"])
+                if status in {"paused", "cancelling", "cancelled"}:
+                    _terminate(process)
+                    raise base.PipelinePaused("任務已由使用者停止")
+                last_state_check = now
+            if now - last_heartbeat >= 15:
+                heartbeat = store.heartbeat(job_id, worker_id, lease_seconds=300)
+                if heartbeat["status"] in {"paused", "cancelling", "cancelled"}:
+                    _terminate(process)
+                    raise base.PipelinePaused("任務已由使用者停止")
+                last_heartbeat = now
+            time.sleep(0.5)
+
+        stdout_capture.seek(0)
+        stderr_capture.seek(0)
+        stdout = stdout_capture.read().decode("utf-8", errors="replace")
+        stderr = stderr_capture.read().decode("utf-8", errors="replace")
+        return int(process.returncode or 0), stdout.strip(), stderr.strip()
 
 
 def _available_rows(store: JobStore, statuses: tuple[str, ...]) -> list[dict[str, Any]]:
