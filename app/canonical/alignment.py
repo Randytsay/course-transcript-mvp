@@ -27,7 +27,16 @@ def canonical_lines(body_text: str) -> list[str]:
 def canonical_scripture_units(body_text: str) -> list[str]:
     units: list[str] = []
     for line in canonical_lines(body_text):
-        parts = [part.strip() for part in _SCRIPTURE_CUE_SPLIT_RE.split(line) if part.strip()]
+        # CBETA TEI extraction can legitimately leave stand-alone closing
+        # quotation marks (for example '』') on their own logical line.
+        # They have no searchable characters after text_key normalization
+        # and therefore cannot own a source-timing span. Dropping them here
+        # keeps display units and normalized spans in lockstep.
+        parts = [
+            part.strip()
+            for part in _SCRIPTURE_CUE_SPLIT_RE.split(line)
+            if part.strip() and text_key(part)
+        ]
         if not parts:
             continue
         index = 0

@@ -6,7 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.canonical.alignment import mantra_pair_display_layer, scripture_display_layer
+from app.canonical.alignment import (
+    canonical_scripture_units,
+    mantra_pair_display_layer,
+    scripture_display_layer,
+)
 from app.canonical.defaults import MANTRA_BODY, MANTRA_KEY, MANTRA_LINES, MANTRA_TITLE, SCRIPTURE_KEY
 from app.canonical.lesson_context import (
     build_lesson_scripture_context,
@@ -86,6 +90,23 @@ class CanonicalTextStoreTests(unittest.TestCase):
 
 
 class DachengCanonicalAlignmentTests(unittest.TestCase):
+    def test_scripture_alignment_ignores_quote_only_canonical_units(self) -> None:
+        lines = [
+            "我今攝受是諸人等，",
+            "或以讀誦分別決定修多羅、毘尼、阿毘曇，",
+            "為他演說、讚歎義味，",
+            "不生嫉妬教於他人，",
+            "令得受持，",
+            "修諸功德來生我所。",
+            "』",
+            "說是語已，",
+            "稱讚釋迦牟尼佛。",
+        ]
+        units = canonical_scripture_units("\n".join(lines))
+        self.assertNotIn("』", units)
+        self.assertIn("我今攝受是諸人等，", units)
+        self.assertIn("稱讚釋迦牟尼佛。", units)
+
     def test_scripture_alignment_can_select_part_of_one_long_canonical_paragraph(self) -> None:
         clauses = [
             "爾時彌勒佛以大慈心語諸大眾言；",
