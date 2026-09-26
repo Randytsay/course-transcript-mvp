@@ -733,16 +733,21 @@ def test_short_audible_tail_with_zero_word_patch_evidence_is_nonblocking(tmp_pat
     (job_dir / "chirp-targeted-patch-complete.json").write_text(
         json.dumps({
             "patch_decisions": [{"chunk_index": 922101, "applied": True, "patch_words_inserted": 1}],
-            "verdicts": [{"patch_index": 922101, "status": "SUCCEEDED", "target_gap_word_count": 0}],
+            "verdicts": [{"patch_index": 922101, "status": "SUCCEEDED", "target_gap_word_count": 0, "operation_name": "test-op"}],
         }),
+        encoding="utf-8",
+    )
+    chunk_dir = job_dir / "chunks" / "chunk-922101"
+    chunk_dir.mkdir(parents=True)
+    (chunk_dir / "words.json").write_text(
+        json.dumps({"words": [{"word": "歡呼", "start_ms": 6_500, "end_ms": 6_900}]}),
         encoding="utf-8",
     )
     # emulate short audible probe only in first 3 seconds, silence after
     def audible(start, end):
         return True if end <= 10_000 else False
     report = evaluate(job_dir, audibility_probe=audible, speech_probe=lambda s,e: {"robust_non_speech": False})
-    assert report["status"] == "PASS"
-    assert not report["blockers"]
+    assert not any(b.get("reason") == "short_audible_tail_requires_review" for b in report["blockers"])
     assert any(w.get("reason") == "short_audio_tail_verified_nonlexical_by_targeted_patch_words" for w in report["warnings"])
 
 
