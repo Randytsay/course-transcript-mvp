@@ -395,10 +395,44 @@ def _normalize(
     )
 
 
+def _chirp_parallelism_for_duration(duration_seconds: float) -> int:
+    if duration_seconds > 90 * 60:
+        return 8
+    if duration_seconds > 30 * 60:
+        return 5
+    return 3
+
+
+def _normalized_duration_seconds(job_dir: Path) -> float | None:
+    normalized = job_dir / "normalized.flac"
+    if not normalized.is_file():
+        return None
+    try:
+        result = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                str(normalized),
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        return float(result.stdout.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def _module_env(record: dict[str, Any], job_dir: Path) -> dict[str, str]:
     env = dict(os.environ)
-    limit = int(env.get("CHIRP_MAX_PARALLEL_CHUNKS_LIMIT", "5"))
-    effective_parallelism = min(record.get("chirp_max_parallel_chunks", 3), limit)
+    limit = max(1, min(int(env.get("CHIRP_MAX_PARALLEL_CHUNKS_LIMIT", "8")), 32))
+    requested = max(1, int(record.get("chirp_max_parallel_chunks", 3) or 3))
+    duration = _normalized_duration_seconds(job_dir)
+    automatic = _chirp_parallelism_for_duration(duration) if duration is not None else requested
+    effective_parallelism = min(max(requested, automatic), limit)
     env.update(
         {
             "JOB_NAME": record["id"],

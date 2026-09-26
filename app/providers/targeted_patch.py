@@ -184,7 +184,10 @@ def _env(item: dict[str, Any]) -> dict[str, str]:
         "CHUNK_END_SECONDS": f"{end_ms / 1000:.3f}",
         "CHUNK_ROLE": "patch",
         "CHUNK_PATCH_MODE": "replace_window",
-        "CHIRP_DYNAMIC_BATCHING": "true",
+        # Targeted repair is latency-sensitive and blocks completeness.
+        # Never route it through Dynamic Batching, which can legitimately
+        # remain queued for a long time.
+        "CHIRP_DYNAMIC_BATCHING": "false",
     }
     return base.env_with(values)
 

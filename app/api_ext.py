@@ -64,7 +64,7 @@ class CreateBatchWithParallelismRequest(BaseModel):
 
 def _parallelism_limit() -> int:
     try:
-        value = int(os.environ.get("CHIRP_MAX_PARALLEL_CHUNKS_LIMIT", "5"))
+        value = int(os.environ.get("CHIRP_MAX_PARALLEL_CHUNKS_LIMIT", "8"))
     except ValueError as exc:
         raise RuntimeError("CHIRP_MAX_PARALLEL_CHUNKS_LIMIT must be an integer") from exc
     return max(1, min(value, 32))

@@ -78,6 +78,8 @@ CHIRP_DYNAMIC_BATCHING=true
 CHIRP_DYNAMIC_MAX_INFLIGHT_JOBS=5
 CHIRP_RECOVERY_POLL_SECONDS=120
 CHIRP_PROVIDER_DEADLINE_SECONDS=90000
+CHIRP_RECOVERY_POLL_SECONDS=60
+CHIRP_MAX_PARALLEL_CHUNKS_LIMIT=8
 CHIRP_OUTPUT_PROPAGATION_GRACE_SECONDS=300
 CHIRP_GCS_CLEANUP_AFTER_RECOVERY=true
 CHIRP_MAX_PARALLEL_CHUNKS=3
@@ -332,3 +334,18 @@ Gate BLOCKED 後若已完成局部 ASR 修復，可呼叫 POST /api/v1/jobs/{job
 dacheng_buddhist 任務會把 active canonical 經文／咒語版本與 Golden Rules 版本寫入交接包。使用者另外提供的參考逐字稿只可作為拼字與上下文證據，不可用來補寫 Gate 尚未確認的漏辨識。Chirp word timestamps 與 source segment timing 是不可變 ASR 證據；最終顯示 cue 的合併／拆分屬於獨立 deterministic rendering concern，不可採用 ChatGPT 自行發明的時間碼。
 
 ChatGPT 完成校稿後，以 owner-only endpoint POST /api/v1/jobs/{job_id}/chatgpt-handoff/import 回灌。首選 payload 是最新 expected_revision 加完整 segment_edits，每筆只含 segment_id 與 corrected_text，不含時間碼；必須完整覆蓋原始 segment IDs、順序一致、不得缺漏或重複。Legacy srt_text 仍相容，但 cue 數量與每個 start/end timestamp 必須完全相同。通過後任務只續跑 deterministic cleanup、Golden Rules audit、export、QA 與 validation，不會重新呼叫 Gemini / M3。若 revision race 發生，回灌 artifacts 會回復到操作前狀態。
+
+### Chirp throughput and targeted-repair policy
+
+Production chooses Chirp submission parallelism from the normalized audio duration:
+
+- up to 30 minutes: 3 concurrent chunks
+- over 30 and up to 90 minutes: 5 concurrent chunks
+- over 90 minutes: 8 concurrent chunks
+
+The server limit remains authoritative and caps the automatic value.  Targeted
+repair patches are latency-sensitive completeness work and therefore always use
+standard BatchRecognize, never Dynamic Batching.  Asynchronous recovery polls at
+a 60-second baseline; retryable provider throttling (including quota/resource
+exhaustion) uses the existing bounded exponential backoff rather than tight
+polling.
