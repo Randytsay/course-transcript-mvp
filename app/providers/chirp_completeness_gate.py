@@ -234,8 +234,13 @@ def build_auto_repair_patch_plan(
     merge_gap_ms: int = 1_000,
     max_total_ms: int = 600_000,
     max_patches: int = 12,
+    patch_index_base: int = 920_000,
 ) -> dict[str, Any]:
-    """Build one bounded paid repair round from completeness blockers only.
+    """Build one bounded paid repair round from completeness blockers.
+
+    The worker may call this repeatedly across bounded convergence rounds. Each
+    round receives a distinct patch_index_base so retained patch artifacts are
+    never confused with a later residual repair.
 
     This never submits a provider request. The worker still applies the normal
     reserved-budget gate before any Dynamic Batch operation is started.
@@ -285,12 +290,34 @@ def build_auto_repair_patch_plan(
             ),
             None,
         )
+        if parent is None and reason in {
+            "uncovered_audio_tail",
+            "short_audible_tail_requires_review",
+        }:
+            parent = next(
+                (
+                    chunk
+                    for chunk in reversed(chunks)
+                    if int(chunk.get("source_end_ms", 0)) > gap_start
+                ),
+                chunks[-1] if chunks else None,
+            )
         if parent is None:
             continue
         parent_start = int(parent.get("source_start_ms", 0))
         parent_end = int(parent.get("source_end_ms", 0))
-        source_start = max(parent_start, gap_start - context_ms)
-        source_end = min(parent_end, gap_end + context_ms)
+        if reason in {
+            "uncovered_audio_tail",
+            "short_audible_tail_requires_review",
+        }:
+            # The completeness blocker already uses the true media end as
+            # gap_end.  Do not clip the repair to the final base chunk; doing
+            # so is what left 10-15 second residual tails after round one.
+            source_start = max(0, gap_start - context_ms)
+            source_end = gap_end
+        else:
+            source_start = max(parent_start, gap_start - context_ms)
+            source_end = min(parent_end, gap_end + context_ms)
         if source_end <= source_start:
             continue
         candidates.append(
@@ -342,7 +369,7 @@ def build_auto_repair_patch_plan(
         gap_end = int(item["gap_end_ms"])
         items.append(
             {
-                "patch_index": 920_000 + offset,
+                "patch_index": patch_index_base + offset,
                 "parent_chunk_index": int(item["parent_chunk_index"]),
                 "source_start_ms": source_start,
                 "source_end_ms": source_end,
@@ -667,8 +694,8 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
         "paid_provider_calls": 0,
         "policy": {
             "gate_before_chatgpt_handoff": True,
-            "auto_paid_retry": "single_bounded_completeness_repair_round_with_budget_gate",
-            "other_repairs": "block_and_review_after_auto_repair_attempt",
+            "auto_paid_retry": "bounded_multi_round_completeness_repair_with_budget_gate",
+            "other_repairs": "auto_recheck_until_converged_or_safety_cap",
             "chirp_word_timestamps_authoritative": True,
             "local_vad_fail_closed": True,
             "vad_verified_nonspeech_is_nonblocking": True,

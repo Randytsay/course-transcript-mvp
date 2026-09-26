@@ -852,8 +852,34 @@ def _prepare_chirp_completeness_auto_repair(
     completeness: dict[str, Any],
 ) -> dict[str, Any] | None:
     marker_path = job_dir / _CHIRP_COMPLETENESS_AUTO_REPAIR_MARKER
+    marker: dict[str, Any] = {}
     if marker_path.is_file():
-        return None
+        try:
+            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            marker = {}
+    max_rounds = max(
+        1,
+        int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_ROUNDS", "3")),
+    )
+    prior_round = max(0, int(marker.get("round") or 0))
+    prior_status = str(marker.get("status") or "")
+    if marker_path.is_file():
+        if prior_status != "completed":
+            return None
+        if prior_round >= max_rounds:
+            marker.update(
+                {
+                    "status": "exhausted",
+                    "round": prior_round,
+                    "max_rounds": max_rounds,
+                    "provider_calls_started": bool(marker.get("provider_calls_started")),
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            )
+            base._atomic_json(marker_path, marker)
+            return None
+    repair_round = prior_round + 1
     if not _env_true("CHIRP_COMPLETENESS_AUTO_REPAIR", default=True):
         base._atomic_json(
             marker_path,
@@ -872,6 +898,7 @@ def _prepare_chirp_completeness_auto_repair(
         merge_gap_ms=int(os.environ.get("CHIRP_COMPLETENESS_REPAIR_MERGE_GAP_MS", "1000")),
         max_total_ms=int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_MS", "600000")),
         max_patches=int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_PATCHES", "12")),
+        patch_index_base=920_000 + (repair_round - 1) * 1_000,
     )
     items = plan.get("items") if isinstance(plan, dict) else []
     if plan.get("status") != "planned" or not isinstance(items, list) or not items:
@@ -881,6 +908,8 @@ def _prepare_chirp_completeness_auto_repair(
                 "status": str(plan.get("status") or "not_applicable"),
                 "policy": "chirp_completeness_auto_repair_v1",
                 "provider_calls_started": False,
+                "round": repair_round,
+                "max_rounds": max_rounds,
                 "proposed_patch_count": int(plan.get("proposed_patch_count") or 0),
                 "total_duration_ms": int(plan.get("total_duration_ms") or 0),
                 "blocked_reason": plan.get("auto_submit_blocked_reason"),
@@ -891,7 +920,10 @@ def _prepare_chirp_completeness_auto_repair(
     archive = (
         job_dir
         / "targeted-patch-archives"
-        / f"completeness-auto-repair-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        / (
+            f"completeness-auto-repair-r{repair_round}-"
+            f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+        )
     )
     archive.mkdir(parents=True, exist_ok=True)
     for name in _TARGETED_PATCH_STATE_FILES:
@@ -913,6 +945,8 @@ def _prepare_chirp_completeness_auto_repair(
             "status": "prepared",
             "policy": "chirp_completeness_auto_repair_v1",
             "provider_calls_started": False,
+            "round": repair_round,
+            "max_rounds": max_rounds,
             "patch_count": len(items),
             "total_duration_ms": int(plan.get("total_duration_ms") or 0),
             "archive": str(archive.relative_to(job_dir)),

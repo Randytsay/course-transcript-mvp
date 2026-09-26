@@ -325,7 +325,7 @@ scripture hint，方便追溯為何某個佛教專有詞被優先採用。
 - CHATGPT_HANDOFF：Chirp 3、merge、固定字幕後先執行 Chirp 完整性 Gate。Gate PASS 才建立 jobs/<job-id>/chatgpt-handoff/ 交接包；Gate BLOCKED 時停在 awaiting_review，禁止進入 ChatGPT 校稿。Server-side LLM correction 強制關閉，preflight 的 Gemini token / cost 估算為 0。
 - CHIRP_ONLY：只使用 Chirp 3 文字與時間軸；不執行 LLM correction。deterministic export 仍會依使用者選定格式產生輸出。
 
-CHATGPT_HANDOFF 交接包至少包含：chirp-raw.srt、segments.json、merged-words.json、chirp-completeness.json、raw-transcript.txt、golden-rules.json、canonical-context.json、INSTRUCTIONS.txt、handoff-manifest.json。完整性 Gate 會檢查 course-relative chunk density、15 分鐘密度、可疑有聲字幕空窗、尾端覆蓋與時間軸結構。既有 high-confidence targeted patch 仍可依既有 budget gate 自動執行；其餘疑點只產生 repair plan 並阻擋 Handoff，不會自行新增付費重辨識。
+CHATGPT_HANDOFF 交接包至少包含：chirp-raw.srt、segments.json、merged-words.json、chirp-completeness.json、raw-transcript.txt、golden-rules.json、canonical-context.json、INSTRUCTIONS.txt、handoff-manifest.json。完整性 Gate 會檢查 course-relative chunk density、15 分鐘密度、可疑有聲字幕空窗、尾端覆蓋與時間軸結構。high-confidence targeted patch 會依既有 budget gate 自動執行；若重建後仍有可修復 residual，系統會自動 recheck 並進入下一輪 repair，預設最多 3 輪（CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_ROUNDS），每輪仍受 patch 數量、總秒數與 reserved budget 限制。尾端 repair 以真實音檔終點為界，不再被最後 base chunk 截斷。只有超過安全上限、budget gate 拒絕或結構性不可自動修復問題才保留 review 阻擋。
 
 Gate BLOCKED 後若已完成局部 ASR 修復，可呼叫 POST /api/v1/jobs/{job_id}/chirp-completeness/recheck，帶最新 expected_revision。此 API 本身不送付費 provider；它只把任務重新排入字幕重建與完整性檢查，既有可重用 Chirp／patch evidence 仍由 worker 保留。
 
