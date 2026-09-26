@@ -13,6 +13,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 from decimal import Decimal
@@ -91,45 +92,70 @@ def _run_with_heartbeat(
     worker_id: str,
     timeout_seconds: int,
     env: dict[str, str] | None = None,
+    progress_path: Path | None = None,
+    stall_timeout_seconds: int | None = None,
 ) -> str:
     process_env = env
     if command and command[0] == "rclone":
         process_env = rclone_environment()
         if env:
             process_env.update(env)
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=process_env,
-    )
-    started = time.monotonic()
-    last_heartbeat = started
-    while process.poll() is None:
-        now = time.monotonic()
-        if now - started > timeout_seconds:
-            process.terminate()
-            try:
-                process.wait(timeout=15)
-            except subprocess.TimeoutExpired:
-                process.kill()
-            raise PipelineError("階段執行超過安全期限")
-        if now - last_heartbeat >= 15:
-            heartbeat = store.heartbeat(job_id, worker_id, lease_seconds=300)
-            if heartbeat["status"] == "paused":
+
+    with tempfile.TemporaryFile() as stdout_capture, tempfile.TemporaryFile() as stderr_capture:
+        process = subprocess.Popen(
+            command,
+            stdout=stdout_capture,
+            stderr=stderr_capture,
+            env=process_env,
+        )
+        started = time.monotonic()
+        last_heartbeat = started
+        last_progress = started
+        last_progress_signature: tuple[int, int] | None = None
+        while process.poll() is None:
+            now = time.monotonic()
+            if now - started > timeout_seconds:
                 process.terminate()
                 try:
                     process.wait(timeout=15)
                 except subprocess.TimeoutExpired:
                     process.kill()
-                raise PipelinePaused("任務已由使用者暫停")
-            last_heartbeat = now
-        time.sleep(1)
-    stdout, stderr = process.communicate()
-    if process.returncode != 0:
-        raise PipelineError(_command_failure_message(process.returncode, stdout, stderr))
-    return stdout.strip()
+                raise PipelineError("階段執行超過安全期限")
+            if progress_path is not None and stall_timeout_seconds is not None:
+                try:
+                    stat = progress_path.stat()
+                    signature = (stat.st_size, stat.st_mtime_ns)
+                except FileNotFoundError:
+                    signature = None
+                if signature != last_progress_signature:
+                    last_progress_signature = signature
+                    last_progress = now
+                elif now - last_progress > stall_timeout_seconds:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    raise PipelineError("階段輸出長時間無進展")
+            if now - last_heartbeat >= 15:
+                heartbeat = store.heartbeat(job_id, worker_id, lease_seconds=300)
+                if heartbeat["status"] == "paused":
+                    process.terminate()
+                    try:
+                        process.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    raise PipelinePaused("任務已由使用者暫停")
+                last_heartbeat = now
+            time.sleep(1)
+
+        stdout_capture.seek(0)
+        stderr_capture.seek(0)
+        stdout = stdout_capture.read().decode("utf-8", errors="replace")
+        stderr = stderr_capture.read().decode("utf-8", errors="replace")
+        if process.returncode != 0:
+            raise PipelineError(_command_failure_message(process.returncode, stdout, stderr))
+        return stdout.strip()
 
 
 def _atomic_json(path: Path, payload: object) -> None:
@@ -350,6 +376,10 @@ def _normalize(
             job_id=record["id"],
             worker_id=worker_id,
             timeout_seconds=7200,
+            progress_path=temporary,
+            stall_timeout_seconds=int(
+                os.environ.get("COURSE_TRANSCRIPT_NORMALIZE_STALL_SECONDS", "300")
+            ),
         )
         if not temporary.is_file() or temporary.stat().st_size <= 0:
             raise PipelineError("FFmpeg 未產生有效正規化音訊")

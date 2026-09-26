@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -66,46 +67,66 @@ def _run_with_heartbeat(
     worker_id: str,
     timeout_seconds: int,
     env: dict[str, str] | None = None,
+    progress_path: Path | None = None,
+    stall_timeout_seconds: int | None = None,
 ) -> str:
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        env=env,
-        start_new_session=True,
-    )
-    started = time.monotonic()
-    last_heartbeat = started
-    last_state_check = started
-    while process.poll() is None:
-        now = time.monotonic()
-        if now - started > timeout_seconds:
-            _terminate_process_group(process)
-            raise base.PipelineError("階段執行超過安全期限")
-        if now - last_state_check >= 2:
-            status = str(store.get_job(job_id)["status"])
-            if status in {"paused", "cancelling", "cancelled"}:
-                _terminate_process_group(process)
-                raise base.PipelinePaused(
-                    "任務已由使用者暫停"
-                    if status == "paused"
-                    else "任務已由使用者取消"
-                )
-            last_state_check = now
-        if now - last_heartbeat >= 15:
-            heartbeat = store.heartbeat(job_id, worker_id, lease_seconds=300)
-            if heartbeat["status"] in {"paused", "cancelling", "cancelled"}:
-                _terminate_process_group(process)
-                raise base.PipelinePaused("任務已由使用者停止")
-            last_heartbeat = now
-        time.sleep(0.5)
-    stdout, stderr = process.communicate()
-    if process.returncode != 0:
-        raise base.PipelineError(
-            base._command_failure_message(process.returncode, stdout, stderr)
+    with tempfile.TemporaryFile() as stdout_capture, tempfile.TemporaryFile() as stderr_capture:
+        process = subprocess.Popen(
+            command,
+            stdout=stdout_capture,
+            stderr=stderr_capture,
+            env=env,
+            start_new_session=True,
         )
-    return stdout.strip()
+        started = time.monotonic()
+        last_heartbeat = started
+        last_state_check = started
+        last_progress = started
+        last_progress_signature: tuple[int, int] | None = None
+        while process.poll() is None:
+            now = time.monotonic()
+            if now - started > timeout_seconds:
+                _terminate_process_group(process)
+                raise base.PipelineError("階段執行超過安全期限")
+            if progress_path is not None and stall_timeout_seconds is not None:
+                try:
+                    stat = progress_path.stat()
+                    signature = (stat.st_size, stat.st_mtime_ns)
+                except FileNotFoundError:
+                    signature = None
+                if signature != last_progress_signature:
+                    last_progress_signature = signature
+                    last_progress = now
+                elif now - last_progress > stall_timeout_seconds:
+                    _terminate_process_group(process)
+                    raise base.PipelineError("階段輸出長時間無進展")
+            if now - last_state_check >= 2:
+                status = str(store.get_job(job_id)["status"])
+                if status in {"paused", "cancelling", "cancelled"}:
+                    _terminate_process_group(process)
+                    raise base.PipelinePaused(
+                        "任務已由使用者暫停"
+                        if status == "paused"
+                        else "任務已由使用者取消"
+                    )
+                last_state_check = now
+            if now - last_heartbeat >= 15:
+                heartbeat = store.heartbeat(job_id, worker_id, lease_seconds=300)
+                if heartbeat["status"] in {"paused", "cancelling", "cancelled"}:
+                    _terminate_process_group(process)
+                    raise base.PipelinePaused("任務已由使用者停止")
+                last_heartbeat = now
+            time.sleep(0.5)
+
+        stdout_capture.seek(0)
+        stderr_capture.seek(0)
+        stdout = stdout_capture.read().decode("utf-8", errors="replace")
+        stderr = stderr_capture.read().decode("utf-8", errors="replace")
+        if process.returncode != 0:
+            raise base.PipelineError(
+                base._command_failure_message(process.returncode, stdout, stderr)
+            )
+        return stdout.strip()
 
 
 def _begin(
