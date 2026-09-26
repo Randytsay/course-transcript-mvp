@@ -31,6 +31,7 @@ from app.pipeline import worker as base
 from app.pipeline import worker_observed as observed
 from app.pipeline.recovery_schedule import is_due, schedule
 from app.providers.correction_evidence import summarize_routing
+from app.providers.chirp_completeness_gate import build_auto_repair_patch_plan
 from app.providers.targeted_patch import build_plan as build_targeted_patch_plan
 
 install_completion_patch(JobStore)
@@ -837,12 +838,118 @@ def _restore_audio_for_targeted_patch_if_needed(
     base._normalize(store, leased, source, data_dir, worker_id)
 
 
+_CHIRP_COMPLETENESS_AUTO_REPAIR_MARKER = "chirp-completeness-auto-repair.json"
+_TARGETED_PATCH_STATE_FILES = (
+    "chirp-targeted-patch-plan.json",
+    "chirp-targeted-patch-submitted.json",
+    "chirp-targeted-patch-waiting.json",
+    "chirp-targeted-patch-complete.json",
+)
+
+
+def _prepare_chirp_completeness_auto_repair(
+    job_dir: Path,
+    completeness: dict[str, Any],
+) -> dict[str, Any] | None:
+    marker_path = job_dir / _CHIRP_COMPLETENESS_AUTO_REPAIR_MARKER
+    if marker_path.is_file():
+        return None
+    if not _env_true("CHIRP_COMPLETENESS_AUTO_REPAIR", default=True):
+        base._atomic_json(
+            marker_path,
+            {
+                "status": "disabled",
+                "policy": "chirp_completeness_auto_repair_v1",
+                "provider_calls_started": False,
+            },
+        )
+        return None
+
+    plan = build_auto_repair_patch_plan(
+        job_dir,
+        completeness,
+        context_ms=int(os.environ.get("CHIRP_COMPLETENESS_REPAIR_CONTEXT_MS", "5000")),
+        merge_gap_ms=int(os.environ.get("CHIRP_COMPLETENESS_REPAIR_MERGE_GAP_MS", "1000")),
+        max_total_ms=int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_MS", "600000")),
+        max_patches=int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_PATCHES", "12")),
+    )
+    items = plan.get("items") if isinstance(plan, dict) else []
+    if plan.get("status") != "planned" or not isinstance(items, list) or not items:
+        base._atomic_json(
+            marker_path,
+            {
+                "status": str(plan.get("status") or "not_applicable"),
+                "policy": "chirp_completeness_auto_repair_v1",
+                "provider_calls_started": False,
+                "proposed_patch_count": int(plan.get("proposed_patch_count") or 0),
+                "total_duration_ms": int(plan.get("total_duration_ms") or 0),
+                "blocked_reason": plan.get("auto_submit_blocked_reason"),
+            },
+        )
+        return None
+
+    archive = (
+        job_dir
+        / "targeted-patch-archives"
+        / f"completeness-auto-repair-{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())}"
+    )
+    archive.mkdir(parents=True, exist_ok=True)
+    for name in _TARGETED_PATCH_STATE_FILES:
+        source = job_dir / name
+        if source.is_file():
+            shutil.copy2(source, archive / name)
+
+    base._atomic_json(job_dir / "chirp-targeted-patch-plan.json", plan)
+    for name in (
+        "chirp-targeted-patch-submitted.json",
+        "chirp-targeted-patch-waiting.json",
+        "chirp-targeted-patch-complete.json",
+    ):
+        (job_dir / name).unlink(missing_ok=True)
+
+    base._atomic_json(
+        marker_path,
+        {
+            "status": "prepared",
+            "policy": "chirp_completeness_auto_repair_v1",
+            "provider_calls_started": False,
+            "patch_count": len(items),
+            "total_duration_ms": int(plan.get("total_duration_ms") or 0),
+            "archive": str(archive.relative_to(job_dir)),
+        },
+    )
+    return plan
+
+
+def _update_chirp_completeness_auto_repair_marker(
+    job_dir: Path,
+    *,
+    status: str,
+    provider_calls_started: bool,
+) -> None:
+    marker_path = job_dir / _CHIRP_COMPLETENESS_AUTO_REPAIR_MARKER
+    payload: dict[str, Any] = {}
+    try:
+        payload = json.loads(marker_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    payload.update(
+        {
+            "status": status,
+            "provider_calls_started": provider_calls_started,
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+    )
+    base._atomic_json(marker_path, payload)
+
+
 def _submit_targeted_patch_if_needed(
     store: JobStore,
     leased: dict[str, Any],
     *,
     data_dir: Path,
     worker_id: str,
+    use_existing_plan: bool = False,
 ) -> dict[str, Any] | None:
     job_dir = data_dir / "jobs" / leased["id"]
     if (job_dir / "chirp-targeted-patch-complete.json").is_file():
@@ -851,7 +958,15 @@ def _submit_targeted_patch_if_needed(
         _restore_audio_for_targeted_patch_if_needed(
             store, leased, data_dir=data_dir, worker_id=worker_id
         )
-    plan = build_targeted_patch_plan(job_dir)
+    if use_existing_plan:
+        try:
+            plan = json.loads(
+                (job_dir / "chirp-targeted-patch-plan.json").read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError):
+            plan = {}
+    else:
+        plan = build_targeted_patch_plan(job_dir)
     items = plan.get("items") if isinstance(plan, dict) else []
     if not isinstance(items, list) or not items:
         return None
@@ -1083,6 +1198,52 @@ def _finish_after_chirp(
                 store, leased, data_dir=data_dir, worker_id=worker_id
             )
             base._record_usage_evidence(store, leased, data_dir, worker_id)
+            auto_repair_plan = _prepare_chirp_completeness_auto_repair(
+                job_dir,
+                completeness,
+            )
+            if auto_repair_plan is not None:
+                waiting = _submit_targeted_patch_if_needed(
+                    store,
+                    leased,
+                    data_dir=data_dir,
+                    worker_id=worker_id,
+                    use_existing_plan=True,
+                )
+                current_plan = {}
+                try:
+                    current_plan = json.loads(
+                        (job_dir / "chirp-targeted-patch-plan.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                except (OSError, json.JSONDecodeError):
+                    current_plan = {}
+                if waiting is not None:
+                    _update_chirp_completeness_auto_repair_marker(
+                        job_dir,
+                        status="submitted",
+                        provider_calls_started=True,
+                    )
+                    return waiting
+                if (job_dir / "chirp-targeted-patch-complete.json").is_file():
+                    _update_chirp_completeness_auto_repair_marker(
+                        job_dir,
+                        status="completed",
+                        provider_calls_started=True,
+                    )
+                    return _finish_after_chirp(
+                        store,
+                        store.get_job(leased["id"]),
+                        data_dir=data_dir,
+                        worker_id=worker_id,
+                    )
+                if current_plan.get("auto_submit_blocked_reason"):
+                    _update_chirp_completeness_auto_repair_marker(
+                        job_dir,
+                        status="budget_blocked",
+                        provider_calls_started=False,
+                    )
             manifest = {
                 "job_id": leased["id"],
                 "status": "CHIRP_COMPLETENESS_BLOCKED",

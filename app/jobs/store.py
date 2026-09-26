@@ -652,6 +652,21 @@ class JobStore:
             ).fetchall()
             if not items:
                 raise JobConflict("批次預覽沒有可建立的影音檔")
+            for item in items:
+                duplicate = connection.execute(
+                    """
+                    SELECT id, status FROM jobs
+                    WHERE source_path = ? AND source_size_bytes = ?
+                      AND status NOT IN ('completed', 'cancelled', 'failed')
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                    """,
+                    (item["source_path"], int(item["size_bytes"])),
+                ).fetchone()
+                if duplicate is not None:
+                    raise JobConflict(
+                        f"同一來源已有未完成任務：{duplicate['id']}（{duplicate['status']}）"
+                    )
 
             batch_id = _batch_id()
             batch_name = (
@@ -842,6 +857,20 @@ class JobStore:
                 raise JobConflict("來源預覽已建立過任務")
             if datetime.fromisoformat(preview["expires_at"]) <= utc_now():
                 raise JobConflict("來源預覽已過期，請重新檢查")
+            duplicate = connection.execute(
+                """
+                SELECT id, status FROM jobs
+                WHERE source_path = ? AND source_size_bytes = ?
+                  AND status NOT IN ('completed', 'cancelled', 'failed')
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (preview["source_path"], int(preview["size_bytes"])),
+            ).fetchone()
+            if duplicate is not None:
+                raise JobConflict(
+                    f"同一來源已有未完成任務：{duplicate['id']}（{duplicate['status']}）"
+                )
 
             job_id = _job_id(preview["source_name"])
             connection.execute(
