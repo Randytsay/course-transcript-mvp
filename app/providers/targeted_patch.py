@@ -106,7 +106,7 @@ def build_plan(job_dir: Path = JOB, *, audibility_probe=None) -> dict[str, Any]:
     min_gap_ms = int(os.environ.get("CHIRP_AUTO_PATCH_MIN_GAP_SECONDS", "30")) * 1000
     max_window_ms = int(os.environ.get("CHIRP_AUTO_PATCH_MAX_SECONDS", "360")) * 1000
     margin_ms = int(os.environ.get("CHIRP_AUTO_PATCH_CONTEXT_SECONDS", "5")) * 1000
-    max_items = max(1, int(os.environ.get("CHIRP_AUTO_PATCH_MAX_ITEMS", "1")))
+    max_items = max(1, int(os.environ.get("CHIRP_AUTO_PATCH_MAX_ITEMS", "3")))
 
     items: list[dict[str, Any]] = []
     for report in reports:
@@ -184,7 +184,10 @@ def _env(item: dict[str, Any]) -> dict[str, str]:
         "CHUNK_END_SECONDS": f"{end_ms / 1000:.3f}",
         "CHUNK_ROLE": "patch",
         "CHUNK_PATCH_MODE": "replace_window",
-        "CHIRP_DYNAMIC_BATCHING": "true",
+        # Targeted repair is latency-sensitive and blocks completeness.
+        # Never route it through Dynamic Batching, which can legitimately
+        # remain queued for a long time.
+        "CHIRP_DYNAMIC_BATCHING": "false",
     }
     return base.env_with(values)
 

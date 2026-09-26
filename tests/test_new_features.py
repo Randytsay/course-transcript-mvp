@@ -290,6 +290,10 @@ class NewFeatureTests(unittest.TestCase):
             self.assertIsNotNone(targeted)
             self.assertEqual(targeted["id"], job["id"])
             self.assertIsNone(worker._next_due_waiting(store, data_dir))
+            # Generic resumable routing must not re-enter the submit path while
+            # a targeted patch is in flight; only the due targeted recovery
+            # selector may own it.
+            self.assertIsNone(worker._next_resumable(store, data_dir))
 
 
 

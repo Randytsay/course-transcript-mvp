@@ -342,6 +342,12 @@ def _next_due_waiting(store: JobStore, data_dir: Path) -> dict[str, Any] | None:
 def _next_resumable(store: JobStore, data_dir: Path) -> dict[str, Any] | None:
     for record in _available_rows(store, _ACTIVE_RESUMABLE):
         job_dir = data_dir / "jobs" / record["id"]
+        # In-flight targeted patches are owned exclusively by the due-recovery
+        # selector above.  Letting the generic resumable path pick them up
+        # causes a tight submit/retain loop that hammers provider status APIs
+        # and floods targeted_patch_submitted events.
+        if _targeted_patch_inflight(job_dir):
+            continue
         if (
             record.get("status") == "transcribing"
             and record.get("active_stage") == "chirp"
@@ -952,6 +958,16 @@ def _prepare_chirp_completeness_auto_repair(
         patch_index_base=920_000 + (repair_round - 1) * 1_000,
     )
     items = plan.get("items") if isinstance(plan, dict) else []
+    per_round_max = max(1, int(os.environ.get("CHIRP_TARGETED_PATCH_PARALLEL_MAX", "3")))
+    if isinstance(items, list) and len(items) > per_round_max:
+        original_count = len(items)
+        items = items[:per_round_max]
+        plan["items"] = items
+        plan["original_proposed_patch_count"] = original_count
+        plan["proposed_patch_count"] = len(items)
+        plan["total_duration_ms"] = sum(int(item.get("duration_ms") or 0) for item in items)
+        plan["deferred_patch_count"] = original_count - len(items)
+        plan["round_parallel_cap"] = per_round_max
     if plan.get("status") != "planned" or not isinstance(items, list) or not items:
         base._atomic_json(
             marker_path,
@@ -1081,7 +1097,7 @@ def _submit_targeted_patch_if_needed(
     env = base._module_env(leased, job_dir)
     env.update(
         {
-            "CHIRP_DYNAMIC_BATCHING": "true",
+            "CHIRP_DYNAMIC_BATCHING": "false",
             "CHIRP_PATCH_ACTION": "submit",
         }
     )

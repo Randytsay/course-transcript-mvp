@@ -40,7 +40,7 @@ def schedule(
     current = load(job_dir)
     timestamp = now or utcnow()
     transient_errors = int(current.get("transient_errors", 0))
-    poll_seconds = max(30, int(os.environ.get("CHIRP_RECOVERY_POLL_SECONDS", "120")))
+    poll_seconds = max(30, int(os.environ.get("CHIRP_RECOVERY_POLL_SECONDS", "60")))
     if outcome == "retryable":
         transient_errors += 1
         delay = retry_delay_seconds(transient_errors, poll_seconds)
