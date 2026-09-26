@@ -670,14 +670,31 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
                 blockers.append(entry)
                 repair_items.append(entry)
         elif beyond is False and within is True:
-            blockers.append(
-                {
-                    "reason": "short_audible_tail_requires_review",
-                    "start_ms": end_ms,
-                    "end_ms": min(audio_ms, end_ms + tail_review_max_ms),
-                    "uncovered_ms": uncovered,
-                }
+            patch_zero_words = _targeted_patch_zero_word_evidence(
+                job_dir,
+                end_ms,
+                audio_ms,
             )
+            if patch_zero_words is not None:
+                warnings.append(
+                    {
+                        "reason": "short_audio_tail_verified_nonlexical_by_targeted_patch_words",
+                        "start_ms": end_ms,
+                        "end_ms": audio_ms,
+                        "uncovered_ms": uncovered,
+                        "recommended_action": "no_repeat_same_recognizer",
+                        "patch_evidence": patch_zero_words,
+                    }
+                )
+            else:
+                blockers.append(
+                    {
+                        "reason": "short_audible_tail_requires_review",
+                        "start_ms": end_ms,
+                        "end_ms": min(audio_ms, end_ms + tail_review_max_ms),
+                        "uncovered_ms": uncovered,
+                    }
+                )
         else:
             warnings.append(
                 {
