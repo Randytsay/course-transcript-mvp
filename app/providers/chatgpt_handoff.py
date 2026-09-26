@@ -145,14 +145,18 @@ def write_bundle(
                 }
     _atomic_json(bundle / "canonical-context.json", canonical_payload)
     instructions = (
-        "Treat Chirp 3 word timestamps and source segment timing as immutable evidence.\n"
+        "Treat Chirp 3 word timestamps as timing truth and the corrected/reference transcript "
+        "as text truth.\n"
         "Preferred return format is a complete list of {segment_id, corrected_text}; do not "
         "return or invent timestamps. Preserve every source segment_id exactly once and in order.\n"
         "Use the user-provided reference transcript as spelling/context evidence, not as "
         "permission to overwrite audio evidence or fill audio that Chirp did not recognize.\n"
-        "Display cue merging/splitting is a separate deterministic rendering concern and must "
-        "never be driven by model-invented timestamps. Legacy SRT return remains supported only "
-        "when cue count and every source timestamp are unchanged.\n"
+        "Final display cue merging/splitting is a separate deterministic rendering concern. "
+        "Its cue boundaries may be rebuilt from existing Chirp word start/end timestamps, but "
+        "must never be driven by model-invented or text-length-proportional milliseconds.\n"
+        "Legacy model-returned SRT import remains supported only when cue count and every original "
+        "source timestamp are unchanged; that legacy import restriction does not constrain the "
+        "deterministic final semantic renderer.\n"
     )
     _atomic_text(bundle / "INSTRUCTIONS.txt", instructions)
 
@@ -165,6 +169,9 @@ def write_bundle(
         "document_context": document_context,
         "cue_count": len(segments),
         "timestamps_immutable": True,
+        "source_word_timestamps_immutable": True,
+        "final_semantic_cue_timing_policy": "rebuild_from_chirp_word_timestamps",
+        "final_semantic_cues_require_original_boundaries": False,
         "reference_transcript_expected_from_user": True,
         "chirp_completeness_status": "PASS",
         "preferred_import_format": "segment_edits",

@@ -13,6 +13,10 @@ from app.skills.dacheng_subtitle_review import (
     blind_audit,
     review_lesson,
     semantic_segmentation,
+    sequential_word_timed_human_display_layer,
+    word_timed_human_display_layer,
+    word_timed_mantra_region_layer,
+    word_timed_scripture_verification_layer,
     write_review_bundle,
 )
 
@@ -230,6 +234,303 @@ class DachengSubtitleReviewSkillTests(unittest.TestCase):
             )
             self.assertTrue(result["qa"]["mantra"]["whole_cycles_preserved"])
             self.assertEqual(result["qa"]["new_golden_candidates"], [])
+
+    def test_word_timed_typo_uses_original_chirp_word_timing(self) -> None:
+        source = [
+            {
+                "segment_id": "s1",
+                "start_ms": 0,
+                "end_ms": 1600,
+                "raw_text": "為法忘俱",
+                "cleaned_text": "為法忘俱",
+            }
+        ]
+        merged_words = {
+            "words": [
+                {"word": "為", "start_ms": 100, "end_ms": 300},
+                {"word": "法", "start_ms": 350, "end_ms": 550},
+                {"word": "忘", "start_ms": 600, "end_ms": 800},
+                {"word": "俱", "start_ms": 900, "end_ms": 1150},
+            ]
+        }
+        original = json.loads(json.dumps(source, ensure_ascii=False))
+        display, meta = word_timed_human_display_layer(
+            source,
+            "為法忘軀。",
+            {"candidates": []},
+            merged_words,
+        )
+        self.assertTrue(meta["applied"])
+        self.assertEqual(meta["timing_source"], "chirp_word_timestamps")
+        self.assertEqual(display[0]["cleaned_text"], "為法忘軀。")
+        self.assertEqual(display[0]["start_ms"], 100)
+        self.assertEqual(display[0]["end_ms"], 1150)
+        self.assertEqual(display[0]["source_word_start_index"], 0)
+        self.assertEqual(display[0]["source_word_end_index"], 3)
+        self.assertEqual(source, original)
+
+    def test_word_timed_semantic_units_preserve_real_pause(self) -> None:
+        source = [
+            {
+                "segment_id": "s1",
+                "start_ms": 0,
+                "end_ms": 3000,
+                "raw_text": "修行真好",
+                "cleaned_text": "修行真好",
+            }
+        ]
+        merged_words = {
+            "words": [
+                {"word": "修", "start_ms": 0, "end_ms": 300},
+                {"word": "行", "start_ms": 400, "end_ms": 700},
+                {"word": "真", "start_ms": 2000, "end_ms": 2300},
+                {"word": "好", "start_ms": 2400, "end_ms": 2700},
+            ]
+        }
+        display, meta = word_timed_human_display_layer(
+            source,
+            "修行，真好。",
+            {"candidates": []},
+            merged_words,
+        )
+        self.assertEqual(meta["timing_source"], "chirp_word_timestamps")
+        self.assertEqual(len(display), 2)
+        self.assertEqual(
+            [(item["start_ms"], item["end_ms"]) for item in display],
+            [(0, 700), (2000, 2700)],
+        )
+        self.assertEqual(display[1]["start_ms"] - display[0]["end_ms"], 1300)
+        word_edges = {0, 300, 400, 700, 2000, 2300, 2400, 2700}
+        for item in display:
+            self.assertIn(item["start_ms"], word_edges)
+            self.assertIn(item["end_ms"], word_edges)
+
+    def test_context_projection_snaps_to_existing_word_boundaries(self) -> None:
+        source = [
+            {
+                "segment_id": "s1",
+                "start_ms": 0,
+                "end_ms": 2300,
+                "raw_text": "甲乙錯錯丙丁",
+                "cleaned_text": "甲乙錯錯丙丁",
+            }
+        ]
+        merged_words = {
+            "words": [
+                {"word": "甲", "start_ms": 0, "end_ms": 200},
+                {"word": "乙", "start_ms": 300, "end_ms": 500},
+                {"word": "錯", "start_ms": 800, "end_ms": 1000},
+                {"word": "錯", "start_ms": 1100, "end_ms": 1300},
+                {"word": "丙", "start_ms": 1700, "end_ms": 1900},
+                {"word": "丁", "start_ms": 2000, "end_ms": 2200},
+            ]
+        }
+        display, meta = word_timed_human_display_layer(
+            source,
+            "甲乙，正確，丙丁。",
+            {"candidates": []},
+            merged_words,
+        )
+        projected = [
+            item
+            for item in display
+            if item.get("human_mapping_method") == "context_projected_word_boundary"
+        ]
+        self.assertEqual(meta["context_projected_units"], 1)
+        self.assertEqual(len(projected), 1)
+        self.assertEqual(projected[0]["cleaned_text"], "正確，")
+        self.assertEqual(projected[0]["start_ms"], 800)
+        self.assertEqual(projected[0]["end_ms"], 1300)
+
+    def test_unmapped_run_projects_only_across_chirp_word_indexes(self) -> None:
+        source_text = "甲乙" + ("錯" * 200) + "丙丁"
+        source = [
+            {
+                "segment_id": "s1",
+                "start_ms": 0,
+                "end_ms": 50_000,
+                "raw_text": source_text,
+                "cleaned_text": source_text,
+            }
+        ]
+        merged_words = {"words": []}
+        for index, char in enumerate(source_text):
+            merged_words["words"].append(
+                {
+                    "word": char,
+                    "start_ms": index * 200,
+                    "end_ms": index * 200 + 120,
+                }
+            )
+        middle_units = [("真" * 20) + "，" for _ in range(10)]
+        human = "甲乙，" + "".join(middle_units) + "丙丁。"
+        display, meta = word_timed_human_display_layer(
+            source,
+            human,
+            {"candidates": []},
+            merged_words,
+        )
+        run_projected = [
+            item
+            for item in display
+            if item.get("human_mapping_method") == "context_projected_word_run"
+        ]
+        self.assertEqual(meta["context_projected_run_units"], 10)
+        self.assertEqual(
+            [item["cleaned_text"] for item in run_projected],
+            middle_units,
+        )
+        word_edges = {
+            edge
+            for index in range(len(source_text))
+            for edge in (index * 200, index * 200 + 120)
+        }
+        for item in run_projected:
+            self.assertIn(item["start_ms"], word_edges)
+            self.assertIn(item["end_ms"], word_edges)
+
+    def test_sequential_alignment_never_reuses_earlier_repeated_phrase(self) -> None:
+        source = [
+            {
+                "segment_id": "s1",
+                "start_ms": 0,
+                "end_ms": 8000,
+                "raw_text": "前段共同句前段結束中間雜訊共同句後段正確",
+                "cleaned_text": "前段共同句前段結束中間雜訊共同句後段正確",
+            }
+        ]
+        merged_words = {"words": []}
+        source_text = "前段共同句前段結束中間雜訊共同句後段正確"
+        for index, char in enumerate(source_text):
+            merged_words["words"].append(
+                {
+                    "word": char,
+                    "start_ms": index * 300,
+                    "end_ms": index * 300 + 180,
+                }
+            )
+        human = "前段共同句，前段結束。\n共同句，後段正確。"
+        display, meta = sequential_word_timed_human_display_layer(
+            source,
+            human,
+            {"candidates": []},
+            merged_words,
+        )
+        self.assertTrue(meta["applied"])
+        self.assertEqual(meta["alignment_strategy"], "sequential_forward_paragraphs")
+        later = [item for item in display if item["cleaned_text"] == "共同句，"][-1]
+        later_occurrence_index = source_text.rfind("共同句")
+        self.assertGreaterEqual(
+            later["start_ms"],
+            later_occurrence_index * 300,
+        )
+        first_paragraph_end = max(
+            item["end_ms"]
+            for item in display
+            if item["cleaned_text"] in {"前段共同句，", "前段結束。"}
+        )
+        self.assertGreaterEqual(later["start_ms"], first_paragraph_end)
+
+    def test_word_timed_scripture_verification_keeps_existing_timing(self) -> None:
+        display = [
+            {
+                "segment_id": "s1",
+                "start_ms": 100,
+                "end_ms": 900,
+                "cleaned_text": "忍辱勇猛大導師能於五濁不善世教化成熟惡眾生令彼修行得見佛",
+                "timing_source": "chirp_word_timestamps",
+            }
+        ]
+        canonical = {
+            "body_text": "忍辱勇猛大導師能於五濁不善世教化成熟惡眾生令彼修行得見佛",
+            "active_version": 1,
+            "active_checksum": "scripture-test",
+        }
+        original = json.loads(json.dumps(display, ensure_ascii=False))
+        result, meta = word_timed_scripture_verification_layer(
+            display,
+            canonical,
+            minimum_contiguous_match_chars=8,
+        )
+        self.assertTrue(meta["applied"])
+        self.assertEqual(meta["timing_source"], "chirp_word_timestamps")
+        self.assertEqual(result, original)
+
+    def test_word_timed_mantra_uses_only_chirp_word_edges(self) -> None:
+        words = [
+            {
+                "word": "啊",
+                "start_ms": index * 200,
+                "end_ms": index * 200 + 120,
+            }
+            for index in range(130)
+        ]
+        display = [
+            {
+                "segment_id": "title",
+                "start_ms": 0,
+                "end_ms": 920,
+                "cleaned_text": "合念《彌勒根本大明神咒》：",
+                "source_word_start_index": 0,
+                "source_word_end_index": 4,
+            },
+            {
+                "segment_id": "closing",
+                "start_ms": 23_000,
+                "end_ms": 24_000,
+                "cleaned_text": "大眾請起立。",
+                "source_word_start_index": 115,
+                "source_word_end_index": 119,
+            },
+        ]
+        canonical = {
+            "title": "《得見彌勒根本大明神咒》",
+            "body_text": MANTRA_BODY,
+            "active_version": 1,
+            "active_checksum": "mantra-test",
+        }
+        result, meta = word_timed_mantra_region_layer(
+            display,
+            MANTRA_BODY,
+            canonical,
+            {"words": words},
+        )
+        self.assertTrue(meta["applied"])
+        self.assertEqual(meta["cycle_count"], 1)
+        mantra_cues = [
+            item
+            for item in result
+            if str(item.get("segment_id") or "").startswith("mantra-word-")
+        ]
+        self.assertEqual(len(mantra_cues), 17)
+        word_edges = {
+            edge
+            for word in words
+            for edge in (word["start_ms"], word["end_ms"])
+        }
+        for cue in mantra_cues:
+            self.assertIn(cue["start_ms"], word_edges)
+            self.assertIn(cue["end_ms"], word_edges)
+            self.assertEqual(cue["timing_source"], "chirp_word_boundary_projection")
+
+    def test_review_lesson_without_merged_words_reports_legacy_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            data_dir = self._data_dir(temp)
+            result = review_lesson(
+                srt_text=_srt([(0, 1200, "今天說法。")]),
+                human_text="今天說法。",
+                data_dir=data_dir,
+                lesson_id="legacy",
+                lesson_date="20260102",
+            )
+            self.assertTrue(result["human_semantic_display"]["legacy_fallback"])
+            self.assertEqual(
+                result["timing_policy"]["ordinary_speech"],
+                "legacy_srt_cue_proportional_fallback",
+            )
+            self.assertFalse(
+                result["timing_policy"]["chirp_word_timestamps_are_timing_truth"]
+            )
 
 
 if __name__ == "__main__":

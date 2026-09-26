@@ -17,6 +17,11 @@ def main() -> int:
     )
     parser.add_argument("--srt", required=True, type=Path)
     parser.add_argument("--human-txt", required=True, type=Path)
+    parser.add_argument(
+        "--merged-words",
+        type=Path,
+        help="Optional merged-words.json; when present Chirp word timestamps are timing truth.",
+    )
     parser.add_argument("--data-dir", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--lesson-id", required=True)
@@ -29,6 +34,9 @@ def main() -> int:
     )
     parser.add_argument("--stem", required=True)
     args = parser.parse_args()
+    merged_words = None
+    if args.merged_words is not None:
+        merged_words = json.loads(args.merged_words.read_text(encoding="utf-8"))
 
     result = review_lesson(
         srt_text=args.srt.read_text(encoding="utf-8"),
@@ -36,6 +44,7 @@ def main() -> int:
         data_dir=args.data_dir,
         lesson_id=args.lesson_id,
         lesson_date=args.lesson_date,
+        merged_words=merged_words,
     )
     paths = write_review_bundle(
         result,
@@ -45,6 +54,7 @@ def main() -> int:
     summary = {
         "status": result["qa"]["status"],
         "learning_applied": result["learning_applied"],
+        "timing_policy": result["timing_policy"],
         "paths": paths,
         "qa": {
             key: result["qa"][key]
