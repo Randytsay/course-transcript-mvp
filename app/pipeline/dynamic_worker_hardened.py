@@ -862,8 +862,59 @@ def _prepare_chirp_completeness_auto_repair(
         1,
         int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_ROUNDS", "3")),
     )
-    prior_round = max(0, int(marker.get("round") or 0))
     prior_status = str(marker.get("status") or "")
+    if marker_path.is_file() and prior_status in {"prepared", "submitted"}:
+        complete_path = job_dir / "chirp-targeted-patch-complete.json"
+        try:
+            complete = json.loads(complete_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            complete = {}
+        decisions = complete.get("patch_decisions") if isinstance(complete, dict) else None
+        verdicts = complete.get("verdicts") if isinstance(complete, dict) else None
+        patch_count = int(marker.get("patch_count") or 0)
+        expected_indices: set[int] = set()
+        try:
+            current_plan = json.loads(
+                (job_dir / "chirp-targeted-patch-plan.json").read_text(encoding="utf-8")
+            )
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            current_plan = {}
+        if isinstance(current_plan, dict):
+            for item in current_plan.get("items") or []:
+                if isinstance(item, dict) and item.get("patch_index") is not None:
+                    expected_indices.add(int(item["patch_index"]))
+        decision_indices = {
+            int(item["chunk_index"])
+            for item in decisions or []
+            if isinstance(item, dict) and item.get("chunk_index") is not None
+        }
+        complete_proven = (
+            isinstance(decisions, list)
+            and bool(decisions)
+            and all(isinstance(item, dict) and item.get("applied") is True for item in decisions)
+            and isinstance(verdicts, list)
+            and len(verdicts) == len(decisions)
+            and all(isinstance(item, dict) and item.get("status") in {"SUCCEEDED", "EMPTY_SILENCE"} for item in verdicts)
+            and (patch_count <= 0 or len(decisions) == patch_count)
+            and (not expected_indices or decision_indices == expected_indices)
+        )
+        if complete_proven:
+            migrated_round = max(1, int(marker.get("round") or 1))
+            marker.update(
+                {
+                    "status": "completed",
+                    "round": migrated_round,
+                    "max_rounds": max_rounds,
+                    "provider_calls_started": True,
+                    "completion_evidence_reconciled": True,
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            )
+            if not marker.get("round"):
+                marker["legacy_marker_migrated"] = True
+            base._atomic_json(marker_path, marker)
+            prior_status = "completed"
+    prior_round = max(0, int(marker.get("round") or 0))
     if marker_path.is_file():
         if prior_status != "completed":
             return None

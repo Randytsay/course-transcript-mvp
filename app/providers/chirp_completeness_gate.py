@@ -310,11 +310,15 @@ def build_auto_repair_patch_plan(
             "uncovered_audio_tail",
             "short_audible_tail_requires_review",
         }:
-            # The completeness blocker already uses the true media end as
-            # gap_end.  Do not clip the repair to the final base chunk; doing
-            # so is what left 10-15 second residual tails after round one.
+            # Tail blockers may expose only a short audibility probe window in
+            # gap_end (especially short_audible_tail_requires_review). Always
+            # extend the repair to the true media end from chunk-plan.json so
+            # the final seconds cannot remain perpetually uncovered.
+            media_end_ms = int(round(float(chunk_plan.get("duration_seconds") or 0) * 1000))
+            if media_end_ms <= 0 and chunks:
+                media_end_ms = max(int(chunk.get("source_end_ms", 0)) for chunk in chunks)
             source_start = max(0, gap_start - context_ms)
-            source_end = gap_end
+            source_end = max(gap_end, media_end_ms)
         else:
             source_start = max(parent_start, gap_start - context_ms)
             source_end = min(parent_end, gap_end + context_ms)
@@ -666,14 +670,31 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
                 blockers.append(entry)
                 repair_items.append(entry)
         elif beyond is False and within is True:
-            blockers.append(
-                {
-                    "reason": "short_audible_tail_requires_review",
-                    "start_ms": end_ms,
-                    "end_ms": min(audio_ms, end_ms + tail_review_max_ms),
-                    "uncovered_ms": uncovered,
-                }
+            patch_zero_words = _targeted_patch_zero_word_evidence(
+                job_dir,
+                end_ms,
+                audio_ms,
             )
+            if patch_zero_words is not None:
+                warnings.append(
+                    {
+                        "reason": "short_audio_tail_verified_nonlexical_by_targeted_patch_words",
+                        "start_ms": end_ms,
+                        "end_ms": audio_ms,
+                        "uncovered_ms": uncovered,
+                        "recommended_action": "no_repeat_same_recognizer",
+                        "patch_evidence": patch_zero_words,
+                    }
+                )
+            else:
+                blockers.append(
+                    {
+                        "reason": "short_audible_tail_requires_review",
+                        "start_ms": end_ms,
+                        "end_ms": min(audio_ms, end_ms + tail_review_max_ms),
+                        "uncovered_ms": uncovered,
+                    }
+                )
         else:
             warnings.append(
                 {

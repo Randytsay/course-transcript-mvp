@@ -19,6 +19,7 @@ from app.providers.chatgpt_handoff import (
     write_bundle,
 )
 from app.providers.chirp_completeness_gate import (
+    evaluate,
     build_auto_repair_patch_plan,
     evaluate as evaluate_completeness,
 )
@@ -630,6 +631,147 @@ def test_completeness_auto_repair_allows_next_round_after_completed(tmp_path: Pa
     assert marker["round"] == 2
     assert marker["max_rounds"] == 3
     assert marker["provider_calls_started"] is False
+
+
+def test_completeness_auto_repair_migrates_legacy_submitted_marker_with_complete_evidence(tmp_path: Path) -> None:
+    job_dir = tmp_path / "legacy-marker"
+    job_dir.mkdir()
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({"duration_seconds": 80.0, "chunks": [{"chunk_index": 0, "source_start_ms": 0, "source_end_ms": 80_000}]}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-completeness-auto-repair.json").write_text(
+        json.dumps({"status": "submitted", "patch_count": 1, "provider_calls_started": True}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-targeted-patch-complete.json").write_text(
+        json.dumps({
+            "patch_decisions": [{"chunk_index": 920001, "applied": True}],
+            "verdicts": [{"patch_index": 920001, "status": "SUCCEEDED"}],
+        }),
+        encoding="utf-8",
+    )
+    report = {"handoff_allowed": False, "blockers": [{"reason": "uncovered_audio_tail", "start_ms": 75_000, "end_ms": 80_000}]}
+    plan = _prepare_chirp_completeness_auto_repair(job_dir, report)
+    assert plan is not None
+    assert plan["items"][0]["patch_index"] == 921001
+    marker = json.loads((job_dir / "chirp-completeness-auto-repair.json").read_text("utf-8"))
+    assert marker["round"] == 2
+
+
+def test_completeness_auto_repair_reconciles_current_round_completion_evidence(tmp_path: Path) -> None:
+    job_dir = tmp_path / "round-two-complete"
+    job_dir.mkdir()
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({"duration_seconds": 90.0, "chunks": [{"chunk_index": 0, "source_start_ms": 0, "source_end_ms": 90_000}]}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-completeness-auto-repair.json").write_text(
+        json.dumps({"status": "submitted", "round": 2, "max_rounds": 3, "patch_count": 1, "provider_calls_started": True}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-targeted-patch-plan.json").write_text(
+        json.dumps({"items": [{"patch_index": 921001}]}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-targeted-patch-complete.json").write_text(
+        json.dumps({
+            "patch_decisions": [{"chunk_index": 921001, "applied": True}],
+            "verdicts": [{"patch_index": 921001, "status": "SUCCEEDED"}],
+        }),
+        encoding="utf-8",
+    )
+    report = {"handoff_allowed": False, "blockers": [{"reason": "short_audible_tail_requires_review", "start_ms": 86_000, "end_ms": 90_000}]}
+    plan = _prepare_chirp_completeness_auto_repair(job_dir, report)
+    assert plan is not None
+    assert plan["items"][0]["patch_index"] == 922001
+    marker = json.loads((job_dir / "chirp-completeness-auto-repair.json").read_text("utf-8"))
+    assert marker["round"] == 3
+
+
+def test_completeness_auto_repair_does_not_migrate_legacy_marker_without_complete_evidence(tmp_path: Path) -> None:
+    job_dir = tmp_path / "legacy-marker-no-proof"
+    job_dir.mkdir()
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({"duration_seconds": 80.0, "chunks": [{"chunk_index": 0, "source_start_ms": 0, "source_end_ms": 80_000}]}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-completeness-auto-repair.json").write_text(
+        json.dumps({"status": "submitted", "patch_count": 1, "provider_calls_started": True}),
+        encoding="utf-8",
+    )
+    report = {"handoff_allowed": False, "blockers": [{"reason": "uncovered_audio_tail", "start_ms": 75_000, "end_ms": 80_000}]}
+    assert _prepare_chirp_completeness_auto_repair(job_dir, report) is None
+
+
+def test_short_audible_tail_with_zero_word_patch_evidence_is_nonblocking(tmp_path: Path) -> None:
+    job_dir = tmp_path / "short-tail-zero-word"
+    job_dir.mkdir()
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({
+            "duration_seconds": 20.0,
+            "chunks": [{"chunk_index": 0, "source_start_ms": 0, "source_end_ms": 20_000}],
+        }),
+        encoding="utf-8",
+    )
+    (job_dir / "merged-words.json").write_text(
+        json.dumps({"words": [{"word": "完", "start_ms": 5_000, "end_ms": 7_000}]}),
+        encoding="utf-8",
+    )
+    (job_dir / "subtitles.json").write_text(
+        json.dumps({"segments": [{"segment_id": 1, "start_ms": 5_000, "end_ms": 7_000, "text": "完"}]}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-targeted-patch-plan.json").write_text(
+        json.dumps({"items": [{
+            "patch_index": 922101, "parent_chunk_index": 0,
+            "source_start_ms": 6_000, "source_end_ms": 20_000,
+            "gap_start_ms": 7_000, "gap_end_ms": 20_000,
+        }]}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-targeted-patch-complete.json").write_text(
+        json.dumps({
+            "patch_decisions": [{"chunk_index": 922101, "applied": True, "patch_words_inserted": 1}],
+            "verdicts": [{"patch_index": 922101, "status": "SUCCEEDED", "target_gap_word_count": 0, "operation_name": "test-op"}],
+        }),
+        encoding="utf-8",
+    )
+    chunk_dir = job_dir / "chunks" / "chunk-922101"
+    chunk_dir.mkdir(parents=True)
+    (chunk_dir / "words.json").write_text(
+        json.dumps({"words": [{"word": "歡呼", "start_ms": 6_500, "end_ms": 6_900}]}),
+        encoding="utf-8",
+    )
+    # emulate short audible probe only in first 3 seconds, silence after
+    def audible(start, end):
+        return True if end <= 10_000 else False
+    report = evaluate(job_dir, audibility_probe=audible, speech_probe=lambda s,e: {"robust_non_speech": False})
+    assert not any(b.get("reason") == "short_audible_tail_requires_review" for b in report["blockers"])
+    assert any(w.get("reason") == "short_audio_tail_verified_nonlexical_by_targeted_patch_words" for w in report["warnings"])
+
+
+def test_completeness_auto_repair_short_audible_tail_reaches_media_end(tmp_path: Path) -> None:
+    job_dir = tmp_path / "auto-repair-short-tail"
+    job_dir.mkdir()
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({
+            "duration_seconds": 75.257,
+            "chunks": [{"chunk_index": 8, "source_start_ms": 60_000, "source_end_ms": 75_300}],
+        }),
+        encoding="utf-8",
+    )
+    report = {
+        "handoff_allowed": False,
+        "blockers": [{
+            "reason": "short_audible_tail_requires_review",
+            "start_ms": 73_500,
+            "end_ms": 73_800,
+        }],
+    }
+    plan = build_auto_repair_patch_plan(job_dir, report)
+    assert plan["status"] == "planned"
+    assert plan["items"][0]["source_end_ms"] == 75_257
 
 
 def test_completeness_auto_repair_tail_reaches_media_end(tmp_path: Path) -> None:
