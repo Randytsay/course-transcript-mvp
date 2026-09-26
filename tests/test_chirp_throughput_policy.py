@@ -58,3 +58,38 @@ def test_recovery_schedule_defaults_to_sixty_seconds(tmp_path: Path) -> None:
         os.environ.pop("CHIRP_RECOVERY_POLL_SECONDS", None)
         state = recovery_schedule.schedule(tmp_path, "pending", now=now)
     assert state["next_recovery_at"] == "2026-09-27T00:01:00+00:00"
+
+
+def test_completeness_auto_repair_caps_each_round_at_three(tmp_path: Path) -> None:
+    from app.pipeline import dynamic_worker_hardened as worker
+
+    items = [
+        {
+            "patch_index": 920000 + i,
+            "duration_ms": 10_000 + i,
+            "source_start_ms": i * 20_000,
+            "source_end_ms": i * 20_000 + 10_000,
+            "gap_start_ms": i * 20_000 + 1_000,
+            "gap_end_ms": i * 20_000 + 9_000,
+            "parent_chunk_index": i,
+            "reason": "audible_subtitle_gap",
+        }
+        for i in range(1, 7)
+    ]
+    fake_plan = {
+        "status": "planned",
+        "items": items,
+        "proposed_patch_count": 6,
+        "total_duration_ms": sum(x["duration_ms"] for x in items),
+    }
+    with patch.object(worker, "build_auto_repair_patch_plan", return_value=fake_plan), patch.dict(
+        os.environ, {"CHIRP_TARGETED_PATCH_PARALLEL_MAX": "3"}
+    ):
+        plan = worker._prepare_chirp_completeness_auto_repair(tmp_path, {"blockers": [{}]})
+    assert plan is not None
+    assert len(plan["items"]) == 3
+    assert plan["original_proposed_patch_count"] == 6
+    assert plan["deferred_patch_count"] == 3
+    assert plan["round_parallel_cap"] == 3
+    marker = __import__("json").loads((tmp_path / "chirp-completeness-auto-repair.json").read_text())
+    assert marker["patch_count"] == 3

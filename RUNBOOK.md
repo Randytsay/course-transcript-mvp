@@ -80,6 +80,7 @@ CHIRP_RECOVERY_POLL_SECONDS=120
 CHIRP_PROVIDER_DEADLINE_SECONDS=90000
 CHIRP_RECOVERY_POLL_SECONDS=60
 CHIRP_MAX_PARALLEL_CHUNKS_LIMIT=8
+CHIRP_TARGETED_PATCH_PARALLEL_MAX=3
 CHIRP_OUTPUT_PROPAGATION_GRACE_SECONDS=300
 CHIRP_GCS_CLEANUP_AFTER_RECOVERY=true
 CHIRP_MAX_PARALLEL_CHUNKS=3
@@ -345,7 +346,9 @@ Production chooses Chirp submission parallelism from the normalized audio durati
 
 The server limit remains authoritative and caps the automatic value.  Targeted
 repair patches are latency-sensitive completeness work and therefore always use
-standard BatchRecognize, never Dynamic Batching.  Asynchronous recovery polls at
+standard BatchRecognize, never Dynamic Batching.  Each repair round submits at
+most three independent patches; remaining gaps are re-evaluated by the next
+completeness round.  Asynchronous recovery polls at
 a 60-second baseline; retryable provider throttling (including quota/resource
 exhaustion) uses the existing bounded exponential backoff rather than tight
 polling.
