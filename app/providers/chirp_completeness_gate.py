@@ -177,34 +177,206 @@ def _vad_assessment(job_dir: Path, start_ms: int, end_ms: int) -> dict[str, Any]
 
 
 def _verified_nonlexical_windows(job_dir: Path) -> list[dict[str, int]]:
-    plan = _read_json(job_dir / "chirp-targeted-patch-plan.json", {})
-    complete = _read_json(job_dir / "chirp-targeted-patch-complete.json", {})
-    items = {
-        int(item["patch_index"]): item
-        for item in plan.get("items", [])
-        if isinstance(item, dict) and item.get("patch_index") is not None
-    } if isinstance(plan, dict) else {}
+    pairs: list[tuple[Path, Path]] = [
+        (
+            job_dir / "chirp-targeted-patch-plan.json",
+            job_dir / "chirp-targeted-patch-complete.json",
+        )
+    ]
+    archive_root = job_dir / "targeted-patch-archives"
+    if archive_root.is_dir():
+        for complete_path in archive_root.rglob("chirp-targeted-patch-complete.json"):
+            pairs.append(
+                (
+                    complete_path.parent / "chirp-targeted-patch-plan.json",
+                    complete_path,
+                )
+            )
+
     windows: list[dict[str, int]] = []
-    if not isinstance(complete, dict):
-        return windows
-    for verdict in complete.get("verdicts", []):
-        if not isinstance(verdict, dict):
+    seen: set[tuple[int, int]] = set()
+    for plan_path, complete_path in pairs:
+        plan = _read_json(plan_path, {})
+        complete = _read_json(complete_path, {})
+        items = {
+            int(item["patch_index"]): item
+            for item in plan.get("items", [])
+            if isinstance(item, dict) and item.get("patch_index") is not None
+        } if isinstance(plan, dict) else {}
+        if not isinstance(complete, dict):
             continue
-        try:
-            patch_index = int(verdict["patch_index"])
-            gap_words = int(verdict.get("target_gap_word_count") or 0)
-        except (KeyError, TypeError, ValueError):
+        for verdict in complete.get("verdicts", []):
+            if not isinstance(verdict, dict):
+                continue
+            try:
+                patch_index = int(verdict["patch_index"])
+                gap_words = int(verdict.get("target_gap_word_count") or 0)
+            except (KeyError, TypeError, ValueError):
+                continue
+            item = items.get(patch_index)
+            if not item or gap_words != 0 or not verdict.get("operation_name"):
+                continue
+            start_ms = int(item.get("gap_start_ms", item.get("source_start_ms", 0)))
+            end_ms = int(item.get("gap_end_ms", item.get("source_end_ms", 0)))
+            key = (start_ms, end_ms)
+            if end_ms <= start_ms or key in seen:
+                continue
+            seen.add(key)
+            windows.append({"start_ms": start_ms, "end_ms": end_ms})
+    return windows
+
+
+def build_auto_repair_patch_plan(
+    job_dir: Path,
+    report: dict[str, Any],
+    *,
+    context_ms: int = 5_000,
+    merge_gap_ms: int = 1_000,
+    max_total_ms: int = 600_000,
+    max_patches: int = 12,
+) -> dict[str, Any]:
+    """Build one bounded paid repair round from completeness blockers only.
+
+    This never submits a provider request. The worker still applies the normal
+    reserved-budget gate before any Dynamic Batch operation is started.
+    """
+    chunk_plan = _read_json(job_dir / "chunk-plan.json", {})
+    chunks = [
+        item
+        for item in (chunk_plan.get("chunks", []) if isinstance(chunk_plan, dict) else [])
+        if isinstance(item, dict)
+    ]
+    blockers = report.get("blockers", []) if isinstance(report, dict) else []
+    if not isinstance(blockers, list) or not blockers:
+        return {
+            "version": "targeted-patch-v1",
+            "policy": "chirp_completeness_auto_repair_v1",
+            "status": "none",
+            "items": [],
+            "total_duration_ms": 0,
+        }
+
+    candidates: list[dict[str, Any]] = []
+    repairable = {
+        "audible_subtitle_gap",
+        "uncovered_audio_tail",
+        "short_audible_tail_requires_review",
+    }
+    for blocker in blockers:
+        if not isinstance(blocker, dict) or blocker.get("reason") not in repairable:
             continue
-        item = items.get(patch_index)
-        if not item or gap_words != 0 or not verdict.get("operation_name"):
+        reason = str(blocker["reason"])
+        if reason == "audible_subtitle_gap":
+            gap_start = int(blocker.get("gap_start_ms", 0))
+            gap_end = int(blocker.get("gap_end_ms", 0))
+        else:
+            gap_start = int(blocker.get("start_ms", 0))
+            gap_end = int(blocker.get("end_ms", 0))
+        if gap_end <= gap_start:
             continue
-        windows.append(
+        midpoint = (gap_start + gap_end) // 2
+        parent = next(
+            (
+                chunk
+                for chunk in chunks
+                if int(chunk.get("source_start_ms", 0))
+                <= midpoint
+                < int(chunk.get("source_end_ms", 0))
+            ),
+            None,
+        )
+        if parent is None:
+            continue
+        parent_start = int(parent.get("source_start_ms", 0))
+        parent_end = int(parent.get("source_end_ms", 0))
+        source_start = max(parent_start, gap_start - context_ms)
+        source_end = min(parent_end, gap_end + context_ms)
+        if source_end <= source_start:
+            continue
+        candidates.append(
             {
-                "start_ms": int(item.get("gap_start_ms", item.get("source_start_ms", 0))),
-                "end_ms": int(item.get("gap_end_ms", item.get("source_end_ms", 0))),
+                "parent_chunk_index": int(parent["chunk_index"]),
+                "source_start_ms": source_start,
+                "source_end_ms": source_end,
+                "gap_start_ms": gap_start,
+                "gap_end_ms": gap_end,
+                "reasons": [reason],
             }
         )
-    return windows
+
+    candidates.sort(
+        key=lambda item: (
+            int(item["parent_chunk_index"]),
+            int(item["source_start_ms"]),
+            int(item["source_end_ms"]),
+        )
+    )
+    merged: list[dict[str, Any]] = []
+    for item in candidates:
+        if (
+            merged
+            and merged[-1]["parent_chunk_index"] == item["parent_chunk_index"]
+            and int(item["source_start_ms"]) <= int(merged[-1]["source_end_ms"]) + merge_gap_ms
+        ):
+            merged[-1]["source_end_ms"] = max(
+                int(merged[-1]["source_end_ms"]),
+                int(item["source_end_ms"]),
+            )
+            merged[-1]["gap_start_ms"] = min(
+                int(merged[-1]["gap_start_ms"]),
+                int(item["gap_start_ms"]),
+            )
+            merged[-1]["gap_end_ms"] = max(
+                int(merged[-1]["gap_end_ms"]),
+                int(item["gap_end_ms"]),
+            )
+            merged[-1]["reasons"].extend(item["reasons"])
+        else:
+            merged.append(dict(item))
+
+    items: list[dict[str, Any]] = []
+    for offset, item in enumerate(merged, start=1):
+        source_start = int(item["source_start_ms"])
+        source_end = int(item["source_end_ms"])
+        gap_start = int(item["gap_start_ms"])
+        gap_end = int(item["gap_end_ms"])
+        items.append(
+            {
+                "patch_index": 920_000 + offset,
+                "parent_chunk_index": int(item["parent_chunk_index"]),
+                "source_start_ms": source_start,
+                "source_end_ms": source_end,
+                "duration_ms": source_end - source_start,
+                "gap_start_ms": gap_start,
+                "gap_end_ms": gap_end,
+                "gap_ms": gap_end - gap_start,
+                "role": "patch",
+                "patch_mode": "replace_window",
+                "reason": "+".join(sorted(set(item["reasons"]))),
+                "automatic_paid_retry": True,
+            }
+        )
+
+    total_duration_ms = sum(int(item["duration_ms"]) for item in items)
+    blocked_reason = None
+    if len(items) > max_patches:
+        blocked_reason = "patch_count_cap_exceeded"
+    elif total_duration_ms > max_total_ms:
+        blocked_reason = "repair_duration_cap_exceeded"
+
+    return {
+        "version": "targeted-patch-v1",
+        "generated_at": datetime.now(UTC).isoformat(),
+        "job": job_dir.name,
+        "policy": "chirp_completeness_auto_repair_v1",
+        "status": "blocked" if blocked_reason else ("planned" if items else "none"),
+        "items": [] if blocked_reason else items,
+        "proposed_patch_count": len(items),
+        "total_duration_ms": total_duration_ms,
+        "max_total_duration_ms": max_total_ms,
+        "max_patch_count": max_patches,
+        "auto_submit_blocked_reason": blocked_reason,
+    }
 
 
 def _covered_by_verified_nonlexical(start_ms: int, end_ms: int, windows: list[dict[str, int]]) -> bool:
@@ -214,6 +386,97 @@ def _covered_by_verified_nonlexical(start_ms: int, end_ms: int, windows: list[di
         if overlap / duration >= 0.80:
             return True
     return False
+
+
+def _targeted_patch_zero_word_evidence(
+    job_dir: Path,
+    start_ms: int,
+    end_ms: int,
+) -> dict[str, Any] | None:
+    """Return completed patch evidence when the *current* residual window has no words.
+
+    The completeness gap can shift after a patch rebuilds subtitles, so the
+    original target_gap_word_count is not sufficient. This checks the actual
+    retained patch word timeline against the current gap/tail.
+    """
+    if end_ms <= start_ms:
+        return None
+    pairs: list[tuple[Path, Path]] = [
+        (
+            job_dir / "chirp-targeted-patch-plan.json",
+            job_dir / "chirp-targeted-patch-complete.json",
+        )
+    ]
+    archive_root = job_dir / "targeted-patch-archives"
+    if archive_root.is_dir():
+        for complete_path in archive_root.rglob("chirp-targeted-patch-complete.json"):
+            pairs.append(
+                (
+                    complete_path.parent / "chirp-targeted-patch-plan.json",
+                    complete_path,
+                )
+            )
+
+    for plan_path, complete_path in pairs:
+        plan = _read_json(plan_path, {})
+        complete = _read_json(complete_path, {})
+        if not isinstance(plan, dict) or not isinstance(complete, dict):
+            continue
+        items = {
+            int(item["patch_index"]): item
+            for item in plan.get("items", [])
+            if isinstance(item, dict) and item.get("patch_index") is not None
+        }
+        for verdict in complete.get("verdicts", []):
+            if not isinstance(verdict, dict) or not verdict.get("operation_name"):
+                continue
+            try:
+                patch_index = int(verdict["patch_index"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if str(verdict.get("status") or "") != "SUCCEEDED":
+                continue
+            item = items.get(patch_index)
+            if not item:
+                continue
+            source_start = int(item.get("source_start_ms", 0))
+            source_end = int(item.get("source_end_ms", 0))
+            if source_start > start_ms or source_end < end_ms:
+                continue
+
+            words_payload = _read_json(
+                job_dir / "chunks" / f"chunk-{patch_index:03d}" / "words.json",
+                {},
+            )
+            words = (
+                words_payload.get("words", [])
+                if isinstance(words_payload, dict)
+                else []
+            )
+            if not isinstance(words, list):
+                continue
+            overlapping = 0
+            for word in words:
+                if not isinstance(word, dict):
+                    continue
+                word_start = int(word.get("start_ms", 0))
+                word_end = int(word.get("end_ms", 0))
+                if word_end > word_start:
+                    has_overlap = max(word_start, start_ms) < min(word_end, end_ms)
+                else:
+                    has_overlap = start_ms <= word_start < end_ms
+                overlapping += int(has_overlap)
+            if overlapping == 0:
+                return {
+                    "patch_index": patch_index,
+                    "operation_name": verdict.get("operation_name"),
+                    "source_start_ms": source_start,
+                    "source_end_ms": source_end,
+                    "residual_start_ms": start_ms,
+                    "residual_end_ms": end_ms,
+                    "overlapping_word_count": 0,
+                }
+    return None
 
 
 def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -> dict[str, Any]:
@@ -290,6 +553,23 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
                 }
             )
             continue
+        patch_zero_words = _targeted_patch_zero_word_evidence(
+            job_dir,
+            start_ms,
+            end_ms,
+        )
+        if patch_zero_words is not None:
+            warnings.append(
+                {
+                    "reason": "audible_gap_verified_nonlexical_by_targeted_patch_words",
+                    "start_ms": start_ms,
+                    "end_ms": end_ms,
+                    "gap_ms": gap_ms,
+                    "recommended_action": "no_repeat_same_recognizer",
+                    "patch_evidence": patch_zero_words,
+                }
+            )
+            continue
         audible = probe(start_ms, end_ms)
         vad = vad_probe(start_ms, end_ms) if audible is True else None
         entry = {
@@ -331,16 +611,33 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
         within = tail["within_tolerance_audible"]
         beyond = tail["beyond_tolerance_audible"]
         if uncovered > tail_review_max_ms and beyond is not False:
-            entry = {
-                "reason": "uncovered_audio_tail",
-                "start_ms": end_ms,
-                "end_ms": audio_ms,
-                "uncovered_ms": uncovered,
-                "within_tolerance_audible": within,
-                "beyond_tolerance_audible": beyond,
-            }
-            blockers.append(entry)
-            repair_items.append(entry)
+            patch_zero_words = _targeted_patch_zero_word_evidence(
+                job_dir,
+                end_ms,
+                audio_ms,
+            )
+            if patch_zero_words is not None:
+                warnings.append(
+                    {
+                        "reason": "audio_tail_verified_nonlexical_by_targeted_patch_words",
+                        "start_ms": end_ms,
+                        "end_ms": audio_ms,
+                        "uncovered_ms": uncovered,
+                        "recommended_action": "no_repeat_same_recognizer",
+                        "patch_evidence": patch_zero_words,
+                    }
+                )
+            else:
+                entry = {
+                    "reason": "uncovered_audio_tail",
+                    "start_ms": end_ms,
+                    "end_ms": audio_ms,
+                    "uncovered_ms": uncovered,
+                    "within_tolerance_audible": within,
+                    "beyond_tolerance_audible": beyond,
+                }
+                blockers.append(entry)
+                repair_items.append(entry)
         elif beyond is False and within is True:
             blockers.append(
                 {
@@ -370,8 +667,8 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
         "paid_provider_calls": 0,
         "policy": {
             "gate_before_chatgpt_handoff": True,
-            "auto_paid_retry": "existing_high_confidence_targeted_patch_only",
-            "other_repairs": "block_and_review_before_handoff",
+            "auto_paid_retry": "single_bounded_completeness_repair_round_with_budget_gate",
+            "other_repairs": "block_and_review_after_auto_repair_attempt",
             "chirp_word_timestamps_authoritative": True,
             "local_vad_fail_closed": True,
             "vad_verified_nonspeech_is_nonblocking": True,

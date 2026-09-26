@@ -161,6 +161,103 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(payload["expected_revision"], blocked["revision"])
 
 
+    def test_same_source_awaiting_review_blocks_duplicate_job(self) -> None:
+        first = self._create_job(workflow_mode="CHATGPT_HANDOFF")
+        with self.store.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status='awaiting_review', active_stage='chirp_completeness'
+                WHERE id=?
+                """,
+                (first["id"],),
+            )
+        preview = self.store.create_preview(
+            source_path="gdrive:課程/第一堂.mp3",
+            source_name="第一堂.mp3",
+            size_bytes=100,
+            modified_at=None,
+            mime_type="audio/mpeg",
+            actor="owner@example.test",
+        )
+
+        with self.assertRaisesRegex(JobConflict, "同一來源已有未完成任務"):
+            self.store.create_preflight_job(
+                preview_id=preview["id"],
+                language_code="cmn-Hant-TW",
+                profile="highest_accuracy",
+                enable_gemini_correction=False,
+                enable_subtitles=True,
+                require_human_review=True,
+                actor="owner@example.test",
+                workflow_mode="CHATGPT_HANDOFF",
+            )
+
+    def test_same_source_completed_job_allows_new_job(self) -> None:
+        first = self._create_job()
+        with self.store.transaction() as connection:
+            connection.execute(
+                "UPDATE jobs SET status='completed', active_stage='completed' WHERE id=?",
+                (first["id"],),
+            )
+        preview = self.store.create_preview(
+            source_path="gdrive:課程/第一堂.mp3",
+            source_name="第一堂.mp3",
+            size_bytes=100,
+            modified_at=None,
+            mime_type="audio/mpeg",
+            actor="owner@example.test",
+        )
+
+        second = self.store.create_preflight_job(
+            preview_id=preview["id"],
+            language_code="cmn-Hant-TW",
+            profile="highest_accuracy",
+            enable_gemini_correction=False,
+            enable_subtitles=True,
+            require_human_review=True,
+            actor="owner@example.test",
+        )
+
+        self.assertNotEqual(second["id"], first["id"])
+
+    def test_batch_creation_blocks_same_source_awaiting_review(self) -> None:
+        first = self._create_job()
+        with self.store.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status='awaiting_review', active_stage='review'
+                WHERE id=?
+                """,
+                (first["id"],),
+            )
+        batch_preview = self.store.create_batch_preview(
+            selection_mode="files",
+            source_root=None,
+            items=[
+                {
+                    "source_path": "gdrive:課程/第一堂.mp3",
+                    "name": "第一堂.mp3",
+                    "size_bytes": 100,
+                    "modified_at": None,
+                    "mime_type": "audio/mpeg",
+                }
+            ],
+            actor="owner@example.test",
+        )
+
+        with self.assertRaisesRegex(JobConflict, "同一來源已有未完成任務"):
+            self.store.create_preflight_batch(
+                batch_preview_id=batch_preview["id"],
+                language_code="cmn-Hant-TW",
+                profile="highest_accuracy",
+                enable_gemini_correction=False,
+                enable_subtitles=True,
+                require_human_review=True,
+                actor="owner@example.test",
+            )
+
     def test_single_active_job_and_lease_ownership(self) -> None:
         job = self._create_job()
         with self.assertRaises(JobConflict):
