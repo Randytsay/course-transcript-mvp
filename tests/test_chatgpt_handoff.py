@@ -29,6 +29,7 @@ from app.pipeline.dynamic_worker_hardened import (
 )
 from app.pipeline.dynamic_worker_hardened import (
     _prepare_chirp_completeness_auto_repair,
+    _update_chirp_completeness_auto_repair_marker,
 )
 
 
@@ -579,8 +580,8 @@ def test_audio_tail_uses_completed_patch_word_evidence(tmp_path: Path) -> None:
     )
 
 
-def test_completeness_auto_repair_is_single_round(tmp_path: Path) -> None:
-    job_dir = tmp_path / "auto-repair-single-round"
+def test_completeness_auto_repair_allows_next_round_after_completed(tmp_path: Path) -> None:
+    job_dir = tmp_path / "auto-repair-multi-round"
     job_dir.mkdir()
     (job_dir / "chunk-plan.json").write_text(
         json.dumps(
@@ -613,11 +614,55 @@ def test_completeness_auto_repair_is_single_round(tmp_path: Path) -> None:
     assert first is not None
     assert first["status"] == "planned"
     assert second is None
+    _update_chirp_completeness_auto_repair_marker(
+        job_dir,
+        status="completed",
+        provider_calls_started=True,
+    )
+    second_round = _prepare_chirp_completeness_auto_repair(job_dir, report)
+    assert second_round is not None
+    assert second_round["status"] == "planned"
+    assert second_round["items"][0]["patch_index"] == 921001
     marker = json.loads(
         (job_dir / "chirp-completeness-auto-repair.json").read_text("utf-8")
     )
     assert marker["status"] == "prepared"
+    assert marker["round"] == 2
+    assert marker["max_rounds"] == 3
     assert marker["provider_calls_started"] is False
+
+
+def test_completeness_auto_repair_tail_reaches_media_end(tmp_path: Path) -> None:
+    job_dir = tmp_path / "auto-repair-tail"
+    job_dir.mkdir()
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps(
+            {
+                "duration_seconds": 75.0,
+                "chunks": [
+                    {
+                        "chunk_index": 8,
+                        "source_start_ms": 60_000,
+                        "source_end_ms": 74_000,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    report = {
+        "handoff_allowed": False,
+        "blockers": [
+            {
+                "reason": "uncovered_audio_tail",
+                "start_ms": 73_500,
+                "end_ms": 75_000,
+            }
+        ],
+    }
+    plan = build_auto_repair_patch_plan(job_dir, report)
+    assert plan["status"] == "planned"
+    assert plan["items"][0]["source_end_ms"] == 75_000
 
 
 def test_preexport_evidence_does_not_require_export_manifest(tmp_path: Path) -> None:
