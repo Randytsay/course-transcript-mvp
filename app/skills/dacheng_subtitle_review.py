@@ -33,7 +33,11 @@ from app.canonical.golden_corpus import (
     golden_corpus_reference,
     parse_srt_text,
 )
-from app.canonical.golden_rules import GOLDEN_RULESET_VERSION, audit_golden_variants
+from app.canonical.golden_rules import (
+    GOLDEN_RULESET_VERSION,
+    audit_golden_variants,
+    golden_terms,
+)
 from app.canonical.omission_detection import detect_bidirectional_omissions
 from app.canonical.store import active_canonical
 from app.providers.boundary_integrity import scan_boundary_integrity
@@ -876,6 +880,8 @@ def sequential_word_timed_human_display_layer(
         paragraph_items: list[dict[str, Any]] = []
         paragraph_previous_word = previous_word
         paragraph_failed = False
+        paragraph_failure_reason = "paragraph_unit_projection_failed"
+        same_word_merge_count = 0
         for unit_index, unit in paragraph_units:
             width = max(1, int(unit["normalized_chars"]))
             unit_target_start = paragraph_cursor
@@ -954,6 +960,26 @@ def sequential_word_timed_human_display_layer(
                     paragraph_items[-1].setdefault("cleanup_actions", []).append(
                         "merged_same_chirp_word_semantic_unit"
                     )
+                    same_word_merge_count += 1
+                    collapsed_text, _ = _normalized_with_raw_map(
+                        _segment_text(paragraph_items[-1])
+                    )
+                    collapsed_duration = max(
+                        1,
+                        int(paragraph_items[-1]["end_ms"])
+                        - int(paragraph_items[-1]["start_ms"]),
+                    )
+                    collapsed_cps = len(collapsed_text) * 1000.0 / collapsed_duration
+                    if (
+                        same_word_merge_count >= 2
+                        and len(collapsed_text) >= 16
+                        and collapsed_cps > 10.0
+                    ):
+                        paragraph_failed = True
+                        paragraph_failure_reason = (
+                            "same_chirp_word_semantic_collapse_density"
+                        )
+                        break
                     continue
                 paragraph_failed = True
                 break
@@ -1003,13 +1029,58 @@ def sequential_word_timed_human_display_layer(
             paragraph_previous_word = unit_last_word
 
         if paragraph_failed or not paragraph_items:
+            if (
+                paragraph_failure_reason
+                == "same_chirp_word_semantic_collapse_density"
+            ):
+                fallback_items = _chirp_word_semantic_fallback(
+                    words,
+                    first_word,
+                    last_word,
+                    segment_prefix=f"chirp-fallback-p{paragraph_order:04d}",
+                )
+                if fallback_items:
+                    output.extend(fallback_items)
+                    mapped_paragraphs += 1
+                    previous_word = last_word
+                    source_cursor = paragraph_source_end
+                    while (
+                        source_cursor < len(char_bounds)
+                        and int(char_bounds[source_cursor][2]) <= previous_word
+                    ):
+                        source_cursor += 1
+                    paragraph_reports.append(
+                        {
+                            "paragraph_order": paragraph_order,
+                            "mapped": True,
+                            "matched_chars": matched,
+                            "coverage": round(coverage, 4),
+                            "reason": paragraph_failure_reason,
+                            "fail_closed_to_chirp_words": True,
+                            "fallback_cue_count": len(fallback_items),
+                            "source_word_start_index": first_word,
+                            "source_word_end_index": last_word,
+                        }
+                    )
+                    for unit_index, unit in paragraph_units:
+                        unmapped_units.append(
+                            {
+                                "unit_index": unit_index,
+                                "text": str(unit["text"]),
+                                "matched_chars": matched,
+                                "coverage": round(coverage, 4),
+                                "reason": paragraph_failure_reason,
+                                "reference_only_not_forced_into_audio": True,
+                            }
+                        )
+                    continue
             paragraph_reports.append(
                 {
                     "paragraph_order": paragraph_order,
                     "mapped": False,
                     "matched_chars": matched,
                     "coverage": round(coverage, 4),
-                    "reason": "paragraph_unit_projection_failed",
+                    "reason": paragraph_failure_reason,
                 }
             )
             for unit_index, unit in paragraph_units:
@@ -1019,7 +1090,7 @@ def sequential_word_timed_human_display_layer(
                         "text": str(unit["text"]),
                         "matched_chars": matched,
                         "coverage": round(coverage, 4),
-                        "reason": "paragraph_unit_projection_failed",
+                        "reason": paragraph_failure_reason,
                     }
                 )
             continue
@@ -1873,6 +1944,183 @@ def align_human_gold(
     }
 
 
+
+def _chirp_word_semantic_fallback(
+    words: list[dict[str, Any]],
+    first_word: int,
+    last_word: int,
+    *,
+    segment_prefix: str,
+) -> list[dict[str, Any]]:
+    """Rebuild one locally unreliable human-alignment span from Chirp words.
+
+    This is a fail-closed fallback for regions where several human semantic
+    units collapse onto the same Chirp word and would otherwise create an
+    impossible text-density cue.  It never synthesizes timestamps: every cue
+    starts/ends on an existing Chirp word boundary.
+    """
+    if not (0 <= first_word <= last_word < len(words)):
+        return []
+    output: list[dict[str, Any]] = []
+    cue_start_word = first_word
+    cue_text_parts: list[str] = []
+    strong_boundary = re.compile(r"[。！？!?；;][\"'」』）)]*$")
+    soft_boundary = re.compile(r"[，,、：:][\"'」』）)]*$")
+
+    def emit(end_word: int) -> None:
+        nonlocal cue_start_word, cue_text_parts
+        text = "".join(cue_text_parts).strip()
+        text = (
+            text.replace(",", "，")
+            .replace("?", "？")
+            .replace("!", "！")
+            .replace(";", "；")
+        )
+        if not text:
+            cue_start_word = end_word + 1
+            cue_text_parts = []
+            return
+        start_ms = int(words[cue_start_word]["start_ms"])
+        end_ms = int(words[end_word]["end_ms"])
+        output.append(
+            {
+                "segment_id": f"{segment_prefix}-{len(output) + 1:03d}",
+                "start_ms": start_ms,
+                "end_ms": end_ms,
+                "raw_text": text,
+                "text": text,
+                "corrected_text": text,
+                "cleaned_text": text,
+                "source_segment_ids": [],
+                "source_word_start_index": cue_start_word,
+                "source_word_end_index": end_word,
+                "cleanup_actions": ["chirp_word_semantic_fallback"],
+                "cleanup_review_reasons": [
+                    "human_alignment_same_word_collapse_fail_closed"
+                ],
+                "human_mapping_method": "chirp_word_fail_closed",
+                "timing_source": "chirp_word_timestamps",
+            }
+        )
+        cue_start_word = end_word + 1
+        cue_text_parts = []
+
+    for word_index in range(first_word, last_word + 1):
+        raw_text = str(words[word_index].get("word") or "")
+        cue_text_parts.append(raw_text)
+        current_text = "".join(cue_text_parts)
+        normalized, _ = _normalized_with_raw_map(current_text)
+        start_ms = int(words[cue_start_word]["start_ms"])
+        end_ms = int(words[word_index]["end_ms"])
+        duration_ms = max(1, end_ms - start_ms)
+        next_gap_ms = 0
+        if word_index < last_word:
+            next_gap_ms = max(
+                0,
+                int(words[word_index + 1]["start_ms"])
+                - int(words[word_index]["end_ms"]),
+            )
+        boundary = False
+        if strong_boundary.search(raw_text):
+            boundary = True
+        elif soft_boundary.search(raw_text) and (
+            len(normalized) >= 14 or duration_ms >= 3_500
+        ):
+            boundary = True
+        elif next_gap_ms >= 800 and len(normalized) >= 6:
+            boundary = True
+        elif duration_ms >= 6_000 or len(normalized) >= 24:
+            boundary = True
+        if boundary:
+            emit(word_index)
+    if cue_text_parts:
+        emit(last_word)
+    return output
+
+
+
+def _apply_evidence_backed_golden_rules(
+    segments: list[dict[str, Any]],
+    *,
+    human_text: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Apply Golden Rules without changing IDs or timestamps.
+
+    High-confidence rules are deterministic.  Medium-confidence rules are
+    applied only when the canonical spelling is explicitly present in the
+    human reference transcript, so a Chirp fail-closed fallback can recover
+    trusted terminology without inventing unsupported text.
+    """
+    output = deepcopy(segments)
+    actions: list[dict[str, Any]] = []
+    human = str(human_text or "")
+    for term in golden_terms():
+        confidence = str(term.get("confidence") or "medium")
+        canonical = str(term.get("canonical") or "")
+        if not canonical:
+            continue
+        if confidence != "high" and canonical not in human:
+            continue
+        variants = sorted(
+            (str(value) for value in term.get("variants", []) if str(value)),
+            key=len,
+            reverse=True,
+        )
+        for item in output:
+            before = _segment_text(item)
+            after = before
+            replaced: list[str] = []
+            for variant in variants:
+                if variant and variant in after:
+                    after = after.replace(variant, canonical)
+                    replaced.append(variant)
+            if after == before:
+                continue
+            item["cleaned_text"] = after
+            item["corrected_text"] = after
+            item.setdefault("cleanup_actions", []).append(
+                "golden_rule_canonicalized"
+            )
+            actions.append(
+                {
+                    "segment_id": str(item.get("segment_id") or ""),
+                    "canonical": canonical,
+                    "variants": replaced,
+                    "confidence": confidence,
+                    "timestamps_modified": False,
+                }
+            )
+    return output, actions
+
+
+def _text_density_anomalies(
+    segments: list[dict[str, Any]],
+    *,
+    max_chars_per_second: float = 10.0,
+    minimum_chars: int = 16,
+) -> list[dict[str, Any]]:
+    anomalies: list[dict[str, Any]] = []
+    for item in segments:
+        normalized, _ = _normalized_with_raw_map(_segment_text(item))
+        if len(normalized) < minimum_chars:
+            continue
+        duration_ms = int(item.get("end_ms") or 0) - int(item.get("start_ms") or 0)
+        if duration_ms <= 0:
+            continue
+        cps = len(normalized) * 1000.0 / duration_ms
+        if cps <= max_chars_per_second:
+            continue
+        anomalies.append(
+            {
+                "segment_id": str(item.get("segment_id") or ""),
+                "normalized_chars": len(normalized),
+                "duration_ms": duration_ms,
+                "chars_per_second": round(cps, 2),
+            }
+        )
+    return anomalies
+
+
 def _merge_short_cues(
     segments: list[dict[str, Any]],
     *,
@@ -2418,6 +2666,7 @@ def qa_review(
         if duration > 15_000
     ]
     boundary = scan_boundary_integrity(segments)
+    density_anomalies = _text_density_anomalies(segments)
     raw_fingerprint_after = _raw_fingerprint(source_segments)
     human_missing = [
         item
@@ -2440,6 +2689,8 @@ def qa_review(
         errors.append(f"pathological_lt250ms={len(short)}")
     if long:
         errors.append(f"long_gt15s={len(long)}")
+    if density_anomalies:
+        errors.append(f"text_density_gt10cps={len(density_anomalies)}")
     if raw_fingerprint_after != original_raw_fingerprint:
         errors.append("raw_immutability_violation")
     return {
@@ -2460,6 +2711,8 @@ def qa_review(
         "adjacent_duplicate_count": len(duplicates),
         "adjacent_duplicates": duplicates,
         "boundary_integrity": boundary,
+        "text_density_anomaly_count": len(density_anomalies),
+        "text_density_anomalies": density_anomalies,
         "formal_scripture_alignment": scripture_alignment,
         "mantra": {
             "applied": bool(mantra_alignment.get("applied")),
@@ -2573,6 +2826,10 @@ def review_lesson(
         mantra_display,
         merged_words=merged_words,
     )
+    final_segments, golden_canonicalization = _apply_evidence_backed_golden_rules(
+        final_segments,
+        human_text=human_text,
+    )
 
     canonical_text = str(scripture.get("body_text") or "") if scripture else ""
     ignored_candidate_source_ids: set[str] = set()
@@ -2642,6 +2899,12 @@ def review_lesson(
         "scripture_alignment": scripture_meta,
         "mantra_alignment": mantra_meta,
         "semantic_segmentation": segmentation,
+        "golden_rule_canonicalization": {
+            "ruleset_version": GOLDEN_RULESET_VERSION,
+            "applied_count": len(golden_canonicalization),
+            "actions": golden_canonicalization,
+            "timestamps_modified": False,
+        },
         "qa": qa,
         "segments": final_segments,
         "srt": srt_from_segments(final_segments),
