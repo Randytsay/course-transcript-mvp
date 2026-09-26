@@ -2,11 +2,18 @@ from __future__ import annotations
 
 import unittest
 
-from app.providers.subtitle_cleanup import build_report, clean_text
+from app.providers.subtitle_cleanup import _subtitle_render_text, build_report, clean_text
 from app.providers.mantra_context import MANTRA_LINES, MANTRA_TITLE
 
 
 class SubtitleCleanupTests(unittest.TestCase):
+    def test_subtitle_render_collapses_blank_lines_inside_one_cue(self) -> None:
+        source = "第一段。\n\n第二段。\n   \n第三段。"
+        self.assertEqual(
+            _subtitle_render_text(source),
+            "第一段。\n第二段。\n第三段。",
+        )
+
     def test_removes_only_high_confidence_boundary_noise(self) -> None:
         cleaned, actions = clean_text("嗯嗯嗯我我我今天來了喔")
         self.assertEqual(cleaned, "我今天來了")

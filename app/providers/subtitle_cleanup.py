@@ -274,6 +274,18 @@ def _timestamp(value: int, separator: str = ",") -> str:
     return f"{hours:02}:{minutes:02}:{seconds:02}{separator}{milliseconds:03}"
 
 
+def _subtitle_render_text(value: str) -> str:
+    """Keep cue text readable without emitting blank cue separators.
+
+    SRT/VTT use blank lines to separate cues. Reference transcripts and
+    ChatGPT corrections may legitimately contain paragraph breaks, but writing
+    those as ``\n\n`` inside one cue corrupts the subtitle container structure.
+    Preserve line breaks while collapsing blank lines to a single newline.
+    """
+    normalized = str(value or "").replace("\r\n", "\n").replace("\r", "\n")
+    return re.sub(r"\n[ \t]*\n+", "\n", normalized).strip()
+
+
 def _protected_double_stutter_boundary(text: str, start: int, char: str) -> bool:
     """Protect normal lexical boundaries that happen to spell AA."""
     prefix = text[: start + 1]
@@ -582,7 +594,7 @@ def main() -> int:
     _atomic_text(
         JOB / "subtitles-cleaned.srt",
         "\n\n".join(
-            f"{index}\n{_timestamp(item['start_ms'])} --> {_timestamp(item['end_ms'])}\n{item['cleaned_text']}"
+            f"{index}\n{_timestamp(item['start_ms'])} --> {_timestamp(item['end_ms'])}\n{_subtitle_render_text(item['cleaned_text'])}"
             for index, item in enumerate(cleaned, 1)
         )
         + "\n",
@@ -591,7 +603,7 @@ def main() -> int:
         JOB / "subtitles-cleaned.vtt",
         "WEBVTT\n\n"
         + "\n\n".join(
-            f"{_timestamp(item['start_ms'], '.')} --> {_timestamp(item['end_ms'], '.')}\n{item['cleaned_text']}"
+            f"{_timestamp(item['start_ms'], '.')} --> {_timestamp(item['end_ms'], '.')}\n{_subtitle_render_text(item['cleaned_text'])}"
             for item in cleaned
         )
         + "\n",
