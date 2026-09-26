@@ -658,6 +658,36 @@ def test_completeness_auto_repair_migrates_legacy_submitted_marker_with_complete
     assert marker["round"] == 2
 
 
+def test_completeness_auto_repair_reconciles_current_round_completion_evidence(tmp_path: Path) -> None:
+    job_dir = tmp_path / "round-two-complete"
+    job_dir.mkdir()
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({"duration_seconds": 90.0, "chunks": [{"chunk_index": 0, "source_start_ms": 0, "source_end_ms": 90_000}]}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-completeness-auto-repair.json").write_text(
+        json.dumps({"status": "submitted", "round": 2, "max_rounds": 3, "patch_count": 1, "provider_calls_started": True}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-targeted-patch-plan.json").write_text(
+        json.dumps({"items": [{"patch_index": 921001}]}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-targeted-patch-complete.json").write_text(
+        json.dumps({
+            "patch_decisions": [{"chunk_index": 921001, "applied": True}],
+            "verdicts": [{"patch_index": 921001, "status": "SUCCEEDED"}],
+        }),
+        encoding="utf-8",
+    )
+    report = {"handoff_allowed": False, "blockers": [{"reason": "short_audible_tail_requires_review", "start_ms": 86_000, "end_ms": 90_000}]}
+    plan = _prepare_chirp_completeness_auto_repair(job_dir, report)
+    assert plan is not None
+    assert plan["items"][0]["patch_index"] == 922001
+    marker = json.loads((job_dir / "chirp-completeness-auto-repair.json").read_text("utf-8"))
+    assert marker["round"] == 3
+
+
 def test_completeness_auto_repair_does_not_migrate_legacy_marker_without_complete_evidence(tmp_path: Path) -> None:
     job_dir = tmp_path / "legacy-marker-no-proof"
     job_dir.mkdir()
