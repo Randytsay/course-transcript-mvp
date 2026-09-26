@@ -310,11 +310,15 @@ def build_auto_repair_patch_plan(
             "uncovered_audio_tail",
             "short_audible_tail_requires_review",
         }:
-            # The completeness blocker already uses the true media end as
-            # gap_end.  Do not clip the repair to the final base chunk; doing
-            # so is what left 10-15 second residual tails after round one.
+            # Tail blockers may expose only a short audibility probe window in
+            # gap_end (especially short_audible_tail_requires_review). Always
+            # extend the repair to the true media end from chunk-plan.json so
+            # the final seconds cannot remain perpetually uncovered.
+            media_end_ms = int(round(float(chunk_plan.get("duration_seconds") or 0) * 1000))
+            if media_end_ms <= 0 and chunks:
+                media_end_ms = max(int(chunk.get("source_end_ms", 0)) for chunk in chunks)
             source_start = max(0, gap_start - context_ms)
-            source_end = gap_end
+            source_end = max(gap_end, media_end_ms)
         else:
             source_start = max(parent_start, gap_start - context_ms)
             source_end = min(parent_end, gap_end + context_ms)

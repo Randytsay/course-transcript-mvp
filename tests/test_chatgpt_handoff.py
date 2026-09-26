@@ -703,6 +703,29 @@ def test_completeness_auto_repair_does_not_migrate_legacy_marker_without_complet
     assert _prepare_chirp_completeness_auto_repair(job_dir, report) is None
 
 
+def test_completeness_auto_repair_short_audible_tail_reaches_media_end(tmp_path: Path) -> None:
+    job_dir = tmp_path / "auto-repair-short-tail"
+    job_dir.mkdir()
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({
+            "duration_seconds": 75.257,
+            "chunks": [{"chunk_index": 8, "source_start_ms": 60_000, "source_end_ms": 75_300}],
+        }),
+        encoding="utf-8",
+    )
+    report = {
+        "handoff_allowed": False,
+        "blockers": [{
+            "reason": "short_audible_tail_requires_review",
+            "start_ms": 73_500,
+            "end_ms": 73_800,
+        }],
+    }
+    plan = build_auto_repair_patch_plan(job_dir, report)
+    assert plan["status"] == "planned"
+    assert plan["items"][0]["source_end_ms"] == 75_257
+
+
 def test_completeness_auto_repair_tail_reaches_media_end(tmp_path: Path) -> None:
     job_dir = tmp_path / "auto-repair-tail"
     job_dir.mkdir()
