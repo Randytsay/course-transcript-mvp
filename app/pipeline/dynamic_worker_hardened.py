@@ -862,8 +862,39 @@ def _prepare_chirp_completeness_auto_repair(
         1,
         int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_ROUNDS", "3")),
     )
-    prior_round = max(0, int(marker.get("round") or 0))
     prior_status = str(marker.get("status") or "")
+    if marker_path.is_file() and prior_status in {"prepared", "submitted"} and not marker.get("round"):
+        complete_path = job_dir / "chirp-targeted-patch-complete.json"
+        try:
+            complete = json.loads(complete_path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, json.JSONDecodeError):
+            complete = {}
+        decisions = complete.get("patch_decisions") if isinstance(complete, dict) else None
+        verdicts = complete.get("verdicts") if isinstance(complete, dict) else None
+        patch_count = int(marker.get("patch_count") or 0)
+        complete_proven = (
+            isinstance(decisions, list)
+            and bool(decisions)
+            and all(isinstance(item, dict) and item.get("applied") is True for item in decisions)
+            and isinstance(verdicts, list)
+            and len(verdicts) == len(decisions)
+            and all(isinstance(item, dict) and item.get("status") in {"SUCCEEDED", "EMPTY_SILENCE"} for item in verdicts)
+            and (patch_count <= 0 or len(decisions) == patch_count)
+        )
+        if complete_proven:
+            marker.update(
+                {
+                    "status": "completed",
+                    "round": 1,
+                    "max_rounds": max_rounds,
+                    "provider_calls_started": True,
+                    "legacy_marker_migrated": True,
+                    "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                }
+            )
+            base._atomic_json(marker_path, marker)
+            prior_status = "completed"
+    prior_round = max(0, int(marker.get("round") or 0))
     if marker_path.is_file():
         if prior_status != "completed":
             return None

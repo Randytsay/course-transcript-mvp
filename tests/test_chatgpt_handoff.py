@@ -632,6 +632,47 @@ def test_completeness_auto_repair_allows_next_round_after_completed(tmp_path: Pa
     assert marker["provider_calls_started"] is False
 
 
+def test_completeness_auto_repair_migrates_legacy_submitted_marker_with_complete_evidence(tmp_path: Path) -> None:
+    job_dir = tmp_path / "legacy-marker"
+    job_dir.mkdir()
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({"duration_seconds": 80.0, "chunks": [{"chunk_index": 0, "source_start_ms": 0, "source_end_ms": 80_000}]}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-completeness-auto-repair.json").write_text(
+        json.dumps({"status": "submitted", "patch_count": 1, "provider_calls_started": True}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-targeted-patch-complete.json").write_text(
+        json.dumps({
+            "patch_decisions": [{"chunk_index": 920001, "applied": True}],
+            "verdicts": [{"patch_index": 920001, "status": "SUCCEEDED"}],
+        }),
+        encoding="utf-8",
+    )
+    report = {"handoff_allowed": False, "blockers": [{"reason": "uncovered_audio_tail", "start_ms": 75_000, "end_ms": 80_000}]}
+    plan = _prepare_chirp_completeness_auto_repair(job_dir, report)
+    assert plan is not None
+    assert plan["items"][0]["patch_index"] == 921001
+    marker = json.loads((job_dir / "chirp-completeness-auto-repair.json").read_text("utf-8"))
+    assert marker["round"] == 2
+
+
+def test_completeness_auto_repair_does_not_migrate_legacy_marker_without_complete_evidence(tmp_path: Path) -> None:
+    job_dir = tmp_path / "legacy-marker-no-proof"
+    job_dir.mkdir()
+    (job_dir / "chunk-plan.json").write_text(
+        json.dumps({"duration_seconds": 80.0, "chunks": [{"chunk_index": 0, "source_start_ms": 0, "source_end_ms": 80_000}]}),
+        encoding="utf-8",
+    )
+    (job_dir / "chirp-completeness-auto-repair.json").write_text(
+        json.dumps({"status": "submitted", "patch_count": 1, "provider_calls_started": True}),
+        encoding="utf-8",
+    )
+    report = {"handoff_allowed": False, "blockers": [{"reason": "uncovered_audio_tail", "start_ms": 75_000, "end_ms": 80_000}]}
+    assert _prepare_chirp_completeness_auto_repair(job_dir, report) is None
+
+
 def test_completeness_auto_repair_tail_reaches_media_end(tmp_path: Path) -> None:
     job_dir = tmp_path / "auto-repair-tail"
     job_dir.mkdir()
