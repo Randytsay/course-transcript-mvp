@@ -352,3 +352,30 @@ completeness round.  Asynchronous recovery polls at
 a 60-second baseline; retryable provider throttling (including quota/resource
 exhaustion) uses the existing bounded exponential backoff rather than tight
 polling.
+
+## Reference-Driven Chirp Completeness Gate
+
+When a source folder contains a sibling *逐字稿.txt, the paid pipeline automatically
+copies that file read-only into the job as reference-transcript.txt after the base
+Chirp 3 timeline completes. Before subtitle segmentation, the
+reference_chirp_completeness stage compares paragraph-level reference coverage with
+the Chirp word timeline.
+
+Only high-confidence alignment failures are candidates. Candidate windows are
+re-transcribed with Standard Batch Chirp 3, never Dynamic Batching. A first rerun
+must materially improve reference agreement; only then is an independent second rerun
+performed. The word span is replaced only when both reruns have identical normalized
+transcripts. Timestamps always remain provider word boundaries.
+
+Fail-closed behavior:
+- no reference sidecar: zero extra provider calls;
+- ambiguous sidecars: skip and preserve the base timeline;
+- no material improvement: keep the base timeline and do not pay for a second rerun;
+- second-run mismatch or recovery failure: mark requires_review and do not replace;
+- worst-case audit estimate above REFERENCE_CHIRP_AUTO_MAX_USD (default USD 0.50):
+  no provider call is made and human review is required;
+- requires_review blocks automatic Drive publication.
+
+Evidence is written to reference-chirp-completeness.json; the original merged timeline
+is preserved as merged-words.pre-reference-completeness.json whenever an accepted
+replacement changes merged-words.json.

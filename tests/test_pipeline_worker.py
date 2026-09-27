@@ -270,6 +270,91 @@ class PipelineWorkerTests(unittest.TestCase):
         self.assertEqual(manifest["drive_publication_status"], "pending_retry")
 
 
+
+    def test_reference_sidecar_prefers_matching_source_stem(self) -> None:
+        record = self._job(approved=True)
+        record["source_name"] = "20260913.MP3"
+        record["source_path"] = "gdrive:04 慈聖/《大成佛經》/22. 20260913/20260913.MP3"
+        job_dir = self.data / "jobs" / record["id"]
+        job_dir.mkdir(parents=True, exist_ok=True)
+        from app.jobs.source import DriveEntry
+        entries = [
+            DriveEntry(
+                source_path="gdrive:04 慈聖/《大成佛經》/22. 20260913/其他_逐字稿.txt",
+                name="其他_逐字稿.txt", is_dir=False, size_bytes=100,
+                modified_at=None, mime_type=None, supported_media=False,
+            ),
+            DriveEntry(
+                source_path="gdrive:04 慈聖/《大成佛經》/22. 20260913/20260913_逐字稿.txt",
+                name="20260913_逐字稿.txt", is_dir=False, size_bytes=120,
+                modified_at=None, mime_type=None, supported_media=False,
+            ),
+        ]
+
+        def fake_copy(command, **kwargs):
+            Path(command[-1]).write_text("可信逐字稿", encoding="utf-8")
+            return ""
+
+        with (
+            patch.object(worker, "list_rclone_directory", return_value=("gdrive:x", entries)),
+            patch.object(worker, "_run_with_heartbeat", side_effect=fake_copy),
+        ):
+            result = worker._maybe_download_reference_transcript(
+                self.store, record, job_dir, "pipeline-test"
+            )
+        self.assertEqual(result["status"], "available")
+        self.assertEqual(result["name"], "20260913_逐字稿.txt")
+        self.assertEqual(
+            (job_dir / "reference-transcript.txt").read_text(encoding="utf-8"),
+            "可信逐字稿",
+        )
+
+    def test_reference_gate_stage_runs_between_chirp_and_segment(self) -> None:
+        record = self._job(approved=True)
+        job_dir = self.data / "jobs" / record["id"]
+        job_dir.mkdir(parents=True)
+        source = job_dir / "source-original.mp3"
+        source.write_bytes(b"test")
+        stages = []
+
+        def fake_module_stage(store, item, data_dir, worker_id, **kwargs):
+            stages.append(str(kwargs["stage"]))
+            store.begin_stage(
+                job_id=item["id"], stage=str(kwargs["stage"]),
+                status=str(kwargs["status"]), detail=str(kwargs["detail"]),
+                progress=int(kwargs["progress_start"]),
+                input_checksum=item["source_checksum"], worker_id=worker_id,
+            )
+            store.complete_stage(
+                job_id=item["id"], stage=str(kwargs["stage"]),
+                detail="done", progress=int(kwargs["progress_end"]),
+                worker_id=worker_id,
+            )
+
+        with (
+            patch.object(worker, "_download_source", return_value=source),
+            patch.object(worker, "_normalize"),
+            patch.object(worker, "_maybe_download_reference_transcript", return_value={"status": "skipped"}),
+            patch.object(worker, "_run_module_stage", side_effect=fake_module_stage),
+            patch.object(worker, "_record_usage_evidence"),
+            patch.object(worker, "_artifact_evidence", return_value=[]),
+        ):
+            worker.run_paid_job(self.store, record, data_dir=self.data, worker_id="pipeline-test")
+        assert stages.index("chirp") < stages.index("reference_completeness") < stages.index("segment")
+
+    def test_reference_review_gate_blocks_auto_publish(self) -> None:
+        record = self._job(approved=True, require_human_review=False)
+        job_dir = self.data / "jobs" / record["id"]
+        job_dir.mkdir(parents=True)
+        (job_dir / "reference-chirp-completeness.json").write_text(
+            json.dumps({"requires_review": True}), encoding="utf-8"
+        )
+        with patch.dict("os.environ", {"COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE": "true"}):
+            assert worker._auto_publish_to_source(
+                self.store, record, self.data, "pipeline-test"
+            ) is None
+
+
 class ExportTests(unittest.TestCase):
     def test_exports_docx_pdf_and_checksummed_interchange_files(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
