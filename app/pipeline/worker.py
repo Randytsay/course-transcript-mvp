@@ -24,6 +24,7 @@ from app.jobs.costs import CostConfig, estimate_job_cost
 from app.jobs.artifacts import cleanup_completed_audio
 from app.jobs.drive_publish import DrivePublishError, publish_outputs, source_parent_destination
 from app.jobs.rclone_auth import rclone_environment
+from app.jobs.source import list_rclone_directory
 from app.jobs.store import JobConflict, JobStore
 from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY
 
@@ -210,6 +211,92 @@ def _artifact_evidence(job_dir: Path) -> list[dict[str, Any]]:
 def _source_file(job_dir: Path, source_name: str) -> Path:
     suffix = Path(source_name).suffix.lower() or ".media"
     return job_dir / f"source-original{suffix}"
+
+
+def _reference_metadata_path(job_dir: Path) -> Path:
+    return job_dir / "reference-transcript-source.json"
+
+
+def _maybe_download_reference_transcript(
+    store: JobStore,
+    record: dict[str, Any],
+    job_dir: Path,
+    worker_id: str,
+) -> dict[str, Any]:
+    """Fetch one trusted sibling *逐字稿.txt sidecar when unambiguous."""
+    destination = job_dir / "reference-transcript.txt"
+    metadata_path = _reference_metadata_path(job_dir)
+    if destination.is_file() and destination.stat().st_size > 0:
+        payload = {
+            "status": "available",
+            "source": "retained_local",
+            "size_bytes": destination.stat().st_size,
+            "sha256": _sha256(destination),
+        }
+        _atomic_json(metadata_path, payload)
+        return payload
+    source_path = str(record.get("source_path") or "")
+    if not source_path.startswith("gdrive:"):
+        payload = {"status": "skipped", "reason": "non_drive_source"}
+        _atomic_json(metadata_path, payload)
+        return payload
+    parent = source_parent_destination(source_path)
+    try:
+        _, entries = list_rclone_directory(parent)
+    except Exception as exc:
+        payload = {"status": "skipped", "reason": "drive_listing_failed", "error": _safe_error(str(exc))}
+        _atomic_json(metadata_path, payload)
+        return payload
+    source_stem = Path(str(record.get("source_name") or "")).stem.casefold()
+    candidates = [
+        entry for entry in entries
+        if not entry.is_dir
+        and entry.name.lower().endswith(".txt")
+        and "逐字稿" in entry.name
+        and 0 < int(entry.size_bytes) <= int(os.environ.get("REFERENCE_TRANSCRIPT_MAX_BYTES", "5242880"))
+    ]
+    if not candidates:
+        payload = {"status": "skipped", "reason": "reference_sidecar_absent"}
+        _atomic_json(metadata_path, payload)
+        return payload
+    def score(entry: Any) -> tuple[int, int, str]:
+        stem = Path(entry.name).stem.casefold()
+        return (
+            2 if stem.startswith(source_stem) and source_stem else 0,
+            1 if source_stem and source_stem in stem else 0,
+            entry.name.casefold(),
+        )
+    ranked = sorted(candidates, key=score, reverse=True)
+    best_score = score(ranked[0])[:2]
+    best = [entry for entry in ranked if score(entry)[:2] == best_score]
+    if len(best) != 1:
+        payload = {
+            "status": "skipped",
+            "reason": "reference_sidecar_ambiguous",
+            "candidate_names": [entry.name for entry in best[:10]],
+        }
+        _atomic_json(metadata_path, payload)
+        return payload
+    chosen = best[0]
+    partial = destination.with_suffix(".txt.partial")
+    partial.unlink(missing_ok=True)
+    _run_with_heartbeat(
+        ["rclone", "copyto", "--immutable", chosen.source_path, str(partial)],
+        store=store, job_id=record["id"], worker_id=worker_id, timeout_seconds=300,
+    )
+    if not partial.is_file() or partial.stat().st_size <= 0:
+        raise PipelineError("逐字稿 sidecar 下载后为空")
+    partial.replace(destination)
+    payload = {
+        "status": "available",
+        "source": "drive_sibling",
+        "name": chosen.name,
+        "source_path": chosen.source_path,
+        "size_bytes": destination.stat().st_size,
+        "sha256": _sha256(destination),
+    }
+    _atomic_json(metadata_path, payload)
+    return payload
 
 
 def _begin(
@@ -532,6 +619,35 @@ def _record_usage_evidence(
             "input_units": round(estimate.chirp_billable_minutes * 60),
         }
     ]
+    gate_path = data_dir / "jobs" / record["id"] / "reference-chirp-completeness.json"
+    if gate_path.is_file():
+        try:
+            gate = json.loads(gate_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            gate = {}
+        gate_seconds = max(0, int(round(float(gate.get("paid_audio_seconds") or 0))))
+        if gate_seconds:
+            standard_rate = CostConfig.from_env().for_processing_strategy("STANDARD_BATCH").chirp_usd_per_minute
+            gate_cost = (Decimal(gate_seconds) / Decimal("60") * standard_rate).quantize(Decimal("0.0001"))
+            store.record_usage(
+                job_id=record["id"], dedupe_key="chirp-reference-completeness",
+                provider="google-cloud-speech", model="chirp_3",
+                input_units=gate_seconds, output_units=None, estimated_cost_usd=gate_cost,
+                usage={
+                    "unit": "actual_reference_audit_audio_seconds",
+                    "processing_strategy": "STANDARD_BATCH",
+                    "provider_calls": int(gate.get("provider_calls") or 0),
+                    "accepted_count": int(gate.get("accepted_count") or 0),
+                    "accounting_note": "Application estimate; Cloud Billing is authoritative.",
+                },
+                worker_id=worker_id,
+            )
+            usage_records.append({
+                "provider": "google-cloud-speech", "model": "chirp_3",
+                "estimated_cost_usd": str(gate_cost),
+                "unit": "actual_reference_audit_audio_seconds",
+                "input_units": gate_seconds, "processing_strategy": "STANDARD_BATCH",
+            })
     if not record["enable_gemini_correction"]:
         _atomic_json(
             data_dir / "jobs" / record["id"] / "usage_report.json",
@@ -662,6 +778,14 @@ def _auto_publish_to_source(
     """Publish only derived, user-selected files after all local QA succeeds."""
     if bool(record.get("require_human_review")):
         return None
+    gate = data_dir / "jobs" / record["id"] / "reference-chirp-completeness.json"
+    if gate.is_file():
+        try:
+            gate_payload = json.loads(gate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            gate_payload = {}
+        if bool(gate_payload.get("requires_review")):
+            return None
     if os.environ.get("COURSE_TRANSCRIPT_AUTO_PUBLISH_TO_SOURCE", "").lower() not in {
         "1", "true", "yes"
     }:
@@ -748,6 +872,21 @@ def run_paid_job(
             ),
             timeout_seconds=14_400,
             evidence=("chunk-plan.json", "merged-words.json"),
+        )
+        _maybe_download_reference_transcript(store, leased, job_dir, worker_id)
+        _run_module_stage(
+            store,
+            leased,
+            data_dir,
+            worker_id,
+            stage="reference_completeness",
+            status="quality_check",
+            detail="以逐字稿交叉验证 Chirp 3 完整性并局部双重重验",
+            progress_start=62,
+            progress_end=63,
+            module="app.providers.reference_chirp_completeness",
+            timeout_seconds=7_200,
+            evidence=("reference-chirp-completeness.json",),
         )
         _run_module_stage(
             store,
