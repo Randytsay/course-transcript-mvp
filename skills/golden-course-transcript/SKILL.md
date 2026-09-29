@@ -69,7 +69,8 @@ Routing must fail safe:
 - ShopClaw API 未設定、逾時、401、回傳格式錯誤時 fail closed：留下 unavailable snapshot，
   但不阻斷字幕；模型不得因此自行猜產品或成分。
 - production 同機預設讀取 `/app/data/integrations/shopclaw-ma-terminology.token`
-  （mode 600），並連到 ShopClaw 的 private-authenticated terminology endpoint；
+  （mode 600），並優先透過同一資料掛載中的
+  `/app/data/integrations/shopclaw-ma-terminology.sock` 連到 ShopClaw；
   環境變數仍可覆寫 URL/token。secret 不寫入 Git、manifest 或 handoff bundle。
 
 ## Evidence priority
