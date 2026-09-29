@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 import os
+import socket
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
@@ -15,6 +17,7 @@ JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 OUTPUT = JOB / "market-america-terminology.json"
 MAX_QUERY_CHARS = 12000
 DEFAULT_TOKEN_FILE = DATA_DIR / "integrations" / "shopclaw-ma-terminology.token"
+DEFAULT_SOCKET_FILE = DATA_DIR / "integrations" / "shopclaw-ma-terminology.sock"
 DEFAULT_ENDPOINT = "https://shopclaw.linebot.ccwu.cc/internal/ma-product-terminology"
 
 
@@ -63,6 +66,35 @@ def _safe_products(payload: Any) -> list[dict[str, Any]]:
     return result[:12]
 
 
+class _UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, socket_path: Path, *, timeout: float = 8.0) -> None:
+        super().__init__("localhost", timeout=timeout)
+        self.socket_path = str(socket_path)
+
+    def connect(self) -> None:
+        self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.sock.settimeout(self.timeout)
+        self.sock.connect(self.socket_path)
+
+
+def _request_remote(*, endpoint: str, token: str, socket_file: Path, body: bytes) -> dict[str, Any]:
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if socket_file.is_socket():
+        conn = _UnixHTTPConnection(socket_file, timeout=8)
+        try:
+            conn.request("POST", "/internal/ma-product-terminology", body=body, headers=headers)
+            response = conn.getresponse()
+            raw = response.read()
+            if response.status != 200:
+                raise RuntimeError(f"shopclaw_terminology_http_{response.status}")
+            return json.loads(raw.decode("utf-8"))
+        finally:
+            conn.close()
+    request = urllib.request.Request(endpoint, data=body, method="POST", headers=headers)
+    with urllib.request.urlopen(request, timeout=8) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def build_snapshot() -> dict[str, Any]:
     mode = os.environ.get("CONTENT_MODE", "").strip().lower()
     if mode != "market_america_training":
@@ -73,6 +105,7 @@ def build_snapshot() -> dict[str, Any]:
     endpoint = os.environ.get("SHOPCLAW_MA_TERMINOLOGY_URL", DEFAULT_ENDPOINT).strip()
     token = os.environ.get("SHOPCLAW_MA_KNOWLEDGE_TOKEN", "").strip()
     token_file = Path(os.environ.get("SHOPCLAW_MA_TERMINOLOGY_TOKEN_FILE", str(DEFAULT_TOKEN_FILE)))
+    socket_file = Path(os.environ.get("SHOPCLAW_MA_TERMINOLOGY_SOCKET", str(DEFAULT_SOCKET_FILE)))
     if not token and token_file.is_file():
         try:
             if token_file.stat().st_mode & 0o077:
@@ -95,18 +128,11 @@ def build_snapshot() -> dict[str, Any]:
         return payload
 
     body = json.dumps({"query": query}, ensure_ascii=False).encode("utf-8")
-    request = urllib.request.Request(
-        endpoint,
-        data=body,
-        method="POST",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-    )
     try:
-        with urllib.request.urlopen(request, timeout=8) as response:
-            remote = json.loads(response.read().decode("utf-8"))
+        remote = _request_remote(endpoint=endpoint, token=token, socket_file=socket_file, body=body)
         products = _safe_products(remote)
         payload = {**base, "status": "ready", "products": products}
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, RuntimeError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, RuntimeError, http.client.HTTPException) as exc:
         payload = {**base, "status": "unavailable", "reason": type(exc).__name__, "products": []}
     OUTPUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
