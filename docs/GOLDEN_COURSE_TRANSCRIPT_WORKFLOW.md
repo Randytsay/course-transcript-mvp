@@ -6,7 +6,7 @@ Canonical operator/AI contract: see
 The contract intentionally composes existing production primitives rather than
 creating a second transcription pipeline:
 
-`Drive discovery -> existing job reconciliation -> Chirp 3 evidence ->
+`Drive discovery -> deterministic topic classification/profile routing -> existing job reconciliation -> Chirp 3 evidence ->
 Completeness Gate/targeted repair -> CHATGPT_HANDOFF -> deterministic cleanup /
 Golden Rules / rendering -> hardened validation -> safe Drive publication`.
 

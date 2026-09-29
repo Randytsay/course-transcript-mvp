@@ -35,6 +35,26 @@ call、或輸出目的地不明時才停下確認。
    - existing Drive outputs
 5. 不重跑已完成且可信的 Chirp / targeted repair。
 
+
+## Automatic topic classification and profile routing
+
+Folder intake uses deterministic evidence before any specialised correction profile is selected. Evidence may include folder/file names, same-folder reference transcript/material hints, explicit operator context and a bounded Chirp transcript sample.
+
+Supported profiles:
+
+- dacheng_buddhist — 佛教／《佛說彌勒大成佛經》；可使用 canonical scripture、mantra 與既有 Golden Corpus。
+- market_america_training — 美安／Market America 商品與事業訓練；優先保留 Market America、SHOP.COM、Isotonix、OPC-3、NAD+、IBV、BV、UFO 等品牌／制度拼字，但不得自行加強健康療效、收入或事業成效宣稱。
+- hvac_energy — HVAC／節能／BESS／EMS 技術課程；優先辨識 HVAC、BESS、EMS、IPMVP、ASHRAE、ISO 50001/50006、M&V、Modbus 等工程術語與單位。
+- generic — 未達專用主題信心門檻的安全預設，不套任何專用詞庫。
+
+Routing must fail safe:
+
+1. 專用 profile 必須達最低分數與領先 margin；否則使用 generic。
+2. 佛經 canonical / Golden Corpus 僅能在 dacheng_buddhist 啟用。
+3. 美安詞庫不得進入 HVAC 或佛教 profile；HVAC 詞庫亦同。
+4. 新 Drive folder 尚無 job 時，可先以檔名／資料夾／reference 做初判，再於 Chirp 取得文字後用相同 classifier 做確認；不得因此繞過既有 preflight、費用核准或 provider safety gate。
+5. 若初判與 Chirp 後判斷衝突且會影響專用詞庫，應降為 generic 或人工確認，不可靜默切換到另一專用 profile。
+
 ## Evidence priority
 
 1. Audio reality.
