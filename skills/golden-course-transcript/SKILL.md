@@ -68,8 +68,9 @@ Routing must fail safe:
 - 每個 job 只建立一次快照，後續 Gemini / ChatGPT handoff 都讀同一份 evidence，確保可重現。
 - ShopClaw API 未設定、逾時、401、回傳格式錯誤時 fail closed：留下 unavailable snapshot，
   但不阻斷字幕；模型不得因此自行猜產品或成分。
-- runtime 以 `SHOPCLAW_MA_TERMINOLOGY_URL` 與 `SHOPCLAW_MA_KNOWLEDGE_TOKEN`
-  提供 S2S 連線；secret 不寫入 Git、manifest 或 handoff bundle。
+- production 同機預設讀取 `/app/data/integrations/shopclaw-ma-terminology.token`
+  （mode 600），並連到 ShopClaw 的 private-authenticated terminology endpoint；
+  環境變數仍可覆寫 URL/token。secret 不寫入 Git、manifest 或 handoff bundle。
 
 ## Evidence priority
 

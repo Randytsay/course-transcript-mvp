@@ -14,6 +14,8 @@ DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 OUTPUT = JOB / "market-america-terminology.json"
 MAX_QUERY_CHARS = 12000
+DEFAULT_TOKEN_FILE = DATA_DIR / "integrations" / "shopclaw-ma-terminology.token"
+DEFAULT_ENDPOINT = "https://shopclaw.linebot.ccwu.cc/internal/ma-product-terminology"
 
 
 def _iso() -> str:
@@ -68,8 +70,16 @@ def build_snapshot() -> dict[str, Any]:
         OUTPUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return payload
 
-    endpoint = os.environ.get("SHOPCLAW_MA_TERMINOLOGY_URL", "").strip()
+    endpoint = os.environ.get("SHOPCLAW_MA_TERMINOLOGY_URL", DEFAULT_ENDPOINT).strip()
     token = os.environ.get("SHOPCLAW_MA_KNOWLEDGE_TOKEN", "").strip()
+    token_file = Path(os.environ.get("SHOPCLAW_MA_TERMINOLOGY_TOKEN_FILE", str(DEFAULT_TOKEN_FILE)))
+    if not token and token_file.is_file():
+        try:
+            if token_file.stat().st_mode & 0o077:
+                raise RuntimeError("terminology_token_file_permissions")
+            token = token_file.read_text(encoding="utf-8").strip()
+        except OSError:
+            token = ""
     query = _load_query()
     base = {
         "schema_version": 1,
@@ -79,7 +89,7 @@ def build_snapshot() -> dict[str, Any]:
         "query_chars": len(query),
         "policy": "read_only_spelling_evidence_only_no_claim_injection",
     }
-    if not endpoint or not token:
+    if not endpoint or len(token) < 32:
         payload = {**base, "status": "unavailable", "reason": "shopclaw_terminology_not_configured", "products": []}
         OUTPUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         return payload
@@ -96,7 +106,7 @@ def build_snapshot() -> dict[str, Any]:
             remote = json.loads(response.read().decode("utf-8"))
         products = _safe_products(remote)
         payload = {**base, "status": "ready", "products": products}
-    except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, RuntimeError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError, RuntimeError) as exc:
         payload = {**base, "status": "unavailable", "reason": type(exc).__name__, "products": []}
     OUTPUT.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     return payload
