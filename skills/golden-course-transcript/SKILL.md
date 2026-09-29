@@ -1,4 +1,4 @@
-# Course Transcript 黃金字幕 Skill v1.0
+# Course Transcript 黃金字幕 Skill v1.1
 
 ## Purpose
 
@@ -101,9 +101,11 @@ audio/ASR completeness evidence has not established.
   完成，不得依字數比例推算時間。
 - Raw Chirp、merged words、provider responses 與 source segment timing 永久保留。
 
-## Completeness gate
+## Completeness gates
 
-ChatGPT handoff 之前必須 PASS。
+ChatGPT handoff 之前，必須依序通過兩層完整性檢查。
+
+### Gate 1 — Acoustic / timeline completeness
 
 至少檢查：
 
@@ -122,7 +124,62 @@ ChatGPT handoff 之前必須 PASS。
    `NEEDS_REVIEW / awaiting_review`。
 4. 禁止用 reference 或 ChatGPT 補寫 Gate 尚未確認的漏辨識。
 
+### Gate 2 — Reference-Driven Chirp Completeness
+
+當來源資料夾存在唯一可信的 sibling `*逐字稿.txt` 時，在 base Chirp 完成、
+正式 semantic segmentation 之前自動執行。沒有 reference sidecar 時此 Gate
+必須 SKIP，且不得增加任何 provider call 或費用。
+
+流程：
+
+1. 以 paragraph-level ordered alignment 比較逐字稿與 `merged-words.json`。
+2. 只挑出高可信異常區段，例如：
+   - same-word semantic collapse；
+   - paragraph projection failure 且 coverage 足夠高；
+   - 逐字稿與現有 Chirp span 明顯不一致，但前後 anchor 仍可靠。
+3. 對候選區段前後加 bounded context，使用 **Standard Batch Chirp 3**
+   局部重跑；此階段禁止 Dynamic Batching。
+4. 第一次重跑只有在客觀指標顯示 material improvement 時才可進入第二次：
+   - reference similarity / coverage 明顯提升；或
+   - 找回原 Chirp 沒有、但逐字稿中存在的連續詞組。
+5. 只有改善候選才進行第二次獨立 Standard Batch Chirp 3 重跑。
+6. 兩次重跑的 normalized transcript 必須完全一致，才可接受替換。
+7. 接受時只原位替換該候選 word span；其他 `merged-words` 內容保持不動。
+8. 替換後重新跑 semantic rendering、Golden Rules、經文／咒語處理與完整 QA。
+
+Fail-closed 規則：
+
+- 第一次重跑沒有改善：保留原 Chirp timeline，不做第二次付費重跑。
+- 第二次與第一次不一致、recovery 失敗或 provider evidence 不完整：
+  設 `requires_review=true`，不得自動發布。
+- reference 只作為 spelling/context evidence，絕不能因逐字稿有字就把音訊中
+  未被聲學證據支持的內容硬塞進字幕。
+- Gate 只允許使用 provider word boundaries；不得創造或插值時間碼。
+- 接受替換前保留 `merged-words.pre-reference-completeness.json`，確保可追溯。
+
+費用與範圍限制：
+
+- 預設最多 `REFERENCE_CHIRP_MAX_CANDIDATES=5` 個候選。
+- 候選總長預設上限 `REFERENCE_CHIRP_MAX_TOTAL_SECONDS=1800`。
+- 自動補強最壞情境費用上限預設 `REFERENCE_CHIRP_AUTO_MAX_USD=0.50`。
+- 若預估超過上限，不呼叫 provider，直接進 `requires_review`。
+- 額外 Standard Batch 音訊秒數與 provider calls 必須獨立記錄在
+  `reference-chirp-completeness.json` 與 usage ledger。
+
+Reference-Driven Gate 的 evidence 至少包含：
+
+- candidate paragraph / word span / reason / coverage
+- first rerun metrics
+- second rerun consistency result
+- accepted / rejected reason
+- provider call count / paid audio seconds
+- whether `merged-words.json` changed
+- whether human review is required
+
 ## ChatGPT handoff
+
+只有 Acoustic / timeline completeness 與 Reference-Driven Chirp Completeness
+都已 PASS 或明確 SKIPPED，且沒有 `requires_review` 時才允許 handoff／自動發布。
 
 PASS 後使用 handoff bundle：
 
@@ -166,7 +223,8 @@ ChatGPT text layer
 
 發布前至少要求：
 
-- Completeness Gate PASS / handoff_allowed
+- Acoustic / timeline Completeness Gate PASS / handoff_allowed
+- Reference-Driven Chirp Completeness PASS / SKIPPED，且 `requires_review=false`
 - coverage residual = 0
 - segment import coverage = 100%
 - timestamps monotonic
@@ -202,7 +260,8 @@ Drive delivery failure 只重試既有 local artifacts，不得重跑 Chirp / Ch
 - source id/path/checksum/duration
 - job id / revision / workflow mode / content mode
 - Chirp model/strategy/chunks/repair rounds
-- completeness status
+- acoustic/timeline completeness status
+- reference-driven completeness status / candidates / accepted replacements / paid audit seconds
 - reference file ids/names/digests
 - ChatGPT handoff/import revision
 - canonical / Golden Rules versions
@@ -221,10 +280,11 @@ Drive delivery failure 只重試既有 local artifacts，不得重跑 Chirp / Ch
 
 1. Source Drive folder/file.
 2. Job id and whether Chirp was reused.
-3. Completeness/repair result.
-4. Reference files actually used.
-5. ChatGPT correction/import result.
-6. QA summary.
-7. Final Drive filenames and verification.
-8. Any residual review items.
+3. Acoustic Completeness / targeted repair result.
+4. Reference-Driven Chirp Completeness result（候選、重跑、接受/拒絕與額外費用）。
+5. Reference files actually used.
+6. ChatGPT correction/import result.
+7. QA summary.
+8. Final Drive filenames and verification.
+9. Any residual review items.
 
