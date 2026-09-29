@@ -10,9 +10,18 @@ import hashlib
 from typing import Final
 
 GENERAL: Final = "general"
+GENERIC: Final = "generic"
 DACHENG_BUDDHIST: Final = "dacheng_buddhist"
+MARKET_AMERICA_TRAINING: Final = "market_america_training"
+HVAC_ENERGY: Final = "hvac_energy"
 LEGACY_UNSPECIFIED: Final = "legacy_unspecified"
-CONTENT_MODES: Final = {GENERAL, DACHENG_BUDDHIST}
+CONTENT_MODES: Final = {
+    GENERAL,
+    GENERIC,
+    DACHENG_BUDDHIST,
+    MARKET_AMERICA_TRAINING,
+    HVAC_ENERGY,
+}
 MAX_DOCUMENT_CONTEXT_CHARS: Final = 2400
 CONTEXT_VERSION: Final = "job-context-v1"
 
@@ -20,7 +29,10 @@ CONTEXT_VERSION: Final = "job-context-v1"
 def normalize_content_mode(value: str | None) -> str:
     mode = str(value or GENERAL).strip().lower()
     if mode not in CONTENT_MODES:
-        raise ValueError("content_mode 必須為 general 或 dacheng_buddhist")
+        raise ValueError(
+            "content_mode 必須為 general、generic、dacheng_buddhist、"
+            "market_america_training 或 hvac_energy"
+        )
     return mode
 
 

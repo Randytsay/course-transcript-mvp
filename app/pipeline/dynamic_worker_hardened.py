@@ -296,6 +296,21 @@ _LOCAL_QA_REPAIR_REPORTS = (
     "export-manifest.json",
 )
 
+def _local_qa_repair_evidence(record: dict[str, Any]) -> tuple[str, ...]:
+    """Return evidence required for a provider-free QA/validation retry.
+
+    CHATGPT_HANDOFF deliberately skips the server-side correction provider.
+    Consequently it may never create review-terms.json, which is correction
+    provider bookkeeping rather than an input to structural/content
+    validation.  Requiring it would make an otherwise valid local-only retry
+    fail closed for the wrong reason.
+    """
+    if normalize_workflow_mode(record.get("workflow_mode")) == CHATGPT_HANDOFF:
+        return tuple(
+            name for name in _LOCAL_QA_REPAIR_EVIDENCE if name != "review-terms.json"
+        )
+    return _LOCAL_QA_REPAIR_EVIDENCE
+
 
 def _archive_qa_repair_evidence(job_dir: Path) -> str:
     """Copy prior QA/validation output before a local-only recalculation."""
@@ -487,7 +502,7 @@ def _repair_qa_only(
     try:
         missing = [
             name
-            for name in _LOCAL_QA_REPAIR_EVIDENCE
+            for name in _local_qa_repair_evidence(leased)
             if not (job_dir / name).is_file()
         ]
         if missing:
@@ -1268,6 +1283,16 @@ def _finish_after_chirp(
         evidence=("subtitles.json", "subtitles.srt", "subtitles.vtt"),
         force=patch_changed or recheck_requested,
     )
+    if str(leased.get("content_mode") or "").strip().lower() == "market_america_training":
+        base._run_module_stage(
+            store, leased, data_dir, worker_id,
+            stage="domain_context", status="quality_check",
+            detail="建立 ShopClaw 美安產品名稱／成分只讀術語快照",
+            progress_start=72, progress_end=72,
+            module="app.providers.market_america_terminology", timeout_seconds=30,
+            evidence=("market-america-terminology.json",),
+            force=patch_changed or recheck_requested,
+        )
     workflow_mode = normalize_workflow_mode(leased.get("workflow_mode"))
     handoff_imported = (
         job_dir / "chatgpt-handoff" / "import-audit.json"

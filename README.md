@@ -90,6 +90,13 @@ with deterministic evidence for non-paid integration testing.
 Read [ARCHITECTURE.md](ARCHITECTURE.md), [RUNBOOK.md](RUNBOOK.md), and
 [HANDOVER.md](HANDOVER.md) before changing or running the pipeline.
 
+For repeatable ChatGPT-operated Drive jobs, follow
+[`skills/golden-course-transcript/SKILL.md`](skills/golden-course-transcript/SKILL.md).
+It defines the **Golden Course Transcript Workflow v1.0**: reuse trusted Chirp 3
+evidence, require the Completeness Gate before ChatGPT text correction, preserve
+Chirp word timing as timing truth, and publish SRT/transcript/QA sidecars through
+the existing safe Drive transaction.
+
 Owner account operations are available at `/review-admin/ai-accounts`. The
 screen supports named profiles, read-only preflight checks, guarded switching,
 and rollback. A switch still requires a controlled API/pipeline deployment

@@ -161,6 +161,8 @@ class CreateJobRequest(BaseModel):
     processing_strategy: Literal[DYNAMIC_BATCHING, STANDARD_BATCH] = DEFAULT_PROCESSING_STRATEGY
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
     ai_correction: CorrectionSelection | None = None
+    content_mode: Literal["general", "generic", "dacheng_buddhist", "market_america_training", "hvac_energy"] = "general"
+    document_context: str = Field(default="", max_length=2400)
 
 
 class CreateBatchRequest(BaseModel):
@@ -175,6 +177,8 @@ class CreateBatchRequest(BaseModel):
     processing_strategy: Literal[DYNAMIC_BATCHING, STANDARD_BATCH] = DEFAULT_PROCESSING_STRATEGY
     output_formats: list[str] = Field(default_factory=lambda: ["srt", "txt", "csv"], min_length=1, max_length=7)
     ai_correction: CorrectionSelection | None = None
+    content_mode: Literal["general", "generic", "dacheng_buddhist", "market_america_training", "hvac_energy"] = "general"
+    document_context: str = Field(default="", max_length=2400)
 
 
 class ApproveJobRequest(BaseModel):
@@ -1216,6 +1220,8 @@ def create_batch(
             require_human_review=payload.require_human_review,
             processing_strategy=payload.processing_strategy,
             output_formats=payload.output_formats,
+            content_mode=payload.content_mode,
+            document_context=payload.document_context,
             actor=actor,
             **_correction_fields(payload.ai_correction),
         )
@@ -1320,6 +1326,8 @@ def create_job(payload: CreateJobRequest, request: Request) -> dict[str, Any]:
             require_human_review=payload.require_human_review,
             processing_strategy=payload.processing_strategy,
             output_formats=payload.output_formats,
+            content_mode=payload.content_mode,
+            document_context=payload.document_context,
             actor=actor,
             **_correction_fields(payload.ai_correction),
         )

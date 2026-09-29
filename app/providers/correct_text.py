@@ -35,6 +35,7 @@ from app.canonical.lesson_context import (
     window_scripture_hint,
 )
 from app.canonical.store import active_canonical
+from app.providers.market_america_terminology import instruction_text as market_america_terminology_instruction
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
@@ -295,7 +296,25 @@ def correction_context_instruction() -> str:
             + (" Canonical mantra:\n" + canonical_mantra if canonical_mantra else " Canonical mantra is unavailable; do not guess it.")
         )
         parts.append(golden_reference_instruction())
-    elif mode == "general":
+    elif mode == "market_america_training":
+        parts.append(
+            "This is a Market America / 美安 product or business training recording. "
+            "Preserve claims exactly as spoken; do not strengthen health, efficacy, income, "
+            "or business-performance claims. Prefer exact spellings only when audio/context "
+            "supports them. Common terms: Market America, SHOP.COM, Isotonix, OPC-3, NAD+, "
+            "IBV, BV, UFO. Do not assume Buddhist or HVAC terminology."
+        )
+        terminology = market_america_terminology_instruction()
+        if terminology:
+            parts.append(terminology)
+    elif mode == "hvac_energy":
+        parts.append(
+            "This is an HVAC / energy / BESS / EMS technical recording. Preserve numeric "
+            "values, units, standards and engineering acronyms exactly when supported by "
+            "audio/context. Common terms: HVAC, BESS, EMS, IPMVP, ASHRAE, ISO 50001, "
+            "ISO 50006, M&V, Modbus. Do not assume Buddhist or retail-product terminology."
+        )
+    elif mode in {"general", "generic"}:
         parts.append("This is a general recording. Do not assume religious, Buddhist, or chanting content.")
     else:
         parts.append("No specialised domain preset is available for this legacy recording.")

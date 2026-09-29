@@ -25,6 +25,22 @@ class ContentContextTests(unittest.TestCase):
         self.assertIn("得見彌勒根本大明神咒", prompt)
         self.assertIn("Preserve every input segment", prompt)
 
+    def test_market_america_context_has_no_buddhist_or_hvac_bias(self) -> None:
+        with patch.dict(os.environ, {"CONTENT_MODE": "market_america_training", "DOCUMENT_CONTEXT": "OPC-3 產品訓練"}, clear=False):
+            prompt = correction_context_instruction()
+        self.assertIn("Market America", prompt)
+        self.assertIn("OPC-3", prompt)
+        self.assertNotIn("得見彌勒", prompt)
+        self.assertNotIn("ISO 50001", prompt)
+
+    def test_hvac_context_has_no_buddhist_or_market_america_bias(self) -> None:
+        with patch.dict(os.environ, {"CONTENT_MODE": "hvac_energy", "DOCUMENT_CONTEXT": "BESS EMS 訓練"}, clear=False):
+            prompt = correction_context_instruction()
+        self.assertIn("IPMVP", prompt)
+        self.assertIn("ASHRAE", prompt)
+        self.assertNotIn("得見彌勒", prompt)
+        self.assertNotIn("SHOP.COM", prompt)
+
     def test_context_validation_and_immutable_store_fields(self) -> None:
         self.assertEqual(normalize_content_mode("GENERAL"), "general")
         self.assertEqual(normalize_document_context("  課程背景 "), "課程背景")
