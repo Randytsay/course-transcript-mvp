@@ -55,6 +55,22 @@ Routing must fail safe:
 4. 新 Drive folder 尚無 job 時，可先以檔名／資料夾／reference 做初判，再於 Chirp 取得文字後用相同 classifier 做確認；不得因此繞過既有 preflight、費用核准或 provider safety gate。
 5. 若初判與 Chirp 後判斷衝突且會影響專用詞庫，應降為 generic 或人工確認，不可靜默切換到另一專用 profile。
 
+### Market America product knowledge cross-check
+
+當 profile 為 `market_america_training` 時，Chirp 固定字幕段建立完成後，額外建立一次性的
+`market-america-terminology.json`。它透過 ShopClaw 的 read-only S2S terminology API
+查詢目前課程文字中可能出現的美安產品，並只保留目前 Market America 商品主檔身份、
+名稱／別名與 serving approved facts 中的術語證據。
+
+- 只用於產品名、別名、成分／材料名稱等「拼字與辨識」輔助。
+- 不讀取 ShopClaw 一般商品 raw `product_copy`、價格、owner cost 或 generic catalog。
+- 不得把資料庫中的功效、健康、劑量、收入或行銷敘述加入原音訊沒有說出的字幕。
+- 每個 job 只建立一次快照，後續 Gemini / ChatGPT handoff 都讀同一份 evidence，確保可重現。
+- ShopClaw API 未設定、逾時、401、回傳格式錯誤時 fail closed：留下 unavailable snapshot，
+  但不阻斷字幕；模型不得因此自行猜產品或成分。
+- runtime 以 `SHOPCLAW_MA_TERMINOLOGY_URL` 與 `SHOPCLAW_MA_KNOWLEDGE_TOKEN`
+  提供 S2S 連線；secret 不寫入 Git、manifest 或 handoff bundle。
+
 ## Evidence priority
 
 1. Audio reality.

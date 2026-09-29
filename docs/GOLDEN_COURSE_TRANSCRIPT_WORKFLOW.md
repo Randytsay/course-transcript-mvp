@@ -10,6 +10,11 @@ creating a second transcription pipeline:
 Completeness Gate/targeted repair -> CHATGPT_HANDOFF -> deterministic cleanup /
 Golden Rules / rendering -> hardened validation -> safe Drive publication`.
 
+For `market_america_training`, the fixed Chirp subtitle layer also triggers one
+read-only ShopClaw terminology snapshot before model correction/handoff. The
+snapshot is spelling evidence only and intentionally excludes prices, raw
+catalog copy and unsupported claim expansion.
+
 Version: **1.0**
 
 This document is the stable handoff pointer for future ChatGPT/WebCodex sessions.

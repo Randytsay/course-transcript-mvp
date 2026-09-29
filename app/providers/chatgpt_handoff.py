@@ -108,6 +108,9 @@ def write_bundle(
     if not isinstance(completeness_payload, dict) or completeness_payload.get("status") != "PASS":
         raise RuntimeError("ChatGPT handoff is blocked until Chirp completeness passes")
     shutil.copy2(completeness, bundle / "chirp-completeness.json")
+    ma_terminology = job_dir / "market-america-terminology.json"
+    if ma_terminology.is_file():
+        shutil.copy2(ma_terminology, bundle / "market-america-terminology.json")
     raw_text = "\n".join(
         str(item.get("raw_text") or item.get("text") or "").strip()
         for item in segments
@@ -157,6 +160,9 @@ def write_bundle(
         "Legacy model-returned SRT import remains supported only when cue count and every original "
         "source timestamp are unchanged; that legacy import restriction does not constrain the "
         "deterministic final semantic renderer.\n"
+        "If market-america-terminology.json is present, use it only as read-only spelling and "
+        "ingredient-name evidence. Never inject efficacy, health, dosage, income, or marketing "
+        "claims that are not actually supported by the transcript/audio context.\n"
     )
     _atomic_text(bundle / "INSTRUCTIONS.txt", instructions)
 
@@ -193,6 +199,11 @@ def write_bundle(
             )
         },
     }
+    if (bundle / "market-america-terminology.json").is_file():
+        manifest["artifacts"]["market-america-terminology.json"] = {
+            "bytes": (bundle / "market-america-terminology.json").stat().st_size,
+            "sha256": _sha256(bundle / "market-america-terminology.json"),
+        }
     _atomic_json(bundle / "handoff-manifest.json", manifest)
     return manifest
 

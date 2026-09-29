@@ -1283,6 +1283,16 @@ def _finish_after_chirp(
         evidence=("subtitles.json", "subtitles.srt", "subtitles.vtt"),
         force=patch_changed or recheck_requested,
     )
+    if str(leased.get("content_mode") or "").strip().lower() == "market_america_training":
+        base._run_module_stage(
+            store, leased, data_dir, worker_id,
+            stage="domain_context", status="quality_check",
+            detail="建立 ShopClaw 美安產品名稱／成分只讀術語快照",
+            progress_start=72, progress_end=72,
+            module="app.providers.market_america_terminology", timeout_seconds=30,
+            evidence=("market-america-terminology.json",),
+            force=patch_changed or recheck_requested,
+        )
     workflow_mode = normalize_workflow_mode(leased.get("workflow_mode"))
     handoff_imported = (
         job_dir / "chatgpt-handoff" / "import-audit.json"
