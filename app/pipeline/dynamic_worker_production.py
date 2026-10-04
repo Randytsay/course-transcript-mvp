@@ -157,6 +157,23 @@ def _repair_qa_only_with_actual_strategy(
     return result
 
 
+def _resume_from_local_evidence(record: dict[str, Any], job_dir: Path) -> bool:
+    if not (job_dir / "merged-words.json").is_file():
+        return False
+    if (job_dir / "chirp-completeness-recheck-request.json").is_file():
+        return True
+    return str(record.get("active_stage") or "") in {
+        "segment",
+        "domain_context",
+        "chirp_completeness",
+        "handoff",
+        "correction",
+        "export",
+        "qa",
+        "validation",
+    }
+
+
 def _submit_or_resume_chirp(
     store: JobStore,
     record: dict[str, Any],
@@ -170,6 +187,13 @@ def _submit_or_resume_chirp(
         store.release_lease(record["id"], worker_id)
         raise JobConflict("未經人工費用確認的任務不可進入付費管線")
     job_dir = data_dir / "jobs" / leased["id"]
+    if _resume_from_local_evidence(leased, job_dir):
+        return worker._finish_after_chirp(
+            store,
+            leased,
+            data_dir=data_dir,
+            worker_id=worker_id,
+        )
     strategy = _processing_strategy(leased, job_dir)
     dynamic = is_dynamic_batching(strategy)
     chunk_retry = worker._chunk_retry_requested(job_dir)

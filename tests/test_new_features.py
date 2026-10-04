@@ -421,6 +421,199 @@ class NewFeatureTests(unittest.TestCase):
         self.assertIn("course_relative_chunk_density_review", reasons)
         self.assertIn("course_density_window_review", reasons)
 
+    def test_merge_accepts_failed_base_only_when_patches_fully_cover_it(self) -> None:
+        from app.providers import merge_chunks
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            chunks = root / "chunks"
+            chunks.mkdir()
+            base_dir = chunks / "chunk-000"
+            base_dir.mkdir()
+            (base_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "chunk_index": 0,
+                        "role": "repair",
+                        "status": "FAILED",
+                        "source_start_ms": 0,
+                        "source_end_ms": 900000,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for index, (start, end) in enumerate(
+                [(0, 300000), (300000, 600000), (600000, 900000)],
+                start=940001,
+            ):
+                directory = chunks / f"chunk-{index:03d}"
+                directory.mkdir()
+                (directory / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "chunk_index": index,
+                            "role": "patch",
+                            "patch_mode": "replace_window",
+                            "status": "SUCCEEDED",
+                            "source_start_ms": start,
+                            "source_end_ms": end,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (directory / "words.json").write_text(
+                    json.dumps(
+                        {
+                            "words": [
+                                {
+                                    "word": "測",
+                                    "start_ms": start + 1000,
+                                    "end_ms": start + 1100,
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            with patch.object(merge_chunks, "CHUNKS", chunks):
+                loaded = merge_chunks.load_chunks()
+            base = next(item for item in loaded if item[0]["chunk_index"] == 0)
+            self.assertEqual(base[1], [])
+            self.assertTrue(base[0]["derived_reconstructed_from_patches"])
+
+    def test_merge_rejects_failed_base_when_patch_coverage_has_gap(self) -> None:
+        from app.providers import merge_chunks
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            chunks = root / "chunks"
+            chunks.mkdir()
+            base_dir = chunks / "chunk-000"
+            base_dir.mkdir()
+            (base_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "chunk_index": 0,
+                        "role": "base",
+                        "status": "FAILED",
+                        "source_start_ms": 0,
+                        "source_end_ms": 900000,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for index, (start, end) in enumerate(
+                [(0, 300000), (600000, 900000)],
+                start=940001,
+            ):
+                directory = chunks / f"chunk-{index:03d}"
+                directory.mkdir()
+                (directory / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "chunk_index": index,
+                            "role": "patch",
+                            "patch_mode": "replace_window",
+                            "status": "SUCCEEDED",
+                            "source_start_ms": start,
+                            "source_end_ms": end,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (directory / "words.json").write_text(
+                    json.dumps({"words": []}),
+                    encoding="utf-8",
+                )
+            with patch.object(merge_chunks, "CHUNKS", chunks):
+                with self.assertRaisesRegex(RuntimeError, "chunk-000"):
+                    merge_chunks.load_chunks()
+
+    def test_completeness_repair_defers_extra_windows_instead_of_blocking_round(self) -> None:
+        from app.providers.chirp_completeness_gate import build_auto_repair_patch_plan
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "chunk-plan.json").write_text(
+                json.dumps(
+                    {
+                        "duration_seconds": 1200,
+                        "chunks": [
+                            {
+                                "chunk_index": 0,
+                                "source_start_ms": 0,
+                                "source_end_ms": 1200000,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = {
+                "blockers": [
+                    {
+                        "reason": "audible_subtitle_gap",
+                        "gap_start_ms": 10000,
+                        "gap_end_ms": 260000,
+                    },
+                    {
+                        "reason": "audible_subtitle_gap",
+                        "gap_start_ms": 400000,
+                        "gap_end_ms": 650000,
+                    },
+                    {
+                        "reason": "audible_subtitle_gap",
+                        "gap_start_ms": 800000,
+                        "gap_end_ms": 1050000,
+                    },
+                ]
+            }
+            plan = build_auto_repair_patch_plan(
+                job,
+                report,
+                context_ms=0,
+                max_total_ms=600000,
+            )
+        self.assertEqual(plan["status"], "planned")
+        self.assertIsNone(plan["auto_submit_blocked_reason"])
+        self.assertEqual(plan["proposed_patch_count"], 2)
+        self.assertEqual(plan["total_duration_ms"], 500000)
+        self.assertEqual(plan["deferred_patch_count"], 1)
+        self.assertEqual(plan["original_proposed_patch_count"], 3)
+
+    def test_production_recheck_resumes_from_local_merged_words(self) -> None:
+        from app.pipeline.dynamic_worker_production import _resume_from_local_evidence
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "merged-words.json").write_text(
+                json.dumps({"words": []}),
+                encoding="utf-8",
+            )
+            (job / "chirp-completeness-recheck-request.json").write_text(
+                json.dumps({"force_gate_rerun": True}),
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                _resume_from_local_evidence({"active_stage": "segment"}, job)
+            )
+            (job / "chirp-completeness-recheck-request.json").unlink()
+            self.assertTrue(
+                _resume_from_local_evidence(
+                    {"active_stage": "chirp_completeness"},
+                    job,
+                )
+            )
+            self.assertTrue(
+                _resume_from_local_evidence({"active_stage": "validation"}, job)
+            )
+            self.assertTrue(
+                _resume_from_local_evidence({"active_stage": "qa"}, job)
+            )
+            self.assertFalse(
+                _resume_from_local_evidence({"active_stage": "chirp"}, job)
+            )
+
 
 
 if __name__ == "__main__":

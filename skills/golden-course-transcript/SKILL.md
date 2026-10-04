@@ -1,4 +1,4 @@
-# Course Transcript 黃金字幕 Skill v1.4
+# Course Transcript 黃金字幕 Skill v1.5
 
 ## Purpose
 
@@ -168,6 +168,23 @@ Golden promotion until bounded repair/review completes.
 6. **恢復流程必須可續跑**
    - provider operation id、attempt、chunk manifest、patch evidence 全部 durable。
    - worker restart 不得造成已成功 provider call 重送。
+7. **修復預算以已核准 batch reserve 為主**
+   - 同一 batch 的局部 repair 先檢查整批 accrued + 新 repair 是否仍低於
+     `batches.reserved_cost_usd`。
+   - 不得因單一 job 初始估價偏低而阻塞整批，但也不得突破 batch 核准上限。
+8. **超過單輪上限採分輪，不整體卡住**
+   - 每輪預設最多 10 分鐘 repair audio。
+   - 多個缺口合計超過上限時，先處理可容納的安全 subset，其餘 deferred
+     到下一輪 Coverage；最多沿用既有 bounded round 上限。
+   - 單一 repair window 自己就超過上限仍 fail closed。
+9. **Local recheck 不得再送 ASR**
+   - 已有 `merged-words.json` 且從 segment / chirp_completeness / QA /
+     validation 等後處理階段恢復時，直接走本機後處理。
+10. **缺失 base 可由完整 patch coverage 重建**
+   - 只有成功 patch intervals 完整覆蓋原 base/retry source interval 時，
+     derived merge 才可標記 `reconstructed_base_chunks`。
+   - validation 可接受此明確 evidence，但原始 FAILED provider manifest
+     不得被改寫成 SUCCEEDED。
 
 
 ## Golden rules

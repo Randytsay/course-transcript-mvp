@@ -70,10 +70,24 @@ The production default is deliberately split by workload:
 - **Canonical-first:** duplicate/segment/alternate media inherit canonical
   evidence wherever lineage is confirmed; do not repeat full Golden QA on the
   same content identity.
+- **Batch-level repair reserve:** repair authorization is evaluated against the
+  already approved batch reserve before falling back to a per-job reservation,
+  so one underestimated job cannot stall a still-within-budget batch.
+- **Bounded multi-round repair:** keep the per-round paid repair duration cap
+  (default 10 minutes). If several repairable gaps exceed the aggregate cap,
+  repair the safe subset first and defer the remainder to the next Coverage
+  round. A single repair window above the cap still blocks.
+- **Local recheck must not resubmit ASR:** when merged words already exist and a
+  job is resuming from segment/Coverage/QA/validation, resume the local
+  post-ASR pipeline directly.
+- **Patch-reconstructed base chunks:** a failed base/retry chunk may be accepted
+  in derived merge/validation only when successful patch evidence completely
+  covers its original source interval. Raw failed provider evidence remains
+  immutable and auditable.
 
 This split is the default for future jobs, not a one-off migration override.
 
-Version: **1.3**
+Version: **1.4**
 
 This document is the stable handoff pointer for future ChatGPT/WebCodex sessions.
 Changes to timing truth, completeness fail-closed behavior, Drive publication

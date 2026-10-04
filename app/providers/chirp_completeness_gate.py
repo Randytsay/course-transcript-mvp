@@ -388,26 +388,61 @@ def build_auto_repair_patch_plan(
             }
         )
 
-    total_duration_ms = sum(int(item["duration_ms"]) for item in items)
+    original_items = list(items)
+    original_total_duration_ms = sum(int(item["duration_ms"]) for item in original_items)
     blocked_reason = None
+    deferred_items: list[dict[str, Any]] = []
     if len(items) > max_patches:
         blocked_reason = "patch_count_cap_exceeded"
-    elif total_duration_ms > max_total_ms:
-        blocked_reason = "repair_duration_cap_exceeded"
+    elif original_total_duration_ms > max_total_ms:
+        selected: list[dict[str, Any]] = []
+        selected_total = 0
+        for item in items:
+            duration = int(item["duration_ms"])
+            if duration > max_total_ms:
+                # A single repair window above the safety cap still fails closed.
+                selected = []
+                deferred_items = list(items)
+                blocked_reason = "repair_duration_cap_exceeded"
+                break
+            if selected_total + duration <= max_total_ms:
+                selected.append(item)
+                selected_total += duration
+            else:
+                deferred_items.append(item)
+        if blocked_reason is None:
+            if not selected:
+                blocked_reason = "repair_duration_cap_exceeded"
+            else:
+                items = selected
 
-    return {
+    total_duration_ms = sum(int(item["duration_ms"]) for item in items)
+    payload = {
         "version": "targeted-patch-v1",
         "generated_at": datetime.now(UTC).isoformat(),
         "job": job_dir.name,
         "policy": "chirp_completeness_auto_repair_v1",
         "status": "blocked" if blocked_reason else ("planned" if items else "none"),
         "items": [] if blocked_reason else items,
-        "proposed_patch_count": len(items),
-        "total_duration_ms": total_duration_ms,
+        "proposed_patch_count": 0 if blocked_reason else len(items),
+        "total_duration_ms": 0 if blocked_reason else total_duration_ms,
         "max_total_duration_ms": max_total_ms,
         "max_patch_count": max_patches,
         "auto_submit_blocked_reason": blocked_reason,
     }
+    if deferred_items and blocked_reason is None:
+        payload.update(
+            {
+                "bounded_round": True,
+                "original_proposed_patch_count": len(original_items),
+                "original_total_duration_ms": original_total_duration_ms,
+                "deferred_patch_count": len(deferred_items),
+                "deferred_total_duration_ms": sum(
+                    int(item["duration_ms"]) for item in deferred_items
+                ),
+            }
+        )
+    return payload
 
 
 def _covered_by_verified_nonlexical(start_ms: int, end_ms: int, windows: list[dict[str, int]]) -> bool:
