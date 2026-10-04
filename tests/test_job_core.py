@@ -333,6 +333,89 @@ class StoreTests(unittest.TestCase):
                 (approved["id"], "chirp-base-audio"),
             ).fetchone()["count"]
         self.assertEqual(count, 1)
+        current = self.store.get_job(approved["id"])
+        self.assertEqual(Decimal(current["actual_cost_usd"]), Decimal("0.25"))
+
+    def test_finish_releases_reservation_and_keeps_recorded_usage(self) -> None:
+        job = self._create_job()
+        self.store.acquire_lease(job["id"], "preflight-worker")
+        estimated = self.store.record_preflight_result(
+            job_id=job["id"],
+            duration_seconds=120,
+            source_checksum="c" * 64,
+            media_format="mp3",
+            audio_codec="mp3",
+            estimated_cost_usd=Decimal("2.50"),
+            pricing_version="test",
+            worker_id="preflight-worker",
+        )
+        approved = self.store.approve_job(
+            job_id=job["id"],
+            expected_revision=estimated["revision"],
+            confirmed_estimated_cost_usd=Decimal("2.50"),
+            project_limit_usd=Decimal("200"),
+            actor="owner@example.test",
+        )
+        self.store.acquire_lease(approved["id"], "pipeline-worker")
+        self.store.record_usage(
+            job_id=approved["id"],
+            dedupe_key="chirp-base-audio",
+            provider="google-cloud-speech",
+            model="chirp_3",
+            input_units=120,
+            output_units=None,
+            estimated_cost_usd=Decimal("0.25"),
+            usage={"unit": "estimated_billable_audio_seconds"},
+            worker_id="pipeline-worker",
+        )
+        finished = self.store.finish_for_review(
+            job_id=approved["id"],
+            worker_id="pipeline-worker",
+        )
+        self.assertEqual(Decimal(finished["reserved_cost_usd"]), Decimal("0"))
+        self.assertEqual(Decimal(finished["actual_cost_usd"]), Decimal("0.25"))
+        costs = self.store.cost_summary(Decimal("200"))
+        self.assertEqual(
+            Decimal(costs["committed_estimated_cost_usd"]),
+            Decimal("0.25"),
+        )
+        self.assertEqual(
+            Decimal(costs["recorded_actual_cost_usd"]),
+            Decimal("0.25"),
+        )
+
+    def test_committed_cost_ignores_legacy_terminal_reservation(self) -> None:
+        job = self._create_job()
+        with self.store.transaction() as connection:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET status = 'completed', reserved_cost_usd = '5',
+                    actual_cost_usd = '0'
+                WHERE id = ?
+                """,
+                (job["id"],),
+            )
+            connection.execute(
+                """
+                INSERT INTO usage_records(
+                    job_id, dedupe_key, provider, model, input_units, output_units,
+                    estimated_cost_usd, usage_json, created_at
+                ) VALUES (?, 'legacy', 'google-cloud-speech', 'chirp_3',
+                          120, NULL, '0.40', '{}', '2026-10-01T00:00:00+00:00')
+                """,
+                (job["id"],),
+            )
+        costs = self.store.cost_summary(Decimal("200"))
+        self.assertEqual(
+            Decimal(costs["committed_estimated_cost_usd"]),
+            Decimal("0.4"),
+        )
+        reconciled = self.store.reconcile_terminal_costs(actor="test")
+        self.assertEqual(reconciled["jobs_changed"], 1)
+        current = self.store.get_job(job["id"])
+        self.assertEqual(Decimal(current["reserved_cost_usd"]), Decimal("0"))
+        self.assertEqual(Decimal(current["actual_cost_usd"]), Decimal("0.4"))
 
     def test_pause_resume_and_failed_stage_retry_keep_approval(self) -> None:
         job = self._create_job()
