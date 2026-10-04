@@ -392,20 +392,18 @@ def build_auto_repair_patch_plan(
     original_total_duration_ms = sum(int(item["duration_ms"]) for item in original_items)
     blocked_reason = None
     deferred_items: list[dict[str, Any]] = []
-    if len(items) > max_patches:
-        blocked_reason = "patch_count_cap_exceeded"
-    elif original_total_duration_ms > max_total_ms:
+    if original_items:
         selected: list[dict[str, Any]] = []
         selected_total = 0
-        for item in items:
+        for item in original_items:
             duration = int(item["duration_ms"])
             if duration > max_total_ms:
                 # A single repair window above the safety cap still fails closed.
                 selected = []
-                deferred_items = list(items)
+                deferred_items = list(original_items)
                 blocked_reason = "repair_duration_cap_exceeded"
                 break
-            if selected_total + duration <= max_total_ms:
+            if len(selected) < max_patches and selected_total + duration <= max_total_ms:
                 selected.append(item)
                 selected_total += duration
             else:

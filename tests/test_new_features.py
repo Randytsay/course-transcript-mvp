@@ -614,6 +614,103 @@ class NewFeatureTests(unittest.TestCase):
                 _resume_from_local_evidence({"active_stage": "chirp"}, job)
             )
 
+    def test_legacy_aggregate_duration_block_is_replanned_and_preserved(self) -> None:
+        from app.pipeline import dynamic_worker_hardened as worker
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "chirp-completeness-auto-repair.json").write_text(
+                json.dumps(
+                    {
+                        "status": "blocked",
+                        "policy": "chirp_completeness_auto_repair_v1",
+                        "provider_calls_started": False,
+                        "round": 1,
+                        "max_rounds": 3,
+                        "proposed_patch_count": 4,
+                        "total_duration_ms": 900000,
+                        "blocked_reason": "repair_duration_cap_exceeded",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fake_plan = {
+                "status": "planned",
+                "items": [
+                    {
+                        "patch_index": 920001,
+                        "duration_ms": 120000,
+                    }
+                ],
+                "proposed_patch_count": 1,
+                "total_duration_ms": 120000,
+                "auto_submit_blocked_reason": None,
+            }
+            with patch.object(
+                worker,
+                "build_auto_repair_patch_plan",
+                return_value=fake_plan,
+            ):
+                plan = worker._prepare_chirp_completeness_auto_repair(
+                    job,
+                    {"blockers": [{"reason": "audible_subtitle_gap"}]},
+                )
+            self.assertIsNotNone(plan)
+            marker = json.loads(
+                (job / "chirp-completeness-auto-repair.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(marker["replanned_from_legacy_block"])
+            self.assertEqual(
+                marker["legacy_block_snapshot"]["blocked_reason"],
+                "repair_duration_cap_exceeded",
+            )
+
+    def test_completeness_repair_defers_excess_patch_count(self) -> None:
+        from app.providers.chirp_completeness_gate import build_auto_repair_patch_plan
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "chunk-plan.json").write_text(
+                json.dumps(
+                    {
+                        "duration_seconds": 300,
+                        "chunks": [
+                            {
+                                "chunk_index": 0,
+                                "source_start_ms": 0,
+                                "source_end_ms": 300000,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            blockers = []
+            for index in range(15):
+                start = index * 15000
+                blockers.append(
+                    {
+                        "reason": "audible_subtitle_gap",
+                        "gap_start_ms": start,
+                        "gap_end_ms": start + 5000,
+                    }
+                )
+            plan = build_auto_repair_patch_plan(
+                job,
+                {"blockers": blockers},
+                context_ms=0,
+                merge_gap_ms=0,
+                max_total_ms=600000,
+                max_patches=12,
+            )
+        self.assertEqual(plan["status"], "planned")
+        self.assertIsNone(plan["auto_submit_blocked_reason"])
+        self.assertEqual(plan["proposed_patch_count"], 12)
+        self.assertEqual(plan["deferred_patch_count"], 3)
+        self.assertEqual(plan["original_proposed_patch_count"], 15)
+
 
 
 if __name__ == "__main__":
