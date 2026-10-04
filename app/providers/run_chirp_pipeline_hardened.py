@@ -108,6 +108,27 @@ def _manifest(index: int) -> dict[str, object]:
         base.CHUNKS / f"chunk-{index:03d}" / "manifest.json"
     )
 
+def _retry_requested(index: int) -> bool:
+    payload = _load_json(base.JOB / "chirp-retry-request.json")
+    chunks = payload.get("chunks") if isinstance(payload, dict) else None
+    return isinstance(chunks, list) and any(
+        isinstance(item, dict) and int(item.get("chunk_index", -1)) == index
+        for item in chunks
+    )
+
+
+def _chunk_dynamic_batching(index: int) -> bool:
+    """Use Standard Batch for repair chunks without invalidating retained chunks."""
+    manifest = _manifest(index)
+    strategy = str(manifest.get("processing_strategy") or "")
+    if strategy == "DYNAMIC_BATCHING":
+        return True
+    if strategy == "PROCESSING_STRATEGY_UNSPECIFIED":
+        return False
+    if _retry_requested(index):
+        return False
+    return base.DYNAMIC_BATCHING
+
 
 def _compatible(index: int, start: float, end: float) -> bool:
     manifest = _manifest(index)
@@ -117,15 +138,18 @@ def _compatible(index: int, start: float, end: float) -> bool:
         manifest,
         start_seconds=start,
         end_seconds=end,
-        dynamic_batching=base.DYNAMIC_BATCHING,
+        dynamic_batching=_chunk_dynamic_batching(index),
     )
 
 
 def _env(index: int, start: float, end: float) -> dict[str, str]:
     values = base._chunk_env(index, start, end)
     values["CHIRP_DYNAMIC_BATCHING"] = (
-        "true" if base.DYNAMIC_BATCHING else "false"
+        "true" if _chunk_dynamic_batching(index) else "false"
     )
+    if _retry_requested(index):
+        values["CHUNK_ROLE"] = "repair"
+        values["CHIRP_REPAIR_STRATEGY"] = "STANDARD_BATCH"
     return base.env_with(values)
 
 

@@ -1,4 +1,4 @@
-# Course Transcript 黃金字幕 Skill v1.1
+# Course Transcript 黃金字幕 Skill v1.4
 
 ## Purpose
 
@@ -22,18 +22,42 @@ call、或輸出目的地不明時才停下確認。
 ## Source discovery
 
 1. 解析 Google Drive file/folder URL。
-2. 列出來源資料夾，辨識：
+2. 對多課程或歷史資料夾先執行 **Media Inventory + Dedup Dry Run**。此階段只能讀取 Drive metadata / MD5 與既有 sidecar，不得下載整批媒體、呼叫 Chirp / Gemini、寫入 GCS 或修改 Drive。
+3. Inventory 必須辨識：
+   - exact binary duplicate（Drive MD5）
+   - master / segment candidate
+   - same-timeline audio/video container candidate
+   - alternate recording candidate
+   - derived clip candidate
+   - existing SRT/TXT/reference transcript / Chirp evidence
+4. 對候選輸出下列其中一個 intake decision：`REUSE`、`SKIP_DUPLICATE`、`VERIFY_DUPLICATE`、`GOLDEN_REPAIR`、`ASR_REQUIRED`、`MANUAL_REVIEW`。
+5. `VERIFY_DUPLICATE` 一律 fail closed：先做本地 duration/audio fingerprint 驗證，未確認前不得送付費 ASR。完全相同 MD5 的 duplicate 可直接重用既有 content identity，但不得刪除原始 Drive 檔。
+   - 使用 `scripts/media_lineage_verify.py` 對 inventory 中的 ambiguous relations 執行 FFprobe + FFmpeg Chromaprint。
+   - verifier 僅下載 `VERIFY_DUPLICATE` 涉及的媒體，逐檔產生 fingerprint 後刪除暫存來源；fingerprint cache 可續跑，避免中斷後重新下載。
+   - `CONFIRMED_SAME_TIMELINE`、`CONFIRMED_SEGMENT_OF`、`CONFIRMED_DERIVED_FROM` 才能形成 canonical reuse；`AMBIGUOUS` / `ERROR` 必須繼續阻擋付費 ASR。
+   - 此階段不得呼叫 Chirp / Gemini、不得寫 GCS、不得修改 Drive。
+6. 再列出來源資料夾，辨識：
    - audio/video source
    - sibling `*逐字稿.txt`
    - existing SRT/TXT/manifest
-3. 用 Drive file id、source_path、source checksum 或 job ledger 對應既有 job。
-4. 先做 reconciliation：
+7. 用 Drive file id、source_path、source checksum 或 job ledger 對應既有 job。
+8. 先做 reconciliation：
    - job status / active_stage / revision
    - Chirp complete evidence
    - Completeness Gate
    - existing handoff bundle
    - existing Drive outputs
-5. 不重跑已完成且可信的 Chirp / targeted repair。
+9. 不重跑已完成且可信的 Chirp / targeted repair。
+
+Read-only dry-run CLI:
+
+```bash
+PYTHONPATH=. python scripts/media_inventory_dry_run.py \
+  --folder-url 'https://drive.google.com/drive/folders/<FOLDER_ID>' \
+  --output reports/media-inventory-dedup.json
+```
+
+此命令的 report 必須明確記錄 `provider_calls_started=false` 與 `drive_mutation_started=false`。
 
 
 ## Automatic topic classification and profile routing
@@ -84,6 +108,67 @@ Routing must fail safe:
 
 Human transcript is never timing truth and never authorizes adding speech that the
 audio/ASR completeness evidence has not established.
+
+### Presentation / visual evidence
+
+For course folders containing PDF/PPT/PPTX, slide screenshots, photographed
+presentation pages, or timestamped frame captures, build a same-course evidence
+inventory before Golden promotion.
+
+- PDF/PPT extracted text and slide-photo text are spelling/context evidence only.
+- A filename carrying a media timestamp (for example
+  `video.mp4_021556.153.jpg`) should be aligned to approximately 02:15:56.153
+  of that course media and receives higher contextual relevance.
+- Visual evidence can confirm product names, ingredient names, lecturer slide
+  headings, acronyms and numeric labels, but cannot override contradictory audio.
+- Do not use generic OCR substitutions to rewrite the transcript automatically.
+  Low-confidence or conflicting visual evidence must remain review-only.
+- Presentation evidence must be course-scoped; never leak vocabulary from a
+  neighboring course folder.
+
+### Golden promotion rule
+
+`completed` in the production job ledger means the configured pipeline
+finished; it does **not** by itself mean Golden quality. Before a subtitle is
+marked Golden or imported into a knowledge base, every subtitle-bearing job must
+have:
+
+1. Acoustic / timeline Completeness Gate result.
+2. Lineage / duplicate disposition.
+3. Domain terminology evidence status.
+4. Same-course material evidence inventory.
+5. Final QA/validation with no unresolved blocking acoustic gap.
+
+Historical jobs that were published before these gates existed must be audited
+retroactively. A blocked audit does not delete the existing SRT; it prevents
+Golden promotion until bounded repair/review completes.
+
+### Default performance / recovery policy
+
+此規則為往後所有 Course Transcript job 的預設，不是本次批次特例：
+
+1. **大量首輪辨識：Dynamic Batch**
+   - 只處理 canonical media。
+   - 已確認 duplicate / segment / derived content 不重跑完整 ASR。
+2. **任何 retry / repair：Standard Batch**
+   - 單一失敗 chunk、audible gap、尾端缺字一律只送該區段。
+   - 已成功 chunk 的 provider evidence 永久重用，不得因 retry 而失效。
+3. **Terminal no-output 不無限等**
+   - provider operation 已 terminal 且超過 output propagation grace 仍無 GCS output，
+     將該 attempt 封存為 dead-output evidence。
+   - 在既有核准預算內，只建立新的 Standard repair attempt；不得重送整堂。
+4. **Coverage / VAD / QA 本機化**
+   - `density_out_of_range` / course-relative density 單獨出現時只列
+     `REVIEW/WARNING`，不是 Golden blocker。
+   - 真正 blocker：audible subtitle gap、audible uncovered tail、broken timing、
+     provider evidence 不完整。
+5. **Coverage PASS 前保留 normalized audio**
+   - 避免修復時又從 Drive 下載與重新轉碼。
+   - handoff / review 尚未完成時也保留，Golden 完成後再清理 derived audio。
+6. **恢復流程必須可續跑**
+   - provider operation id、attempt、chunk manifest、patch evidence 全部 durable。
+   - worker restart 不得造成已成功 provider call 重送。
+
 
 ## Golden rules
 

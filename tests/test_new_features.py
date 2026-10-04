@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -294,6 +295,131 @@ class NewFeatureTests(unittest.TestCase):
             # a targeted patch is in flight; only the due targeted recovery
             # selector may own it.
             self.assertIsNone(worker._next_resumable(store, data_dir))
+
+    def test_retry_chunk_uses_standard_without_invalidating_retained_dynamic(self) -> None:
+        from app.providers import run_chirp_pipeline_hardened as hardened
+
+        with tempfile.TemporaryDirectory() as temp:
+            job_dir = Path(temp)
+            chunks_dir = job_dir / "chunks"
+            retained = chunks_dir / "chunk-000"
+            retained.mkdir(parents=True)
+            (retained / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "SUCCEEDED",
+                        "processing_strategy": "DYNAMIC_BATCHING",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "chirp-retry-request.json").write_text(
+                json.dumps({"chunks": [{"chunk_index": 1}]}),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(hardened.base, "JOB", job_dir),
+                patch.object(hardened.base, "CHUNKS", chunks_dir),
+                patch.object(hardened.base, "DYNAMIC_BATCHING", True),
+            ):
+                self.assertTrue(hardened._chunk_dynamic_batching(0))
+                self.assertFalse(hardened._chunk_dynamic_batching(1))
+                retry_dir = chunks_dir / "chunk-001"
+                retry_dir.mkdir(parents=True)
+                (retry_dir / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "status": "SUBMITTED",
+                            "processing_strategy": "PROCESSING_STRATEGY_UNSPECIFIED",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (job_dir / "chirp-retry-request.json").unlink()
+                self.assertFalse(hardened._chunk_dynamic_batching(1))
+
+    def test_targeted_patch_budget_uses_standard_batch_rate(self) -> None:
+        from app.pipeline import dynamic_worker_hardened as worker
+
+        record = {
+            "id": "job-1",
+            "processing_strategy": "DYNAMIC_BATCHING",
+            "reserved_cost_usd": "1.0000",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            with (
+                patch.object(worker, "estimated_accrued_cost", return_value=Decimal("0")),
+                patch.dict(os.environ, {}, clear=True),
+            ):
+                allowed, accrued, extra, reserved = worker._targeted_patch_budget(
+                    record,
+                    data_dir=Path(temp),
+                    plan={"total_duration_ms": 60_000},
+                )
+        self.assertTrue(allowed)
+        self.assertEqual(accrued, Decimal("0"))
+        self.assertEqual(extra, Decimal("0.0160"))
+        self.assertEqual(reserved, Decimal("1.0000"))
+
+    def test_density_only_completeness_signal_is_nonblocking(self) -> None:
+        from app.providers.chirp_completeness_gate import evaluate
+
+        with tempfile.TemporaryDirectory() as temp:
+            job_dir = Path(temp)
+            segments = [
+                {
+                    "segment_id": "seg-0001",
+                    "start_ms": 0,
+                    "end_ms": 1500,
+                    "raw_text": "第一句",
+                    "text": "第一句",
+                },
+                {
+                    "segment_id": "seg-0002",
+                    "start_ms": 1700,
+                    "end_ms": 3200,
+                    "raw_text": "第二句",
+                    "text": "第二句",
+                },
+            ]
+            (job_dir / "subtitles.json").write_text(
+                json.dumps({"segments": segments}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (job_dir / "merged-words.json").write_text(
+                json.dumps({"words": []}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (job_dir / "chunk-plan.json").write_text(
+                json.dumps({"duration_seconds": 3.2, "chunks": []}),
+                encoding="utf-8",
+            )
+            with (
+                patch(
+                    "app.providers.chirp_completeness_gate.base_chunk_density_reports",
+                    return_value=(
+                        [],
+                        [{"chunk_index": 0, "classification": "density_out_of_range"}],
+                    ),
+                ),
+                patch(
+                    "app.providers.chirp_completeness_gate.density_windows",
+                    return_value=(
+                        [],
+                        [{"start_ms": 0, "end_ms": 1000, "classification": "density_out_of_range"}],
+                    ),
+                ),
+            ):
+                report = evaluate(
+                    job_dir,
+                    audibility_probe=lambda _start, _end: False,
+                )
+        self.assertEqual(report["status"], "PASS")
+        self.assertTrue(report["handoff_allowed"])
+        self.assertEqual(report["summary"]["blocker_count"], 0)
+        reasons = {item["reason"] for item in report["warnings"]}
+        self.assertIn("course_relative_chunk_density_review", reasons)
+        self.assertIn("course_density_window_review", reasons)
 
 
 

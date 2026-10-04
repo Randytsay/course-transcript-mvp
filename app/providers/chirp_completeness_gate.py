@@ -542,9 +542,13 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
         job_dir, audio_ms, audibility_probe=probe
     )
     for item in chunk_plans:
-        blocker = {"reason": "course_relative_chunk_density", **item}
-        blockers.append(blocker)
-        repair_items.append(blocker)
+        warnings.append(
+            {
+                "reason": "course_relative_chunk_density_review",
+                **item,
+                "recommended_action": "review_only_unless_audible_gap_confirms_missing_speech",
+            }
+        )
     for report in chunk_reports:
         if report.get("classification") == "targeted_patch_no_lexical_tokens":
             warnings.append(
@@ -557,9 +561,13 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
 
     density, density_plans = density_windows(segments, audio_ms)
     for item in density_plans:
-        blocker = {"reason": "course_density_window", **item}
-        blockers.append(blocker)
-        repair_items.append(blocker)
+        warnings.append(
+            {
+                "reason": "course_density_window_review",
+                **item,
+                "recommended_action": "review_only_unless_audible_gap_confirms_missing_speech",
+            }
+        )
 
     verified_nonlexical = _verified_nonlexical_windows(job_dir)
     min_gap_ms = int(os.environ.get("CHIRP_MID_GAP_MIN_MS", "5000"))
