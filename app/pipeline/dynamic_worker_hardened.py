@@ -232,7 +232,13 @@ def _available_rows(store: JobStore, statuses: tuple[str, ...]) -> list[dict[str
             SELECT * FROM jobs
             WHERE status IN ({placeholders})
               AND approved_at IS NOT NULL
-              AND CAST(reserved_cost_usd AS REAL) > 0
+              AND (
+                    CAST(reserved_cost_usd AS REAL) > 0
+                    OR (
+                        status = 'quality_check'
+                        AND active_stage IN ('qa', 'validation')
+                    )
+              )
               AND (
                     locked_by IS NULL
                     OR lease_expires_at IS NULL
@@ -836,12 +842,38 @@ def _targeted_patch_budget(
         / Decimal("60000")
         * config.chirp_usd_per_minute
     ).quantize(Decimal("0.0001"))
+    database_path = data_dir / "course-transcript.db"
     accrued = estimated_accrued_cost(
-        data_dir / "course-transcript.db",
+        database_path,
         data_dir,
         record["id"],
     )
     reserved = Decimal(str(record.get("reserved_cost_usd") or "0"))
+    batch_id = str(record.get("batch_id") or "").strip()
+    if batch_id:
+        try:
+            batch = JobStore(database_path).get_batch(batch_id)
+            batch_reserved = Decimal(str(batch.get("reserved_cost_usd") or "0"))
+            jobs = batch.get("jobs") if isinstance(batch, dict) else None
+            if batch_reserved > 0 and isinstance(jobs, list) and jobs:
+                batch_accrued = sum(
+                    (
+                        estimated_accrued_cost(database_path, data_dir, str(item["id"]))
+                        for item in jobs
+                        if isinstance(item, dict) and item.get("id")
+                    ),
+                    Decimal("0"),
+                )
+                return (
+                    batch_accrued + extra <= batch_reserved,
+                    batch_accrued,
+                    extra,
+                    batch_reserved,
+                )
+        except Exception:
+            # Fail back to the per-job reservation if batch accounting evidence
+            # cannot be read; never bypass the budget gate on an accounting error.
+            pass
     return accrued + extra <= reserved, accrued, extra, reserved
 
 

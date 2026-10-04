@@ -122,14 +122,82 @@ def repair_chunk_timings(
     return repaired, repairs
 
 
+def _is_base_equivalent(manifest: dict) -> bool:
+    """A Standard retry still owns the original base chunk interval."""
+    return str(manifest.get("role") or "base") in {"base", "repair"}
+
+
+def _fully_covered_by_successful_patches(
+    manifest: dict,
+    patch_intervals: list[tuple[int, int]],
+) -> bool:
+    start = int(manifest.get("source_start_ms", 0))
+    end = int(manifest.get("source_end_ms", 0))
+    if end <= start:
+        return False
+    intervals = sorted(
+        (max(start, left), min(end, right))
+        for left, right in patch_intervals
+        if right > start and left < end
+    )
+    cursor = start
+    for left, right in intervals:
+        if right <= cursor:
+            continue
+        if left > cursor:
+            return False
+        cursor = max(cursor, right)
+        if cursor >= end:
+            return True
+    return cursor >= end
+
+
 def load_chunks() -> list[tuple[dict, list[dict]]]:
-    result: list[tuple[dict, list[dict]]] = []
-    for directory in sorted(CHUNKS.glob("chunk-*")):
-        manifest_path, words_path = directory / "manifest.json", directory / "words.json"
-        if not manifest_path.exists() or not words_path.exists():
+    directories = sorted(CHUNKS.glob("chunk-*"))
+    manifests: dict[Path, dict] = {}
+    patch_intervals: list[tuple[int, int]] = []
+    for directory in directories:
+        manifest_path = directory / "manifest.json"
+        if not manifest_path.exists():
             raise RuntimeError(f"missing manifest or words for {directory.name}")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if manifest.get("status") not in {"SUCCEEDED", "EMPTY_SILENCE"}:
+        manifests[directory] = manifest
+        words_path = directory / "words.json"
+        if (
+            manifest.get("role") == "patch"
+            and manifest.get("status") in {"SUCCEEDED", "EMPTY_SILENCE"}
+            and words_path.exists()
+        ):
+            patch_intervals.append(
+                (
+                    int(manifest["source_start_ms"]),
+                    int(manifest["source_end_ms"]),
+                )
+            )
+
+    result: list[tuple[dict, list[dict]]] = []
+    for directory in directories:
+        manifest = manifests[directory]
+        words_path = directory / "words.json"
+        complete = (
+            manifest.get("status") in {"SUCCEEDED", "EMPTY_SILENCE"}
+            and words_path.exists()
+        )
+        if not complete:
+            if (
+                _is_base_equivalent(manifest)
+                and _fully_covered_by_successful_patches(manifest, patch_intervals)
+            ):
+                derived_manifest = dict(manifest)
+                derived_manifest["derived_reconstructed_from_patches"] = True
+                result.append((derived_manifest, []))
+                continue
+            if manifest.get("role") == "patch" and manifest.get("status") in {"FAILED", "CANCELLED"}:
+                # Retain failed/superseded patch evidence on disk, but never let it
+                # block a merge when a later successful patch set covers the gap.
+                continue
+            if not words_path.exists():
+                raise RuntimeError(f"missing manifest or words for {directory.name}")
             raise RuntimeError(f"{directory.name} status is {manifest.get('status')}")
         words = json.loads(words_path.read_text(encoding="utf-8")).get("words", [])
         result.append((manifest, words))
@@ -146,7 +214,7 @@ def main() -> int:
         print(f"MERGE=FAIL {exc}")
         return 1
 
-    chunks = [pair for pair in all_chunks if pair[0].get("role", "base") == "base"]
+    chunks = [pair for pair in all_chunks if _is_base_equivalent(pair[0])]
     patches = [pair for pair in all_chunks if pair[0].get("role") == "patch"]
     if not chunks:
         print("MERGE=FAIL no base chunks")
@@ -295,6 +363,11 @@ def main() -> int:
         "total_duration_ms": max((int(word["end_ms"]) for word in merged), default=0),
         "boundaries_ms": boundaries,
         "chunks_merged": [manifest["chunk_index"] for manifest, _ in chunks],
+        "reconstructed_base_chunks": [
+            manifest["chunk_index"]
+            for manifest, _ in chunks
+            if manifest.get("derived_reconstructed_from_patches")
+        ],
         "dropped_anomaly_count": len(anomalies),
         "timing_repair_count": len(timing_repairs),
         "words": merged,
