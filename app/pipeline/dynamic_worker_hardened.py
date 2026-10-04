@@ -960,6 +960,19 @@ def _prepare_chirp_completeness_auto_repair(
         int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_ROUNDS", "3")),
     )
     prior_status = str(marker.get("status") or "")
+    legacy_block_snapshot: dict[str, Any] | None = None
+    if (
+        prior_status == "blocked"
+        and str(marker.get("blocked_reason") or "") in {
+            "repair_duration_cap_exceeded",
+            "patch_count_cap_exceeded",
+        }
+        and int(marker.get("proposed_patch_count") or 0) > 1
+        and not bool(marker.get("provider_calls_started"))
+    ):
+        legacy_block_snapshot = dict(marker)
+        marker = {}
+        prior_status = ""
     if marker_path.is_file() and prior_status in {"prepared", "submitted"}:
         complete_path = job_dir / "chirp-targeted-patch-complete.json"
         try:
@@ -1012,7 +1025,7 @@ def _prepare_chirp_completeness_auto_repair(
             base._atomic_json(marker_path, marker)
             prior_status = "completed"
     prior_round = max(0, int(marker.get("round") or 0))
-    if marker_path.is_file():
+    if marker_path.is_file() and legacy_block_snapshot is None:
         if prior_status != "completed":
             return None
         if prior_round >= max_rounds:
@@ -1108,6 +1121,8 @@ def _prepare_chirp_completeness_auto_repair(
             "patch_count": len(items),
             "total_duration_ms": int(plan.get("total_duration_ms") or 0),
             "archive": str(archive.relative_to(job_dir)),
+            "replanned_from_legacy_block": legacy_block_snapshot is not None,
+            "legacy_block_snapshot": legacy_block_snapshot,
         },
     )
     return plan
