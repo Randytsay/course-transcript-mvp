@@ -232,7 +232,13 @@ def _available_rows(store: JobStore, statuses: tuple[str, ...]) -> list[dict[str
             SELECT * FROM jobs
             WHERE status IN ({placeholders})
               AND approved_at IS NOT NULL
-              AND CAST(reserved_cost_usd AS REAL) > 0
+              AND (
+                    CAST(reserved_cost_usd AS REAL) > 0
+                    OR (
+                        status = 'quality_check'
+                        AND active_stage IN ('qa', 'validation')
+                    )
+              )
               AND (
                     locked_by IS NULL
                     OR lease_expires_at IS NULL

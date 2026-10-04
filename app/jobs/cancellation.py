@@ -104,7 +104,12 @@ def _refresh_batch_state(
     if not batch_id:
         return
     rows = connection.execute(
-        "SELECT status FROM jobs WHERE batch_id = ? ORDER BY queue_position",
+        """
+        SELECT status, reserved_cost_usd, actual_cost_usd
+        FROM jobs
+        WHERE batch_id = ?
+        ORDER BY queue_position
+        """,
         (batch_id,),
     ).fetchall()
     if not rows:
@@ -113,6 +118,14 @@ def _refresh_batch_state(
     ready = sum(status in {"awaiting_review", "completed"} for status in statuses)
     failed = sum(status == "failed" for status in statuses)
     cancelled = sum(status == "cancelled" for status in statuses)
+    reserved = sum(
+        (Decimal(row["reserved_cost_usd"] or "0") for row in rows),
+        Decimal("0"),
+    )
+    actual = sum(
+        (Decimal(row["actual_cost_usd"] or "0") for row in rows),
+        Decimal("0"),
+    )
     terminal = ready + failed + cancelled
     if cancelled == len(statuses):
         batch_status = "cancelled"
@@ -134,10 +147,11 @@ def _refresh_batch_state(
         """
         UPDATE batches
         SET status = ?, completed_count = ?, failed_count = ?,
+            reserved_cost_usd = ?, actual_cost_usd = ?,
             updated_at = ?, revision = revision + 1
         WHERE id = ?
         """,
-        (batch_status, ready, failed, now, batch_id),
+        (batch_status, ready, failed, str(reserved), str(actual), now, batch_id),
     )
 
 
@@ -189,11 +203,20 @@ def request_cancellation(
             """
             UPDATE jobs
             SET status = ?, active_stage = 'cancel', stage_detail = ?,
-                error = NULL, reserved_cost_usd = ?, updated_at = ?,
-                revision = revision + 1
+                error = NULL, reserved_cost_usd = ?, actual_cost_usd = ?,
+                updated_at = ?, revision = revision + 1
             WHERE id = ?
             """,
-            (next_status, detail, str(accrued), now, job_id),
+            (
+                next_status,
+                detail,
+                str(accrued) if next_status == "cancelling" else "0",
+                str(max(Decimal(row["actual_cost_usd"] or "0"), accrued))
+                if next_status == "cancelled"
+                else str(Decimal(row["actual_cost_usd"] or "0")),
+                now,
+                job_id,
+            ),
         )
         _event(
             connection,
@@ -370,12 +393,16 @@ def finalize_cancellation(
             UPDATE jobs
             SET status = 'cancelled', active_stage = 'cancel',
                 stage_detail = '任務已取消；保留已完成證據與已發生成本',
-                reserved_cost_usd = ?, locked_by = NULL,
+                reserved_cost_usd = '0', actual_cost_usd = ?, locked_by = NULL,
                 lease_expires_at = NULL, last_heartbeat_at = NULL,
                 updated_at = ?, revision = revision + 1
             WHERE id = ?
             """,
-            (str(accrued), now, job_id),
+            (
+                str(max(Decimal(row["actual_cost_usd"] or "0"), accrued)),
+                now,
+                job_id,
+            ),
         )
         _event(
             connection,

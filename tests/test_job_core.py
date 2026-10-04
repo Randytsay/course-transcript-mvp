@@ -19,6 +19,7 @@ from app.jobs.source import (
     validate_source_path,
 )
 from app.jobs.store import JobConflict, JobStore
+from app.jobs.completion import finish_with_policy
 
 
 class CostTests(unittest.TestCase):
@@ -384,6 +385,47 @@ class StoreTests(unittest.TestCase):
             Decimal("0.25"),
         )
 
+    def test_production_completion_policy_settles_cost(self) -> None:
+        job = self._create_job()
+        self.store.acquire_lease(job["id"], "preflight-worker")
+        estimated = self.store.record_preflight_result(
+            job_id=job["id"],
+            duration_seconds=120,
+            source_checksum="d" * 64,
+            media_format="mp3",
+            audio_codec="mp3",
+            estimated_cost_usd=Decimal("2.50"),
+            pricing_version="test",
+            worker_id="preflight-worker",
+        )
+        approved = self.store.approve_job(
+            job_id=job["id"],
+            expected_revision=estimated["revision"],
+            confirmed_estimated_cost_usd=Decimal("2.50"),
+            project_limit_usd=Decimal("200"),
+            actor="owner@example.test",
+        )
+        self.store.acquire_lease(approved["id"], "pipeline-worker")
+        self.store.record_usage(
+            job_id=approved["id"],
+            dedupe_key="chirp-base-audio",
+            provider="google-cloud-speech",
+            model="chirp_3",
+            input_units=120,
+            output_units=None,
+            estimated_cost_usd=Decimal("0.25"),
+            usage={"unit": "estimated_billable_audio_seconds"},
+            worker_id="pipeline-worker",
+        )
+        finished = finish_with_policy(
+            self.store,
+            job_id=approved["id"],
+            worker_id="pipeline-worker",
+        )
+        self.assertEqual(finished["status"], "awaiting_review")
+        self.assertEqual(Decimal(finished["reserved_cost_usd"]), Decimal("0"))
+        self.assertEqual(Decimal(finished["actual_cost_usd"]), Decimal("0.25"))
+
     def test_committed_cost_ignores_legacy_terminal_reservation(self) -> None:
         job = self._create_job()
         with self.store.transaction() as connection:
@@ -490,6 +532,7 @@ class StoreTests(unittest.TestCase):
             error="synthetic failure",
             worker_id="pipeline-worker",
         )
+        self.assertEqual(Decimal(failed["reserved_cost_usd"]), Decimal("0"))
         with self.store.connect() as connection:
             failed_stage = connection.execute(
                 "SELECT status, completed_at, error FROM stage_runs WHERE job_id = ? AND stage = 'export'",
@@ -522,6 +565,7 @@ class StoreTests(unittest.TestCase):
         )
         self.assertIn("speech.recognizers.recognize", tail_failed["error"])
         self.assertIn("IAM_PERMISSION_DENIED", tail_failed["error"])
+        self.assertEqual(Decimal(tail_failed["reserved_cost_usd"]), Decimal("0"))
         retried = self.store.retry_failed_stage(
             job_id=job["id"],
             expected_revision=tail_failed["revision"],
@@ -530,6 +574,10 @@ class StoreTests(unittest.TestCase):
         )
         self.assertEqual(retried["status"], "queued")
         self.assertIsNotNone(retried["approved_at"])
+        self.assertEqual(
+            Decimal(retried["reserved_cost_usd"]),
+            Decimal("0.25"),
+        )
         with self.store.connect() as connection:
             pending_stage = connection.execute(
                 "SELECT status, completed_at, error FROM stage_runs WHERE job_id = ? AND stage = 'export'",
@@ -575,6 +623,7 @@ class StoreTests(unittest.TestCase):
             error="synthetic QA failure",
             worker_id="pipeline-worker",
         )
+        self.assertEqual(Decimal(failed["reserved_cost_usd"]), Decimal("0"))
         retried = self.store.retry_failed_stage(
             job_id=approved["id"],
             expected_revision=failed["revision"],
@@ -583,6 +632,10 @@ class StoreTests(unittest.TestCase):
         )
         self.assertEqual(retried["status"], "quality_check")
         self.assertEqual(retried["active_stage"], "qa")
+        self.assertEqual(Decimal(retried["reserved_cost_usd"]), Decimal("0"))
+        selected = self.store.next_paid_job()
+        self.assertIsNotNone(selected)
+        self.assertEqual(selected["id"], approved["id"])
         event = self.store.list_job_events(approved["id"])[0]
         self.assertTrue(event["payload"]["local_only"])
 
