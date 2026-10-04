@@ -1146,6 +1146,12 @@ class JobStore:
                 """,
                 (stage, f"{stage} 階段失敗", safe_error, now, job_id),
             )
+            self._settle_job_cost(
+                connection,
+                job_id=job_id,
+                actor=worker_id,
+                now=now,
+            )
             self._clear_lease(connection, job_id, worker_id)
             self._event(
                 connection,
@@ -1206,7 +1212,13 @@ class JobStore:
                 SELECT * FROM jobs
                 WHERE status IN ({','.join('?' for _ in statuses)})
                   AND approved_at IS NOT NULL
-                  AND CAST(reserved_cost_usd AS REAL) > 0
+                  AND (
+                        CAST(reserved_cost_usd AS REAL) > 0
+                        OR (
+                            status = 'quality_check'
+                            AND active_stage IN ('qa', 'validation')
+                        )
+                  )
                 ORDER BY created_at, batch_id, queue_position
                 LIMIT 1
                 """,
@@ -1323,6 +1335,12 @@ class JobStore:
     ) -> None:
         with self.transaction() as connection:
             self._require_lease(connection, job_id, worker_id)
+            row = connection.execute(
+                "SELECT batch_id, actual_cost_usd FROM jobs WHERE id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                raise JobNotFound("Job not found")
             connection.execute(
                 """
                 INSERT OR IGNORE INTO usage_records(
@@ -1342,6 +1360,16 @@ class JobStore:
                     _iso(),
                 ),
             )
+            actual = max(
+                Decimal(row["actual_cost_usd"] or "0"),
+                self._usage_cost(connection, job_id),
+            )
+            connection.execute(
+                "UPDATE jobs SET actual_cost_usd = ? WHERE id = ?",
+                (str(actual), job_id),
+            )
+            if row["batch_id"]:
+                self._refresh_batch_costs(connection, str(row["batch_id"]))
 
     def finish_for_review(
         self,
@@ -1390,6 +1418,12 @@ class JobStore:
                     now,
                     job_id,
                 ),
+            )
+            self._settle_job_cost(
+                connection,
+                job_id=job_id,
+                actor=worker_id,
+                now=now,
             )
             self._clear_lease(connection, job_id, worker_id)
             self._event(
@@ -1801,9 +1835,12 @@ class JobStore:
             committed = self._committed_cost(connection)
             actual = sum(
                 (
-                    Decimal(row["actual_cost_usd"] or "0")
+                    max(
+                        Decimal(row["actual_cost_usd"] or "0"),
+                        self._usage_cost(connection, row["id"]),
+                    )
                     for row in connection.execute(
-                        "SELECT actual_cost_usd FROM jobs"
+                        "SELECT id, actual_cost_usd FROM jobs"
                     ).fetchall()
                 ),
                 Decimal("0"),
@@ -1818,6 +1855,57 @@ class JobStore:
             "accounting_note": (
                 "程式僅記錄預估與用量；Cloud Billing 才是實際帳務依據。"
             ),
+        }
+
+    def reconcile_terminal_costs(self, *, actor: str) -> dict[str, str | int]:
+        """Release stale terminal reservations against recorded provider usage."""
+        now = _iso()
+        changed = 0
+        before = Decimal("0")
+        after = Decimal("0")
+        batches: set[str] = set()
+        with self.transaction() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, batch_id, status, reserved_cost_usd, actual_cost_usd
+                FROM jobs
+                WHERE status IN ('awaiting_review', 'completed', 'failed', 'cancelled')
+                ORDER BY created_at
+                """
+            ).fetchall()
+            for row in rows:
+                previous = max(
+                    Decimal(row["reserved_cost_usd"] or "0"),
+                    Decimal(row["actual_cost_usd"] or "0"),
+                )
+                before += previous
+                result = self._settle_job_cost(
+                    connection,
+                    job_id=row["id"],
+                    actor=actor,
+                    now=now,
+                )
+                after += result["actual_cost_usd"]
+                if result["changed"]:
+                    changed += 1
+                    connection.execute(
+                        """
+                        UPDATE jobs
+                        SET updated_at = ?, revision = revision + 1
+                        WHERE id = ?
+                        """,
+                        (now, row["id"]),
+                    )
+                if row["batch_id"]:
+                    batches.add(str(row["batch_id"]))
+            for batch_id in batches:
+                self._refresh_batch_costs(connection, batch_id)
+        return {
+            "jobs_scanned": len(rows),
+            "jobs_changed": changed,
+            "committed_before_usd": str(before),
+            "settled_actual_usd": str(after),
+            "released_reservation_usd": str(max(Decimal("0"), before - after)),
         }
 
     def append_audit_event(
@@ -2003,16 +2091,25 @@ class JobStore:
                 if local_only_qa
                 else "queued"
             )
+            retry_reservation = (
+                Decimal("0")
+                if local_only_qa
+                else max(
+                    Decimal(row["estimated_cost_usd"] or "0"),
+                    Decimal(row["actual_cost_usd"] or "0"),
+                )
+            )
             connection.execute(
                 """
                 UPDATE jobs
                 SET status = ?, active_stage = ?, stage_detail = ?,
-                    error = NULL, locked_by = NULL, lease_expires_at = NULL,
+                    error = NULL, reserved_cost_usd = ?,
+                    locked_by = NULL, lease_expires_at = NULL,
                     last_heartbeat_at = NULL, updated_at = ?,
                     revision = revision + 1
                 WHERE id = ?
                 """,
-                (next_status, stage, detail, now, job_id),
+                (next_status, stage, detail, str(retry_reservation), now, job_id),
             )
             self._event(
                 connection,
@@ -2024,6 +2121,7 @@ class JobStore:
                     "chunk_index": chunk_index,
                     "retry_archive": retry_archive,
                     "local_only": local_only_qa,
+                    "reserved_cost_usd": str(retry_reservation),
                 },
             )
             if row["batch_id"]:
@@ -2053,6 +2151,110 @@ class JobStore:
         )
 
     @staticmethod
+    def _usage_cost(
+        connection: sqlite3.Connection,
+        job_id: str,
+    ) -> Decimal:
+        rows = connection.execute(
+            """
+            SELECT estimated_cost_usd
+            FROM usage_records
+            WHERE job_id = ?
+            """,
+            (job_id,),
+        ).fetchall()
+        return sum(
+            (Decimal(row["estimated_cost_usd"] or "0") for row in rows),
+            Decimal("0"),
+        )
+
+    @classmethod
+    def _settle_job_cost(
+        cls,
+        connection: sqlite3.Connection,
+        *,
+        job_id: str,
+        actor: str,
+        now: str,
+    ) -> dict[str, Any]:
+        row = connection.execute(
+            """
+            SELECT batch_id, reserved_cost_usd, actual_cost_usd
+            FROM jobs
+            WHERE id = ?
+            """,
+            (job_id,),
+        ).fetchone()
+        if row is None:
+            raise JobNotFound("Job not found")
+        previous_reserved = Decimal(row["reserved_cost_usd"] or "0")
+        previous_actual = Decimal(row["actual_cost_usd"] or "0")
+        usage_cost = cls._usage_cost(connection, job_id)
+        actual = max(previous_actual, usage_cost)
+        changed = previous_reserved != Decimal("0") or previous_actual != actual
+        if changed:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET reserved_cost_usd = '0', actual_cost_usd = ?
+                WHERE id = ?
+                """,
+                (str(actual), job_id),
+            )
+            cls._event(
+                connection,
+                job_id,
+                "job_cost_settled",
+                actor,
+                {
+                    "previous_reserved_cost_usd": str(previous_reserved),
+                    "previous_actual_cost_usd": str(previous_actual),
+                    "recorded_usage_cost_usd": str(usage_cost),
+                    "actual_cost_usd": str(actual),
+                    "settled_at": now,
+                },
+            )
+        if row["batch_id"]:
+            cls._refresh_batch_costs(connection, str(row["batch_id"]))
+        return {
+            "changed": changed,
+            "actual_cost_usd": actual,
+            "previous_reserved_cost_usd": previous_reserved,
+            "previous_actual_cost_usd": previous_actual,
+            "recorded_usage_cost_usd": usage_cost,
+        }
+
+    @staticmethod
+    def _refresh_batch_costs(
+        connection: sqlite3.Connection,
+        batch_id: str,
+    ) -> None:
+        rows = connection.execute(
+            """
+            SELECT reserved_cost_usd, actual_cost_usd
+            FROM jobs
+            WHERE batch_id = ?
+            """,
+            (batch_id,),
+        ).fetchall()
+        reserved = sum(
+            (Decimal(row["reserved_cost_usd"] or "0") for row in rows),
+            Decimal("0"),
+        )
+        actual = sum(
+            (Decimal(row["actual_cost_usd"] or "0") for row in rows),
+            Decimal("0"),
+        )
+        connection.execute(
+            """
+            UPDATE batches
+            SET reserved_cost_usd = ?, actual_cost_usd = ?
+            WHERE id = ?
+            """,
+            (str(reserved), str(actual), batch_id),
+        )
+
+    @staticmethod
     def _committed_cost(
         connection: sqlite3.Connection,
         *,
@@ -2060,13 +2262,23 @@ class JobStore:
         exclude_batch_id: str | None = None,
     ) -> Decimal:
         rows = connection.execute(
-            "SELECT id, batch_id, reserved_cost_usd, actual_cost_usd FROM jobs"
+            """
+            SELECT id, batch_id, status, reserved_cost_usd, actual_cost_usd
+            FROM jobs
+            """
         ).fetchall()
+        terminal_statuses = {"awaiting_review", "completed", "failed", "cancelled"}
         return sum(
             (
                 max(
+                    Decimal(row["actual_cost_usd"] or "0"),
+                    JobStore._usage_cost(connection, row["id"]),
+                )
+                if row["status"] in terminal_statuses
+                else max(
                     Decimal(row["reserved_cost_usd"] or "0"),
                     Decimal(row["actual_cost_usd"] or "0"),
+                    JobStore._usage_cost(connection, row["id"]),
                 )
                 for row in rows
                 if (exclude_job_id is None or row["id"] != exclude_job_id)
@@ -2160,6 +2372,7 @@ class JobStore:
             """,
             (status, ready, failed, now, batch_id),
         )
+        JobStore._refresh_batch_costs(connection, batch_id)
 
     @staticmethod
     def _require_lease(
