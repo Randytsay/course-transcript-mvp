@@ -84,6 +84,9 @@ def refresh_batch_state(connection: Any, batch_id: str, now: str) -> None:
         """,
         (batch_status, ready, failed, now, batch_id),
     )
+    from app.jobs.store import JobStore
+
+    JobStore._refresh_batch_costs(connection, batch_id)
 
 
 def finish_with_policy(
@@ -145,6 +148,12 @@ def finish_with_policy(
             WHERE id = ?
             """,
             (status, active_stage, detail, now, job_id),
+        )
+        self._settle_job_cost(
+            connection,
+            job_id=job_id,
+            actor=worker_id,
+            now=now,
         )
         self._clear_lease(connection, job_id, worker_id)
         self._event(

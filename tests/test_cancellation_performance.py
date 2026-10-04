@@ -86,6 +86,7 @@ class CancellationPerformanceTests(unittest.TestCase):
 
         self.assertEqual(cancelled["status"], "cancelled")
         self.assertEqual(Decimal(cancelled["reserved_cost_usd"]), Decimal("0"))
+        self.assertEqual(Decimal(cancelled["actual_cost_usd"]), Decimal("0"))
         self.assertFalse((job_dir / "normalized.flac").exists())
         events = self.store.list_job_events(job["id"])
         self.assertEqual(events[0]["event_type"], "job_cancelled")
@@ -122,6 +123,7 @@ class CancellationPerformanceTests(unittest.TestCase):
         )
         self.assertEqual(cancelled["status"], "cancelled")
         self.assertIsNone(cancelled["locked_by"])
+        self.assertEqual(Decimal(cancelled["reserved_cost_usd"]), Decimal("0"))
 
     @patch("google.cloud.speech_v2.SpeechClient")
     def test_provider_cancellation_is_best_effort(self, speech_client: Mock) -> None:
