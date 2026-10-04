@@ -24,7 +24,7 @@ from app.jobs.performance_enhanced import build_performance_summary as enhanced_
 from app.jobs.performance import CostConfig, estimated_accrued_cost
 from app.jobs.correction_policy import get_job_correction_policy
 from app.jobs.store import JobConflict, JobStore
-from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, is_dynamic_batching
+from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, STANDARD_BATCH, is_dynamic_batching
 from app.jobs.workflow_mode import CHATGPT_HANDOFF, CHIRP_ONLY, normalize_workflow_mode
 from app.operations.runtime_heartbeat import write_service_heartbeat
 from app.pipeline import worker as base
@@ -418,17 +418,26 @@ def _submit_job(
     try:
         source = base._download_source(store, leased, data_dir, worker_id)
         base._normalize(store, leased, source, data_dir, worker_id)
+        chunk_retry = _chunk_retry_requested(job_dir)
         base._begin(
             store,
             leased,
             worker_id,
             stage="chirp",
             status="transcribing",
-            detail="提交 Chirp 3 動態批次並保存 operation",
+            detail=(
+                "提交 Chirp 3 Standard Batch 局部修復並保存 operation"
+                if chunk_retry
+                else "提交 Chirp 3 動態批次並保存 operation"
+            ),
             progress=21,
         )
         env = base._module_env(leased, job_dir)
-        env.update({"CHIRP_DYNAMIC_BATCHING": "true", "CHIRP_SUBMIT_ONLY": "1"})
+        env.update({
+            "CHIRP_DYNAMIC_BATCHING": "true",
+            "CHIRP_SUBMIT_ONLY": "1",
+            "CHIRP_REPAIR_MODE": "standard" if chunk_retry else "",
+        })
         base._run_with_heartbeat(
             [sys.executable, "-m", "app.providers.run_chirp_pipeline_hardened"],
             store=store,
@@ -452,15 +461,31 @@ def _submit_job(
                     stage_detail=?, progress=45, updated_at=?, revision=revision+1
                 WHERE id=?
                 """,
-                (f"Chirp 動態批次已提交 {total} 段；等待 Google 離峰處理", now, leased["id"]),
+                (
+                    (
+                        "Chirp Standard Batch 局部修復已提交；等待 Google 處理"
+                        if chunk_retry
+                        else f"Chirp 動態批次已提交 {total} 段；等待 Google 離峰處理"
+                    ),
+                    now,
+                    leased["id"],
+                ),
             )
             store._clear_lease(connection, leased["id"], worker_id)
             store._event(
                 connection,
                 leased["id"],
-                "chirp_dynamic_batch_submitted",
+                (
+                    "chirp_standard_retry_submitted"
+                    if chunk_retry
+                    else "chirp_dynamic_batch_submitted"
+                ),
                 worker_id,
-                {"chunk_count": total, "worker_released": True},
+                {
+                    "chunk_count": total,
+                    "worker_released": True,
+                    "repair_strategy": "STANDARD_BATCH" if chunk_retry else None,
+                },
             )
         return store.get_job(leased["id"])
     except base.PipelinePaused:
@@ -803,8 +828,9 @@ def _targeted_patch_budget(
     data_dir: Path,
     plan: dict[str, Any],
 ) -> tuple[bool, Decimal, Decimal, Decimal]:
-    strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
-    config = CostConfig.from_env().for_processing_strategy(strategy)
+    # Targeted repair always uses Standard Batch, regardless of the
+    # original full-course strategy.
+    config = CostConfig.from_env().for_processing_strategy(STANDARD_BATCH)
     extra = (
         Decimal(int(plan.get("total_duration_ms") or 0))
         / Decimal("60000")
@@ -843,6 +869,21 @@ def _stored_qa_targeted_patch_seed(job_dir: Path) -> bool:
     return False
 
 
+def _stored_completeness_targeted_patch_seed(job_dir: Path) -> bool:
+    try:
+        plan = json.loads(
+            (job_dir / "chirp-targeted-patch-plan.json").read_text(encoding="utf-8")
+        )
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(plan, dict)
+        and plan.get("status") == "planned"
+        and isinstance(plan.get("items"), list)
+        and bool(plan["items"])
+    )
+
+
 def _restore_audio_for_targeted_patch_if_needed(
     store: JobStore,
     leased: dict[str, Any],
@@ -853,7 +894,10 @@ def _restore_audio_for_targeted_patch_if_needed(
     job_dir = data_dir / "jobs" / leased["id"]
     if (job_dir / "normalized.flac").is_file():
         return
-    if not _stored_qa_targeted_patch_seed(job_dir):
+    if not (
+        _stored_qa_targeted_patch_seed(job_dir)
+        or _stored_completeness_targeted_patch_seed(job_dir)
+    ):
         return
     source = base._download_source(store, leased, data_dir, worker_id)
     base._normalize(store, leased, source, data_dir, worker_id)
@@ -1192,8 +1236,8 @@ def _record_targeted_patch_usage(
         for item in verdicts
         if isinstance(item, dict) and item.get("patch_index") is not None
     }
-    strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
-    config = CostConfig.from_env().for_processing_strategy(strategy)
+    # Targeted patch usage must be accounted at the Standard Batch rate.
+    config = CostConfig.from_env().for_processing_strategy(STANDARD_BATCH)
     for item in items:
         if not isinstance(item, dict) or item.get("patch_index") is None:
             continue
@@ -1297,7 +1341,7 @@ def _finish_after_chirp(
     handoff_imported = (
         job_dir / "chatgpt-handoff" / "import-audit.json"
     ).is_file()
-    if workflow_mode == CHATGPT_HANDOFF and not handoff_imported:
+    if bool(leased.get("enable_subtitles")) and not handoff_imported:
         base._run_module_stage(
             store, leased, data_dir, worker_id,
             stage="chirp_completeness", status="quality_check",
@@ -1378,7 +1422,7 @@ def _finish_after_chirp(
                 "chirp_processing_strategy": "DYNAMIC_BATCHING",
                 "correction_model": None,
                 "drive_upload_started": False,
-                "drive_publication_status": "blocked_before_chatgpt_handoff",
+                "drive_publication_status": "blocked_before_golden_completion",
                 "drive_publication_error": None,
                 "source_media_preserved_in_drive": True,
                 "human_review_blocking": True,
@@ -1438,7 +1482,8 @@ def _finish_after_chirp(
         }
         base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
         base._atomic_json(job_dir / "processing_manifest.json", manifest)
-        base.cleanup_completed_audio(job_dir)
+        # Keep normalized audio while correction is pending so any
+        # completeness repair can reuse local audio without another Drive download.
         schedule(job_dir, "awaiting-chatgpt")
         observed._write_report_safely(data_dir, leased["id"])
         return store.finish_for_handoff(
@@ -1478,7 +1523,8 @@ def _finish_after_chirp(
         }
         base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
         base._atomic_json(job_dir / "processing_manifest.json", manifest)
-        base.cleanup_completed_audio(job_dir)
+        # CHIRP_ONLY is not Golden-complete; retain normalized audio for
+        # later local quality audit or targeted repair.
         schedule(job_dir, "chirp-only-ready")
         observed._write_report_safely(data_dir, leased["id"])
         return store.finish_for_handoff(

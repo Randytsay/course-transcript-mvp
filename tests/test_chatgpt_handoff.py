@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
+from unittest.mock import patch
 
 from app.jobs.costs import CostConfig, estimate_job_cost
 from app.jobs.workflow_mode import (
@@ -208,6 +209,37 @@ def test_chirp_completeness_gate_passes_clean_short_job(tmp_path: Path) -> None:
     assert report["status"] == "PASS"
     assert report["handoff_allowed"] is True
     assert report["summary"]["blocker_count"] == 0
+
+
+def test_chirp_completeness_density_only_is_review_not_blocker(tmp_path: Path) -> None:
+    job_dir = tmp_path / "gate-density-review"
+    _write_job(job_dir)
+    with (
+        patch(
+            "app.providers.chirp_completeness_gate.base_chunk_density_reports",
+            return_value=(
+                [],
+                [{"chunk_index": 0, "classification": "density_out_of_range"}],
+            ),
+        ),
+        patch(
+            "app.providers.chirp_completeness_gate.density_windows",
+            return_value=(
+                [],
+                [{"start_ms": 0, "end_ms": 1000, "classification": "density_out_of_range"}],
+            ),
+        ),
+    ):
+        report = evaluate_completeness(
+            job_dir,
+            audibility_probe=lambda _start, _end: False,
+        )
+    assert report["status"] == "PASS"
+    assert report["handoff_allowed"] is True
+    assert report["summary"]["blocker_count"] == 0
+    reasons = {item["reason"] for item in report["warnings"]}
+    assert "course_relative_chunk_density_review" in reasons
+    assert "course_density_window_review" in reasons
 
 
 def test_chirp_completeness_gate_blocks_audible_mid_gap(tmp_path: Path) -> None:
