@@ -234,6 +234,7 @@ def build_auto_repair_patch_plan(
     merge_gap_ms: int = 1_000,
     max_total_ms: int = 600_000,
     max_patches: int = 12,
+    max_window_ms: int = 300_000,
     patch_index_base: int = 920_000,
 ) -> dict[str, Any]:
     """Build one bounded paid repair round from completeness blockers.
@@ -365,8 +366,31 @@ def build_auto_repair_patch_plan(
         else:
             merged.append(dict(item))
 
+    bounded_merged: list[dict[str, Any]] = []
+    max_window_ms = max(1, min(int(max_window_ms), int(max_total_ms)))
+    for item in merged:
+        source_start = int(item["source_start_ms"])
+        source_end = int(item["source_end_ms"])
+        if source_end - source_start <= max_window_ms:
+            bounded_merged.append(item)
+            continue
+        cursor = source_start
+        while cursor < source_end:
+            window_end = min(source_end, cursor + max_window_ms)
+            split = dict(item)
+            split["source_start_ms"] = cursor
+            split["source_end_ms"] = window_end
+            split["gap_start_ms"] = max(int(item["gap_start_ms"]), cursor)
+            split["gap_end_ms"] = min(int(item["gap_end_ms"]), window_end)
+            if split["gap_end_ms"] <= split["gap_start_ms"]:
+                split["gap_start_ms"] = cursor
+                split["gap_end_ms"] = window_end
+            split["split_from_long_window"] = True
+            bounded_merged.append(split)
+            cursor = window_end
+
     items: list[dict[str, Any]] = []
-    for offset, item in enumerate(merged, start=1):
+    for offset, item in enumerate(bounded_merged, start=1):
         source_start = int(item["source_start_ms"])
         source_end = int(item["source_end_ms"])
         gap_start = int(item["gap_start_ms"])
@@ -385,6 +409,7 @@ def build_auto_repair_patch_plan(
                 "patch_mode": "replace_window",
                 "reason": "+".join(sorted(set(item["reasons"]))),
                 "automatic_paid_retry": True,
+                "split_from_long_window": bool(item.get("split_from_long_window")),
             }
         )
 

@@ -29,6 +29,8 @@ PLAN = "chirp-targeted-patch-plan.json"
 SUBMITTED = "chirp-targeted-patch-submitted.json"
 WAITING = "chirp-targeted-patch-waiting.json"
 COMPLETE = "chirp-targeted-patch-complete.json"
+RESUBMIT = "chirp-targeted-patch-resubmit.json"
+RESUBMIT_EXIT = 77
 
 
 def _iso() -> str:
@@ -199,13 +201,145 @@ def _manifest(job_dir: Path, item: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _prepare_terminal_resubmit(
+    job_dir: Path,
+    items: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Re-key terminal patch operations before another paid submission.
+
+    A terminal provider operation is immutable evidence and must never be
+    polled/reused as the retry target.  Re-keying gives the retry a fresh chunk
+    identity and therefore a fresh provider operation/GCS prefix while keeping
+    all successful patch chunks intact.
+    """
+    prior_marker = _read_json(job_dir / RESUBMIT, {})
+    if isinstance(prior_marker, dict) and prior_marker.get("status") == "prepared":
+        return prior_marker
+
+    plan = _read_json(job_dir / PLAN, {})
+    if not isinstance(plan, dict):
+        return None
+
+    existing_indices: set[int] = set()
+    chunks_dir = job_dir / "chunks"
+    if chunks_dir.is_dir():
+        for path in chunks_dir.glob("chunk-*"):
+            match = re.fullmatch(r"chunk-(\d+)", path.name)
+            if match:
+                existing_indices.add(int(match.group(1)))
+    for item in items:
+        try:
+            existing_indices.add(int(item["patch_index"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    next_index = max(existing_indices or {899_999}) + 1
+    audio_end_ms = _audio_ms(job_dir)
+
+    replacements: dict[int, dict[str, Any]] = {}
+    evidence: list[dict[str, Any]] = []
+    for item in items:
+        try:
+            old_index = int(item["patch_index"])
+            start_ms = int(item["source_start_ms"])
+            end_ms = int(item["source_end_ms"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        manifest = _manifest(job_dir, item)
+        status = str(manifest.get("status") or "")
+        if status not in {"FAILED", "CANCELLED"}:
+            continue
+        error = manifest.get("error") if isinstance(manifest.get("error"), dict) else {}
+        error_code = str(error.get("code") or "")
+        compatible = window_matches(
+            manifest,
+            start_seconds=start_ms / 1000,
+            end_seconds=end_ms / 1000,
+            dynamic_batching=False,
+        )
+        if error_code != "OUTPUT_MISSING" and compatible:
+            continue
+
+        bounded_end_ms = min(end_ms, audio_end_ms)
+        if bounded_end_ms <= start_ms:
+            continue
+        new_item = dict(item)
+        new_item["patch_index"] = next_index
+        new_item["source_end_ms"] = bounded_end_ms
+        new_item["duration_ms"] = bounded_end_ms - start_ms
+        if new_item.get("gap_end_ms") is not None:
+            new_item["gap_end_ms"] = min(int(new_item["gap_end_ms"]), bounded_end_ms)
+        if new_item.get("gap_start_ms") is not None:
+            new_item["gap_start_ms"] = max(int(new_item["gap_start_ms"]), start_ms)
+        if new_item.get("gap_start_ms") is not None and new_item.get("gap_end_ms") is not None:
+            new_item["gap_ms"] = max(
+                0,
+                int(new_item["gap_end_ms"]) - int(new_item["gap_start_ms"]),
+            )
+        new_item["supersedes_patch_index"] = old_index
+        new_item["resubmit_reason"] = (
+            f"terminal_{error_code}" if error_code else "terminal_incompatible_window"
+        )
+        replacements[old_index] = new_item
+        evidence.append(
+            {
+                "old_patch_index": old_index,
+                "new_patch_index": next_index,
+                "old_operation_name": manifest.get("operation_name"),
+                "old_status": status,
+                "old_error_code": error_code or None,
+                "old_source_start_ms": manifest.get("source_start_ms"),
+                "old_source_end_ms": manifest.get("source_end_ms"),
+                "new_source_start_ms": start_ms,
+                "new_source_end_ms": bounded_end_ms,
+            }
+        )
+        next_index += 1
+
+    if not replacements:
+        return None
+
+    revised_items: list[dict[str, Any]] = []
+    for item in items:
+        old_index = int(item["patch_index"])
+        revised_items.append(replacements.get(old_index, item))
+
+    archive = job_dir / "targeted-patch-archives" / (
+        "terminal-resubmit-" + datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    )
+    archive.mkdir(parents=True, exist_ok=False)
+    for name in (PLAN, SUBMITTED, WAITING, COMPLETE, RESUBMIT):
+        source = job_dir / name
+        if source.is_file():
+            shutil.copy2(source, archive / name)
+
+    plan["items"] = revised_items
+    plan["status"] = "planned"
+    plan["proposed_patch_count"] = len(revised_items)
+    plan["total_duration_ms"] = sum(int(item.get("duration_ms") or 0) for item in revised_items)
+    plan["terminal_resubmit_prepared_at"] = _iso()
+    plan["terminal_resubmit_archive"] = str(archive.relative_to(job_dir))
+    plan["terminal_resubmits"] = evidence
+    _atomic(job_dir / PLAN, plan)
+    (job_dir / WAITING).unlink(missing_ok=True)
+    (job_dir / COMPLETE).unlink(missing_ok=True)
+
+    marker = {
+        "status": "prepared",
+        "prepared_at": _iso(),
+        "archive": str(archive.relative_to(job_dir)),
+        "replacements": evidence,
+    }
+    _atomic(job_dir / RESUBMIT, marker)
+    return marker
+
+
 def _submit(job_dir: Path, item: dict[str, Any]) -> tuple[bool, str]:
     prior = _manifest(job_dir, item)
     status = str(prior.get("status") or "")
     start = int(item["source_start_ms"]) / 1000
     end = int(item["source_end_ms"]) / 1000
     if status in {"SUBMITTED", "RUNNING", "RECOVERING", "SUCCEEDED", "EMPTY_SILENCE"}:
-        if not window_matches(prior, start_seconds=start, end_seconds=end, dynamic_batching=True):
+        if not window_matches(prior, start_seconds=start, end_seconds=end, dynamic_batching=False):
             return False, "retained targeted patch window is incompatible"
         return True, f"patch-{item['patch_index']}: retained {status}"
     env = _env(item)
@@ -293,6 +427,7 @@ def submit(job_dir: Path = JOB) -> int:
         job_dir / WAITING,
         {"checked_at": _iso(), "pending": len(items), "patch_count": len(items)},
     )
+    (job_dir / RESUBMIT).unlink(missing_ok=True)
     print("\n".join(messages))
     print(f"TARGETED_PATCH=SUBMITTED count={len(items)}")
     return 75
@@ -303,6 +438,15 @@ def recover(job_dir: Path = JOB) -> int:
     if not items:
         print("TARGETED_PATCH=NONE")
         return 0
+    resubmit = _read_json(job_dir / RESUBMIT, {})
+    if isinstance(resubmit, dict) and resubmit.get("status") == "prepared":
+        print("TARGETED_PATCH=RESUBMIT_REQUIRED prepared")
+        return RESUBMIT_EXIT
+    prepared = _prepare_terminal_resubmit(job_dir, items)
+    if prepared is not None:
+        replacements = prepared.get("replacements") if isinstance(prepared, dict) else []
+        print(f"TARGETED_PATCH=RESUBMIT_REQUIRED count={len(replacements or [])}")
+        return RESUBMIT_EXIT
     counts = {"done": 0, "pending": 0, "retryable": 0, "failed": 0}
     messages = []
     for item in items:

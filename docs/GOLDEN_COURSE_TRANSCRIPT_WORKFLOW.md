@@ -60,7 +60,9 @@ The production default is deliberately split by workload:
   bounded gap. Never send an already-successful chunk back through the provider.
 - **Provider terminal/no-output:** stop polling the dead operation. Archive the
   attempt and create at most one fresh Standard repair attempt for that missing
-  chunk under the approved batch budget.
+  chunk under the approved batch budget. The retry must receive a fresh patch
+  identity and provider operation/GCS prefix; stale submitted/recovery markers
+  may never route the replacement window back to the terminal operation.
 - **Coverage / VAD / QA:** local and provider-free. Density anomalies alone are
   review warnings; they become blockers only when corroborated by audible gaps,
   broken timing/provider evidence, or an uncovered audible tail.
@@ -87,7 +89,7 @@ The production default is deliberately split by workload:
 
 This split is the default for future jobs, not a one-off migration override.
 
-Version: **1.4**
+Version: **1.5**
 
 This document is the stable handoff pointer for future ChatGPT/WebCodex sessions.
 Changes to timing truth, completeness fail-closed behavior, Drive publication

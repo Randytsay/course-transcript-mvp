@@ -854,8 +854,11 @@ def _targeted_patch_budget(
         try:
             batch = JobStore(database_path).get_batch(batch_id)
             batch_reserved = Decimal(str(batch.get("reserved_cost_usd") or "0"))
+            batch_estimated = Decimal(str(batch.get("estimated_cost_usd") or "0"))
+            batch_actual = Decimal(str(batch.get("actual_cost_usd") or "0"))
+            batch_ceiling = max(batch_reserved, batch_estimated)
             jobs = batch.get("jobs") if isinstance(batch, dict) else None
-            if batch_reserved > 0 and isinstance(jobs, list) and jobs:
+            if batch_ceiling > 0 and isinstance(jobs, list) and jobs:
                 batch_accrued = sum(
                     (
                         estimated_accrued_cost(database_path, data_dir, str(item["id"]))
@@ -864,11 +867,12 @@ def _targeted_patch_budget(
                     ),
                     Decimal("0"),
                 )
+                batch_committed = max(batch_accrued, batch_actual)
                 return (
-                    batch_accrued + extra <= batch_reserved,
-                    batch_accrued,
+                    batch_committed + extra <= batch_ceiling,
+                    batch_committed,
                     extra,
-                    batch_reserved,
+                    batch_ceiling,
                 )
         except Exception:
             # Fail back to the per-job reservation if batch accounting evidence
@@ -1059,6 +1063,9 @@ def _prepare_chirp_completeness_auto_repair(
         merge_gap_ms=int(os.environ.get("CHIRP_COMPLETENESS_REPAIR_MERGE_GAP_MS", "1000")),
         max_total_ms=int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_MS", "600000")),
         max_patches=int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_PATCHES", "12")),
+        max_window_ms=int(
+            os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_WINDOW_MS", "300000")
+        ),
         patch_index_base=920_000 + (repair_round - 1) * 1_000,
     )
     items = plan.get("items") if isinstance(plan, dict) else []
@@ -1718,6 +1725,19 @@ def _recover_job(
         if stdout:
             print(stdout)
         completed, total = _chunk_counts(job_dir)
+        if targeted_recovery and returncode == 77:
+            waiting = _submit_targeted_patch_if_needed(
+                store,
+                leased,
+                data_dir=data_dir,
+                worker_id=worker_id,
+                use_existing_plan=True,
+            )
+            if waiting is not None:
+                return waiting
+            raise base.PipelineError(
+                "Chirp terminal targeted patch requires a fresh submission but budget/policy blocked it"
+            )
         if returncode in {75, 76}:
             outcome = "retryable" if returncode == 76 else "pending"
             schedule(job_dir, outcome, detail=base._safe_error(stderr or stdout))

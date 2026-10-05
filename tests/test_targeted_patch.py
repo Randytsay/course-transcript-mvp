@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from app.providers.qa_report import base_chunk_density_reports
+from app.providers import targeted_patch
 from app.providers.recover_chunk_hardened import empty_result_policy
 from app.providers.targeted_patch import build_plan
 from app.pipeline.dynamic_worker_hardened import (
@@ -259,6 +261,116 @@ class TargetedPatchTests(unittest.TestCase):
             self.assertEqual(call["output_units"], 123)
             self.assertEqual(call["usage"]["role"], "patch")
             self.assertEqual(call["usage"]["target_gap_word_count"], 100)
+
+    def test_terminal_output_missing_rekeys_before_resubmit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary) / "job-terminal"
+            chunks = job / "chunks"
+            old_index = 973805
+            old_chunk = chunks / f"chunk-{old_index:03d}"
+            old_chunk.mkdir(parents=True)
+            (job / "chunk-plan.json").write_text(
+                json.dumps({"duration_seconds": 100.0, "chunks": []}),
+                encoding="utf-8",
+            )
+            (job / targeted_patch.PLAN).write_text(
+                json.dumps(
+                    {
+                        "version": "targeted-patch-v1",
+                        "status": "planned",
+                        "items": [
+                            {
+                                "patch_index": old_index,
+                                "parent_chunk_index": 12,
+                                "source_start_ms": 80_000,
+                                "source_end_ms": 100_000,
+                                "duration_ms": 20_000,
+                                "gap_start_ms": 82_000,
+                                "gap_end_ms": 99_000,
+                                "gap_ms": 17_000,
+                                "role": "patch",
+                                "patch_mode": "replace_window",
+                            }
+                        ],
+                        "proposed_patch_count": 1,
+                        "total_duration_ms": 20_000,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job / targeted_patch.SUBMITTED).write_text(
+                json.dumps({"patch_count": 1, "patch_indices": [old_index]}),
+                encoding="utf-8",
+            )
+            old_manifest = {
+                "chunk_index": old_index,
+                "role": "patch",
+                "patch_mode": "replace_window",
+                "source_start_ms": 80_000,
+                "source_end_ms": 100_500,
+                "processing_strategy": "PROCESSING_STRATEGY_UNSPECIFIED",
+                "dynamic_batching": False,
+                "operation_name": "operations/dead",
+                "status": "FAILED",
+                "attempt_count": 1,
+                "error": {
+                    "code": "OUTPUT_MISSING",
+                    "message": "Operation completed without a GCS result",
+                },
+            }
+            (old_chunk / "manifest.json").write_text(
+                json.dumps(old_manifest), encoding="utf-8"
+            )
+            # Reserve the next numeric identity to prove re-keying scans all
+            # retained chunk evidence instead of overwriting it.
+            (chunks / "chunk-973806").mkdir()
+
+            with patch.object(targeted_patch.base, "run_subprocess") as runner:
+                code = targeted_patch.recover(job)
+            self.assertEqual(code, targeted_patch.RESUBMIT_EXIT)
+            runner.assert_not_called()
+
+            revised = json.loads((job / targeted_patch.PLAN).read_text(encoding="utf-8"))
+            item = revised["items"][0]
+            self.assertEqual(item["patch_index"], 973807)
+            self.assertEqual(item["supersedes_patch_index"], old_index)
+            self.assertEqual(item["resubmit_reason"], "terminal_OUTPUT_MISSING")
+            self.assertEqual(item["source_end_ms"], 100_000)
+            self.assertEqual(
+                json.loads((old_chunk / "manifest.json").read_text(encoding="utf-8")),
+                old_manifest,
+            )
+            marker = json.loads((job / targeted_patch.RESUBMIT).read_text(encoding="utf-8"))
+            self.assertEqual(marker["status"], "prepared")
+            self.assertEqual(marker["replacements"][0]["new_patch_index"], 973807)
+
+    def test_targeted_patch_retains_matching_standard_batch_operation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            job = Path(temporary) / "job-retained"
+            chunk = job / "chunks" / "chunk-900700"
+            chunk.mkdir(parents=True)
+            item = {
+                "patch_index": 900700,
+                "source_start_ms": 1_000,
+                "source_end_ms": 61_000,
+            }
+            (chunk / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "SUBMITTED",
+                        "source_start_ms": 1_000,
+                        "source_end_ms": 61_000,
+                        "processing_strategy": "PROCESSING_STRATEGY_UNSPECIFIED",
+                        "dynamic_batching": False,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with patch.object(targeted_patch.base, "run_subprocess") as runner:
+                ok, message = targeted_patch._submit(job, item)
+            self.assertTrue(ok)
+            self.assertIn("retained SUBMITTED", message)
+            runner.assert_not_called()
 
     def test_completed_patch_with_gap_words_marks_repaired(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

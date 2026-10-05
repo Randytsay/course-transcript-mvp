@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.providers.validate_outputs import _published_subtitle_count, _reconstructed_base_chunks
+from app.providers.validate_outputs import _published_subtitle_count, _reconstructed_base_chunks, _superseded_failed_patch
 
 
 class ValidateOutputsTests(unittest.TestCase):
@@ -32,6 +32,12 @@ class ValidateOutputsTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(_reconstructed_base_chunks(root), {0, 8})
+
+    def test_failed_patch_is_superseded_validation_evidence(self) -> None:
+        self.assertTrue(_superseded_failed_patch({"role": "patch", "status": "FAILED"}))
+        self.assertTrue(_superseded_failed_patch({"role": "patch", "status": "CANCELLED"}))
+        self.assertFalse(_superseded_failed_patch({"role": "patch", "status": "SUCCEEDED"}))
+        self.assertFalse(_superseded_failed_patch({"role": "base", "status": "FAILED"}))
 
 
 if __name__ == "__main__":

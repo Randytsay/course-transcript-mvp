@@ -711,6 +711,49 @@ class NewFeatureTests(unittest.TestCase):
         self.assertEqual(plan["deferred_patch_count"], 3)
         self.assertEqual(plan["original_proposed_patch_count"], 15)
 
+    def test_long_single_gap_is_split_into_bounded_windows(self) -> None:
+        from app.providers.chirp_completeness_gate import build_auto_repair_patch_plan
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "chunk-plan.json").write_text(
+                json.dumps(
+                    {
+                        "duration_seconds": 900,
+                        "chunks": [
+                            {
+                                "chunk_index": 0,
+                                "source_start_ms": 0,
+                                "source_end_ms": 900000,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan = build_auto_repair_patch_plan(
+                job,
+                {
+                    "blockers": [
+                        {
+                            "reason": "audible_subtitle_gap",
+                            "gap_start_ms": 280720,
+                            "gap_end_ms": 895160,
+                        }
+                    ]
+                },
+                context_ms=5000,
+                max_total_ms=600000,
+                max_window_ms=300000,
+            )
+        self.assertEqual(plan["status"], "planned")
+        self.assertIsNone(plan["auto_submit_blocked_reason"])
+        self.assertEqual(plan["proposed_patch_count"], 2)
+        self.assertEqual(plan["total_duration_ms"], 600000)
+        self.assertEqual(plan["deferred_patch_count"], 1)
+        self.assertTrue(all(item["duration_ms"] <= 300000 for item in plan["items"]))
+        self.assertTrue(all(item["split_from_long_window"] for item in plan["items"]))
+
 
 
 if __name__ == "__main__":

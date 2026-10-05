@@ -2096,6 +2096,7 @@ class JobStore:
                 else max(
                     Decimal(row["estimated_cost_usd"] or "0"),
                     Decimal(row["actual_cost_usd"] or "0"),
+                    Decimal(row["reserved_cost_usd"] or "0"),
                 )
             )
             connection.execute(

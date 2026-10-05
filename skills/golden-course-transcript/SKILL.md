@@ -1,4 +1,4 @@
-# Course Transcript 黃金字幕 Skill v1.5
+# Course Transcript 黃金字幕 Skill v1.6
 
 ## Purpose
 
@@ -153,10 +153,13 @@ Golden promotion until bounded repair/review completes.
 2. **任何 retry / repair：Standard Batch**
    - 單一失敗 chunk、audible gap、尾端缺字一律只送該區段。
    - 已成功 chunk 的 provider evidence 永久重用，不得因 retry 而失效。
-3. **Terminal no-output 不無限等**
+3. **Terminal no-output 不無限等，也不得重用 dead operation**
    - provider operation 已 terminal 且超過 output propagation grace 仍無 GCS output，
      將該 attempt 封存為 dead-output evidence。
    - 在既有核准預算內，只建立新的 Standard repair attempt；不得重送整堂。
+   - 新 attempt 必須使用新的 patch identity、operation name 與 attempt-isolated
+     GCS prefix。若 repair window 因 trim/replan 改變，舊 `submitted/waiting`
+     state 只能作為歷史 evidence，不得把新 window 導回舊 terminal operation。
 4. **Coverage / VAD / QA 本機化**
    - `density_out_of_range` / course-relative density 單獨出現時只列
      `REVIEW/WARNING`，不是 Golden blocker。

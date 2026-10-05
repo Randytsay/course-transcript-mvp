@@ -17,6 +17,14 @@ SRT_TIMING = re.compile(r"^\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}$"
 VTT_TIMING = re.compile(r"^\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}$")
 
 
+def _superseded_failed_patch(payload: dict[str, Any]) -> bool:
+    """Failed patch attempts are audit evidence, not required final ASR evidence."""
+    return (
+        str(payload.get("role") or "base") == "patch"
+        and str(payload.get("status") or "") in {"FAILED", "CANCELLED"}
+    )
+
+
 def blocks(path: Path) -> list[list[str]]:
     return [
         block.splitlines()
@@ -247,6 +255,10 @@ def main() -> int:
     for path in manifests:
         payload = json.loads(path.read_text(encoding="utf-8"))
         role = str(payload.get("role") or "base")
+        if _superseded_failed_patch(payload):
+            # Keep failed patch manifests for provenance, but do not require
+            # raw/word outputs from an attempt that a later patch superseded.
+            continue
         chunk_index = int(payload.get("chunk_index", -1))
         base_equivalent = role in {"base", "repair"}
         if base_equivalent:
