@@ -23,6 +23,44 @@ _ORIGINAL_AUTO_PUBLISH = worker.base._auto_publish_to_source
 _ORIGINAL_FINISH_AFTER_CHIRP = worker._finish_after_chirp
 _ORIGINAL_REPAIR_QA_ONLY = worker._repair_qa_only
 
+_RUNTIME_ENV_KEYS = (
+    "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+    "GCS_BUCKET",
+)
+
+
+def _load_active_runtime_env(runtime_dir: Path | None = None) -> tuple[str, ...]:
+    """Fill missing active GCP runtime settings from the mounted runtime file.
+
+    Production deployments can be orchestrated from a helper container where
+    Compose cannot read the host-only ``env_file`` path.  The same runtime
+    directory is still mounted into the worker, so bootstrap the three
+    non-secret routing values here without overriding explicit environment
+    values or importing arbitrary keys.
+    """
+    root = runtime_dir or Path(os.environ.get("AI_RUNTIME_DIR", "/run/ai-runtime"))
+    path = root / "ai-active.env"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (FileNotFoundError, OSError):
+        return ()
+
+    loaded: list[str] = []
+    allowed = set(_RUNTIME_ENV_KEYS)
+    for raw in lines:
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key not in allowed or not value or os.environ.get(key):
+            continue
+        os.environ[key] = value
+        loaded.append(key)
+    return tuple(loaded)
+
 
 def _review_required(value: object) -> bool:
     if isinstance(value, str):
@@ -342,4 +380,5 @@ worker._submit_job = _submit_or_resume_chirp
 
 
 if __name__ == "__main__":
+    _load_active_runtime_env()
     raise SystemExit(worker.main())
