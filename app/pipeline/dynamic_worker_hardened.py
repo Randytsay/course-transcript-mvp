@@ -971,8 +971,8 @@ def _prepare_chirp_completeness_auto_repair(
             "repair_duration_cap_exceeded",
             "patch_count_cap_exceeded",
         }
-        and int(marker.get("proposed_patch_count") or 0) > 1
         and not bool(marker.get("provider_calls_started"))
+        and not bool(marker.get("legacy_replan_attempted"))
     ):
         legacy_block_snapshot = dict(marker)
         marker = {}
@@ -1091,6 +1091,8 @@ def _prepare_chirp_completeness_auto_repair(
                 "proposed_patch_count": int(plan.get("proposed_patch_count") or 0),
                 "total_duration_ms": int(plan.get("total_duration_ms") or 0),
                 "blocked_reason": plan.get("auto_submit_blocked_reason"),
+                "legacy_replan_attempted": legacy_block_snapshot is not None,
+                "legacy_block_snapshot": legacy_block_snapshot,
             },
         )
         return None

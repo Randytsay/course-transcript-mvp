@@ -429,7 +429,7 @@ def test_completeness_auto_repair_merges_adjacent_blockers(tmp_path: Path) -> No
     assert first["automatic_paid_retry"] is True
 
 
-def test_completeness_auto_repair_fails_closed_over_duration_cap(
+def test_completeness_auto_repair_defers_excess_duration_to_next_round(
     tmp_path: Path,
 ) -> None:
     job_dir = tmp_path / "auto-repair-cap"
@@ -465,9 +465,14 @@ def test_completeness_auto_repair_fails_closed_over_duration_cap(
         max_total_ms=600_000,
     )
 
-    assert plan["status"] == "blocked"
-    assert plan["items"] == []
-    assert plan["auto_submit_blocked_reason"] == "repair_duration_cap_exceeded"
+    assert plan["status"] == "planned"
+    assert len(plan["items"]) == 2
+    assert plan["total_duration_ms"] == 600_000
+    assert plan["proposed_patch_count"] == 2
+    assert plan["original_proposed_patch_count"] == 3
+    assert plan["deferred_patch_count"] == 1
+    assert plan["auto_submit_blocked_reason"] is None
+    assert all(item["duration_ms"] <= 300_000 for item in plan["items"])
 
 
 def test_current_residual_gap_uses_archived_patch_word_evidence(
