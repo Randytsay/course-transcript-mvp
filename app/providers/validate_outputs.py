@@ -17,6 +17,14 @@ SRT_TIMING = re.compile(r"^\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3}$"
 VTT_TIMING = re.compile(r"^\d{2}:\d{2}:\d{2}\.\d{3} --> \d{2}:\d{2}:\d{2}\.\d{3}$")
 
 
+def _superseded_failed_patch(payload: dict[str, Any]) -> bool:
+    """Failed patch attempts are audit evidence, not required final ASR evidence."""
+    return (
+        str(payload.get("role") or "base") == "patch"
+        and str(payload.get("status") or "") in {"FAILED", "CANCELLED"}
+    )
+
+
 def blocks(path: Path) -> list[list[str]]:
     return [
         block.splitlines()
@@ -75,6 +83,23 @@ def _published_subtitle_count(cleaned_path: Path, raw_count: int) -> int:
         return raw_count
     display = payload.get("display_segments") if isinstance(payload, dict) else None
     return len(display) if isinstance(display, list) and display else raw_count
+
+
+def _reconstructed_base_chunks(job: Path) -> set[int]:
+    try:
+        merged = json.loads((job / "merged-words.json").read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return set()
+    values = merged.get("reconstructed_base_chunks") if isinstance(merged, dict) else None
+    if not isinstance(values, list):
+        return set()
+    reconstructed: set[int] = set()
+    for value in values:
+        try:
+            reconstructed.add(int(value))
+        except (TypeError, ValueError):
+            continue
+    return reconstructed
 
 
 def main() -> int:
@@ -225,15 +250,30 @@ def main() -> int:
         else 0
     )
     manifests = sorted((JOB / "chunks").glob("chunk-*/manifest.json"))
+    reconstructed_base_chunks = _reconstructed_base_chunks(JOB)
     base_payloads: list[dict[str, Any]] = []
     for path in manifests:
         payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("role", "base") == "base":
+        role = str(payload.get("role") or "base")
+        if _superseded_failed_patch(payload):
+            # Keep failed patch manifests for provenance, but do not require
+            # raw/word outputs from an attempt that a later patch superseded.
+            continue
+        chunk_index = int(payload.get("chunk_index", -1))
+        base_equivalent = role in {"base", "repair"}
+        if base_equivalent:
             base_payloads.append(payload)
         chunk = path.parent
-        if payload.get("status") not in {"SUCCEEDED", "EMPTY_SILENCE"}:
+        reconstructed = base_equivalent and chunk_index in reconstructed_base_chunks
+        if (
+            payload.get("status") not in {"SUCCEEDED", "EMPTY_SILENCE"}
+            and not reconstructed
+        ):
             errors.append(f"incomplete Chirp status for {chunk.name}")
-        if not (chunk / "chirp-raw.json").is_file() or not (chunk / "words.json").is_file():
+        if (
+            not (chunk / "chirp-raw.json").is_file()
+            or not (chunk / "words.json").is_file()
+        ) and not reconstructed:
             errors.append(f"incomplete raw Chirp evidence for {chunk.name}")
     if len(base_payloads) != expected_chunks:
         errors.append("missing required chunk manifests")

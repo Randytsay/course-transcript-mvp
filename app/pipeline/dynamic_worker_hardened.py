@@ -24,7 +24,7 @@ from app.jobs.performance_enhanced import build_performance_summary as enhanced_
 from app.jobs.performance import CostConfig, estimated_accrued_cost
 from app.jobs.correction_policy import get_job_correction_policy
 from app.jobs.store import JobConflict, JobStore
-from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, is_dynamic_batching
+from app.jobs.strategy import DEFAULT_PROCESSING_STRATEGY, STANDARD_BATCH, is_dynamic_batching
 from app.jobs.workflow_mode import CHATGPT_HANDOFF, CHIRP_ONLY, normalize_workflow_mode
 from app.operations.runtime_heartbeat import write_service_heartbeat
 from app.pipeline import worker as base
@@ -424,17 +424,26 @@ def _submit_job(
     try:
         source = base._download_source(store, leased, data_dir, worker_id)
         base._normalize(store, leased, source, data_dir, worker_id)
+        chunk_retry = _chunk_retry_requested(job_dir)
         base._begin(
             store,
             leased,
             worker_id,
             stage="chirp",
             status="transcribing",
-            detail="提交 Chirp 3 動態批次並保存 operation",
+            detail=(
+                "提交 Chirp 3 Standard Batch 局部修復並保存 operation"
+                if chunk_retry
+                else "提交 Chirp 3 動態批次並保存 operation"
+            ),
             progress=21,
         )
         env = base._module_env(leased, job_dir)
-        env.update({"CHIRP_DYNAMIC_BATCHING": "true", "CHIRP_SUBMIT_ONLY": "1"})
+        env.update({
+            "CHIRP_DYNAMIC_BATCHING": "true",
+            "CHIRP_SUBMIT_ONLY": "1",
+            "CHIRP_REPAIR_MODE": "standard" if chunk_retry else "",
+        })
         base._run_with_heartbeat(
             [sys.executable, "-m", "app.providers.run_chirp_pipeline_hardened"],
             store=store,
@@ -458,15 +467,31 @@ def _submit_job(
                     stage_detail=?, progress=45, updated_at=?, revision=revision+1
                 WHERE id=?
                 """,
-                (f"Chirp 動態批次已提交 {total} 段；等待 Google 離峰處理", now, leased["id"]),
+                (
+                    (
+                        "Chirp Standard Batch 局部修復已提交；等待 Google 處理"
+                        if chunk_retry
+                        else f"Chirp 動態批次已提交 {total} 段；等待 Google 離峰處理"
+                    ),
+                    now,
+                    leased["id"],
+                ),
             )
             store._clear_lease(connection, leased["id"], worker_id)
             store._event(
                 connection,
                 leased["id"],
-                "chirp_dynamic_batch_submitted",
+                (
+                    "chirp_standard_retry_submitted"
+                    if chunk_retry
+                    else "chirp_dynamic_batch_submitted"
+                ),
                 worker_id,
-                {"chunk_count": total, "worker_released": True},
+                {
+                    "chunk_count": total,
+                    "worker_released": True,
+                    "repair_strategy": "STANDARD_BATCH" if chunk_retry else None,
+                },
             )
         return store.get_job(leased["id"])
     except base.PipelinePaused:
@@ -809,19 +834,50 @@ def _targeted_patch_budget(
     data_dir: Path,
     plan: dict[str, Any],
 ) -> tuple[bool, Decimal, Decimal, Decimal]:
-    strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
-    config = CostConfig.from_env().for_processing_strategy(strategy)
+    # Targeted repair always uses Standard Batch, regardless of the
+    # original full-course strategy.
+    config = CostConfig.from_env().for_processing_strategy(STANDARD_BATCH)
     extra = (
         Decimal(int(plan.get("total_duration_ms") or 0))
         / Decimal("60000")
         * config.chirp_usd_per_minute
     ).quantize(Decimal("0.0001"))
+    database_path = data_dir / "course-transcript.db"
     accrued = estimated_accrued_cost(
-        data_dir / "course-transcript.db",
+        database_path,
         data_dir,
         record["id"],
     )
     reserved = Decimal(str(record.get("reserved_cost_usd") or "0"))
+    batch_id = str(record.get("batch_id") or "").strip()
+    if batch_id:
+        try:
+            batch = JobStore(database_path).get_batch(batch_id)
+            batch_reserved = Decimal(str(batch.get("reserved_cost_usd") or "0"))
+            batch_estimated = Decimal(str(batch.get("estimated_cost_usd") or "0"))
+            batch_actual = Decimal(str(batch.get("actual_cost_usd") or "0"))
+            batch_ceiling = max(batch_reserved, batch_estimated)
+            jobs = batch.get("jobs") if isinstance(batch, dict) else None
+            if batch_ceiling > 0 and isinstance(jobs, list) and jobs:
+                batch_accrued = sum(
+                    (
+                        estimated_accrued_cost(database_path, data_dir, str(item["id"]))
+                        for item in jobs
+                        if isinstance(item, dict) and item.get("id")
+                    ),
+                    Decimal("0"),
+                )
+                batch_committed = max(batch_accrued, batch_actual)
+                return (
+                    batch_committed + extra <= batch_ceiling,
+                    batch_committed,
+                    extra,
+                    batch_ceiling,
+                )
+        except Exception:
+            # Fail back to the per-job reservation if batch accounting evidence
+            # cannot be read; never bypass the budget gate on an accounting error.
+            pass
     return accrued + extra <= reserved, accrued, extra, reserved
 
 
@@ -849,6 +905,21 @@ def _stored_qa_targeted_patch_seed(job_dir: Path) -> bool:
     return False
 
 
+def _stored_completeness_targeted_patch_seed(job_dir: Path) -> bool:
+    try:
+        plan = json.loads(
+            (job_dir / "chirp-targeted-patch-plan.json").read_text(encoding="utf-8")
+        )
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(plan, dict)
+        and plan.get("status") == "planned"
+        and isinstance(plan.get("items"), list)
+        and bool(plan["items"])
+    )
+
+
 def _restore_audio_for_targeted_patch_if_needed(
     store: JobStore,
     leased: dict[str, Any],
@@ -859,7 +930,10 @@ def _restore_audio_for_targeted_patch_if_needed(
     job_dir = data_dir / "jobs" / leased["id"]
     if (job_dir / "normalized.flac").is_file():
         return
-    if not _stored_qa_targeted_patch_seed(job_dir):
+    if not (
+        _stored_qa_targeted_patch_seed(job_dir)
+        or _stored_completeness_targeted_patch_seed(job_dir)
+    ):
         return
     source = base._download_source(store, leased, data_dir, worker_id)
     base._normalize(store, leased, source, data_dir, worker_id)
@@ -890,6 +964,19 @@ def _prepare_chirp_completeness_auto_repair(
         int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_ROUNDS", "3")),
     )
     prior_status = str(marker.get("status") or "")
+    legacy_block_snapshot: dict[str, Any] | None = None
+    if (
+        prior_status == "blocked"
+        and str(marker.get("blocked_reason") or "") in {
+            "repair_duration_cap_exceeded",
+            "patch_count_cap_exceeded",
+        }
+        and int(marker.get("proposed_patch_count") or 0) > 1
+        and not bool(marker.get("provider_calls_started"))
+    ):
+        legacy_block_snapshot = dict(marker)
+        marker = {}
+        prior_status = ""
     if marker_path.is_file() and prior_status in {"prepared", "submitted"}:
         complete_path = job_dir / "chirp-targeted-patch-complete.json"
         try:
@@ -942,7 +1029,7 @@ def _prepare_chirp_completeness_auto_repair(
             base._atomic_json(marker_path, marker)
             prior_status = "completed"
     prior_round = max(0, int(marker.get("round") or 0))
-    if marker_path.is_file():
+    if marker_path.is_file() and legacy_block_snapshot is None:
         if prior_status != "completed":
             return None
         if prior_round >= max_rounds:
@@ -976,6 +1063,9 @@ def _prepare_chirp_completeness_auto_repair(
         merge_gap_ms=int(os.environ.get("CHIRP_COMPLETENESS_REPAIR_MERGE_GAP_MS", "1000")),
         max_total_ms=int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_MS", "600000")),
         max_patches=int(os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_PATCHES", "12")),
+        max_window_ms=int(
+            os.environ.get("CHIRP_COMPLETENESS_AUTO_REPAIR_MAX_WINDOW_MS", "300000")
+        ),
         patch_index_base=920_000 + (repair_round - 1) * 1_000,
     )
     items = plan.get("items") if isinstance(plan, dict) else []
@@ -1038,6 +1128,8 @@ def _prepare_chirp_completeness_auto_repair(
             "patch_count": len(items),
             "total_duration_ms": int(plan.get("total_duration_ms") or 0),
             "archive": str(archive.relative_to(job_dir)),
+            "replanned_from_legacy_block": legacy_block_snapshot is not None,
+            "legacy_block_snapshot": legacy_block_snapshot,
         },
     )
     return plan
@@ -1198,8 +1290,8 @@ def _record_targeted_patch_usage(
         for item in verdicts
         if isinstance(item, dict) and item.get("patch_index") is not None
     }
-    strategy = record.get("processing_strategy") or DEFAULT_PROCESSING_STRATEGY
-    config = CostConfig.from_env().for_processing_strategy(strategy)
+    # Targeted patch usage must be accounted at the Standard Batch rate.
+    config = CostConfig.from_env().for_processing_strategy(STANDARD_BATCH)
     for item in items:
         if not isinstance(item, dict) or item.get("patch_index") is None:
             continue
@@ -1303,7 +1395,7 @@ def _finish_after_chirp(
     handoff_imported = (
         job_dir / "chatgpt-handoff" / "import-audit.json"
     ).is_file()
-    if workflow_mode == CHATGPT_HANDOFF and not handoff_imported:
+    if bool(leased.get("enable_subtitles")) and not handoff_imported:
         base._run_module_stage(
             store, leased, data_dir, worker_id,
             stage="chirp_completeness", status="quality_check",
@@ -1384,7 +1476,7 @@ def _finish_after_chirp(
                 "chirp_processing_strategy": "DYNAMIC_BATCHING",
                 "correction_model": None,
                 "drive_upload_started": False,
-                "drive_publication_status": "blocked_before_chatgpt_handoff",
+                "drive_publication_status": "blocked_before_golden_completion",
                 "drive_publication_error": None,
                 "source_media_preserved_in_drive": True,
                 "human_review_blocking": True,
@@ -1444,7 +1536,8 @@ def _finish_after_chirp(
         }
         base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
         base._atomic_json(job_dir / "processing_manifest.json", manifest)
-        base.cleanup_completed_audio(job_dir)
+        # Keep normalized audio while correction is pending so any
+        # completeness repair can reuse local audio without another Drive download.
         schedule(job_dir, "awaiting-chatgpt")
         observed._write_report_safely(data_dir, leased["id"])
         return store.finish_for_handoff(
@@ -1484,7 +1577,8 @@ def _finish_after_chirp(
         }
         base._atomic_json(job_dir / "pipeline-manifest.json", manifest)
         base._atomic_json(job_dir / "processing_manifest.json", manifest)
-        base.cleanup_completed_audio(job_dir)
+        # CHIRP_ONLY is not Golden-complete; retain normalized audio for
+        # later local quality audit or targeted repair.
         schedule(job_dir, "chirp-only-ready")
         observed._write_report_safely(data_dir, leased["id"])
         return store.finish_for_handoff(
@@ -1631,6 +1725,19 @@ def _recover_job(
         if stdout:
             print(stdout)
         completed, total = _chunk_counts(job_dir)
+        if targeted_recovery and returncode == 77:
+            waiting = _submit_targeted_patch_if_needed(
+                store,
+                leased,
+                data_dir=data_dir,
+                worker_id=worker_id,
+                use_existing_plan=True,
+            )
+            if waiting is not None:
+                return waiting
+            raise base.PipelineError(
+                "Chirp terminal targeted patch requires a fresh submission but budget/policy blocked it"
+            )
         if returncode in {75, 76}:
             outcome = "retryable" if returncode == 76 else "pending"
             schedule(job_dir, outcome, detail=base._safe_error(stderr or stdout))

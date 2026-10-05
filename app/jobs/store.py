@@ -1568,8 +1568,7 @@ class JobStore:
             ).fetchone()
             if row is None:
                 raise JobNotFound("Job not found")
-            if normalize_workflow_mode(row["workflow_mode"]) != CHATGPT_HANDOFF:
-                raise JobConflict("只有 ChatGPT Handoff 任務可停在 Chirp 完整性 Gate")
+            workflow_mode = normalize_workflow_mode(row["workflow_mode"])
             connection.execute(
                 """
                 UPDATE jobs
@@ -1579,7 +1578,7 @@ class JobStore:
                 WHERE id=?
                 """,
                 (
-                    f"Chirp 完整性 Gate 發現 {max(1, int(blocker_count))} 項需先處理，尚未交給 ChatGPT",
+                    f"Chirp 完整性 Gate 發現 {max(1, int(blocker_count))} 項需先處理；Golden promotion 已暫停",
                     now,
                     job_id,
                 ),
@@ -1591,9 +1590,10 @@ class JobStore:
                 "chirp_completeness_blocked",
                 worker_id,
                 {
-                    "workflow_mode": CHATGPT_HANDOFF,
+                    "workflow_mode": workflow_mode,
                     "blocker_count": max(1, int(blocker_count)),
                     "chatgpt_handoff_created": False,
+                    "golden_promotion_blocked": True,
                 },
             )
             if row["batch_id"]:
@@ -1616,8 +1616,7 @@ class JobStore:
                 raise JobNotFound("Job not found")
             if int(row["revision"]) != int(expected_revision):
                 raise JobConflict("任務已更新，請重新載入後再重新檢查")
-            if normalize_workflow_mode(row["workflow_mode"]) != CHATGPT_HANDOFF:
-                raise JobConflict("此任務不是 ChatGPT Handoff 模式")
+            workflow_mode = normalize_workflow_mode(row["workflow_mode"])
             if row["status"] != "awaiting_review" or row["active_stage"] != "chirp_completeness":
                 raise JobConflict("任務目前不在 Chirp 完整性 Gate 待處理狀態")
             if not row["approved_at"]:
@@ -1630,7 +1629,7 @@ class JobStore:
                     "requested_at": now,
                     "actor": actor,
                     "expected_revision": int(expected_revision),
-                    "workflow_mode": CHATGPT_HANDOFF,
+                    "workflow_mode": workflow_mode,
                     "force_segment_rerun": True,
                     "force_gate_rerun": True,
                 },
@@ -1652,7 +1651,7 @@ class JobStore:
                 "chirp_completeness_recheck_queued",
                 actor,
                 {
-                    "workflow_mode": CHATGPT_HANDOFF,
+                    "workflow_mode": workflow_mode,
                     "force_segment_rerun": True,
                     "force_gate_rerun": True,
                 },
@@ -2098,6 +2097,7 @@ class JobStore:
                     Decimal(row["reserved_cost_usd"] or "0"),
                     Decimal(row["estimated_cost_usd"] or "0"),
                     Decimal(row["actual_cost_usd"] or "0"),
+                    Decimal(row["reserved_cost_usd"] or "0"),
                 )
             )
             connection.execute(

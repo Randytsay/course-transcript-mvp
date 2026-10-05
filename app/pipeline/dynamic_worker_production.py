@@ -157,6 +157,23 @@ def _repair_qa_only_with_actual_strategy(
     return result
 
 
+def _resume_from_local_evidence(record: dict[str, Any], job_dir: Path) -> bool:
+    if not (job_dir / "merged-words.json").is_file():
+        return False
+    if (job_dir / "chirp-completeness-recheck-request.json").is_file():
+        return True
+    return str(record.get("active_stage") or "") in {
+        "segment",
+        "domain_context",
+        "chirp_completeness",
+        "handoff",
+        "correction",
+        "export",
+        "qa",
+        "validation",
+    }
+
+
 def _submit_or_resume_chirp(
     store: JobStore,
     record: dict[str, Any],
@@ -170,8 +187,16 @@ def _submit_or_resume_chirp(
         store.release_lease(record["id"], worker_id)
         raise JobConflict("未經人工費用確認的任務不可進入付費管線")
     job_dir = data_dir / "jobs" / leased["id"]
+    if _resume_from_local_evidence(leased, job_dir):
+        return worker._finish_after_chirp(
+            store,
+            leased,
+            data_dir=data_dir,
+            worker_id=worker_id,
+        )
     strategy = _processing_strategy(leased, job_dir)
     dynamic = is_dynamic_batching(strategy)
+    chunk_retry = worker._chunk_retry_requested(job_dir)
     try:
         source = worker.base._download_source(
             store,
@@ -192,7 +217,11 @@ def _submit_or_resume_chirp(
             worker_id,
             stage="chirp",
             status="transcribing",
-            detail="提交或恢復 Chirp 3 批次並保存 operation",
+            detail=(
+                "提交 Chirp 3 Standard Batch 局部修復並保存 operation"
+                if chunk_retry
+                else "提交或恢復 Chirp 3 批次並保存 operation"
+            ),
             progress=21,
         )
         env = worker.base._module_env(leased, job_dir)
@@ -259,7 +288,11 @@ def _submit_or_resume_chirp(
                 WHERE id=?
                 """,
                 (
-                    f"{strategy_label(strategy)}已提交 {total} 段；等待 Google 處理",
+                    (
+                        "快速修復（Standard Batch）已提交；等待 Google 處理"
+                        if chunk_retry
+                        else f"{strategy_label(strategy)}已提交 {total} 段；等待 Google 處理"
+                    ),
                     now,
                     leased["id"],
                 ),
@@ -268,12 +301,17 @@ def _submit_or_resume_chirp(
             store._event(
                 connection,
                 leased["id"],
-                "chirp_batch_submitted",
+                (
+                    "chirp_standard_retry_submitted"
+                    if chunk_retry
+                    else "chirp_batch_submitted"
+                ),
                 worker_id,
                 {
                     "chunk_count": total,
                     "worker_released": True,
                     "processing_strategy": strategy,
+                    "repair_strategy": "STANDARD_BATCH" if chunk_retry else None,
                 },
             )
         return store.get_job(leased["id"])

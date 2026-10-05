@@ -162,6 +162,50 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(payload["expected_revision"], blocked["revision"])
 
 
+    def test_full_auto_can_pause_and_requeue_at_completeness_gate(self) -> None:
+        job = self._create_job(workflow_mode="FULL_AUTO")
+        self.store.acquire_lease(job["id"], "preflight-worker")
+        estimated = self.store.record_preflight_result(
+            job_id=job["id"],
+            duration_seconds=120,
+            source_checksum="e" * 64,
+            media_format="mp3",
+            audio_codec="mp3",
+            estimated_cost_usd=Decimal("0.25"),
+            pricing_version="test",
+            worker_id="preflight-worker",
+        )
+        approved = self.store.approve_job(
+            job_id=job["id"],
+            expected_revision=estimated["revision"],
+            confirmed_estimated_cost_usd=Decimal("0.25"),
+            project_limit_usd=Decimal("200"),
+            actor="owner@example.test",
+        )
+        self.store.acquire_lease(approved["id"], "pipeline-worker")
+        blocked = self.store.finish_for_chirp_completeness_review(
+            job_id=approved["id"],
+            worker_id="pipeline-worker",
+            blocker_count=2,
+        )
+        self.assertEqual(blocked["status"], "awaiting_review")
+        self.assertEqual(blocked["active_stage"], "chirp_completeness")
+        requeued = self.store.requeue_chirp_completeness(
+            job_id=approved["id"],
+            expected_revision=blocked["revision"],
+            actor="owner@example.test",
+        )
+        self.assertEqual(requeued["status"], "queued")
+        marker = (
+            Path(self.tmp.name)
+            / "jobs"
+            / approved["id"]
+            / "chirp-completeness-recheck-request.json"
+        )
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+        self.assertEqual(payload["workflow_mode"], "FULL_AUTO")
+
+
     def test_same_source_awaiting_review_blocks_duplicate_job(self) -> None:
         first = self._create_job(workflow_mode="CHATGPT_HANDOFF")
         with self.store.transaction() as connection:

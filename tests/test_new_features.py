@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -294,6 +295,464 @@ class NewFeatureTests(unittest.TestCase):
             # a targeted patch is in flight; only the due targeted recovery
             # selector may own it.
             self.assertIsNone(worker._next_resumable(store, data_dir))
+
+    def test_retry_chunk_uses_standard_without_invalidating_retained_dynamic(self) -> None:
+        from app.providers import run_chirp_pipeline_hardened as hardened
+
+        with tempfile.TemporaryDirectory() as temp:
+            job_dir = Path(temp)
+            chunks_dir = job_dir / "chunks"
+            retained = chunks_dir / "chunk-000"
+            retained.mkdir(parents=True)
+            (retained / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "status": "SUCCEEDED",
+                        "processing_strategy": "DYNAMIC_BATCHING",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (job_dir / "chirp-retry-request.json").write_text(
+                json.dumps({"chunks": [{"chunk_index": 1}]}),
+                encoding="utf-8",
+            )
+            with (
+                patch.object(hardened.base, "JOB", job_dir),
+                patch.object(hardened.base, "CHUNKS", chunks_dir),
+                patch.object(hardened.base, "DYNAMIC_BATCHING", True),
+            ):
+                self.assertTrue(hardened._chunk_dynamic_batching(0))
+                self.assertFalse(hardened._chunk_dynamic_batching(1))
+                retry_dir = chunks_dir / "chunk-001"
+                retry_dir.mkdir(parents=True)
+                (retry_dir / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "status": "SUBMITTED",
+                            "processing_strategy": "PROCESSING_STRATEGY_UNSPECIFIED",
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (job_dir / "chirp-retry-request.json").unlink()
+                self.assertFalse(hardened._chunk_dynamic_batching(1))
+
+    def test_targeted_patch_budget_uses_standard_batch_rate(self) -> None:
+        from app.pipeline import dynamic_worker_hardened as worker
+
+        record = {
+            "id": "job-1",
+            "processing_strategy": "DYNAMIC_BATCHING",
+            "reserved_cost_usd": "1.0000",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            with (
+                patch.object(worker, "estimated_accrued_cost", return_value=Decimal("0")),
+                patch.dict(os.environ, {}, clear=True),
+            ):
+                allowed, accrued, extra, reserved = worker._targeted_patch_budget(
+                    record,
+                    data_dir=Path(temp),
+                    plan={"total_duration_ms": 60_000},
+                )
+        self.assertTrue(allowed)
+        self.assertEqual(accrued, Decimal("0"))
+        self.assertEqual(extra, Decimal("0.0160"))
+        self.assertEqual(reserved, Decimal("1.0000"))
+
+    def test_density_only_completeness_signal_is_nonblocking(self) -> None:
+        from app.providers.chirp_completeness_gate import evaluate
+
+        with tempfile.TemporaryDirectory() as temp:
+            job_dir = Path(temp)
+            segments = [
+                {
+                    "segment_id": "seg-0001",
+                    "start_ms": 0,
+                    "end_ms": 1500,
+                    "raw_text": "第一句",
+                    "text": "第一句",
+                },
+                {
+                    "segment_id": "seg-0002",
+                    "start_ms": 1700,
+                    "end_ms": 3200,
+                    "raw_text": "第二句",
+                    "text": "第二句",
+                },
+            ]
+            (job_dir / "subtitles.json").write_text(
+                json.dumps({"segments": segments}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (job_dir / "merged-words.json").write_text(
+                json.dumps({"words": []}, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            (job_dir / "chunk-plan.json").write_text(
+                json.dumps({"duration_seconds": 3.2, "chunks": []}),
+                encoding="utf-8",
+            )
+            with (
+                patch(
+                    "app.providers.chirp_completeness_gate.base_chunk_density_reports",
+                    return_value=(
+                        [],
+                        [{"chunk_index": 0, "classification": "density_out_of_range"}],
+                    ),
+                ),
+                patch(
+                    "app.providers.chirp_completeness_gate.density_windows",
+                    return_value=(
+                        [],
+                        [{"start_ms": 0, "end_ms": 1000, "classification": "density_out_of_range"}],
+                    ),
+                ),
+            ):
+                report = evaluate(
+                    job_dir,
+                    audibility_probe=lambda _start, _end: False,
+                )
+        self.assertEqual(report["status"], "PASS")
+        self.assertTrue(report["handoff_allowed"])
+        self.assertEqual(report["summary"]["blocker_count"], 0)
+        reasons = {item["reason"] for item in report["warnings"]}
+        self.assertIn("course_relative_chunk_density_review", reasons)
+        self.assertIn("course_density_window_review", reasons)
+
+    def test_merge_accepts_failed_base_only_when_patches_fully_cover_it(self) -> None:
+        from app.providers import merge_chunks
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            chunks = root / "chunks"
+            chunks.mkdir()
+            base_dir = chunks / "chunk-000"
+            base_dir.mkdir()
+            (base_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "chunk_index": 0,
+                        "role": "repair",
+                        "status": "FAILED",
+                        "source_start_ms": 0,
+                        "source_end_ms": 900000,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for index, (start, end) in enumerate(
+                [(0, 300000), (300000, 600000), (600000, 900000)],
+                start=940001,
+            ):
+                directory = chunks / f"chunk-{index:03d}"
+                directory.mkdir()
+                (directory / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "chunk_index": index,
+                            "role": "patch",
+                            "patch_mode": "replace_window",
+                            "status": "SUCCEEDED",
+                            "source_start_ms": start,
+                            "source_end_ms": end,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (directory / "words.json").write_text(
+                    json.dumps(
+                        {
+                            "words": [
+                                {
+                                    "word": "測",
+                                    "start_ms": start + 1000,
+                                    "end_ms": start + 1100,
+                                }
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+            with patch.object(merge_chunks, "CHUNKS", chunks):
+                loaded = merge_chunks.load_chunks()
+            base = next(item for item in loaded if item[0]["chunk_index"] == 0)
+            self.assertEqual(base[1], [])
+            self.assertTrue(base[0]["derived_reconstructed_from_patches"])
+
+    def test_merge_rejects_failed_base_when_patch_coverage_has_gap(self) -> None:
+        from app.providers import merge_chunks
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            chunks = root / "chunks"
+            chunks.mkdir()
+            base_dir = chunks / "chunk-000"
+            base_dir.mkdir()
+            (base_dir / "manifest.json").write_text(
+                json.dumps(
+                    {
+                        "chunk_index": 0,
+                        "role": "base",
+                        "status": "FAILED",
+                        "source_start_ms": 0,
+                        "source_end_ms": 900000,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            for index, (start, end) in enumerate(
+                [(0, 300000), (600000, 900000)],
+                start=940001,
+            ):
+                directory = chunks / f"chunk-{index:03d}"
+                directory.mkdir()
+                (directory / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "chunk_index": index,
+                            "role": "patch",
+                            "patch_mode": "replace_window",
+                            "status": "SUCCEEDED",
+                            "source_start_ms": start,
+                            "source_end_ms": end,
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                (directory / "words.json").write_text(
+                    json.dumps({"words": []}),
+                    encoding="utf-8",
+                )
+            with patch.object(merge_chunks, "CHUNKS", chunks):
+                with self.assertRaisesRegex(RuntimeError, "chunk-000"):
+                    merge_chunks.load_chunks()
+
+    def test_completeness_repair_defers_extra_windows_instead_of_blocking_round(self) -> None:
+        from app.providers.chirp_completeness_gate import build_auto_repair_patch_plan
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "chunk-plan.json").write_text(
+                json.dumps(
+                    {
+                        "duration_seconds": 1200,
+                        "chunks": [
+                            {
+                                "chunk_index": 0,
+                                "source_start_ms": 0,
+                                "source_end_ms": 1200000,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            report = {
+                "blockers": [
+                    {
+                        "reason": "audible_subtitle_gap",
+                        "gap_start_ms": 10000,
+                        "gap_end_ms": 260000,
+                    },
+                    {
+                        "reason": "audible_subtitle_gap",
+                        "gap_start_ms": 400000,
+                        "gap_end_ms": 650000,
+                    },
+                    {
+                        "reason": "audible_subtitle_gap",
+                        "gap_start_ms": 800000,
+                        "gap_end_ms": 1050000,
+                    },
+                ]
+            }
+            plan = build_auto_repair_patch_plan(
+                job,
+                report,
+                context_ms=0,
+                max_total_ms=600000,
+            )
+        self.assertEqual(plan["status"], "planned")
+        self.assertIsNone(plan["auto_submit_blocked_reason"])
+        self.assertEqual(plan["proposed_patch_count"], 2)
+        self.assertEqual(plan["total_duration_ms"], 500000)
+        self.assertEqual(plan["deferred_patch_count"], 1)
+        self.assertEqual(plan["original_proposed_patch_count"], 3)
+
+    def test_production_recheck_resumes_from_local_merged_words(self) -> None:
+        from app.pipeline.dynamic_worker_production import _resume_from_local_evidence
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "merged-words.json").write_text(
+                json.dumps({"words": []}),
+                encoding="utf-8",
+            )
+            (job / "chirp-completeness-recheck-request.json").write_text(
+                json.dumps({"force_gate_rerun": True}),
+                encoding="utf-8",
+            )
+            self.assertTrue(
+                _resume_from_local_evidence({"active_stage": "segment"}, job)
+            )
+            (job / "chirp-completeness-recheck-request.json").unlink()
+            self.assertTrue(
+                _resume_from_local_evidence(
+                    {"active_stage": "chirp_completeness"},
+                    job,
+                )
+            )
+            self.assertTrue(
+                _resume_from_local_evidence({"active_stage": "validation"}, job)
+            )
+            self.assertTrue(
+                _resume_from_local_evidence({"active_stage": "qa"}, job)
+            )
+            self.assertFalse(
+                _resume_from_local_evidence({"active_stage": "chirp"}, job)
+            )
+
+    def test_legacy_aggregate_duration_block_is_replanned_and_preserved(self) -> None:
+        from app.pipeline import dynamic_worker_hardened as worker
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "chirp-completeness-auto-repair.json").write_text(
+                json.dumps(
+                    {
+                        "status": "blocked",
+                        "policy": "chirp_completeness_auto_repair_v1",
+                        "provider_calls_started": False,
+                        "round": 1,
+                        "max_rounds": 3,
+                        "proposed_patch_count": 4,
+                        "total_duration_ms": 900000,
+                        "blocked_reason": "repair_duration_cap_exceeded",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            fake_plan = {
+                "status": "planned",
+                "items": [
+                    {
+                        "patch_index": 920001,
+                        "duration_ms": 120000,
+                    }
+                ],
+                "proposed_patch_count": 1,
+                "total_duration_ms": 120000,
+                "auto_submit_blocked_reason": None,
+            }
+            with patch.object(
+                worker,
+                "build_auto_repair_patch_plan",
+                return_value=fake_plan,
+            ):
+                plan = worker._prepare_chirp_completeness_auto_repair(
+                    job,
+                    {"blockers": [{"reason": "audible_subtitle_gap"}]},
+                )
+            self.assertIsNotNone(plan)
+            marker = json.loads(
+                (job / "chirp-completeness-auto-repair.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(marker["replanned_from_legacy_block"])
+            self.assertEqual(
+                marker["legacy_block_snapshot"]["blocked_reason"],
+                "repair_duration_cap_exceeded",
+            )
+
+    def test_completeness_repair_defers_excess_patch_count(self) -> None:
+        from app.providers.chirp_completeness_gate import build_auto_repair_patch_plan
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "chunk-plan.json").write_text(
+                json.dumps(
+                    {
+                        "duration_seconds": 300,
+                        "chunks": [
+                            {
+                                "chunk_index": 0,
+                                "source_start_ms": 0,
+                                "source_end_ms": 300000,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            blockers = []
+            for index in range(15):
+                start = index * 15000
+                blockers.append(
+                    {
+                        "reason": "audible_subtitle_gap",
+                        "gap_start_ms": start,
+                        "gap_end_ms": start + 5000,
+                    }
+                )
+            plan = build_auto_repair_patch_plan(
+                job,
+                {"blockers": blockers},
+                context_ms=0,
+                merge_gap_ms=0,
+                max_total_ms=600000,
+                max_patches=12,
+            )
+        self.assertEqual(plan["status"], "planned")
+        self.assertIsNone(plan["auto_submit_blocked_reason"])
+        self.assertEqual(plan["proposed_patch_count"], 12)
+        self.assertEqual(plan["deferred_patch_count"], 3)
+        self.assertEqual(plan["original_proposed_patch_count"], 15)
+
+    def test_long_single_gap_is_split_into_bounded_windows(self) -> None:
+        from app.providers.chirp_completeness_gate import build_auto_repair_patch_plan
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "chunk-plan.json").write_text(
+                json.dumps(
+                    {
+                        "duration_seconds": 900,
+                        "chunks": [
+                            {
+                                "chunk_index": 0,
+                                "source_start_ms": 0,
+                                "source_end_ms": 900000,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            plan = build_auto_repair_patch_plan(
+                job,
+                {
+                    "blockers": [
+                        {
+                            "reason": "audible_subtitle_gap",
+                            "gap_start_ms": 280720,
+                            "gap_end_ms": 895160,
+                        }
+                    ]
+                },
+                context_ms=5000,
+                max_total_ms=600000,
+                max_window_ms=300000,
+            )
+        self.assertEqual(plan["status"], "planned")
+        self.assertIsNone(plan["auto_submit_blocked_reason"])
+        self.assertEqual(plan["proposed_patch_count"], 2)
+        self.assertEqual(plan["total_duration_ms"], 600000)
+        self.assertEqual(plan["deferred_patch_count"], 1)
+        self.assertTrue(all(item["duration_ms"] <= 300000 for item in plan["items"]))
+        self.assertTrue(all(item["split_from_long_window"] for item in plan["items"]))
 
 
 

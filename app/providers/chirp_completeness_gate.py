@@ -234,6 +234,7 @@ def build_auto_repair_patch_plan(
     merge_gap_ms: int = 1_000,
     max_total_ms: int = 600_000,
     max_patches: int = 12,
+    max_window_ms: int = 300_000,
     patch_index_base: int = 920_000,
 ) -> dict[str, Any]:
     """Build one bounded paid repair round from completeness blockers.
@@ -365,8 +366,31 @@ def build_auto_repair_patch_plan(
         else:
             merged.append(dict(item))
 
+    bounded_merged: list[dict[str, Any]] = []
+    max_window_ms = max(1, min(int(max_window_ms), int(max_total_ms)))
+    for item in merged:
+        source_start = int(item["source_start_ms"])
+        source_end = int(item["source_end_ms"])
+        if source_end - source_start <= max_window_ms:
+            bounded_merged.append(item)
+            continue
+        cursor = source_start
+        while cursor < source_end:
+            window_end = min(source_end, cursor + max_window_ms)
+            split = dict(item)
+            split["source_start_ms"] = cursor
+            split["source_end_ms"] = window_end
+            split["gap_start_ms"] = max(int(item["gap_start_ms"]), cursor)
+            split["gap_end_ms"] = min(int(item["gap_end_ms"]), window_end)
+            if split["gap_end_ms"] <= split["gap_start_ms"]:
+                split["gap_start_ms"] = cursor
+                split["gap_end_ms"] = window_end
+            split["split_from_long_window"] = True
+            bounded_merged.append(split)
+            cursor = window_end
+
     items: list[dict[str, Any]] = []
-    for offset, item in enumerate(merged, start=1):
+    for offset, item in enumerate(bounded_merged, start=1):
         source_start = int(item["source_start_ms"])
         source_end = int(item["source_end_ms"])
         gap_start = int(item["gap_start_ms"])
@@ -385,29 +409,63 @@ def build_auto_repair_patch_plan(
                 "patch_mode": "replace_window",
                 "reason": "+".join(sorted(set(item["reasons"]))),
                 "automatic_paid_retry": True,
+                "split_from_long_window": bool(item.get("split_from_long_window")),
             }
         )
 
-    total_duration_ms = sum(int(item["duration_ms"]) for item in items)
+    original_items = list(items)
+    original_total_duration_ms = sum(int(item["duration_ms"]) for item in original_items)
     blocked_reason = None
-    if len(items) > max_patches:
-        blocked_reason = "patch_count_cap_exceeded"
-    elif total_duration_ms > max_total_ms:
-        blocked_reason = "repair_duration_cap_exceeded"
+    deferred_items: list[dict[str, Any]] = []
+    if original_items:
+        selected: list[dict[str, Any]] = []
+        selected_total = 0
+        for item in original_items:
+            duration = int(item["duration_ms"])
+            if duration > max_total_ms:
+                # A single repair window above the safety cap still fails closed.
+                selected = []
+                deferred_items = list(original_items)
+                blocked_reason = "repair_duration_cap_exceeded"
+                break
+            if len(selected) < max_patches and selected_total + duration <= max_total_ms:
+                selected.append(item)
+                selected_total += duration
+            else:
+                deferred_items.append(item)
+        if blocked_reason is None:
+            if not selected:
+                blocked_reason = "repair_duration_cap_exceeded"
+            else:
+                items = selected
 
-    return {
+    total_duration_ms = sum(int(item["duration_ms"]) for item in items)
+    payload = {
         "version": "targeted-patch-v1",
         "generated_at": datetime.now(UTC).isoformat(),
         "job": job_dir.name,
         "policy": "chirp_completeness_auto_repair_v1",
         "status": "blocked" if blocked_reason else ("planned" if items else "none"),
         "items": [] if blocked_reason else items,
-        "proposed_patch_count": len(items),
-        "total_duration_ms": total_duration_ms,
+        "proposed_patch_count": 0 if blocked_reason else len(items),
+        "total_duration_ms": 0 if blocked_reason else total_duration_ms,
         "max_total_duration_ms": max_total_ms,
         "max_patch_count": max_patches,
         "auto_submit_blocked_reason": blocked_reason,
     }
+    if deferred_items and blocked_reason is None:
+        payload.update(
+            {
+                "bounded_round": True,
+                "original_proposed_patch_count": len(original_items),
+                "original_total_duration_ms": original_total_duration_ms,
+                "deferred_patch_count": len(deferred_items),
+                "deferred_total_duration_ms": sum(
+                    int(item["duration_ms"]) for item in deferred_items
+                ),
+            }
+        )
+    return payload
 
 
 def _covered_by_verified_nonlexical(start_ms: int, end_ms: int, windows: list[dict[str, int]]) -> bool:
@@ -542,9 +600,13 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
         job_dir, audio_ms, audibility_probe=probe
     )
     for item in chunk_plans:
-        blocker = {"reason": "course_relative_chunk_density", **item}
-        blockers.append(blocker)
-        repair_items.append(blocker)
+        warnings.append(
+            {
+                "reason": "course_relative_chunk_density_review",
+                **item,
+                "recommended_action": "review_only_unless_audible_gap_confirms_missing_speech",
+            }
+        )
     for report in chunk_reports:
         if report.get("classification") == "targeted_patch_no_lexical_tokens":
             warnings.append(
@@ -557,9 +619,13 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
 
     density, density_plans = density_windows(segments, audio_ms)
     for item in density_plans:
-        blocker = {"reason": "course_density_window", **item}
-        blockers.append(blocker)
-        repair_items.append(blocker)
+        warnings.append(
+            {
+                "reason": "course_density_window_review",
+                **item,
+                "recommended_action": "review_only_unless_audible_gap_confirms_missing_speech",
+            }
+        )
 
     verified_nonlexical = _verified_nonlexical_windows(job_dir)
     min_gap_ms = int(os.environ.get("CHIRP_MID_GAP_MIN_MS", "5000"))
