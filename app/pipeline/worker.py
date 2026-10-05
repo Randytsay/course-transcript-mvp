@@ -822,6 +822,7 @@ def _auto_publish_to_source(
         destination=source_parent_destination(record["source_path"]),
         output_formats=json.loads(record["output_formats_json"]),
         authorized=True,
+        golden_sidecars=True,
         sleeper=keep_lease_alive,
     )
     _complete(

@@ -339,6 +339,7 @@ ChatGPT text layer
 - pathological short/long cue 有清單且符合 policy
 - first/tail coverage 合理
 - content drift / addition / deletion gate 通過
+- 跨 cue 成對標點與語義標註完整；不得留下未閉合括號、書名號、引號等
 - final SRT/TXT 可重新解析
 - manifest / checksums / audit evidence 完整
 
@@ -346,13 +347,19 @@ ChatGPT text layer
 
 ## Drive delivery
 
-來源 media 永不改名、覆蓋或刪除。
+來源 media 永不改名、覆蓋或刪除。同資料夾原有的 `*逐字稿.txt` 是 reference
+evidence，必須保留原檔與 digest，**永不得被 Golden 校正版覆寫**。
 
 最終至少發布：
 
 - `<source basename>.srt`
-- `<source basename>_逐字稿.txt`
-- `<source basename>_transcript_report.json`（或 production manifest 對應命名）
+- `<source prefix>校正版逐字稿.txt`（例如來源 `261003_.MP3` →
+  `261003_校正版逐字稿.txt`）
+- `<source prefix>transcript_report.json`（例如 `261003_transcript_report.json`）
+
+校正版逐字稿必須與最終 canonical SRT 的文字層一致；report 至少記錄最終
+SRT/TXT SHA-256、timestamps immutable policy，以及現有 Completeness、
+Content QA、handoff import、export manifest 等可用 evidence digest/摘要。
 
 若 final sidecar 已存在，使用 production resumable safe-publish：
 pending upload → verify → timestamped backup → promote → final verify。

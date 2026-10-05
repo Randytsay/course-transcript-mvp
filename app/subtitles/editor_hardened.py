@@ -335,6 +335,7 @@ def publish_edited(
                 destination=source_parent_destination(source_path),
                 output_formats=payload.output_formats,
                 authorized=True,
+                golden_sidecars=True,
             )
         except Exception as exc:
             _mark_editor_failed(

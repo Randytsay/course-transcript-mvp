@@ -180,6 +180,7 @@ def publish_reviewed(
                 destination=source_parent_destination(source_path),
                 output_formats=payload.output_formats,
                 authorized=True,
+                golden_sidecars=True,
             )
         except Exception as exc:
             hardened._mark_editor_failed(

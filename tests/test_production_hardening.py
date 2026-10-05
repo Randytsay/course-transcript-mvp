@@ -197,6 +197,40 @@ class ProductionHardeningTests(unittest.TestCase):
             ),
         )
 
+    def test_semantic_presentation_guard_allows_cross_cue_pair_and_rejects_dangling_pair(
+        self,
+    ) -> None:
+        from app.providers.validate_outputs_hardened import _presentation_validation
+
+        balanced = [
+            {"segment_id": "a", "corrected_text": "我早就酸了（台語："},
+            {"segment_id": "b", "corrected_text": "走了）。再待一刻。"},
+        ]
+        self.assertEqual(_presentation_validation(balanced), [])
+
+        dangling = [
+            {"segment_id": "a", "corrected_text": "我早就酸了（台語："},
+            {"segment_id": "b", "corrected_text": "走了走，再待一刻。"},
+        ]
+        issues = _presentation_validation(dangling)
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0]["type"], "unclosed_paired_punctuation")
+        self.assertEqual(issues[0]["segment_id"], "a")
+
+        late_closer = [
+            {"segment_id": "a", "corrected_text": "註記（"},
+            {"segment_id": "b", "corrected_text": "一"},
+            {"segment_id": "c", "corrected_text": "二"},
+            {"segment_id": "d", "corrected_text": "三"},
+            {"segment_id": "e", "corrected_text": "四"},
+            {"segment_id": "f", "corrected_text": "五）"},
+        ]
+        issues = _presentation_validation(late_closer)
+        self.assertEqual(
+            [item["type"] for item in issues],
+            ["unclosed_paired_punctuation", "unexpected_closing_punctuation"],
+        )
+
     def test_segment_quality_flags_provider_collapses(self) -> None:
         from app.providers.qa_report import segment_quality
 
