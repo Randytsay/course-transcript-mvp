@@ -614,7 +614,7 @@ class NewFeatureTests(unittest.TestCase):
                 _resume_from_local_evidence({"active_stage": "chirp"}, job)
             )
 
-    def test_legacy_aggregate_duration_block_is_replanned_and_preserved(self) -> None:
+    def test_legacy_zero_count_duration_block_is_replanned_and_preserved(self) -> None:
         from app.pipeline import dynamic_worker_hardened as worker
 
         with tempfile.TemporaryDirectory() as temp:
@@ -627,8 +627,8 @@ class NewFeatureTests(unittest.TestCase):
                         "provider_calls_started": False,
                         "round": 1,
                         "max_rounds": 3,
-                        "proposed_patch_count": 4,
-                        "total_duration_ms": 900000,
+                        "proposed_patch_count": 0,
+                        "total_duration_ms": 0,
                         "blocked_reason": "repair_duration_cap_exceeded",
                     }
                 ),
@@ -662,6 +662,60 @@ class NewFeatureTests(unittest.TestCase):
                 )
             )
             self.assertTrue(marker["replanned_from_legacy_block"])
+            self.assertEqual(
+                marker["legacy_block_snapshot"]["blocked_reason"],
+                "repair_duration_cap_exceeded",
+            )
+
+    def test_legacy_block_replan_is_attempted_only_once_if_still_blocked(self) -> None:
+        from app.pipeline import dynamic_worker_hardened as worker
+
+        with tempfile.TemporaryDirectory() as temp:
+            job = Path(temp)
+            (job / "chirp-completeness-auto-repair.json").write_text(
+                json.dumps(
+                    {
+                        "status": "blocked",
+                        "policy": "chirp_completeness_auto_repair_v1",
+                        "provider_calls_started": False,
+                        "round": 1,
+                        "max_rounds": 3,
+                        "proposed_patch_count": 0,
+                        "total_duration_ms": 0,
+                        "blocked_reason": "repair_duration_cap_exceeded",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            blocked_plan = {
+                "status": "blocked",
+                "items": [],
+                "proposed_patch_count": 0,
+                "total_duration_ms": 0,
+                "auto_submit_blocked_reason": "repair_duration_cap_exceeded",
+            }
+            with patch.object(
+                worker,
+                "build_auto_repair_patch_plan",
+                return_value=blocked_plan,
+            ) as planner:
+                first = worker._prepare_chirp_completeness_auto_repair(
+                    job,
+                    {"blockers": [{"reason": "audible_subtitle_gap"}]},
+                )
+                second = worker._prepare_chirp_completeness_auto_repair(
+                    job,
+                    {"blockers": [{"reason": "audible_subtitle_gap"}]},
+                )
+            self.assertIsNone(first)
+            self.assertIsNone(second)
+            self.assertEqual(planner.call_count, 1)
+            marker = json.loads(
+                (job / "chirp-completeness-auto-repair.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertTrue(marker["legacy_replan_attempted"])
             self.assertEqual(
                 marker["legacy_block_snapshot"]["blocked_reason"],
                 "repair_duration_cap_exceeded",
