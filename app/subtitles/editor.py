@@ -592,6 +592,7 @@ def publish_edited(
         destination=source_parent_destination(str(record["source_path"])),
         output_formats=payload.output_formats,
         authorized=True,
+        golden_sidecars=True,
     )
     state["history"].append(
         {

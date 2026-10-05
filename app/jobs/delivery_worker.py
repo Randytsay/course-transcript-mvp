@@ -246,6 +246,7 @@ def run_once() -> bool:
                     destination=source_parent_destination(source_path),
                     output_formats=output_formats,
                     authorized=True,
+                    golden_sidecars=True,
                 )
                 _mark_completed(record, job_dir, result)
             except _DELIVERY_ERRORS as exc:

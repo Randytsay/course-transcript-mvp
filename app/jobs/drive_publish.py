@@ -38,6 +38,7 @@ class PublishArtifact:
     format: str
     local_name: str
     suffix: str
+    remote_name_template: str | None = None
 
 
 _ARTIFACTS: dict[str, tuple[PublishArtifact, ...]] = {
@@ -68,7 +69,41 @@ _ARTIFACTS: dict[str, tuple[PublishArtifact, ...]] = {
         PublishArtifact("ass", "subtitles-corrected.ass", ".ass"),
         PublishArtifact("ass", "subtitles.ass", ".ass"),
     ),
+    "golden_txt": (
+        PublishArtifact(
+            "golden_txt",
+            "transcript-corrected.txt",
+            ".txt",
+            "{prefix}校正版逐字稿.txt",
+        ),
+        PublishArtifact(
+            "golden_txt",
+            "transcript_corrected.txt",
+            ".txt",
+            "{prefix}校正版逐字稿.txt",
+        ),
+    ),
+    "transcript_report": (
+        PublishArtifact(
+            "transcript_report",
+            "transcript-report.json",
+            ".json",
+            "{prefix}transcript_report.json",
+        ),
+    ),
 }
+
+GOLDEN_SIDECAR_FORMATS = ("golden_txt", "transcript_report")
+GOLDEN_REPORT_EVIDENCE = (
+    "reference-transcript-source.json",
+    "chirp-completeness.json",
+    "reference-chirp-completeness.json",
+    "content-qa.json",
+    "qa-report.json",
+    "chatgpt-handoff/import-audit.json",
+    "export-manifest.json",
+    "processing_manifest.json",
+)
 
 
 def _utcnow() -> str:
@@ -125,6 +160,118 @@ def _artifact_for(job_dir: Path, output_format: str) -> PublishArtifact:
         if path.is_file() and path.stat().st_size > 0:
             return candidate
     raise DrivePublishError(f"Missing verified local artifact for {output_format}")
+
+
+def _sidecar_prefix(base_name: str) -> str:
+    return base_name if base_name.endswith(("_", "-", " ")) else f"{base_name}_"
+
+
+def _remote_filename(base_name: str, artifact: PublishArtifact) -> str:
+    if artifact.remote_name_template:
+        return artifact.remote_name_template.format(
+            base_name=base_name,
+            prefix=_sidecar_prefix(base_name),
+        )
+    return f"{base_name}{artifact.suffix}"
+
+
+def _evidence_root(job_dir: Path) -> Path:
+    for candidate in (job_dir, *list(job_dir.parents)[:3]):
+        if (
+            (candidate / "subtitles.json").is_file()
+            or (candidate / "pipeline-manifest.json").is_file()
+            or (candidate / "processing_manifest.json").is_file()
+        ):
+            return candidate
+    return job_dir
+
+
+def _evidence_summary(path: Path) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "name": path.name,
+        "size_bytes": path.stat().st_size,
+        "sha256": _sha256(path),
+    }
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return record
+    if not isinstance(payload, dict):
+        return record
+    for key in (
+        "status",
+        "review_required",
+        "requires_review",
+        "reason",
+        "summary",
+        "errors",
+        "warnings",
+        "candidate_count",
+        "accepted_count",
+        "provider_calls",
+        "paid_audio_seconds",
+        "merged_words_changed",
+        "name",
+        "source_path",
+        "sha256",
+    ):
+        if key in payload:
+            target = "payload_sha256" if key == "sha256" else key
+            record[target] = payload[key]
+    return record
+
+
+def _ensure_golden_report(job_dir: Path, *, source_name: str) -> Path:
+    report_path = job_dir / "transcript-report.json"
+    if report_path.is_file() and report_path.stat().st_size > 0:
+        return report_path
+
+    source_root = _evidence_root(job_dir)
+    srt_artifact = _artifact_for(job_dir, "srt")
+    txt_artifact = _artifact_for(job_dir, "txt")
+    srt_path = job_dir / srt_artifact.local_name
+    txt_path = job_dir / txt_artifact.local_name
+    evidence = []
+    for relative_name in GOLDEN_REPORT_EVIDENCE:
+        path = source_root / relative_name
+        if path.is_file() and path.stat().st_size > 0:
+            item = _evidence_summary(path)
+            item["relative_path"] = relative_name
+            evidence.append(item)
+    reference_path = source_root / "reference-transcript.txt"
+    reference_transcript = None
+    if reference_path.is_file() and reference_path.stat().st_size > 0:
+        reference_transcript = {
+            "local_name": reference_path.name,
+            "size_bytes": reference_path.stat().st_size,
+            "sha256": _sha256(reference_path),
+        }
+    payload = {
+        "schema_version": 1,
+        "generated_at": _utcnow(),
+        "source_name": source_name,
+        "policy": {
+            "reference_transcript_preserved": True,
+            "corrected_transcript_is_separate_sidecar": True,
+            "timestamps_immutable": True,
+        },
+        "final_artifacts": {
+            "srt": {
+                "local_name": srt_artifact.local_name,
+                "size_bytes": srt_path.stat().st_size,
+                "sha256": _sha256(srt_path),
+            },
+            "corrected_transcript": {
+                "local_name": txt_artifact.local_name,
+                "size_bytes": txt_path.stat().st_size,
+                "sha256": _sha256(txt_path),
+            },
+        },
+        "reference_transcript": reference_transcript,
+        "evidence": evidence,
+    }
+    _write_state(report_path, payload)
+    return report_path
 
 
 def _is_rate_limited(result: subprocess.CompletedProcess[str]) -> bool:
@@ -216,6 +363,7 @@ def publish_outputs(
     destination: str,
     output_formats: Iterable[object] | None,
     authorized: bool,
+    golden_sidecars: bool = False,
     runner: Callable[[list[str]], subprocess.CompletedProcess[str]] = _run,
     sleeper: Callable[[float], None] = time.sleep,
     jitter: Callable[[], float] = random.random,
@@ -231,6 +379,14 @@ def publish_outputs(
     base_name = Path(source_name).stem
     if not base_name or base_name in {".", ".."}:
         raise DrivePublishError("Drive publication source name is invalid")
+    publish_formats = list(formats)
+    if golden_sidecars:
+        _ensure_golden_report(job_dir, source_name=source_name)
+        if "srt" not in publish_formats:
+            publish_formats.insert(0, "srt")
+        publish_formats.extend(
+            fmt for fmt in GOLDEN_SIDECAR_FORMATS if fmt not in publish_formats
+        )
 
     state_path = job_dir / "drive-publish-state.json"
     if state_path.is_file():
@@ -242,7 +398,10 @@ def publish_outputs(
                  "job_id": job_dir.name, "files": {}}
 
     files = state.get("files") if isinstance(state.get("files"), dict) else {}
-    if all(isinstance(files.get(fmt), dict) and files[fmt].get("status") == "completed" for fmt in formats):
+    if all(
+        isinstance(files.get(fmt), dict) and files[fmt].get("status") == "completed"
+        for fmt in publish_formats
+    ):
         state["status"] = "completed"
         return state
 
@@ -276,11 +435,15 @@ def publish_outputs(
             _write_state(state_path, state)
             raise DrivePublishError(f"Drive upload failed for {fmt}")
 
-    for fmt in formats:
+    for fmt in publish_formats:
         artifact = _artifact_for(job_dir, fmt)
         local_path = job_dir / artifact.local_name
-        final_path = _join_remote(destination, f"{base_name}{artifact.suffix}")
-        pending_path = _join_remote(destination, f".{base_name}.{job_dir.name[:16]}.pending{artifact.suffix}")
+        final_path = _join_remote(destination, _remote_filename(base_name, artifact))
+        golden_token = f".{fmt}" if fmt in GOLDEN_SIDECAR_FORMATS else ""
+        pending_path = _join_remote(
+            destination,
+            f".{base_name}.{job_dir.name[:16]}{golden_token}.pending{artifact.suffix}",
+        )
         local_bytes = local_path.stat().st_size
         current = files.get(fmt, {})
         record = {
@@ -377,6 +540,8 @@ def main() -> int:
         destination=destination,
         output_formats=json.loads(os.environ.get("OUTPUT_FORMATS_JSON", '["srt", "txt"]')),
         authorized=True,
+        golden_sidecars=os.environ.get("GOLDEN_SIDECARS", "1").strip().lower()
+        in {"1", "true", "yes"},
     )
     print(f"DRIVE_PUBLISH=PASS files={len(state['files'])} backups={state.get('backup_count', 0)}")
     return 0
