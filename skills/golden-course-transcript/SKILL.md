@@ -1,4 +1,4 @@
-# Course Transcript 黃金字幕 Skill v1.5
+# Course Transcript 黃金字幕 Skill v1.7
 
 ## Purpose
 
@@ -138,6 +138,9 @@ have:
 3. Domain terminology evidence status.
 4. Same-course material evidence inventory.
 5. Final QA/validation with no unresolved blocking acoustic gap.
+6. Durable semantic evidence: successful ChatGPT handoff import, or an explicit reviewer-authored `semantic-review.json` with zero unresolved semantic blockers.
+7. Drive publication freshness: the published SRT and formal transcript hashes must match the current semantic display artifacts; an old `completed` publish state is insufficient.
+8. Canonical-only knowledge ingestion: derivative/alternate media may inherit semantic/QA readiness only from a strict-Golden canonical job and must not become a second knowledge object.
 
 Historical jobs that were published before these gates existed must be audited
 retroactively. A blocked audit does not delete the existing SRT; it prevents
@@ -153,10 +156,13 @@ Golden promotion until bounded repair/review completes.
 2. **任何 retry / repair：Standard Batch**
    - 單一失敗 chunk、audible gap、尾端缺字一律只送該區段。
    - 已成功 chunk 的 provider evidence 永久重用，不得因 retry 而失效。
-3. **Terminal no-output 不無限等**
+3. **Terminal no-output 不無限等，也不得重用 dead operation**
    - provider operation 已 terminal 且超過 output propagation grace 仍無 GCS output，
      將該 attempt 封存為 dead-output evidence。
    - 在既有核准預算內，只建立新的 Standard repair attempt；不得重送整堂。
+   - 新 attempt 必須使用新的 patch identity、operation name 與 attempt-isolated
+     GCS prefix。若 repair window 因 trim/replan 改變，舊 `submitted/waiting`
+     state 只能作為歷史 evidence，不得把新 window 導回舊 terminal operation。
 4. **Coverage / VAD / QA 本機化**
    - `density_out_of_range` / course-relative density 單獨出現時只列
      `REVIEW/WARNING`，不是 Golden blocker。
@@ -185,6 +191,10 @@ Golden promotion until bounded repair/review completes.
      derived merge 才可標記 `reconstructed_base_chunks`。
    - validation 可接受此明確 evidence，但原始 FAILED provider manifest
      不得被改寫成 SUCCEEDED。
+11. **Local ASR 只作 emergency fallback evidence**
+   - 只有 retained Chirp / Standard repair 無法收斂，或已無新的付費 call 授權時，才使用本機 ASR 處理 bounded gap。
+   - 必須保存 local model、timing provenance、confidence、lexical/nonlexical verdict 與 `provider_calls_started=false`；不得把 local ASR 冒充 Chirp 3 timing truth。
+   - 若使用同課程另一份已 Golden 錄音協助校正文句，必須先有獨立內容對齊證據；只能借用已確認相同語意的文字，不得複製另一錄音的時間碼，也不得擴大健康、劑量、療效或收入宣稱。
 
 
 ## Golden rules
@@ -354,6 +364,13 @@ ChatGPT text layer
 若 final sidecar 已存在，使用 production resumable safe-publish：
 pending upload → verify → timestamped backup → promote → final verify。
 Drive delivery failure 只重試既有 local artifacts，不得重跑 Chirp / ChatGPT。
+
+Golden publication priority:
+
+- SRT 優先發布 `subtitles-cleaned.srt`；若不存在才依序 fallback 到 corrected/base artifacts。
+- 正式逐字稿優先發布 `transcript-cleaned.txt`，Drive 名稱固定為 `<source basename>_逐字稿.txt`。
+- semantic display layer 在既有 Drive 發布後發生任何變更時，必須重新走 safe-publish；finalizer 以 SHA-256 驗證 freshness。
+- 重發時沿用「pending upload → verify → 舊版 `(舊)` / `(舊2)` 備份 → promote → final verify」，不得直接覆蓋沒有備份。
 
 ## Audit manifest
 

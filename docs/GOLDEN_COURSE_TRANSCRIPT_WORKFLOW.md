@@ -47,6 +47,16 @@ requires a provider-independent quality pass over every subtitle-bearing job:
 5. Only after these gates pass may a transcript receive a Golden marker and
    replace the previously published SRT. Existing Drive SRTs are preserved with
    the operator's old-version suffix policy before promotion.
+6. Semantic Golden evidence is mandatory. Deterministic cleanup, terminology
+   snapshots and structural QA are supporting evidence, not a substitute for a
+   durable ChatGPT import audit or explicit semantic-review PASS with zero
+   unresolved blockers.
+7. Drive freshness is a Golden gate. The published SRT and formal transcript
+   hashes must equal the current `subtitles-cleaned.srt` and
+   `transcript-cleaned.txt`; a historical `status=completed` record is stale
+   after any semantic-display change.
+8. Canonical-covered alternates inherit semantic/QA readiness from the strict
+   Golden canonical job and remain excluded from knowledge ingestion themselves.
 
 Provider-free audit reports must explicitly retain
 `provider_calls_started=false` and `drive_mutation_started=false`.
@@ -60,7 +70,9 @@ The production default is deliberately split by workload:
   bounded gap. Never send an already-successful chunk back through the provider.
 - **Provider terminal/no-output:** stop polling the dead operation. Archive the
   attempt and create at most one fresh Standard repair attempt for that missing
-  chunk under the approved batch budget.
+  chunk under the approved batch budget. The retry must receive a fresh patch
+  identity and provider operation/GCS prefix; stale submitted/recovery markers
+  may never route the replacement window back to the terminal operation.
 - **Coverage / VAD / QA:** local and provider-free. Density anomalies alone are
   review warnings; they become blockers only when corroborated by audible gaps,
   broken timing/provider evidence, or an uncovered audible tail.
@@ -80,14 +92,25 @@ The production default is deliberately split by workload:
 - **Local recheck must not resubmit ASR:** when merged words already exist and a
   job is resuming from segment/Coverage/QA/validation, resume the local
   post-ASR pipeline directly.
+- **Local ASR emergency fallback:** when retained Chirp evidence cannot cover a bounded audible gap and no further paid provider call is authorized or useful, a local CPU ASR pass may create explicit fallback evidence. Local ASR never masquerades as Chirp: its model, timing source, confidence, zero-word/nonlexical verdict and `provider_calls_started=false` provenance must be durable. Prefer semantically reviewed same-lesson/canonical text only when independent alignment shows the content matches; never copy timing from another recording and never expand health, dosage, efficacy or income claims.
 - **Patch-reconstructed base chunks:** a failed base/retry chunk may be accepted
   in derived merge/validation only when successful patch evidence completely
   covers its original source interval. Raw failed provider evidence remains
   immutable and auditable.
 
+- **Golden Corpus allowlist:** after strict finalization, build a canonical
+  corpus manifest. Only entries with `ingest=true` may enter a second brain.
+  Confirmed duplicates, derived summaries, material-only clips and
+  canonical-covered alternates remain linked as lineage evidence but are not
+  separately ingested.
+- **Publication artifact priority:** publish `subtitles-cleaned.srt` and
+  `transcript-cleaned.txt` first. The transcript remote name is
+  `<source basename>_逐字稿.txt`; safe replacement retains existing versions as
+  `(舊)`, `(舊2)`, etc.
+
 This split is the default for future jobs, not a one-off migration override.
 
-Version: **1.4**
+Version: **1.6**
 
 This document is the stable handoff pointer for future ChatGPT/WebCodex sessions.
 Changes to timing truth, completeness fail-closed behavior, Drive publication

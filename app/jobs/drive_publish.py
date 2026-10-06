@@ -42,15 +42,17 @@ class PublishArtifact:
 
 _ARTIFACTS: dict[str, tuple[PublishArtifact, ...]] = {
     "srt": (
+        PublishArtifact("srt", "subtitles-cleaned.srt", ".srt"),
         PublishArtifact("srt", "subtitles-corrected.srt", ".srt"),
         PublishArtifact("srt", "subtitles.srt", ".srt"),
         PublishArtifact("srt", "transcript.srt", ".srt"),
     ),
     "txt": (
-        PublishArtifact("txt", "transcript-corrected.txt", ".txt"),
-        PublishArtifact("txt", "transcript_corrected.txt", ".txt"),
-        PublishArtifact("txt", "transcript-raw.txt", ".txt"),
-        PublishArtifact("txt", "transcript_raw.txt", ".txt"),
+        PublishArtifact("txt", "transcript-cleaned.txt", "_逐字稿.txt"),
+        PublishArtifact("txt", "transcript-corrected.txt", "_逐字稿.txt"),
+        PublishArtifact("txt", "transcript_corrected.txt", "_逐字稿.txt"),
+        PublishArtifact("txt", "transcript-raw.txt", "_逐字稿.txt"),
+        PublishArtifact("txt", "transcript_raw.txt", "_逐字稿.txt"),
     ),
     "json": (
         PublishArtifact("json", "chirp.json", ".json"),
@@ -199,11 +201,11 @@ def _unique_backup_path(
     *,
     runner: Callable[[list[str]], subprocess.CompletedProcess[str]],
 ) -> str:
+    """Preserve an existing output using a human-readable Traditional Chinese suffix."""
     prefix, suffix = os.path.splitext(final_path)
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    for sequence in range(100):
-        tail = f"-{sequence:02d}" if sequence else ""
-        candidate = f"{prefix}.backup-{stamp}{tail}{suffix}"
+    for sequence in range(1, 101):
+        label = "(舊)" if sequence == 1 else f"(舊{sequence})"
+        candidate = f"{prefix}{label}{suffix}"
         if _remote_size(candidate, runner=runner, missing_ok=True) is None:
             return candidate
     raise DrivePublishError("Unable to allocate a unique Drive backup filename")

@@ -176,6 +176,35 @@ def _vad_assessment(job_dir: Path, start_ms: int, end_ms: int) -> dict[str, Any]
     }
 
 
+def _local_asr_nonlexical_evidence(
+    job_dir: Path,
+    start_ms: int,
+    end_ms: int,
+) -> dict[str, Any] | None:
+    payload = _read_json(job_dir / "local-asr-gap-evidence.json", {})
+    patches = payload.get("patches", []) if isinstance(payload, dict) else []
+    for item in patches:
+        if not isinstance(item, dict) or not item.get("verified_nonlexical"):
+            continue
+        gap_start = int(item.get("gap_start_ms", 0))
+        gap_end = int(item.get("gap_end_ms", 0))
+        if gap_start > start_ms or gap_end < end_ms:
+            continue
+        return {
+            "patch_index": item.get("patch_index"),
+            "provider": payload.get("provider"),
+            "provenance": payload.get("provenance"),
+            "model": payload.get("model"),
+            "source_start_ms": gap_start,
+            "source_end_ms": gap_end,
+            "residual_start_ms": start_ms,
+            "residual_end_ms": end_ms,
+            "word_count": int(item.get("word_count") or 0),
+            "classification": item.get("classification"),
+        }
+    return None
+
+
 def _verified_nonlexical_windows(job_dir: Path) -> list[dict[str, int]]:
     pairs: list[tuple[Path, Path]] = [
         (
@@ -223,6 +252,18 @@ def _verified_nonlexical_windows(job_dir: Path) -> list[dict[str, int]]:
                 continue
             seen.add(key)
             windows.append({"start_ms": start_ms, "end_ms": end_ms})
+    local_payload = _read_json(job_dir / "local-asr-gap-evidence.json", {})
+    local_patches = local_payload.get("patches", []) if isinstance(local_payload, dict) else []
+    for item in local_patches:
+        if not isinstance(item, dict) or not item.get("verified_nonlexical"):
+            continue
+        start_ms = int(item.get("gap_start_ms", 0))
+        end_ms = int(item.get("gap_end_ms", 0))
+        key = (start_ms, end_ms)
+        if end_ms <= start_ms or key in seen:
+            continue
+        seen.add(key)
+        windows.append({"start_ms": start_ms, "end_ms": end_ms})
     return windows
 
 
@@ -234,6 +275,7 @@ def build_auto_repair_patch_plan(
     merge_gap_ms: int = 1_000,
     max_total_ms: int = 600_000,
     max_patches: int = 12,
+    max_window_ms: int = 300_000,
     patch_index_base: int = 920_000,
 ) -> dict[str, Any]:
     """Build one bounded paid repair round from completeness blockers.
@@ -365,8 +407,31 @@ def build_auto_repair_patch_plan(
         else:
             merged.append(dict(item))
 
+    bounded_merged: list[dict[str, Any]] = []
+    max_window_ms = max(1, min(int(max_window_ms), int(max_total_ms)))
+    for item in merged:
+        source_start = int(item["source_start_ms"])
+        source_end = int(item["source_end_ms"])
+        if source_end - source_start <= max_window_ms:
+            bounded_merged.append(item)
+            continue
+        cursor = source_start
+        while cursor < source_end:
+            window_end = min(source_end, cursor + max_window_ms)
+            split = dict(item)
+            split["source_start_ms"] = cursor
+            split["source_end_ms"] = window_end
+            split["gap_start_ms"] = max(int(item["gap_start_ms"]), cursor)
+            split["gap_end_ms"] = min(int(item["gap_end_ms"]), window_end)
+            if split["gap_end_ms"] <= split["gap_start_ms"]:
+                split["gap_start_ms"] = cursor
+                split["gap_end_ms"] = window_end
+            split["split_from_long_window"] = True
+            bounded_merged.append(split)
+            cursor = window_end
+
     items: list[dict[str, Any]] = []
-    for offset, item in enumerate(merged, start=1):
+    for offset, item in enumerate(bounded_merged, start=1):
         source_start = int(item["source_start_ms"])
         source_end = int(item["source_end_ms"])
         gap_start = int(item["gap_start_ms"])
@@ -385,6 +450,7 @@ def build_auto_repair_patch_plan(
                 "patch_mode": "replace_window",
                 "reason": "+".join(sorted(set(item["reasons"]))),
                 "automatic_paid_retry": True,
+                "split_from_long_window": bool(item.get("split_from_long_window")),
             }
         )
 
@@ -465,6 +531,9 @@ def _targeted_patch_zero_word_evidence(
     """
     if end_ms <= start_ms:
         return None
+    local_evidence = _local_asr_nonlexical_evidence(job_dir, start_ms, end_ms)
+    if local_evidence is not None:
+        return local_evidence
     pairs: list[tuple[Path, Path]] = [
         (
             job_dir / "chirp-targeted-patch-plan.json",
@@ -519,7 +588,7 @@ def _targeted_patch_zero_word_evidence(
             )
             if not isinstance(words, list):
                 continue
-            overlapping = 0
+            overlapping_words: list[str] = []
             for word in words:
                 if not isinstance(word, dict):
                     continue
@@ -529,8 +598,24 @@ def _targeted_patch_zero_word_evidence(
                     has_overlap = max(word_start, start_ms) < min(word_end, end_ms)
                 else:
                     has_overlap = start_ms <= word_start < end_ms
-                overlapping += int(has_overlap)
-            if overlapping == 0:
+                if has_overlap:
+                    overlapping_words.append(str(word.get("word") or "").strip())
+
+            normalized_singletons = {
+                "啊", "阿", "哇", "好", "嗯", "恩", "喔", "哦",
+                "欸", "誒", "哎", "哎呀", "嘿", "對", "對啊",
+            }
+            lexical = [
+                token.strip(" ,，。！？!?、;；:：[]【】()（）")
+                for token in overlapping_words
+                if token.strip(" ,，。！？!?、;；:：[]【】()（）")
+                and token.upper() not in {"BACKGROUND", "[BACKGROUND]"}
+            ]
+            verified_nonlexical = (
+                len(lexical) == 0
+                or (len(lexical) == 1 and lexical[0] in normalized_singletons)
+            )
+            if verified_nonlexical:
                 return {
                     "patch_index": patch_index,
                     "operation_name": verdict.get("operation_name"),
@@ -538,9 +623,38 @@ def _targeted_patch_zero_word_evidence(
                     "source_end_ms": source_end,
                     "residual_start_ms": start_ms,
                     "residual_end_ms": end_ms,
-                    "overlapping_word_count": 0,
+                    "overlapping_word_count": len(overlapping_words),
+                    "overlapping_words": overlapping_words,
+                    "classification": (
+                        "targeted_patch_zero_lexical_words"
+                        if not lexical
+                        else "targeted_patch_single_interjection"
+                    ),
                 }
     return None
+
+
+def _local_fallback_zero_word_evidence(job_dir: Path, start_ms: int, end_ms: int) -> dict[str, Any] | None:
+    payload = _read_json(job_dir / "local-asr-fallback" / "tail-local-asr.json", {})
+    if not isinstance(payload, dict):
+        return None
+    try:
+        source_start = int(payload.get("start_ms", -1))
+        source_end = int(payload.get("end_ms", -1))
+    except (TypeError, ValueError):
+        return None
+    text = str(payload.get("text") or "").strip()
+    if text:
+        return None
+    if source_start > start_ms or source_end < end_ms:
+        return None
+    return {
+        "engine": "faster-whisper-tiny-local-fallback",
+        "source_start_ms": source_start,
+        "source_end_ms": source_end,
+        "lexical_word_count": 0,
+        "provider_calls_started": False,
+    }
 
 
 def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -> dict[str, Any]:
@@ -728,14 +842,31 @@ def evaluate(job_dir: Path = JOB, *, audibility_probe=None, speech_probe=None) -
                     }
                 )
             else:
-                blockers.append(
-                    {
-                        "reason": "short_audible_tail_requires_review",
-                        "start_ms": end_ms,
-                        "end_ms": min(audio_ms, end_ms + tail_review_max_ms),
-                        "uncovered_ms": uncovered,
-                    }
+                local_zero_words = _local_fallback_zero_word_evidence(
+                    job_dir,
+                    end_ms,
+                    audio_ms,
                 )
+                if local_zero_words is not None:
+                    warnings.append(
+                        {
+                            "reason": "short_audio_tail_verified_nonlexical_by_local_asr",
+                            "start_ms": end_ms,
+                            "end_ms": audio_ms,
+                            "uncovered_ms": uncovered,
+                            "recommended_action": "no_paid_retry_required",
+                            "local_asr_evidence": local_zero_words,
+                        }
+                    )
+                else:
+                    blockers.append(
+                        {
+                            "reason": "short_audible_tail_requires_review",
+                            "start_ms": end_ms,
+                            "end_ms": min(audio_ms, end_ms + tail_review_max_ms),
+                            "uncovered_ms": uncovered,
+                        }
+                    )
         else:
             warnings.append(
                 {

@@ -98,6 +98,21 @@ _ACTIVE_RESUMABLE = (
 
 def _module_env(record: dict[str, Any], job_dir: Path) -> dict[str, str]:
     env = _ORIGINAL_MODULE_ENV(record, job_dir)
+    runtime_env = Path(env.get("AI_RUNTIME_DIR", "/run/ai-runtime")) / "ai-active.env"
+    if runtime_env.is_file():
+        try:
+            for raw in runtime_env.read_text(encoding="utf-8").splitlines():
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                if key in {"GOOGLE_CLOUD_PROJECT", "GOOGLE_CLOUD_LOCATION", "GCS_BUCKET"}:
+                    runtime_value = value.strip()
+                    if runtime_value and not str(env.get(key) or "").strip():
+                        env[key] = runtime_value
+        except OSError:
+            pass
     env["OUTPUT_FORMATS_JSON"] = str(
         record.get("output_formats_json") or '["srt","txt"]'
     )
@@ -438,7 +453,7 @@ def _submit_job(
             ),
             progress=21,
         )
-        env = base._module_env(leased, job_dir)
+        env = _module_env(leased, job_dir)
         env.update({
             "CHIRP_DYNAMIC_BATCHING": "true",
             "CHIRP_SUBMIT_ONLY": "1",
@@ -854,11 +869,14 @@ def _targeted_patch_budget(
         try:
             batch = JobStore(database_path).get_batch(batch_id)
             batch_reserved = Decimal(str(batch.get("reserved_cost_usd") or "0"))
-            batch_estimated = Decimal(str(batch.get("estimated_cost_usd") or "0"))
             batch_actual = Decimal(str(batch.get("actual_cost_usd") or "0"))
-            batch_ceiling = max(batch_reserved, batch_estimated)
             jobs = batch.get("jobs") if isinstance(batch, dict) else None
-            if batch_ceiling > 0 and isinstance(jobs, list) and jobs:
+            # The batch reservation is the approved paid-call ceiling.  Never
+            # substitute a later estimated total, and never fall back to a job's
+            # stale reservation after the batch reservation has been released.
+            if batch_reserved <= 0:
+                return False, batch_actual, extra, batch_reserved
+            if isinstance(jobs, list) and jobs:
                 batch_accrued = sum(
                     (
                         estimated_accrued_cost(database_path, data_dir, str(item["id"]))
@@ -869,10 +887,10 @@ def _targeted_patch_budget(
                 )
                 batch_committed = max(batch_accrued, batch_actual)
                 return (
-                    batch_committed + extra <= batch_ceiling,
+                    batch_committed + extra <= batch_reserved,
                     batch_committed,
                     extra,
-                    batch_ceiling,
+                    batch_reserved,
                 )
         except Exception:
             # Fail back to the per-job reservation if batch accounting evidence
@@ -1207,7 +1225,7 @@ def _submit_targeted_patch_if_needed(
     if not allowed:
         return None
 
-    env = base._module_env(leased, job_dir)
+    env = _module_env(leased, job_dir)
     env.update(
         {
             "CHIRP_DYNAMIC_BATCHING": "false",
@@ -1696,7 +1714,7 @@ def _recover_job(
 ) -> dict[str, Any]:
     leased = store.acquire_lease(record["id"], worker_id, lease_seconds=300)
     job_dir = data_dir / "jobs" / leased["id"]
-    env = base._module_env(leased, job_dir)
+    env = _module_env(leased, job_dir)
     env.update({
         "CHIRP_DYNAMIC_BATCHING": (
             "true"

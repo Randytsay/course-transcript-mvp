@@ -119,6 +119,80 @@ class DrivePublishTests(unittest.TestCase):
             )
             self.assertEqual(result["status"], "completed")
 
+    def test_existing_output_is_preserved_with_old_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            job = self._job(Path(temp))
+            (job / "subtitles-cleaned.srt").write_text("cleaned subtitle", encoding="utf-8")
+            remote: dict[str, bytes] = {
+                "gdrive:course/lesson.srt": b"old subtitle",
+                "gdrive:course/lesson(舊).srt": b"older subtitle",
+            }
+
+            def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+                operation = command[1]
+                if operation == "size":
+                    path = command[-1]
+                    if path not in remote:
+                        return subprocess.CompletedProcess(command, 1, "", "object not found")
+                    return subprocess.CompletedProcess(
+                        command, 0, json.dumps({"count": 1, "bytes": len(remote[path])}), ""
+                    )
+                if operation == "copyto":
+                    local = Path(command[-2])
+                    remote[command[-1]] = local.read_bytes()
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                if operation == "moveto":
+                    source, destination = command[-2], command[-1]
+                    remote[destination] = remote.pop(source)
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                raise AssertionError(command)
+
+            state = publish_outputs(
+                job,
+                source_name="lesson.mp3",
+                destination="gdrive:course",
+                output_formats=["srt"],
+                authorized=True,
+                runner=runner,
+                sleeper=lambda _: None,
+                jitter=lambda: 0,
+                clock=lambda: 100,
+            )
+            self.assertEqual(remote["gdrive:course/lesson.srt"], b"cleaned subtitle")
+            self.assertEqual(remote["gdrive:course/lesson(舊).srt"], b"older subtitle")
+            self.assertEqual(remote["gdrive:course/lesson(舊2).srt"], b"old subtitle")
+            self.assertEqual(
+                state["files"]["srt"]["backup_remote_path"],
+                "gdrive:course/lesson(舊2).srt",
+            )
+
+    def test_cleaned_txt_is_published_with_transcript_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            job = self._job(Path(temp))
+            commands: list[list[str]] = []
+            (job / "transcript-cleaned.txt").write_text("cleaned transcript", encoding="utf-8")
+
+            def runner(command: list[str]) -> subprocess.CompletedProcess[str]:
+                commands.append(command)
+                if command[1] == "copyto":
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                return subprocess.CompletedProcess(command, 0, '{"bytes": 18}', "")
+
+            result = publish_outputs(
+                job,
+                source_name="lesson.mp3",
+                destination="gdrive:course",
+                output_formats=["txt"],
+                authorized=True,
+                runner=runner,
+                sleeper=lambda _: None,
+                clock=lambda: 100,
+            )
+
+            self.assertEqual(result["files"]["txt"]["local_name"], "transcript-cleaned.txt")
+            upload = next(command for command in commands if command[1] == "copyto")
+            self.assertEqual(upload[-1], "gdrive:course/lesson_逐字稿.txt")
+
     def test_source_parent_destination_keeps_generated_files_beside_source(self) -> None:
         self.assertEqual(
             source_parent_destination("gdrive:課程/女性保健/lesson.m4a"),
