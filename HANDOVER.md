@@ -1,5 +1,10 @@
 # Handover
 
+> **Current-state note (2026-10-07):** Read `CURRENT_STATE.md`, `DECISIONS.md`,
+> `KNOWN_ISSUES.md`, `GLOBAL_GUARDRAILS.md`, and `AI_AGENT_HANDOFF.md` before
+> using the historical state below. This file contains durable implementation
+> detail but some repository-state bullets reflect older milestones.
+
 ## Start here
 
 Read `README.md`, `ARCHITECTURE.md`, `RUNBOOK.md`, `DEPLOYMENT.md`, `docs/DYNAMIC_BATCH_AND_SUBTITLE_EDITOR_HANDOFF.md`, and `docs/VPS_DEPLOY_GATE.md`, then `AGENTS.md`.

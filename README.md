@@ -1,5 +1,13 @@
 # Course Transcript MVP
 
+## Knowledge / takeover entry point
+
+New AI Agents should start with `CURRENT_STATE.md`, then `AI_AGENT_HANDOFF.md`
+and `docs/KNOWLEDGE_INDEX.md`. These files distinguish merged main, unmerged
+accepted policy, dirty runtime work and historical provenance so old handoff
+documents are not mistaken for current production truth.
+
+
 Private, resumable long-audio transcription MVP. Chirp 3 provides word-level
 timing; Google Vertex AI Gemini 3.7 Flash performs text-only correction after
 the timing layer is complete.
