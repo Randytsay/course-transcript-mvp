@@ -40,8 +40,12 @@ Do not claim the project-specific fix is fully verified until the exact code pat
 
 Never deploy from the dirty WebCodex/live worktree. Build, validate, deploy and verify an immutable exact Git SHA.
 
+## RK-GRD-0009 — Treat dependency security audit as time-sensitive evidence
+
+A previously green commit can become red after new advisories are published. Do not waive a newly failing dependency audit because the current PR is “docs only” or otherwise unrelated. Isolate the smallest security remediation, restore the security gate, then reconcile the original PR onto the repaired main baseline.
+
 ## Reconciliation metadata
 
 - Brain: `Randytsay/AI_Knowledge_Brain`
 - Initial reconciliation: 2026-10-07
-- Guardrail IDs: RK-GRD-0001 … RK-GRD-0008
+- Guardrail IDs: RK-GRD-0001 … RK-GRD-0009

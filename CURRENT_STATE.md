@@ -8,7 +8,8 @@ This file is the entry point for the **current repository state**. It intentiona
 
 - Repository: `Randytsay/course-transcript-mvp`
 - Canonical branch: `main`
-- Main observed at: `47e546faa83b32aaae562e3a047955921ff23d69` (2026-10-07)
+- Implementation baseline before the knowledge-only migration: `47e546faa83b32aaae562e3a047955921ff23d69` (2026-10-07)
+- Knowledge Migration baseline merge: `52f2a4ebf68c2ae1955ff89110dee7c40794ee47` (2026-10-07)
 - Exact production SHA: **must be verified at runtime** with the release label / `runtime_revision_guard.py`. It is not inferred from this file.
 - Golden timing truth: Chirp 3 word-level timestamps.
 - LLM role: text/semantic correction only; it must not invent or alter provider timing.
