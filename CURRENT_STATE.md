@@ -8,7 +8,7 @@ This file is the entry point for the **current repository state**. It intentiona
 
 - Repository: `Randytsay/course-transcript-mvp`
 - Canonical branch: `main`
-- Main observed at: `c63206494245648897a5ce9c07ed6cdaa1820f7d` (2026-10-05)
+- Main observed at: `47e546faa83b32aaae562e3a047955921ff23d69` (2026-10-07)
 - Exact production SHA: **must be verified at runtime** with the release label / `runtime_revision_guard.py`. It is not inferred from this file.
 - Golden timing truth: Chirp 3 word-level timestamps.
 - LLM role: text/semantic correction only; it must not invent or alter provider timing.
@@ -17,6 +17,8 @@ This file is the entry point for the **current repository state**. It intentiona
 ## Merged behavior on main
 
 Main already contains, among other things:
+
+- 2026-10-07 production dependency audit remediation: `source-map-js` pinned to 1.2.2 and `sharp` pinned to 0.35.5 after newly published advisories caused the previously-green baseline to fail CI.
 
 - Golden Course Transcript skill / reference-completeness workflow baseline.
 - Bounded targeted repair and safe terminal-patch handling.
