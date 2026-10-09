@@ -33,6 +33,10 @@ _EDITOR_OWNED_DELIVERY_STATES = {
     "editor_publish_failed",
     "superseded_by_editor",
 }
+# Deterministic local failures cannot be fixed by re-sending Drive requests.
+_NON_RETRYABLE_MISSING_ARTIFACT = "Missing verified local artifact for "
+_BLOCKED_DELIVERY_STATE = "blocked_missing_artifact"
+
 _DELIVERY_ERRORS = (
     DrivePublishError,
     ValueError,
@@ -81,6 +85,12 @@ def _superseded(job_dir: Path) -> bool:
 
 def _due(job_dir: Path) -> bool:
     state = _delivery_state(job_dir)
+    if state.get("status") == _BLOCKED_DELIVERY_STATE:
+        return False
+    # Old jobs with this permanent precondition failure must stop retrying
+    # even before their state is migrated by an operator.
+    if _NON_RETRYABLE_MISSING_ARTIFACT in str(state.get("last_error") or ""):
+        return False
     next_at = parse_time(state.get("next_attempt_at"))
     return next_at is None or next_at <= utcnow()
 
@@ -147,13 +157,14 @@ def _schedule_failure(job_dir: Path, error: str) -> dict[str, Any]:
     path = job_dir / "drive-delivery-state.json"
     state = _read(path)
     attempts = int(state.get("attempts", 0)) + 1
-    delay = retry_delay_seconds(attempts, base_seconds=60)
+    permanent = _NON_RETRYABLE_MISSING_ARTIFACT in error
+    delay = retry_delay_seconds(attempts, base_seconds=60) if not permanent else None
     state.update(
-        status="pending_retry",
+        status=_BLOCKED_DELIVERY_STATE if permanent else "pending_retry",
         attempts=attempts,
         last_error=error[-1000:],
         last_attempt_at=iso(),
-        next_attempt_at=iso(utcnow() + timedelta(seconds=delay)),
+        next_attempt_at=iso(utcnow() + timedelta(seconds=delay)) if delay is not None else None,
     )
     atomic_json(path, state)
     return state
@@ -205,6 +216,10 @@ def _record_failure_while_locked(
         print(f"DRIVE_DELIVERY=SKIP_EDITOR_OWNED job={record['id']}")
         return
     state = _schedule_failure(job_dir, f"{type(exc).__name__}: {exc}")
+    if state["status"] == _BLOCKED_DELIVERY_STATE:
+        _write_manifest_status(job_dir, _BLOCKED_DELIVERY_STATE, state["last_error"])
+        print(f"DRIVE_DELIVERY=BLOCKED_ARTIFACT job={record['id']} attempts={state['attempts']}")
+        return
     _write_manifest_status(job_dir, "pending_retry", state["last_error"])
     print(
         f"DRIVE_DELIVERY=RETRY job={record['id']} "

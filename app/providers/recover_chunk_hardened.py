@@ -94,7 +94,10 @@ def _operation_file_error(name: str) -> tuple[int, str] | None:
         return None
     response = cloud_speech.BatchRecognizeResponse()
     try:
-        if not response_any.Unpack(response):
+        # Google Any.Unpack expects protobuf Message, but cloud_speech
+        # exports a proto-plus wrapper without DESCRIPTOR. The old call
+        # raised AttributeError and silently concealed per-file code 13.
+        if not response_any.Unpack(cloud_speech.BatchRecognizeResponse.pb(response)):
             return None
     except (TypeError, ValueError, AttributeError):
         return None
