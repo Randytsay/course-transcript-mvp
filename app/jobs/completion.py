@@ -82,7 +82,7 @@ def refresh_batch_state(connection: Any, batch_id: str, now: str) -> None:
             updated_at = ?, revision = revision + 1
         WHERE id = ?
         """,
-        (batch_status, ready, failed, now, batch_id),
+        (batch_status, completed, failed, now, batch_id),
     )
 def finish_with_policy(
     self: Any,
