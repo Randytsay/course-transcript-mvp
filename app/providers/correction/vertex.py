@@ -17,7 +17,7 @@ from .base import (
     ProviderId,
 )
 
-DEFAULT_MODEL = "gemini-3.7-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 
 def _location() -> str:
@@ -40,7 +40,7 @@ class VertexCorrectionProvider:
     id = ProviderId.VERTEX
     display_name = "Google Vertex AI"
     default_model = DEFAULT_MODEL
-    # Gemini 3.7 Flash on Vertex supports native batch prediction.
+    # Gemini 3.8 Flash on Vertex supports native batch prediction.
     capabilities = ProviderCapabilities(
         supports_realtime=True,
         supports_batch=True,
@@ -68,7 +68,8 @@ class VertexCorrectionProvider:
             response = client.models.generate_content(
                 model=self.model, contents=prompt,
                 config=types.GenerateContentConfig(
-                    response_mime_type="application/json", temperature=0.2),
+                    response_mime_type="application/json",
+                    thinking_config=types.ThinkingConfig(thinking_level="LOW")),
             )
             return response.text or ""
         except Exception as exc:
