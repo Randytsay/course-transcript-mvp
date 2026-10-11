@@ -85,6 +85,12 @@ class GoldenV2Ledger:
                     identity_digest TEXT NOT NULL, source_sha TEXT NOT NULL,
                     PRIMARY KEY(job_id,stage_name,identity_digest)
                 );
+                CREATE TABLE IF NOT EXISTS v2_reconciliations (
+                    job_id TEXT NOT NULL, stage_name TEXT NOT NULL,
+                    actor TEXT NOT NULL, evidence_sha TEXT NOT NULL,
+                    actual_cents INTEGER NOT NULL, verified_at TEXT NOT NULL,
+                    PRIMARY KEY(job_id,stage_name,evidence_sha)
+                );
             """)
 
     def create(self, *, source_sha: str, mode: str,
@@ -278,6 +284,57 @@ class GoldenV2Ledger:
             )
             db.execute(
                 "UPDATE v2_jobs SET status='NEEDS_RECONCILIATION' WHERE id=?", (claim["job_id"],),
+            )
+
+    def reconcile_unknown(
+        self, job_id: str, *, stage: str, actor: str, evidence_sha: str,
+        actual_cents: int, evidence_verifier: Any,
+    ) -> None:
+        """Resume only when trusted code independently verifies completed output.
+
+        A verified immutable provider response/operation AND source/window
+        identity must be checked by evidence_verifier. No external provider
+        requests occur here; absence of real evidence remains blocked.
+        """
+        if (stage not in MODEL_BY_STAGE or not actor.strip()
+                or len(evidence_sha) != 64
+                or any(ch not in "0123456789abcdef" for ch in evidence_sha)
+                or type(actual_cents) is not int or actual_cents < 0):
+            raise ValueError("invalid reconciliation proof")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            row = db.execute(
+                "SELECT * FROM v2_stages WHERE job_id=? AND name=?", (job_id, stage),
+            ).fetchone()
+            if (job["status"] != "NEEDS_RECONCILIATION" or row is None
+                    or row["state"] != "OUTCOME_UNKNOWN"
+                    or actual_cents > row["estimate_cents"]):
+                raise V2Conflict("no eligible unknown provider outcome")
+            # External verifier must validate RAW provider evidence and exact
+            # staged source identity; a self-declared proof is never enough.
+            if not callable(evidence_verifier) or not evidence_verifier(
+                job_id=job_id, stage=stage, source_sha=job["source_sha"],
+                evidence_sha=evidence_sha,
+            ):
+                raise V2Conflict("provider evidence not independently verified")
+            other_spent = sum(
+                int(item["actual_cents"] or 0) for item in self._stages(db, job_id)
+            )
+            if other_spent + actual_cents > job["approved_cents"]:
+                raise V2Conflict("reconciliation would exceed approved budget")
+            db.execute(
+                "UPDATE v2_stages SET state='COMPLETE',actual_cents=?,"
+                "evidence_sha=?,claim_hash=NULL,updated_at=? WHERE job_id=? AND name=?",
+                (actual_cents,evidence_sha,_now(),job_id,stage),
+            )
+            db.execute(
+                "INSERT INTO v2_reconciliations(job_id,stage_name,actor,"
+                "evidence_sha,actual_cents,verified_at) VALUES(?,?,?,?,?,?)",
+                (job_id,stage,actor,evidence_sha,actual_cents,_now()),
+            )
+            db.execute(
+                "UPDATE v2_jobs SET status='PROCESSING',revision=revision+1 WHERE id=?",
+                (job_id,),
             )
 
     def status(self, job_id: str) -> dict[str, Any]:
