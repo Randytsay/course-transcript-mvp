@@ -24,8 +24,8 @@ Draft PR：https://github.com/Randytsay/course-transcript-mvp/pull/142
 ## 2026-10-11 初次工程證據
 - PR: [#142 V2 WIP](https://github.com/Randytsay/course-transcript-mvp/pull/142)（Draft；不允許合併／發佈）
 - 隔離 Runner：`/tmp/golden-v2-20261011`（新複本；不同於 dirty production source）
-- 非付費測試：13/13 V2 初期、24/24 引擎、74/74 聚焦、30/30 stage+引擎、10/10 stage+finalizer、6/6 三引擎模擬串接、18/18 SQLite+Transcribe+整合、19/19 3.8 routing 回歸均通過。最近一次已完成完整測試 717/717 ALL PASS；後續新增模組後需再次跑全套。
-- **全套測試**：最初 PyYAML/pytest 依賴缺失已處理，701/701 PASS，之後擴展到 717/717 PASS（2026-10-11；新 SQLite store 和 3.8 routing 改動後仍需再跑）；沒有真 Vertex provider / QA 聲學依據，G1–G8 不可宣告 PASS。
+- 非付費測試：13/13 V2 初期、24/24 引擎、74/74 聚焦、30/30 stage+引擎、10/10 stage+finalizer、6/6 三引擎模擬串接、18/18 SQLite+Transcribe+整合、19/19 3.8 routing 回歸均通過。最近一次已完成完整測試 **724/724 ALL PASS**（commit `22a958f`，Python unittest；後續僅文件更新）。
+- **全套測試**：最初因 PyYAML/pytest 依賴缺失的載入錯誤已修復，依次測得 701/701、717/717、**724/724 PASS**（最後測試 commit `22a958f`，Runner 隔離路徑 `/tmp/golden-v2-20261011`）；仍未真實 Vertex/Chirp 音訊付費驗證，不代表 Golden 全部通過。
 - Vertex/Speech 真 API：NOT_RUN；Drive 寫入：NO；Production 改動：NO；付費金額：US$0。
 - 待完成：完整引擎序列、持久化與授權帳本、金標準音檔評測、Skill／UI、部署回滾及 Drive 遠端 SHA。
 - 每次續作先查最新 branch HEAD/PR CI/status 和 `CURRENT_STATE.md`，不得以本紀錄替代 live code。
