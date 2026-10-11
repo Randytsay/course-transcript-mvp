@@ -37,7 +37,7 @@ Google 官方 2026-10-08 Gemini API release notes 說明 3.7 → 3.8 的已棄�
 
 3.8 SDK 相容性驗證：設定 `thinking_level`（LOW/MEDIUM/HIGH 按任務測試）；移除舊 `thinking_budget` 與官方已不支援參數（例如 `temperature`、`top_p`、`top_k`、`candidate_count`、`frequency_penalty`、`presence_penalty`；以實際 SDK/端點的驗證結果為準）。確保 text-only correction 及新 audio transcription 走**不同 prompt、schema 與 provider adapter**，不僅是把舊字串直接替換。
 
-Gemini 3.5 Transcribe 目前單次音檔一般上限 1 小時；若用字詞時間碼／diarization 為 30 分鐘。自訂詞彙與時間碼組合需依實際端點限制分離設定；標註／Smart 模式不應默默刪除口語而成為唯一逐字稿。將限制做成 capability probe，不把文件數值寫死在永遠不變的邏輯裡。
+注意 API 產品差異：Google AI Developer API 文檔列一般 1 小時、啟用字詞時間碼／diarization 為 30 分鐘；但本專案使用 **Vertex AI / Gemini Enterprise Agent Platform**，其目前官方模型頁面列單次最多 15 分鐘。因此 V2 的 Vertex adapter 一律以 **每次 ≤15 分鐘** 作為保守硬限制，並於 capability probe 核對實際端點／SDK 後才可變更。自訂詞彙與時間碼組合需依實際端點限制分離設定；標註／Smart 模式不應默默刪除口語而成為唯一逐字稿。將限制做成 capability probe，不把文件數值寫死在永遠不變的邏輯裡。
 
 ## 3. 核心資料流（順序為使用者正式需求）
 
