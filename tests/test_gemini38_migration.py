@@ -36,7 +36,7 @@ class Gemini38MigrationTests(unittest.TestCase):
         self.assertIsNone(config.top_k)
         self.assertIsNone(config.candidate_count)
         self.assertIsNotNone(config.thinking_config)
-        self.assertEqual(str(config.thinking_config.thinking_level).upper(), "LOW")
+        self.assertEqual(config.thinking_config.thinking_level.name, "LOW")
 
     def test_hardened_and_cascade_use_38_thinking_config(self) -> None:
         response = SimpleNamespace(text='{"segments":[]}')
