@@ -14,7 +14,7 @@ from app.jobs.correction_policy import GEMINI_FIRST, M3_FIRST, normalize_correct
 
 
 class CorrectionProvider(StrEnum):
-    GEMINI = "gemini-3.7-flash"
+    GEMINI = "gemini-3.8-flash"
     MINIMAX_M3 = "minimax-m3"
 
 
