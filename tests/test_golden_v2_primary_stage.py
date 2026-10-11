@@ -90,6 +90,7 @@ class GeminiStageIntegrationTests(unittest.TestCase):
             bucket_name="private-test-bucket",
             object_prefix="v2/staging",
             cost_accountant=lambda records: len(records),
+            cost_estimator=lambda manifest: manifest["local_window_count"],
             part_factory=lambda uri, mime: (uri, mime),
             max_window_seconds=9,
             overlap_seconds=0.5,
@@ -118,6 +119,13 @@ class GeminiStageIntegrationTests(unittest.TestCase):
         self.assertEqual(state["spent_cents"], 2)
         with self.assertRaises(V2Conflict):
             self.ledger.claim_next(self.job, worker_id="next")
+
+    def test_cost_preflight_excess_blocks_all_cloud_and_model_calls(self):
+        with self.assertRaises(V2Conflict):
+            self.execute(cost_estimator=lambda manifest: 99999)
+        self.assertEqual(self.vertex.models.generate_content.call_count, 0)
+        self.assertEqual(len(self.cloud.objects), 0)
+        self.assertEqual(self.ledger.status(self.job)["spent_cents"], 0)
 
     def test_network_unknown_is_not_automatically_retried(self):
         self.vertex.models.generate_content.side_effect = TimeoutError("disconnect")
