@@ -54,6 +54,14 @@ class ThirdEngineTests(TestCase):
                 self.invoke(root, custom_vocabulary=["文殊師利"], word_timestamp=True)
         self.client.models.generate_content.assert_not_called()
 
+    def test_vertex_allows_diarization_and_vocabulary_combination(self) -> None:
+        with TemporaryDirectory() as root:
+            result = self.invoke(root, custom_vocabulary=["文殊師利"], diarization=True)
+            self.assertEqual(result["status"], "COMPLETE")
+            call = self.client.models.generate_content.call_args.kwargs
+            self.assertTrue(call["config"]["diarization"])
+            self.assertEqual(call["config"]["custom_vocabulary"], ["文殊師利"])
+
     def test_verbatim_uses_vertex_generate_content_configuration(self) -> None:
         with TemporaryDirectory() as root:
             first = self.invoke(root, custom_vocabulary=["文殊師利"])
