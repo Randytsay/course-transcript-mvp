@@ -37,9 +37,19 @@ class ModelConfigurationTests(unittest.TestCase):
                 f"active model drifted in {relative}",
             )
             self.assertTrue(
-                "gemini-3.7-flash" in content or "Gemini 3.7 Flash" in content,
-                f"Gemini 3.7 marker missing in {relative}",
+                any(marker in content for marker in ("gemini-3.8-flash", "Gemini 3.8 Flash", "gemini-3.7-flash", "Gemini 3.7 Flash")),
+                f"Gemini Flash marker missing in {relative}",
             )
+
+    def test_new_v2_paths_target_38(self) -> None:
+        for relative in (
+            ".env.example",
+            "app/providers/correct_text.py",
+            "app/providers/correct_text_cascade.py",
+            "app/providers/correction/vertex.py",
+        ):
+            content = (ROOT / relative).read_text(encoding="utf-8")
+            self.assertIn("gemini-3.8-flash", content, relative)
 
     def test_proxy_keeps_legacy_aliases_but_all_resolve_to_gemini_37(self) -> None:
         content = (ROOT / "deploy/vertex-openai-proxy/litellm-config.yaml").read_text(
