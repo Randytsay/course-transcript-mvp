@@ -108,16 +108,23 @@ def _finish_reason(response: Any) -> str:
 def run_window(
     *, client: Any, staged_window: dict[str, Any], source_sha256: str,
     job_dir: Path, approval_token: str, reference_terms: str = "",
-    part_factory: Any = None,
+    part_factory: Any = None, approval_validator: Any = None,
 ) -> dict[str, Any]:
     """Run at most one paid call, only after explicit worker-side authorization.
 
     The caller must preflight cost + source identity and supply a non-empty
-    approval_token. This is not an authorization server; a production worker
-    must validate that token against the immutable job cost approval record.
+    approval_token. approval_validator must check the immutable job ledger;
+    passing a token alone never permits a paid request.
     """
     if not approval_token.strip() or len(source_sha256) != 64 or any(c not in "0123456789abcdef" for c in source_sha256):
         raise PrimaryTranscriptError("source identity or approval missing")
+    # This library never accepts a self-asserted token as sufficient authority.
+    # The production worker must supply a store-backed validator that checks
+    # approved source checksum, selected model, exact job/cost revision.
+    if approval_validator is None or not approval_validator(
+        approval_token, source_sha256, MODEL, staged_window
+    ):
+        raise PrimaryTranscriptError("no verified cost approval")
     start = float(staged_window["start_seconds"])
     end = float(staged_window["end_seconds"])
     validate_staged_windows([{**staged_window, "index": 0, "start_seconds": 0, "end_seconds": end-start}], end-start)
