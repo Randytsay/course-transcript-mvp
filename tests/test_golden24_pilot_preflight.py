@@ -204,6 +204,44 @@ class PilotGateTests(unittest.TestCase):
                 {"id":2,"start_ms":3000,"end_ms":4400,"text":"乙"}
             ])
 
+    def test_v5_punctuation_keeps_all_word_characters(self):
+        from scripts.golden24.v5_semantic_layout import lex, curated
+        example={"id":905,"start_ms":0,"end_ms":4000,
+                 "text":"富貴生病跟貧窮生病有沒有一樣啊不一樣對不對對嘛有"}
+        changed,flags,n=curated([example])
+        self.assertEqual(flags,[])
+        self.assertGreater(n,0)
+        self.assertEqual(lex(changed[0]["text"]),lex(example["text"]))
+        self.assertIn("？",changed[0]["text"])
+        self.assertIn("。",changed[0]["text"])
+
+    def test_v5_no_line_wider_than_14_and_keeps_content(self):
+        from scripts.golden24.v5_semantic_layout import render_lines
+        example="如來要入城了，趕快來迎接。還有佛說的經文，怎麼樣？"
+        wrapped=render_lines(example,14)
+        self.assertTrue(all(len(line)<=14 for line in wrapped.splitlines()))
+        self.assertEqual(wrapped.replace("\n",""),example)
+
+    def test_v5_split_prefers_complete_sentence(self):
+        from scripts.golden24.v5_semantic_layout import fragments
+        example="如來要入城了，趕快來迎接。還有佛說的經文，怎麼樣？"
+        chunks=fragments(example)
+        self.assertGreaterEqual(len(chunks),2)
+        self.assertEqual("".join(chunks),example)
+        self.assertEqual(chunks[0],"如來要入城了，趕快來迎接。")
+
+    def test_v5_recovers_only_grounded_v2_timing(self):
+        from scripts.golden24.v5_semantic_layout import v2_boundary_for_parts
+        text="我都享受到。現在不想出來，"
+        before="我都享受到。"
+        from scripts.golden24.v5_semantic_layout import lex
+        t=v2_boundary_for_parts(text,[before,"現在不想出來，"],0,
+                                  {len(lex(before))-1:1200},200,2600)
+        self.assertIsNone(t)
+        t=v2_boundary_for_parts(text,[before,"現在不想出來，"],0,
+                                  {len(lex(before)):1300},200,2600)
+        self.assertEqual(t,[1300])
+
 
 if __name__ == "__main__":
     unittest.main()
