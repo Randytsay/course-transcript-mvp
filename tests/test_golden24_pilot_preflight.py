@@ -151,6 +151,30 @@ class PilotGateTests(unittest.TestCase):
         self.assertEqual(cjktypography("大,小?"), "大，小？")
 
 
+    def test_v3_readability_merge_uses_only_old_boundaries_and_keeps_words(self):
+        from scripts.golden24.v3_readability import conservative_merge, clean
+        before = [
+            {"id":1,"start_ms":0,"end_ms":2600,"text":"這是非常好的事情，"},
+            {"id":2,"start_ms":2600,"end_ms":2990,"text":"對不對？"},
+            {"id":3,"start_ms":3450,"end_ms":5200,"text":"後面的新句子。"},
+        ]
+        merged, actions = conservative_merge(before)
+        self.assertEqual(len(actions), 1)
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(clean("".join(x["text"] for x in before)),
+                         clean("".join(x["text"] for x in merged)))
+        original_starts={x["start_ms"] for x in before}
+        original_ends={x["end_ms"] for x in before}
+        self.assertTrue(all(x["start_ms"] in original_starts
+                            and x["end_ms"] in original_ends for x in merged))
+
+    def test_v3_qa_refuses_promote_review(self):
+        from scripts.golden24.v3_readability import render_txt
+        cues=[{"start_ms":0,"end_ms":2000,"text":"第一段，"},
+              {"start_ms":2040,"end_ms":3000,"text":"第二段。"}]
+        from scripts.golden24.v3_readability import clean
+        self.assertEqual(clean(render_txt(cues)), "第一段，第二段。")
+
 
 if __name__ == "__main__":
     unittest.main()
