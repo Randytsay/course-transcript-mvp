@@ -43,6 +43,18 @@ class GoldenPrimaryAudioTests(unittest.TestCase):
                                    approval_token="", part_factory=lambda u, m: (u, m))
         client.models.generate_content.assert_not_called()
 
+    def test_self_asserted_approval_token_never_authorizes_paid_call(self) -> None:
+        client = SimpleNamespace(models=SimpleNamespace(generate_content=Mock()))
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(primary.PrimaryTranscriptError):
+                primary.run_window(
+                    client=client, staged_window=win(0, 0, 10),
+                    source_sha256="a"*64, job_dir=Path(root),
+                    approval_token="any-string-is-not-an-approval",
+                    part_factory=lambda u, m: (u, m),
+                )
+        client.models.generate_content.assert_not_called()
+
     def test_response_persisted_and_reused_without_rebilling(self) -> None:
         client = SimpleNamespace(models=SimpleNamespace(generate_content=Mock(
             return_value=SimpleNamespace(
