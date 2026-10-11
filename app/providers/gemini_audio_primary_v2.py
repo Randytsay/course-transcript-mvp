@@ -189,7 +189,7 @@ def assemble_primary_candidates(
         if index and span.start_ms < expected[index - 1].end_ms:
             max_len = min(160, len(combined), len(text))
             matching = next(
-                (n for n in range(max_len, 5, -1) if combined[-n:] == text[:n]),
+                (n for n in range(max_len, 4, -1) if combined[-n:] == text[:n]),
                 0,
             )
             if matching:
