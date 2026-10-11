@@ -1,7 +1,9 @@
 # Golden Transcript V2 — 驗收 Gate 狀態追蹤
 
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
-執行進度：**V2 Draft PR #142 已建立；P0–P4 正在開發，全部 Gate 均未取得正式 PASS**。\n\nDraft PR：https://github.com/Randytsay/course-transcript-mvp/pull/142
+執行進度：**V2 Draft PR #142 已建立；P0–P4 正在開發，全部 Gate 均未取得正式 PASS**。
+
+Draft PR：https://github.com/Randytsay/course-transcript-mvp/pull/142
 
 規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)
 
