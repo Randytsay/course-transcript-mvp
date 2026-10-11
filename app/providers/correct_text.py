@@ -579,7 +579,7 @@ def main() -> int:
             }
         )
     payload = {
-        "source": "chirp_3_merged + gemini-3.7-flash segment correction",
+        "source": f"chirp_3_merged + {MODEL} segment correction",
         "model": MODEL,
         "prompt_version": PROMPT_VERSION,
         "configured_window_ms": WINDOW_MS,
