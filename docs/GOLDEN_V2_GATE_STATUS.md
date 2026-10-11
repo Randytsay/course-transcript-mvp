@@ -1,7 +1,7 @@
 # Golden Transcript V2 — 驗收 Gate 狀態追蹤
 
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
-執行進度：**僅設計與驗收文件已入 GitHub；尚未開始 P0–P8 的工程驗收**。
+執行進度：**P0、P1 在獨立開發分支開始，尚未完整驗收；main/production 未切換。**
 
 規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)
 
@@ -9,8 +9,8 @@
 
 | 階段 | Gate | 狀態 | 目前可核對成果／阻礙 |
 |---|---|---|---|
-| P0 基線／隔離 | G0 | NOT_RUN | 需再取得正式 runtime SHA、active jobs、dirty worktree 證據及備份驗證 |
-| P1 3.7→3.8 | G1 | NOT_RUN | 只有遷移規格，程式未修改；尚未測真 Vertex API |
+| P0 基線／隔離 | G0 | PARTIAL | 2026-10-11 已確認 GitHub main/feature branch、另外隔離 V2 分支；WebCodex 的舊 source Project `.git/worktrees` 無效，正式 runtime SHA／active transcription jobs／備份尚未驗證。未 reset/clean/stash。 |
+| P1 3.7→3.8 | G1 | PARTIAL | 已於 V2 隔離分支修改 `correct_text.py`、`correct_text_cascade.py` 的 3.8 target 及 prompt version，新增 `test_golden_v2_model_policy.py`；尚未執行完整測試、SDK 真實 API smoke、正式部署；其他 3.7 路徑仍待盤點。 |
 | P2 Gemini 3.8 音訊主稿 | G2 | NOT_RUN | 需新增 audio-first provider + completeness |
 | P3 Chirp 獨立聲學比對 | G3 | NOT_RUN | 現有 Chirp 技術可重用，但尚未串成 V2 順序 |
 | P4 Gemini 3.5 Transcribe | G4 | NOT_RUN | 尚未建立 V2 adapter／模式 |
