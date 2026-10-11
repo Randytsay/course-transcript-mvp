@@ -106,6 +106,41 @@ class PilotGateTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "provenance"):
                 check_chirp_coverage(p, j, [], "expected-sha")
 
+    def test_gap_candidate_is_staged_idempotently_and_never_publishable(self):
+        from scripts.golden24.recover_gap_candidate import create_candidate
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            snap, job, out = p / "snap", p / "job", p / "stage"
+            snap.mkdir()
+            job.mkdir()
+            mp3 = b"source-bytes"
+            (snap / "20260927.MP3").write_bytes(mp3)
+            (snap / "20260927.srt").write_text(
+                "1\n00:00:00,000 --> 00:00:02,000\n開頭。\n\n"
+                "2\n00:01:20,000 --> 00:01:22,000\n後續。\n",
+                encoding="utf-8",
+            )
+            (job / "source-manifest.json").write_text(json.dumps({
+                "source_name": "20260927.MP3",
+                "source_sha256": hashlib.sha256(mp3).hexdigest()}))
+            (job / "merged-words.json").write_text(json.dumps({
+                "total_words": 12,
+                "words": [{"word": "字", "start_ms": 6000 + 500*i,
+                           "end_ms": 6200 + 500*i} for i in range(12)]}))
+            (job / "transcript.json").write_text(json.dumps({
+                "source_timing": "chirp_3 word timestamps",
+                "display_segments": [
+                    {"start_ms": 6000, "end_ms": 12000, "text": "確定補段。"},
+                    {"start_ms": 79500, "end_ms": 80500, "text": "跨界保留待審。"},
+                ]}))
+            first = create_candidate(snap, job, out)
+            second = create_candidate(snap, job, out)
+            self.assertEqual(first["candidate_srt_sha256"], second["candidate_srt_sha256"])
+            self.assertFalse(first["publication_allowed"])
+            self.assertEqual(first["inserted_chirp_timed_cues"], 1)
+            self.assertEqual(len(first["crossing_segments_pending_review"]), 1)
+            self.assertEqual(first["candidate_cues"], 3)
+
 
 if __name__ == "__main__":
     unittest.main()
