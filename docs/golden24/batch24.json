@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "workflow": "golden24-staged",
+  "approved_scope": "24 ceremonies, stage-gated; no formal overwrite before Golden QA",
+  "source_root_folder_id": "1upVRLwqDo1agfYwXekrQP2-2PeKGzvN4",
+  "stages": [
+    {"stage":1,"name":"pilot","dates":["20260927"]},
+    {"stage":2,"name":"high_risk","dates":["20260322","20260816","20260913","20260920"]},
+    {"stage":3,"name":"early_batch","dates":["20260308","20260315","20260329","20260405","20260412","20260419","20260426","20260510","20260524","20260531","20260607"]},
+    {"stage":4,"name":"later_batch","dates":["20260614","20260621","20260628","20260705","20260719","20260802","20260823","20260830"]}
+  ],
+  "first_pilot": {"date":"20260927","folder_id":"1XWyDV7m0mtBVwItfK_bb3Ds8ySCEO6bB","state":"REVIEW","publish_allowed":false}
+}
