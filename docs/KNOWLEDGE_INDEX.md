@@ -14,6 +14,13 @@ This index tells future Agents which documents are current contracts versus hist
 - `skills/golden-course-transcript/SKILL.md` — Golden workflow operator contract on the current branch.
 - `docs/GOLDEN_COURSE_TRANSCRIPT_WORKFLOW.md` — stable Golden workflow pointer.
 
+## Approved future specification (NOT yet deployed)
+
+- `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md` — V2 Gemini 3.8 primary → Chirp 3 → optional Gemini 3.5 Transcribe, final WebCodex/Golden QA design.
+- `docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md` — P0–P8 sequence, G0–G8 auditable release gates, user approval boundaries.
+
+These documents have authority for **new V2 implementation intent**, not as evidence of current executable code or production status. For current behavior use exact commit/runtime code, `CURRENT_STATE.md`, and tested implementation evidence.
+
 ## Current implementation contracts
 
 Use as applicable:
