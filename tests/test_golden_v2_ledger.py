@@ -106,6 +106,37 @@ class GoldenV2LedgerTests(unittest.TestCase):
         status = self.store.status(job)
         self.assertEqual(next(r["state"] for r in status["stages"] if r["name"] == "third_optional"), "SKIPPED")
 
+    def test_unknown_provider_reconciles_from_verified_evidence_without_rerun(self):
+        job = self.create()
+        self.approve(job)
+        claim = self.store.claim_next(job, worker_id="A")
+        self.store.mark_outcome_unknown(claim)
+        recovered = GoldenV2Ledger(self.db)
+        with self.assertRaises(V2Conflict):
+            recovered.reconcile_unknown(
+                job, stage="gemini_primary", actor="reviewer",
+                evidence_sha="d"*64, actual_cents=9,
+                evidence_verifier=lambda **e: False,
+            )
+        self.assertEqual(recovered.status(job)["status"], "NEEDS_RECONCILIATION")
+        verification = []
+        recovered.reconcile_unknown(
+            job, stage="gemini_primary", actor="reviewer",
+            evidence_sha="d"*64, actual_cents=9,
+            evidence_verifier=lambda **e: verification.append(e) or (
+                e["source_sha"] == "a"*64 and e["stage"] == "gemini_primary"
+            ),
+        )
+        self.assertEqual(len(verification), 1)
+        self.assertEqual(recovered.status(job)["spent_cents"], 9)
+        self.assertEqual(recovered.claim_next(job, worker_id="B")["stage"], "chirp_independent")
+        with self.assertRaises(V2Conflict):
+            recovered.reconcile_unknown(
+                job, stage="gemini_primary", actor="reviewer",
+                evidence_sha="d"*64, actual_cents=9,
+                evidence_verifier=lambda **e: True,
+            )
+
     def test_cost_ledger_rejects_actual_above_reserved(self):
         job = self.create()
         self.approve(job)
