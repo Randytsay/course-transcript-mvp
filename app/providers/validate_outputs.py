@@ -285,7 +285,7 @@ def main() -> int:
         errors.append("missing text-correction provider records")
     # Historical Gemini evidence remains readable; M3 records are accepted
     # only from the dedicated provider audit directory.
-    supported_correction_models = {"gemini-3.6-flash", "gemini-3.7-flash", "minimax-m3", "MiniMax-M3"}
+    supported_correction_models = {"gemini-3.6-flash", "gemini-3.7-flash", "gemini-3.8-flash", "minimax-m3", "MiniMax-M3"}
     for path in correction_records:
         record = json.loads(path.read_text(encoding="utf-8"))
         provider = str(record.get("provider") or "")

@@ -19,7 +19,7 @@ from typing import Any
 
 
 DEFAULT_MODELS = {
-    "vertex": "gemini-3.7-flash",
+    "vertex": "gemini-3.8-flash",
     "openrouter": "google/gemini-3.7-flash",
     "minimax": "MiniMax-M3",
 }

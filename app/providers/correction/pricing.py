@@ -1,7 +1,7 @@
 """Pricing catalog — provider/model/mode aware and date-aware.
 
 Sources:
-- Vertex Gemini 3.7 Flash: official Google pricing, global, through
+- Vertex Gemini 3.7/3.8 Flash: official Google pricing, global, through
   2026-12-31 (Standard $0.75/$3.75 per 1M; Flex/Batch $0.375/$1.875),
   2027-01-01 onward Standard $1.50/$7.50, Flex/Batch $0.75/$3.75.
 - OpenRouter: only from provider models-API pricing metadata; batch price
@@ -26,8 +26,9 @@ class PricePoint:
     effective_until: str | None = None
 
 
-# Vertex Gemini 3.7 Flash — official published global pricing (USD / 1M tokens).
-_VERTEX_G37_FLASH_GLOBAL = [
+# Vertex Gemini 3.7 and 3.8 Flash share official global pricing (USD / 1M tokens).
+# https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing
+_VERTEX_FLASH_GLOBAL = [
     # promotional-through-2026 window
     PricePoint(0.75, 3.75, "google-official-global", "2026-01-01", "2026-12-31"),
     PricePoint(0.375, 1.875, "google-official-global-flex", "2026-01-01", "2026-12-31"),
@@ -41,18 +42,22 @@ CHIRP_STANDARD_USD_PER_MINUTE = 0.016
 
 
 def vertex_price(*, mode: str, on: date,
-                 location: str = "global") -> dict[str, Any]:
-    """Date-aware Vertex pricing for gemini-3.7-flash.
+                 location: str = "global",
+                 model: str = "gemini-3.7-flash") -> dict[str, Any]:
+    """Date-aware Vertex pricing for Gemini 3.7/3.8 Flash.
 
     mode: REALTIME or BATCH (BATCH uses flex pricing).
     Non-global locations are not covered by the global snapshot -> unknown
     rather than wrong.
     """
+    if model not in {"gemini-3.7-flash", "gemini-3.8-flash"}:
+        return {"input": None, "output": None, "known": False,
+                "reason": f"model {model} 未建立可靠費率"}
     if location != "global":
         return {"input": None, "output": None, "known": False,
                 "reason": f"region {location} 未有可靠價格資料"}
     flex = mode == "BATCH"
-    for point in _VERTEX_G37_FLASH_GLOBAL:
+    for point in _VERTEX_FLASH_GLOBAL:
         is_flex = "flex" in point.source
         if is_flex != flex:
             continue
@@ -73,7 +78,7 @@ def estimate_correction_cost(
 ) -> dict[str, Any]:
     """Estimate AI correction cost. Unknown pricing -> known=False, cost=None."""
     if provider == "vertex":
-        p = vertex_price(mode=mode, on=on)
+        p = vertex_price(mode=mode, on=on, model=model)
         if not p["known"]:
             return {**p, "estimated_cost_usd": None}
         cost = (input_tokens / 1e6 * p["input"]) + (output_tokens / 1e6 * p["output"])
