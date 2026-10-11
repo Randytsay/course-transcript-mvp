@@ -40,10 +40,10 @@ from app.providers.market_america_terminology import instruction_text as market_
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
 WORK = JOB / "correction-v2"
-MODEL = "gemini-3.7-flash"
+MODEL = "gemini-3.8-flash"
 WINDOW_MS = max(15_000, int(os.environ.get("GEMINI_CORRECTION_WINDOW_MS", "60000")))
 MAX_WORKERS = max(1, int(os.environ.get("GEMINI_MAX_PARALLEL_WINDOWS", "2")))
-PROMPT_VERSION = "fixed-segments-v9-gemini-3.7-golden-corpus-error-memory"
+PROMPT_VERSION = "fixed-segments-v10-gemini-3.8-golden-corpus-error-memory"
 _CLIENTS = threading.local()
 
 TERMS_SCHEMA = {
@@ -579,7 +579,7 @@ def main() -> int:
             }
         )
     payload = {
-        "source": "chirp_3_merged + gemini-3.7-flash segment correction",
+        "source": "chirp_3_merged + gemini-3.8-flash segment correction",
         "model": MODEL,
         "prompt_version": PROMPT_VERSION,
         "configured_window_ms": WINDOW_MS,
