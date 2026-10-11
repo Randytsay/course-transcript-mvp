@@ -54,6 +54,7 @@ class GoldenPrimaryAudioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             opts = dict(client=client, staged_window=win(0, 0, 60),
                         source_sha256="a"*64, job_dir=Path(root), approval_token="authorized-job-test",
+                        approval_validator=lambda t, h, model, w: t == "authorized-job-test",
                         part_factory=lambda u, m: {"uri": u, "mime": m})
             first = primary.run_window(**opts)
             second = primary.run_window(**opts)
@@ -77,6 +78,7 @@ class GoldenPrimaryAudioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             opts = dict(client=client, staged_window=win(0, 0, 10),
                         source_sha256="f"*64, job_dir=Path(root), approval_token="authorized-job-test",
+                        approval_validator=lambda t, h, model, w: t == "authorized-job-test",
                         part_factory=lambda u, m: (u, m))
             with self.assertRaises(primary.PrimaryTranscriptError):
                 primary.run_window(**opts)
