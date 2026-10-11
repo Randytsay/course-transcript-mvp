@@ -1,6 +1,14 @@
 # Current State
 
-Last reviewed: 2026-10-07
+Last reviewed: 2026-10-11 (V2 specification note; production SHA remains unverified)
+
+## Newly approved V2 work — design only (2026-10-11)
+
+- [V2 architecture specification](docs/GOLDEN_V2_ARCHITECTURE_PLAN.md) defines Gemini `gemini-3.8-flash` **full-audio first**, then independent Chirp 3, optional Gemini 3.5 Transcribe, then ChatGPT/WebCodex QA.
+- [V2 development and acceptance gates](docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md) define P0–P8/G0–G8 milestones.
+- This is an **intent/acceptance contract only**, not proof that source code, existing job state, credentials, billing or production release have migrated from 3.7 to 3.8. Do not rewrite historic model provenance.
+- Next authorized safe work: non-paid P0 review and isolated development preparation; no paid provider calls, IAM/billing mutations, Drive publish or production cutover without separate scope approval.
+
 
 This file is the entry point for the **current repository state**. It intentionally separates merged main, reviewed-but-unmerged work, and uncommitted runtime work. Do not infer production state from a development worktree.
 
