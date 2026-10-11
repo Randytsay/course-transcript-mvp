@@ -141,6 +141,16 @@ class PilotGateTests(unittest.TestCase):
             self.assertEqual(len(first["crossing_segments_pending_review"]), 1)
             self.assertEqual(first["candidate_cues"], 3)
 
+    def test_golden_readability_wrap_preserves_text(self):
+        from scripts.golden24.generate_review_pair import linewrap, cjktypography, tc
+        text = "這就是所有一切殊勝的因緣功德，應該好好學習才能得到成就。"
+        wrapped = linewrap(text)
+        self.assertEqual(wrapped.replace("\n", ""), text)
+        self.assertLessEqual(max(map(len, wrapped.splitlines())), 24)
+        self.assertEqual(tc(5238120), "01:27:18,120")
+        self.assertEqual(cjktypography("大,小?"), "大，小？")
+
+
 
 if __name__ == "__main__":
     unittest.main()
