@@ -26,7 +26,7 @@ def main() -> int:
     ]
     payload = {
         "source": "fake fixed-segment correction",
-        "model": "gemini-3.7-flash",
+        "model": "gemini-3.8-flash",
         "fake_provider": True,
         "segment_count": len(segments),
         "corrected_count": 0,
@@ -68,7 +68,7 @@ def main() -> int:
         glossary / "global-terms.json",
         json.dumps(
             {
-                "model": "gemini-3.7-flash",
+                "model": "gemini-3.8-flash",
                 "fake_provider": True,
                 "usage_metadata": {},
                 "terms": [],
@@ -86,7 +86,7 @@ def main() -> int:
         correction / "seg-0001.json",
         json.dumps(
             {
-                "model": "gemini-3.7-flash",
+                "model": "gemini-3.8-flash",
                 "fake_provider": True,
                 "raw_response": "{\"segments\":[]}",
                 "segments": segments,
