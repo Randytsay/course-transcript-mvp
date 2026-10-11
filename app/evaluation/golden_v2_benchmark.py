@@ -15,7 +15,7 @@ def _normalize(text: str) -> str:
 
 def _error_counts(gold: str, hypothesis: str) -> tuple[int, int, int]:
     """Return (substitution, deletion, insertion) minimal edit path."""
-    previous = [(0, 0, 0, j) for j in range(len(hypothesis) + 1)]
+    previous = [(j, 0, 0, j) for j in range(len(hypothesis) + 1)]
     for i, expected in enumerate(gold, 1):
         current = [(i, 0, i, 0)]
         for j, seen in enumerate(hypothesis, 1):
