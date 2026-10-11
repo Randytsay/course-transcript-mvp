@@ -261,6 +261,15 @@ class GoldenV2Ledger:
                  int(comparison_has_dispute) if comparison_has_dispute is not None else None,
                  _now(), claim["job_id"],claim["stage"]),
             )
+            # Final-stage completion must persist the review boundary inside
+            # this transaction. claim_next() raises when nothing remains, so
+            # any status write there would roll back with that exception.
+            if claim["stage"] == "golden_qa":
+                db.execute(
+                    "UPDATE v2_jobs SET status='AWAITING_FINAL_REVIEW',"
+                    "revision=revision+1 WHERE id=?",
+                    (claim["job_id"],),
+                )
 
     def hold_for_review(self, claim: dict[str, Any], *, evidence_sha: str) -> None:
         """Known semantic/structural issue: persist evidence, block next stages."""
