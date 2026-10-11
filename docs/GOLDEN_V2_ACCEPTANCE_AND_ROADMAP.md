@@ -64,7 +64,7 @@
 
 ### G4 — Gemini 3.5 Transcribe
 - [ ] G4-01 能獨立選擇開關；`QUALITY_3WAY` 全文、`SMART_2PLUS` 按需觸發；OFF 時沒有 API 花費。
-- [ ] G4-02 1h / 30m 限制（依最新模型 capability）與不相容配置自動校驗、分段。
+- [ ] G4-02 Vertex/Agent Platform 預錄轉錄採保守 ≤15m chunk（依端點當時模型 capability 再驗）；自訂詞彙與時間碼等不相容配置自動拒絕、分段。
 - [ ] G4-03 使用同一 Google Cloud Billing/Project 的可用性、usage/費用證據有紀錄；未核實不宣稱成功。
 - [ ] G4-04 三稿可比對，但「2 比 1 多數決」不得直接覆寫音訊或 Golden 字幕。
 
