@@ -144,7 +144,7 @@ def transcribe_audio_chunk(
     reason = _completion_reason(response)
     # Empty, truncated, or blocked responses must not become FULL_TRANSCRIPT.
     has_text = bool(raw_text.strip())
-    truncated = "MAX_TOKENS" in reason or "SAFETY" in reason or "RECITATION" in reason
+    truncated = reason != "STOP"
     usage = getattr(response, "usage_metadata", None)
     return {
         "model": MODEL,
