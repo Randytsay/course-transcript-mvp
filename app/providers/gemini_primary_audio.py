@@ -142,11 +142,24 @@ def run_window(
         )
     else:
         config = {"thinking_config": {"thinking_level": "MEDIUM"}}
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=[prompt, part_factory(staged_window["gcs_uri"], staged_window["mime_type"])],
-        config=config,
-    )
+    # Persist a durable barrier BEFORE the external call. On timeout, the
+    # provider may have charged/finished even if its response was lost. Never
+    # automatically submit a second call with the same identity.
+    _atomic_json(audit_path, {"identity": identity, "status": "REQUEST_STARTED",
+                              "human_review_required": True})
+    try:
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[prompt, part_factory(staged_window["gcs_uri"], staged_window["mime_type"])],
+            config=config,
+        )
+    except Exception as exc:
+        _atomic_json(audit_path, {
+            "identity": identity, "status": "OUTCOME_UNKNOWN",
+            "human_review_required": True,
+            "error_type": type(exc).__name__,
+        })
+        raise PrimaryTranscriptError("provider outcome unknown; reconcile before retry") from exc
     text = str(getattr(response, "text", "") or "").strip()
     finish = _finish_reason(response)
     valid = bool(text) and finish in {"STOP", "FINISH_REASON_STOP"}
