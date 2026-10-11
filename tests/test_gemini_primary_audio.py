@@ -108,6 +108,7 @@ class GoldenPrimaryAudioTests(unittest.TestCase):
         result = primary.assemble_windows(windows, records, 90)
         self.assertEqual(len(result["review_items"]), 1)
         self.assertEqual(result["text"].count("重複的佛經與內容"), 2)
+        self.assertFalse(result["ready_for_chirp_comparison"])
 
 
 if __name__ == "__main__":
