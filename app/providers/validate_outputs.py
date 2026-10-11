@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.exports import normalize_output_formats
+from app.providers.subtitle_single_line_gate import SINGLE_LINE_HARD_TARGET
 
 DATA_DIR = Path(os.environ.get("COURSE_TRANSCRIPT_DATA_DIR", "/app/data"))
 JOB = DATA_DIR / "jobs" / os.environ.get("JOB_NAME", "voice_11386603-seg1")
@@ -51,8 +52,15 @@ def _selected() -> list[str]:
 
 def _validate_srt(path: Path, segment_count: int) -> bool:
     units = blocks(path)
+    # Golden Subtitle policy: an SRT cue is one independently timed semantic
+    # unit.  Internal visual line wrapping is NOT a substitute for timing.
+    # A single overlong line also cannot be an acceptable fallback.
     return len(units) == segment_count and all(
-        len(unit) >= 3 and unit[0].isdigit() and SRT_TIMING.match(unit[1])
+        len(unit) == 3
+        and unit[0].isdigit()
+        and bool(SRT_TIMING.fullmatch(unit[1]))
+        and bool(unit[2].strip())
+        and len(unit[2]) <= SINGLE_LINE_HARD_TARGET
         for unit in units
     )
 
