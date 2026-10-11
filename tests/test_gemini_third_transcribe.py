@@ -31,6 +31,7 @@ class ThirdEngineTests(TestCase):
             job_dir=Path(root), approval_token="approved-by-worker", enabled=True,
             part_factory=lambda u, m: (u, m),
             config_factory=lambda d: d,
+            approval_validator=lambda token, source, model, window: token == "approved-by-worker",
         )
         args.update(kw)
         return run_third_window(**args)
