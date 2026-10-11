@@ -8,6 +8,15 @@ accepted policy, dirty runtime work and historical provenance so old handoff
 documents are not mistaken for current production truth.
 
 
+## Golden Transcript V2 — approved *design*, not production status
+
+The 2026-10-11 V2 upgrade specification is documented in:
+
+- [Three-engine architecture and Gemini 3.8 migration](docs/GOLDEN_V2_ARCHITECTURE_PLAN.md)
+- [P0–P8 development sequence and G0–G8 acceptance checklist](docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)
+
+**V2 target:** Gemini 3.8 Flash full-audio transcript first → independent Chirp 3 acoustic/timing comparison → optional Gemini 3.5 Transcribe → ChatGPT/WebCodex adjudication and Golden SRT/TXT QA. The text below describes an earlier/current V1 implementation and may still mention Gemini 3.7 Flash. **Do not construe this documentation as proof that the production model has switched.** Check `CURRENT_STATE.md` and runtime exact-SHA evidence before making a production claim.
+
 Private, resumable long-audio transcription MVP. Chirp 3 provides word-level
 timing; Google Vertex AI Gemini 3.7 Flash performs text-only correction after
 the timing layer is complete.
