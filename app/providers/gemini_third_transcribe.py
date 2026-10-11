@@ -26,8 +26,11 @@ MAX_WINDOW_SECONDS = 900
 
 
 def _configuration(*, vocab: list[str], words: bool, diarization: bool) -> dict[str, Any]:
-    if words and vocab or diarization and vocab:
-        raise PrimaryTranscriptError("custom vocabulary cannot mix with diarization/word timestamps")
+    # Vertex's official synchronous example permits diarization + vocabulary.
+    # Word timestamps + vocabulary are conservatively kept separate pending
+    # explicit endpoint-capability testing.
+    if words and vocab:
+        raise PrimaryTranscriptError("word timestamps and custom vocabulary require separate passes")
     if len(vocab) > 1000 or any(not isinstance(x, str) or not x.strip() for x in vocab):
         raise PrimaryTranscriptError("invalid custom vocabulary")
     options: dict[str, Any] = {"mode": "VERBATIM"}
