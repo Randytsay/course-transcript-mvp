@@ -7,7 +7,6 @@ ROOT = Path(__file__).resolve().parents[1]
 # Executable/configuration entrypoints for V2; older architecture and runbook
 # documents deliberately continue to describe historical V1 evidence.
 ACTIVE_MODEL_FILES = (
-    "AGENTS.md",
     ".env.example",
     "app/api.py",
     "app/infrastructure_test.py",
