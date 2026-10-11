@@ -175,6 +175,35 @@ class PilotGateTests(unittest.TestCase):
         from scripts.golden24.v3_readability import clean
         self.assertEqual(clean(render_txt(cues)), "第一段，第二段。")
 
+    def test_v4_early_onset_and_hold_no_overlap(self):
+        from scripts.golden24.v4_display_timing import pad_display_timing
+        src = [
+            {"id":1,"start_ms":1000,"end_ms":3000,"text":"第一句。"},
+            {"id":2,"start_ms":3640,"end_ms":5700,"text":"第二句。"},
+            {"id":3,"start_ms":5700,"end_ms":7100,"text":"第三句。"},
+            {"id":4,"start_ms":15000,"end_ms":18000,"text":"第四句。"},
+        ]
+        new,action = pad_display_timing(src)
+        self.assertEqual(len(new), 4)
+        self.assertLess(new[1]["start_ms"],src[1]["start_ms"])
+        self.assertGreater(new[0]["end_ms"],src[0]["end_ms"])
+        self.assertEqual(new[2]["start_ms"], src[2]["start_ms"])
+        self.assertTrue(all(a["end_ms"]<=b["start_ms"]
+                            for a,b in zip(new,new[1:])))
+        self.assertTrue(all(x["start_ms"]<=s["start_ms"]
+                            and x["end_ms"]>=s["end_ms"]
+                            for x,s in zip(new,src)))
+        self.assertTrue(all(0 <= x["next_early_display_ms"] <= 450
+                            and 0 <= x["previous_hold_ms"] <= 220 for x in action))
+
+    def test_v4_rejects_overlap(self):
+        from scripts.golden24.v4_display_timing import pad_display_timing
+        with self.assertRaisesRegex(ValueError,"Overlapping"):
+            pad_display_timing([
+                {"id":1,"start_ms":0,"end_ms":3200,"text":"甲"},
+                {"id":2,"start_ms":3000,"end_ms":4400,"text":"乙"}
+            ])
+
 
 if __name__ == "__main__":
     unittest.main()
