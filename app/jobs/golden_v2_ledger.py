@@ -256,6 +256,19 @@ class GoldenV2Ledger:
                  _now(), claim["job_id"],claim["stage"]),
             )
 
+    def hold_for_review(self, claim: dict[str, Any], *, evidence_sha: str) -> None:
+        """Known semantic/structural issue: persist evidence, block next stages."""
+        if len(evidence_sha) != 64 or any(c not in "0123456789abcdef" for c in evidence_sha):
+            raise ValueError("review evidence SHA256 required")
+        with self._tx() as db:
+            self._verify_claim(db, claim)
+            db.execute(
+                "UPDATE v2_stages SET state='REVIEW_REQUIRED',evidence_sha=?,"
+                "claim_hash=NULL,updated_at=? WHERE job_id=? AND name=?",
+                (evidence_sha, _now(), claim["job_id"], claim["stage"]),
+            )
+            db.execute("UPDATE v2_jobs SET status='NEEDS_REVIEW' WHERE id=?", (claim["job_id"],))
+
     def mark_outcome_unknown(self, claim: dict[str, Any]) -> None:
         with self._tx() as db:
             self._verify_claim(db, claim)
