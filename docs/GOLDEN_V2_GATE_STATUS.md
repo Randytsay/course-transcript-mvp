@@ -1,7 +1,7 @@
 # Golden Transcript V2 — 驗收 Gate 狀態追蹤
 
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
-執行進度：**P0–P4 為獨立分支上的部分工程成果，不代表 G0–G4 PASS；main/production 未切換。**
+執行進度：**P0–P7 多項為獨立分支上的部分工程成果，不代表任何 Gate PASS；P8 尚未開始。main/production 未切換。**
 
 規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)
 
@@ -14,9 +14,9 @@
 | P2 Gemini 3.8 音訊主稿 | G2 | PARTIAL | `app/providers/gemini_primary_audio.py` 已有 GCS 音訊 adapter、分窗、raw/usage audit、斷線不盲重送及假 provider 測試；**尚未接持久 Worker、真實 Vertex、聲學 completeness**。 |
 | P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py` 與 `golden_v2_flow.py` + tests 具備獨立文字差異及先 Gemini 後 Chirp 的 callback ordering；**尚未連結真實 Chirp 工作任務／完整 coverage**。 |
 | P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_third_transcribe.py` 實作 Vertex generateContent/VERBATIM、≤15m hard cap、選用/禁用與 mock tests；**尚未實際 Vertex smoke/worker 用量帳本**。 |
-| P5 WebCodex 最終裁決與 Golden QA | G5 | NOT_RUN | 原有 CHATGPT_HANDOFF / Golden QA 可借鏡；新版未完成 |
-| P6 實測評分與最佳化 | G6 | NOT_RUN | 尚未取得人工 Gold 基準與付費模型結果 |
-| P7 ChatGPT Skill / 持久任務 | G7 | NOT_RUN | V1 Skill 已存在，V2 新契約未建／驗證 |
+| P5 WebCodex 最終裁決與 Golden QA | G5 | PARTIAL | `golden_v2_final_gate.py` + tests 已具 SRT/TXT、Chirp 時間邊界、差異決議阻擋；**未串接現有 handoff/字幕渲染及真人聲學驗收**。 |
+| P6 實測評分與最佳化 | G6 | PARTIAL | `app/evaluation/golden_v2_benchmark.py` 提供人工 Gold 的 CER 計算與測試；**無真實人工金標／三引擎樣本／價格比較**。 |
+| P7 ChatGPT Skill / 持久任務 | G7 | PARTIAL | 已提交 `skills/golden-course-transcript-v2/SKILL.md` 草案；**未安裝、未連線到 V2 持久任務 API**。 |
 | P8 UI / 部署 / Drive 驗收 | G8 | NOT_RUN | 尚未 staging/canary/production／Drive 實測 |
 
 ## V2 文件提交紀錄
