@@ -12,7 +12,7 @@
 | P0 基線／隔離 | G0 | PARTIAL | 2026-10-11 已確認 GitHub main/feature branch、另外隔離 V2 分支；WebCodex 的舊 source Project `.git/worktrees` 無效，正式 runtime SHA／active transcription jobs／備份尚未驗證。未 reset/clean/stash。 |
 | P1 3.7→3.8 | G1 | PARTIAL | 已於 V2 隔離分支修改 `correct_text.py`、`correct_text_cascade.py` 的 3.8 target 及 prompt version，新增 `test_golden_v2_model_policy.py`；尚未執行完整測試、SDK 真實 API smoke、正式部署；其他 3.7 路徑仍待盤點。 |
 | P2 Gemini 3.8 音訊主稿 | G2 | PARTIAL | 新增 `golden_v2_audio_staging.py` 的本機 FFmpeg source-SHA FLAC 分段、`golden_v2_gcs_staging.py` 的經核准 GCS 不覆寫上傳，以及 `golden_v2_primary_stage.py` 串接 Gemini 3.8→SQLite，含超額預估阻擋、結果不明停機及 mock 整合測試；**尚未接正式 V1/Chirp Worker、Vertex 實測、原始 Drive 與 normalized SHA lineage、重疊去重／聲學 coverage**。 |
-| P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py` 與 `golden_v2_flow.py` + tests 具備獨立文字差異及先 Gemini 後 Chirp 的 callback ordering；**尚未連結真實 Chirp 工作任務／完整 coverage**。 |
+| P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py`/`golden_v2_flow.py` 具備獨立差異比對與先 Gemini 後 Chirp 的順序；新增 `golden_v2_chirp_reuse.py` 可核對相同 normalized FLAC SHA、既有 Chirp completeness PASS 與提交證據後直接使用已付費成果（本次新 ASR 成本=0）；**尚未接新 Chirp 非同步送件／回收／bounded repair Worker 和 V2 完整聲學 QA**。 |
 | P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_third_transcribe.py` 實作 Vertex generateContent/VERBATIM、≤15m hard cap、選用/禁用與 mock tests；**尚未實際 Vertex smoke/worker 用量帳本**。 |
 | P5 WebCodex 最終裁決與 Golden QA | G5 | PARTIAL | `golden_v2_final_gate.py` + `golden_v2_stage_runner.py` 已可寫入離線比對/QA 報告並持久化 `NEEDS_REVIEW`；**未串接現有 handoff/字幕渲染及真人聲學驗收**。 |
 | P6 實測評分與最佳化 | G6 | PARTIAL | `app/evaluation/golden_v2_benchmark.py` 提供人工 Gold 的 CER 計算與測試；**無真實人工金標／三引擎樣本／價格比較**。 |
