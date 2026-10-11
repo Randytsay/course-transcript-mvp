@@ -82,7 +82,7 @@ class RuntimeRoutingTests(unittest.TestCase):
             self.assertEqual(quota.invalidations, 1)
             manifest = json.loads((Path(directory) / "correction-routing.json").read_text(encoding="utf-8"))
             self.assertEqual(len(manifest["provider_switches"]), 1)
-            self.assertEqual(manifest["segment_counts"]["gemini-3.7-flash"], 2)
+            self.assertEqual(manifest["segment_counts"][CorrectionProvider.GEMINI.value], 2)
             self.assertEqual(manifest["effective_m3_concurrency"], 1)
             self.assertEqual(manifest["effective_gemini_concurrency"], 1)
             self.assertEqual(manifest["runtime_git_sha"], "a" * 40)
@@ -144,7 +144,7 @@ class RuntimeRoutingTests(unittest.TestCase):
             self.assertEqual(max_active, 2)
             self.assertEqual(m3.calls, 2)
             manifest = json.loads((Path(directory) / "correction-routing.json").read_text(encoding="utf-8"))
-            self.assertEqual(manifest["segment_counts"]["gemini-3.7-flash"], 3)
+            self.assertEqual(manifest["segment_counts"][CorrectionProvider.GEMINI.value], 3)
             self.assertEqual(manifest["effective_m3_concurrency"], 1)
             self.assertEqual(manifest["effective_gemini_concurrency"], 2)
 
