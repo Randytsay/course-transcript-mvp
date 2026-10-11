@@ -1,7 +1,7 @@
 # Golden Transcript V2 — 驗收 Gate 狀態追蹤
 
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
-執行進度：**P0、P1 在獨立開發分支開始，尚未完整驗收；main/production 未切換。**
+執行進度：**P0–P4 為獨立分支上的部分工程成果，不代表 G0–G4 PASS；main/production 未切換。**
 
 規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)
 
@@ -11,9 +11,9 @@
 |---|---|---|---|
 | P0 基線／隔離 | G0 | PARTIAL | 2026-10-11 已確認 GitHub main/feature branch、另外隔離 V2 分支；WebCodex 的舊 source Project `.git/worktrees` 無效，正式 runtime SHA／active transcription jobs／備份尚未驗證。未 reset/clean/stash。 |
 | P1 3.7→3.8 | G1 | PARTIAL | 已於 V2 隔離分支修改 `correct_text.py`、`correct_text_cascade.py` 的 3.8 target 及 prompt version，新增 `test_golden_v2_model_policy.py`；尚未執行完整測試、SDK 真實 API smoke、正式部署；其他 3.7 路徑仍待盤點。 |
-| P2 Gemini 3.8 音訊主稿 | G2 | NOT_RUN | 需新增 audio-first provider + completeness |
-| P3 Chirp 獨立聲學比對 | G3 | NOT_RUN | 現有 Chirp 技術可重用，但尚未串成 V2 順序 |
-| P4 Gemini 3.5 Transcribe | G4 | NOT_RUN | 尚未建立 V2 adapter／模式 |
+| P2 Gemini 3.8 音訊主稿 | G2 | PARTIAL | `app/providers/gemini_primary_audio.py` 已有 GCS 音訊 adapter、分窗、raw/usage audit、斷線不盲重送及假 provider 測試；**尚未接持久 Worker、真實 Vertex、聲學 completeness**。 |
+| P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py` 與 `golden_v2_flow.py` + tests 具備獨立文字差異及先 Gemini 後 Chirp 的 callback ordering；**尚未連結真實 Chirp 工作任務／完整 coverage**。 |
+| P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_third_transcribe.py` 實作 Vertex generateContent/VERBATIM、≤15m hard cap、選用/禁用與 mock tests；**尚未實際 Vertex smoke/worker 用量帳本**。 |
 | P5 WebCodex 最終裁決與 Golden QA | G5 | NOT_RUN | 原有 CHATGPT_HANDOFF / Golden QA 可借鏡；新版未完成 |
 | P6 實測評分與最佳化 | G6 | NOT_RUN | 尚未取得人工 Gold 基準與付費模型結果 |
 | P7 ChatGPT Skill / 持久任務 | G7 | NOT_RUN | V1 Skill 已存在，V2 新契約未建／驗證 |
