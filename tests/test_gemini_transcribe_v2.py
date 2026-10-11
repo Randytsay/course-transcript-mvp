@@ -40,12 +40,17 @@ class TranscribeAdapterTests(unittest.TestCase):
         self.assertTrue(result["candidate_valid"])
         self.assertTrue(result["never_authoritative_timing"])
 
-    def test_vocabulary_is_independent_of_word_timing(self):
-        with self.assertRaises(ValueError):
-            invoke(self.client, custom_vocabulary=["文殊師利"], word_timestamp=True)
-        with self.assertRaises(ValueError):
-            invoke(self.client, custom_vocabulary=["文殊師利"], diarization=True)
-        self.client.models.generate_content.assert_not_called()
+    def test_vocabulary_can_be_combined_with_diarization_as_in_vertex_docs(self):
+        invoke(self.client, custom_vocabulary=["文殊師利"], diarization=True)
+        config = self.client.models.generate_content.call_args.kwargs["config"].audio_transcription_config
+        self.assertEqual(config.custom_vocabulary, ["文殊師利"])
+        self.assertTrue(config.diarization)
+
+    def test_timestamp_plus_vocabulary_remains_a_capability_probe(self):
+        invoke(self.client, custom_vocabulary=["文殊師利"], word_timestamp=True)
+        config = self.client.models.generate_content.call_args.kwargs["config"].audio_transcription_config
+        self.assertTrue(config.word_timestamp)
+        self.assertEqual(config.custom_vocabulary, ["文殊師利"])
 
     def test_out_of_range_chunk_fails_closed(self):
         with self.assertRaises(ValueError):
