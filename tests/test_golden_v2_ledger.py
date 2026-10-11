@@ -137,13 +137,39 @@ class GoldenV2LedgerTests(unittest.TestCase):
                 evidence_verifier=lambda **e: True,
             )
 
-    def test_cost_ledger_rejects_actual_above_reserved(self):
+    def test_cost_ledger_preserves_actual_above_reserved_and_blocks_replay(self):
         job = self.create()
         self.approve(job)
         claim = self.store.claim_next(job, worker_id="A")
+        self.store.complete(claim, evidence_sha="b"*64, actual_cents=31)
+        reopened = GoldenV2Ledger(self.db)
+        status = reopened.status(job)
+        self.assertEqual(status["stages"][0]["state"], "OVER_BUDGET")
+        self.assertEqual(status["stages"][0]["evidence_sha"], "b"*64)
+        self.assertEqual(status["spent_cents"], 31)
+        self.assertEqual(status["status"], "NEEDS_RECONCILIATION")
         with self.assertRaises(V2Conflict):
-            self.store.complete(claim, evidence_sha="b"*64, actual_cents=31)
-        self.assertEqual(self.store.status(job)["stages"][0]["state"], "RUNNING")
+            reopened.claim_next(job, worker_id="B")
+        with self.assertRaises(V2Conflict):
+            reopened.complete(claim, evidence_sha="b"*64, actual_cents=31)
+
+    def test_verified_unknown_overrun_is_recorded_instead_of_lost(self):
+        job = self.create()
+        self.approve(job)
+        claim = self.store.claim_next(job, worker_id="A")
+        self.store.mark_outcome_unknown(claim, known_cents=12, evidence_sha="a"*64)
+        self.store.reconcile_unknown(
+            job, stage="gemini_primary", actor="reviewer",
+            evidence_sha="c"*64, actual_cents=34,
+            evidence_verifier=lambda **_: True,
+        )
+        status = GoldenV2Ledger(self.db).status(job)
+        self.assertEqual(status["spent_cents"], 34)
+        self.assertEqual(status["stages"][0]["evidence_sha"], "c"*64)
+        self.assertEqual(status["stages"][0]["state"], "OVER_BUDGET")
+        self.assertEqual(status["status"], "NEEDS_RECONCILIATION")
+        with self.assertRaises(V2Conflict):
+            self.store.claim_next(job, worker_id="C")
 
     def test_double_completion_does_not_charge_twice(self):
         job = self.create()

@@ -120,5 +120,6 @@ def run_third_window(
     }
     _atomic_json(record_path, record)
     if not valid:
-        raise PrimaryTranscriptError("empty or truncated third-model transcription preserved")
+        raise PrimaryTranscriptError("empty or truncated third-model transcription preserved",
+                                     known_record=record)
     return record

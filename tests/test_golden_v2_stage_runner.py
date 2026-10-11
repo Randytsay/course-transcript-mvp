@@ -1,4 +1,6 @@
 """Offline V2 integration: real SQLite ledger + comparison + QA artifacts."""
+import hashlib
+import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -31,10 +33,27 @@ class V2DurableBridgeTests(unittest.TestCase):
         )
         self.store.approve(self.job, revision=0, approved_cents=30,
                            actor="owner-test", reference="explicit-fake-test")
+        golden_dir = self.job_dir / "golden-v2"
+        golden_dir.mkdir(parents=True)
+        artifacts = {
+            "gemini_primary": ("primary-stage.json", {
+                "schema": "golden-v2-primary-stage-v1", "job_id": self.job,
+                "source_sha256": "1" * 64, "ready_for_chirp": True,
+                "assembled": {"text": "復次文殊師利男身具七寶"}}),
+            "chirp_independent": ("chirp-merged.json", {
+                "schema": "golden-v2-chirp-merged-v1", "job_id": self.job,
+                "source_sha": "1" * 64, "timing_authority": "chirp_3",
+                "words": W}),
+        }
         for stage in ("gemini_primary", "chirp_independent"):
             claim = self.store.claim_next(self.job, worker_id="fake")
             self.assertEqual(claim["stage"], stage)
-            self.store.complete(claim, evidence_sha="a"*64, actual_cents=0)
+            name, artifact = artifacts[stage]
+            wire = json.dumps(artifact, ensure_ascii=False, sort_keys=True,
+                              separators=(",", ":")).encode()
+            (golden_dir / name).write_bytes(wire)
+            self.store.complete(claim, evidence_sha=hashlib.sha256(wire).hexdigest(),
+                                actual_cents=0)
 
     def tearDown(self):
         self.temp.cleanup()

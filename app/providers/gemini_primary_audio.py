@@ -30,7 +30,9 @@ INSTRUCTION = (
 
 
 class PrimaryTranscriptError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, known_record: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.known_record = known_record
 
 
 def plan_windows(duration_seconds: float, *, max_seconds: float = MAX_WINDOW_SECONDS, overlap_seconds: float = 10.0) -> list[dict[str, float | int]]:
@@ -178,7 +180,7 @@ def run_window(
     }
     _atomic_json(audit_path, record)
     if not valid:
-        raise PrimaryTranscriptError("empty, blocked or truncated model response preserved for review")
+        raise PrimaryTranscriptError("empty, blocked or truncated model response preserved for review", known_record=record)
     return record
 
 

@@ -55,6 +55,17 @@ class GeminiStageIntegrationTests(unittest.TestCase):
              "-t", "4", "-ac", "1", "-c:a", "flac", "-y", str(self.source)],
             check=True, capture_output=True, timeout=20,
         )
+        self.original = self.dir / "original.wav"
+        subprocess.run(
+            ["ffmpeg", "-nostdin", "-loglevel", "error", "-i", str(self.source),
+             "-c:a", "pcm_s16le", "-y", str(self.original)],
+            check=True, capture_output=True, timeout=20,
+        )
+        self.observation = {
+            "provider": "google_drive", "file_id": "mock-drive-id", "version": "v1",
+            "size_bytes": self.original.stat().st_size,
+            "downloaded_sha256": file_sha256(self.original),
+        }
         self.sha = file_sha256(self.source)
         self.ledger = GoldenV2Ledger(self.dir / "jobs.db")
         self.job = self.ledger.create(
@@ -84,6 +95,7 @@ class GeminiStageIntegrationTests(unittest.TestCase):
         args = dict(
             ledger=self.ledger, claim=self.claim,
             normalized_audio=self.source,
+            original_media=self.original, drive_observation=self.observation,
             job_dir=self.dir / "job",
             storage_client=self.cloud,
             vertex_client=self.vertex,
@@ -102,6 +114,8 @@ class GeminiStageIntegrationTests(unittest.TestCase):
         report = self.execute()
         self.assertTrue(report["ready_for_chirp"])
         self.assertEqual(report["actual_cents"], 1)
+        self.assertEqual(len(report["source_lineage_sha256"]), 64)
+        self.assertTrue((self.dir/"job/golden-v2/source-lineage.json").is_file())
         self.assertEqual(self.vertex.models.generate_content.call_count, 1)
         self.assertEqual(self.ledger.status(self.job)["spent_cents"], 1)
         self.assertTrue((self.dir/"job/golden-v2/primary-stage.json").is_file())
@@ -126,6 +140,23 @@ class GeminiStageIntegrationTests(unittest.TestCase):
         self.assertEqual(self.vertex.models.generate_content.call_count, 0)
         self.assertEqual(len(self.cloud.objects), 0)
         self.assertEqual(self.ledger.status(self.job)["spent_cents"], 0)
+
+    def test_wrong_drive_observation_blocks_cloud_before_request(self):
+        wrong = {**self.observation, "downloaded_sha256": "0" * 64}
+        with self.assertRaises(ValueError):
+            self.execute(drive_observation=wrong)
+        self.assertEqual(len(self.cloud.objects), 0)
+        self.assertEqual(self.vertex.models.generate_content.call_count, 0)
+
+    def test_source_version_change_blocks_reuse(self):
+        # Persist valid source evidence using a no-cloud cost overrun check.
+        with self.assertRaises(V2Conflict):
+            self.execute(cost_estimator=lambda m: 10000)
+        modified = {**self.observation, "version": "v2"}
+        with self.assertRaises(ValueError):
+            self.execute(drive_observation=modified)
+        self.assertEqual(len(self.cloud.objects), 0)
+        self.assertEqual(self.vertex.models.generate_content.call_count, 0)
 
     def test_network_unknown_is_not_automatically_retried(self):
         self.vertex.models.generate_content.side_effect = TimeoutError("disconnect")

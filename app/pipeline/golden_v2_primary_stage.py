@@ -6,35 +6,29 @@ owner-authorized storage client and Vertex client. Unit tests use mock clients.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Callable
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.providers.gemini_primary_audio import (
-    assemble_windows, run_window, _atomic_json, PrimaryTranscriptError,
+    assemble_windows, run_window, PrimaryTranscriptError,
 )
 from app.providers.golden_v2_audio_staging import prepare_local_clips
 from app.providers.golden_v2_gcs_staging import upload_approved_clips
+from app.providers.golden_v2_source_lineage import bind_source_lineage
+from app.providers.golden_v2_immutable import store_immutable_bytes
 
 
 def _persist_immutable(path: Path, payload: dict[str, Any]) -> str:
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    digest = hashlib.sha256(encoded).hexdigest()
-    if path.exists():
-        previous = json.loads(path.read_text(encoding="utf-8"))
-        existing = json.dumps(previous, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-        if existing != encoded:
-            raise V2Conflict("existing primary stage result disagrees; operator review required")
-    else:
-        _atomic_json(path, payload)
-    return digest
+    return store_immutable_bytes(path, encoded)
 
 
 def execute_approved_primary_stage(
     *, ledger: GoldenV2Ledger, claim: dict[str, Any],
     normalized_audio: Path, job_dir: Path,
+    original_media: Path, drive_observation: dict[str, Any],
     storage_client: Any, vertex_client: Any,
     bucket_name: str, object_prefix: str,
     cost_accountant: Callable[[list[dict[str, Any]]], int],
@@ -53,6 +47,11 @@ def execute_approved_primary_stage(
             or not callable(cost_estimator)):
         raise V2Conflict("verified Gemini claim and cost estimator/accountant required")
     ledger.assert_upload_authorized(claim, stage="gemini_primary", source_sha=claim["source_sha"])
+    lineage = bind_source_lineage(
+        original_media=original_media, normalized_audio=normalized_audio,
+        drive_observation=drive_observation, expected_normalized_sha256=claim["source_sha"],
+        output_path=job_dir / "golden-v2" / "source-lineage.json",
+    )
     local = prepare_local_clips(
         source=normalized_audio,
         expected_source_sha256=claim["source_sha"],
@@ -71,6 +70,7 @@ def execute_approved_primary_stage(
         storage_client=storage_client,
     )
     records: list[dict[str, Any]] = []
+    known_review = False
     try:
         for window in staged:
             records.append(run_window(
@@ -82,20 +82,51 @@ def execute_approved_primary_stage(
                 part_factory=part_factory,
                 approval_validator=ledger.provider_approval_validator(claim),
             ))
-    except PrimaryTranscriptError:
-        # Even a network error may have consumed tokens; an operator must
-        # reconcile the corresponding raw provider evidence and actual costs.
+    except PrimaryTranscriptError as exc:
+        if exc.known_record is not None:
+            records.append(exc.known_record)
+            known_review = True
+        else:
+            # A disconnected response can have been billed; never replay.
+            partial = {
+                "schema": "golden-v2-ambiguous-primary-v1", "job_id": claim["job_id"],
+                "source_sha256": claim["source_sha"], "completed_records": records,
+                "unresolved_window_index": len(records),
+            }
+            digest = _persist_immutable(
+                job_dir / "golden-v2" / "primary-ambiguous.json", partial,
+            )
+            try:
+                known_cents = cost_accountant(records)
+                if type(known_cents) is not int or known_cents < 0:
+                    raise ValueError("unknown partial provider usage")
+            except Exception:
+                known_cents = 0  # Keep raw evidence; unresolved cost blocks next claim.
+            ledger.mark_outcome_unknown(claim, known_cents=known_cents,
+                                        evidence_sha=digest)
+            raise
+    try:
+        actual_cents = cost_accountant(records)
+    except Exception:
         ledger.mark_outcome_unknown(claim)
         raise
-    actual_cents = cost_accountant(records)
     if type(actual_cents) is not int or actual_cents < 0:
         ledger.mark_outcome_unknown(claim)
         raise V2Conflict("provider usage could not be reconciled to approved USD cents")
-    main = assemble_windows(staged, records, local["source_duration_seconds"])
+    main = (assemble_windows(staged, records, local["source_duration_seconds"])
+            if not known_review else {
+                "text": "\n\n".join(r.get("text", "") for r in records),
+                "window_count": len(records), "structural_coverage": "INCOMPLETE",
+                "acoustic_coverage": "UNVERIFIED",
+                "review_items": [{"reason": "known_provider_response_requires_review",
+                                  "window": len(records)-1}],
+                "ready_for_chirp_comparison": False, "golden_approved": False,
+            })
     report = {
         "schema": "golden-v2-primary-stage-v1",
         "job_id": claim["job_id"],
         "source_sha256": claim["source_sha"],
+        "source_lineage_sha256": lineage["manifest_sha256"],
         "mode": "gemini_3_8_audio_first",
         "windows": staged,
         "window_evidence": [{
@@ -110,6 +141,10 @@ def execute_approved_primary_stage(
         "golden_approved": False,
     }
     digest = _persist_immutable(job_dir / "golden-v2" / "primary-stage.json", report)
+    if actual_cents > claim["estimate_cents"]:
+        ledger.mark_outcome_unknown(claim, known_cents=actual_cents,
+                                    evidence_sha=digest)
+        raise V2Conflict("observed primary expense exceeds reservation; owner reconciliation required")
     if main["ready_for_chirp_comparison"]:
         ledger.complete(claim, evidence_sha=digest, actual_cents=actual_cents)
     else:

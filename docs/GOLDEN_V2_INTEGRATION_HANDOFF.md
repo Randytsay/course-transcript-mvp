@@ -4,6 +4,22 @@
 > Branch: `feat/golden-v2-gemini38-primary` (PR #143, **draft; NOT merged, NOT deployed**).  
 > Work in this document is an isolated engineering scaffold, **not a runnable replacement for the production Chirp-first Worker**.
 
+> **Goal continuation, 2026-10-12:** Additional provider-free code and tests are being delivered separately on `codex/golden-v2-goal-completion`; the original PR #143 still tracks `feat/golden-v2-gemini38-primary`. This entry describes local source implementation only. CI must be checked against the *new commit SHA* before it can be called green; live billing, Drive and production remain untouched.
+
+## Newly integrated Goal-path components (isolated branch)
+
+| Layer | Code | Current verified boundary |
+|---|---|---|
+| Crash-safe raw provenance | `app/providers/golden_v2_immutable.py`, `golden_v2_source_lineage.py` | Byte-exact, hardlink no-overwrite evidence for source manifest and raw provider JSON, tested with simulated conflicts and interrupted writes |
+| Persisted recoverability | `app/jobs/golden_v2_ledger.py` | Revision CAS, local stale-claim recovery, strict ban on implicit retry of unknown paid requests |
+| Independent acoustic stage | `app/pipeline/golden_v2_chirp_stage.py`, `app/providers/golden_v2_chirp_gateway.py` | Fake-provider asynchronous Chirp operation submission/recovery and persisted result identity; no actual Speech-to-Text call in this milestone |
+| Optional third stage | `app/pipeline/golden_v2_third_stage.py` | Budget-checked optional provider with isolated evidence; offline tests only |
+| Local adjudication flow | `app/pipeline/golden_v2_coordinator.py`, `golden_v2_stage_runner.py`, `app/providers/golden_v2_acoustic_qa.py` | SQLite-based comparison → block disputed speech → provider-free QA; no artificial human sign-off |
+| Subtitle exports | `app/subtitles/golden_v2_render.py` | SRT/TXT from original Chirp word timestamps; output validity and text equivalence checked locally |
+| Operator entry point | `scripts/golden_v2_local_worker.py` | One pass of safe local stages, explicit provider/reviewer blockers, no cloud calls or Drive writes |
+
+The initial isolated worktree checks passed **96 V2 unittest**, **786 full unittest**, **30 pytest**, Python compilation, Next.js build (19 pages), Compose config, and whitespace verification. These are source-level checks; no live Gemini 3.8, Gemini 3.5 Transcribe, Chirp 3, reviewer API, long-audio benchmark, Drive publication, or production cutover has been validated. The complete G0–G8 verdict is **0/9 PASS** until the defined evidence is collected.
+
 ## Implemented components (actual code paths)
 
 | Layer | Code | Contract |

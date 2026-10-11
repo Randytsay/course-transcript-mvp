@@ -34,8 +34,8 @@ def upload_approved_clips(
     Drive provenance is tracked separately by the ingestion/preflight layer.
     All external calls are behind assert_upload_authorized().
     """
-    if claim.get("stage") not in {"gemini_primary", "third_optional"}:
-        raise AudioStagingError("GCS staging allowed only for Gemini audio stages")
+    if claim.get("stage") not in {"gemini_primary", "chirp_independent", "third_optional"}:
+        raise AudioStagingError("GCS staging allowed only for approved audio stages")
     if not bucket_name or "/" in bucket_name or not _prefix_ok(object_prefix):
         raise AudioStagingError("unsafe bucket or destination prefix")
     if local_manifest.get("schema") != "golden-v2-local-audio-windows-v1":
@@ -46,7 +46,8 @@ def upload_approved_clips(
     windows = local_manifest.get("windows")
     if not isinstance(windows, list) or not windows:
         raise AudioStagingError("no staged clips")
-    stage_limit = 900.0 if claim["stage"] == "third_optional" else 2700.0
+    stage_limit = {"third_optional": 900.0, "chirp_independent": 1200.0,
+                   "gemini_primary": 2700.0}[claim["stage"]]
     # Fully validate all windows and local bytes before *any* network call.
     staged_windows = []
     files = []
@@ -86,6 +87,7 @@ def upload_approved_clips(
             if (
                 str(remote_meta.get("golden_v2_clip_sha256", "")) != digest
                 or str(remote_meta.get("golden_v2_source_sha256", "")) != source_sha
+                or remote_meta.get("golden_v2_stage") != claim["stage"]
                 or int(blob.size or 0) != path.stat().st_size
             ):
                 raise AudioStagingError("existing remote clip failed identity verification")
@@ -102,9 +104,15 @@ def upload_approved_clips(
             if (
                 str(meta.get("golden_v2_clip_sha256", "")) != digest
                 or str(meta.get("golden_v2_source_sha256", "")) != source_sha
+                or meta.get("golden_v2_stage") != claim["stage"]
                 or int(blob.size or 0) != path.stat().st_size
             ):
                 raise AudioStagingError("uploaded GCS object did not verify")
         # This is the exact bound object authorized by the provider adapter.
-        ledger.register_window(claim, window)
+        if claim["stage"] != "chirp_independent":
+            ledger.register_window(claim, window)
+        else:
+            # Submission is bound later to the exact SHA-verified uploaded
+            # object, source offsets and approved per-window reservation.
+            window["clip_sha256"] = digest
     return staged_windows
