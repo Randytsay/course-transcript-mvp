@@ -46,11 +46,16 @@ def run_third_window(
     custom_vocabulary: list[str] | None = None,
     word_timestamp: bool = False, diarization: bool = False,
     part_factory: Any = None, config_factory: Any = None,
+    approval_validator: Any = None,
 ) -> dict[str, Any]:
     if not enabled:
         return {"status": "SKIPPED", "model": MODEL, "paid_calls": 0}
     if not approval_token.strip() or len(source_sha256) != 64 or any(c not in "0123456789abcdef" for c in source_sha256):
         raise PrimaryTranscriptError("source identity or approval missing")
+    if approval_validator is None or not approval_validator(
+        approval_token, source_sha256, MODEL, staged_window
+    ):
+        raise PrimaryTranscriptError("no verified cost approval")
     start, end = float(staged_window["start_seconds"]), float(staged_window["end_seconds"])
     validate_staged_windows(
         [{**staged_window, "index": 0, "start_seconds": 0, "end_seconds": end-start}],
