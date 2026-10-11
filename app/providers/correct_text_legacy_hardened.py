@@ -1,4 +1,4 @@
-"""Gemini 3.7 correction with auditable splitting and content-safety guards."""
+"""Gemini 3.8 correction with auditable splitting and content-safety guards."""
 from __future__ import annotations
 
 import hashlib
@@ -32,6 +32,7 @@ def generate_json(prompt: str, schema: dict[str, Any]) -> tuple[object, dict[str
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=schema,
+                    thinking_config=types.ThinkingConfig(thinking_level="LOW"),
                 ),
             )
             response_completed_at = base.iso()
