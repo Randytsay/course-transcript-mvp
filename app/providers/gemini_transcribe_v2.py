@@ -49,8 +49,9 @@ def transcribe_independent_chunk(
     terms = list(custom_vocabulary or [])
     if len(terms) > 1000 or any(not isinstance(term, str) or not term.strip() for term in terms):
         raise ValueError("Invalid custom vocabulary")
-    if terms and (word_timestamp or diarization):
-        raise ValueError("Custom vocabulary cannot accompany word timing/diarization")
+    # Official Vertex examples combine custom vocabulary with diarization.
+    # Do not invent an incompatibility; validate endpoint capabilities before
+    # a real paid request, and keep the raw provider error in the attempt log.
     langs = list(language_codes or [])
     if len(langs) > 4 or any(not re.fullmatch(r"[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*", lang) for lang in langs):
         raise ValueError("Invalid language codes")
