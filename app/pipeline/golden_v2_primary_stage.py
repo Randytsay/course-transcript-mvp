@@ -38,6 +38,7 @@ def execute_approved_primary_stage(
     storage_client: Any, vertex_client: Any,
     bucket_name: str, object_prefix: str,
     cost_accountant: Callable[[list[dict[str, Any]]], int],
+    cost_estimator: Callable[[dict[str, Any]], int],
     part_factory: Any = None,
     max_window_seconds: float = 2700.0,
     overlap_seconds: float = 10.0,
@@ -48,8 +49,9 @@ def execute_approved_primary_stage(
     claim_next exactly once and handle any REVIEW_REQUIRED/OUTCOME_UNKNOWN
     state before submitting further external API requests.
     """
-    if claim.get("stage") != "gemini_primary" or not callable(cost_accountant):
-        raise V2Conflict("verified Gemini stage claim and actual-cost accountant required")
+    if (claim.get("stage") != "gemini_primary" or not callable(cost_accountant)
+            or not callable(cost_estimator)):
+        raise V2Conflict("verified Gemini claim and cost estimator/accountant required")
     ledger.assert_upload_authorized(claim, stage="gemini_primary", source_sha=claim["source_sha"])
     local = prepare_local_clips(
         source=normalized_audio,
@@ -58,6 +60,10 @@ def execute_approved_primary_stage(
         max_window_seconds=max_window_seconds,
         overlap_seconds=overlap_seconds,
     )
+    estimated_cents = cost_estimator(local)
+    if (type(estimated_cents) is not int or estimated_cents < 0
+            or estimated_cents > claim["estimate_cents"]):
+        raise V2Conflict("audio-window cost estimate exceeds approved stage reservation")
     staged = upload_approved_clips(
         ledger=ledger, claim=claim, local_manifest=local,
         local_dir=job_dir / "golden-v2" / "local-clips",
@@ -98,6 +104,7 @@ def execute_approved_primary_stage(
             "finish_reason": record.get("finish_reason"),
         } for record in records],
         "assembled": main,
+        "estimated_cents": estimated_cents,
         "actual_cents": actual_cents,
         "ready_for_chirp": main["ready_for_chirp_comparison"],
         "golden_approved": False,
