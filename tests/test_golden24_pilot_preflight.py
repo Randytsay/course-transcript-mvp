@@ -242,6 +242,41 @@ class PilotGateTests(unittest.TestCase):
                                   {len(lex(before)):1300},200,2600)
         self.assertEqual(t,[1300])
 
+    def test_v6_keep_protected_phrase_intact(self):
+        from scripts.golden24.v6_word_boundary import format_word_safe,flatten,jieba
+        if jieba is None:
+            self.skipTest("Review-only jieba dependency not installed")
+        text="我們要生活，這個生活品質比較好一點，而且能照顧家人。"
+        shaped,review=format_word_safe(text,preferred=14)
+        self.assertEqual(flatten(shaped),text)
+        lines=shaped.splitlines()
+        self.assertTrue(all(len(line)<=20 for line in lines))
+        for a,b in zip(lines,lines[1:]):
+            self.assertFalse(a.endswith("好") and b.startswith("一點"))
+            self.assertFalse(a.endswith("一") and b.startswith("樣"))
+            self.assertFalse(a.endswith("我") and b.startswith("們"))
+
+    def test_v6_audio_timestamp_repair_does_not_interpolate(self):
+        from scripts.golden24.v6_word_boundary import nearest_source_word_start
+        words=[
+            {"word":"這", "start_ms":3205840},
+            {"word":"個", "start_ms":3205960},
+            {"word":"生", "start_ms":3206040},
+            {"word":"活", "start_ms":3206240},
+            {"word":"品", "start_ms":3206360},
+            {"word":"質", "start_ms":3206560},
+            {"word":"比", "start_ms":3206800},
+            {"word":"較", "start_ms":3206920},
+            {"word":"好", "start_ms":3207160},
+            {"word":"一", "start_ms":3207360},
+            {"word":"點", "start_ms":3207480},
+        ]
+        self.assertEqual(
+            nearest_source_word_start(words,"好",3207360,3206000,3208000),
+            3207160)
+        self.assertIsNone(
+            nearest_source_word_start(words,"新詞",3207360,3206000,3208000))
+
 
 if __name__ == "__main__":
     unittest.main()

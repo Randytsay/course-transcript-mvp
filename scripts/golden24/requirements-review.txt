@@ -1,0 +1,2 @@
+# Isolated V6 word-boundary REVIEW tool; not a production/runtime dependency.
+jieba==0.42.1
