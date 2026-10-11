@@ -189,6 +189,28 @@ class GoldenV2Ledger:
             db.execute("UPDATE v2_jobs SET status='AWAITING_FINAL_REVIEW' WHERE id=?", (job_id,))
             raise V2Conflict("all stages finished; final owner/QA decision required")
 
+    def assert_upload_authorized(
+        self, claim: dict[str, Any], *, stage: str, source_sha: str,
+    ) -> None:
+        """Confirm a verified live claim before potentially billable GCS IO.
+
+        Caller must separately verify the normalized audio SHA and the
+        private GCS destination policy. This gate prevents any cloud upload
+        from unapproved, expired or wrong-model stage claims.
+        """
+        if stage not in {"gemini_primary", "third_optional"}:
+            raise V2Conflict("only Gemini audio stages may upload windows")
+        with self._tx() as db:
+            self._verify_claim(db, claim)
+            if claim["stage"] != stage or claim["source_sha"] != source_sha:
+                raise V2Conflict("source or stage does not match cost approval")
+            row = db.execute(
+                "SELECT estimate_cents FROM v2_stages WHERE job_id=? AND name=?",
+                (claim["job_id"], stage),
+            ).fetchone()
+            if row is None:
+                raise V2Conflict("no stage estimate approved")
+
     def register_window(self, claim: dict[str, Any], window: dict[str, Any]) -> None:
         """Stage a source-bound immutable URI/window identity before provider call.
 
