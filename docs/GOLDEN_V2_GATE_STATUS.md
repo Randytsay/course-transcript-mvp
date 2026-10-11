@@ -14,9 +14,9 @@
 | P2 Gemini 3.8 音訊主稿 | G2 | PARTIAL | `app/providers/gemini_primary_audio.py` 已有 GCS 音訊 adapter、分窗、raw/usage audit、斷線不盲重送及假 provider 測試；**尚未接持久 Worker、真實 Vertex、聲學 completeness**。 |
 | P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py` 與 `golden_v2_flow.py` + tests 具備獨立文字差異及先 Gemini 後 Chirp 的 callback ordering；**尚未連結真實 Chirp 工作任務／完整 coverage**。 |
 | P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_third_transcribe.py` 實作 Vertex generateContent/VERBATIM、≤15m hard cap、選用/禁用與 mock tests；**尚未實際 Vertex smoke/worker 用量帳本**。 |
-| P5 WebCodex 最終裁決與 Golden QA | G5 | PARTIAL | `golden_v2_final_gate.py` + tests 已具 SRT/TXT、Chirp 時間邊界、差異決議阻擋；**未串接現有 handoff/字幕渲染及真人聲學驗收**。 |
+| P5 WebCodex 最終裁決與 Golden QA | G5 | PARTIAL | `golden_v2_final_gate.py` + `golden_v2_stage_runner.py` 已可寫入離線比對/QA 報告並持久化 `NEEDS_REVIEW`；**未串接現有 handoff/字幕渲染及真人聲學驗收**。 |
 | P6 實測評分與最佳化 | G6 | PARTIAL | `app/evaluation/golden_v2_benchmark.py` 提供人工 Gold 的 CER 計算與測試；**無真實人工金標／三引擎樣本／價格比較**。 |
-| P7 ChatGPT Skill / 持久任務 | G7 | PARTIAL | 已提交 `skills/golden-course-transcript-v2/SKILL.md` 草案；**未安裝、未連線到 V2 持久任務 API**。 |
+| P7 ChatGPT Skill / 持久任務 | G7 | PARTIAL | 新增 `app/jobs/golden_v2_ledger.py` SQLite task/claim/費用/來源視窗授權；`scripts/golden_v2_status.py` 唯讀查詢；`golden_v2_stage_runner.py` 離線 QA 橋接與假 provider 整合測試；`skills/golden-course-transcript-v2/SKILL.md` 仍為草案。**未安裝 Skill、未接實際 V2 worker/API/付費 Vertex/Drive**。 |
 | P8 UI / 部署 / Drive 驗收 | G8 | NOT_RUN | 尚未 staging/canary/production／Drive 實測 |
 
 ## V2 文件提交紀錄
@@ -24,6 +24,7 @@
 - `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md`：V2 分工、Gemini 3.8 遷移、完整流程、長檔/帳務/權限/安全。
 - `docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md`：P0–P8 施工序、G0–G8 逐項核准與資料證據。
 - `AGENTS.md`、`README.md`、`docs/KNOWLEDGE_INDEX.md`、`CURRENT_STATE.md`、`DECISIONS.md`：已更新 V2 索引/決策／舊系統現況界線。
+- `docs/GOLDEN_V2_INTEGRATION_HANDOFF.md`：現有 V2 SQLite/bridge 的實作交接與尚未整合項目。
 - 原本 V1 程式、任務、模型服務、Google Drive 檔案、正式部署：**未因本文件工作而變更**。
 
 ## 每次 Gate 更新欄位
