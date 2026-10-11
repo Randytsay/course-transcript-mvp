@@ -68,7 +68,7 @@ class GeminiAudioPrimaryV2Tests(unittest.TestCase):
         request = client.models.generate_content.call_args.kwargs
         self.assertEqual(request["model"], "gemini-3.8-flash")
         self.assertIsNone(request["config"].temperature)
-        self.assertEqual(str(request["config"].thinking_config.thinking_level).upper(), "MEDIUM")
+        self.assertEqual(request["config"].thinking_config.thinking_level.name, "MEDIUM")
 
     def test_max_output_tokens_is_not_complete(self) -> None:
         response = SimpleNamespace(
