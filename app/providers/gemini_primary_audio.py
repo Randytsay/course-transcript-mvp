@@ -203,6 +203,6 @@ def assemble_windows(windows: list[dict[str, Any]], records: list[dict[str, Any]
     return {
         "text": "\n\n".join(texts), "window_count": len(windows),
         "structural_coverage": "PASS", "acoustic_coverage": "UNVERIFIED",
-        "review_items": review, "ready_for_chirp_comparison": True,
+        "review_items": review, "ready_for_chirp_comparison": not bool(review),
         "golden_approved": False,
     }
