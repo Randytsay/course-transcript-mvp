@@ -40,6 +40,8 @@ def evaluate_recognition(
     # Gemini is first and must structurally cover all staged source windows.
     primary_records = [gemini_runner(window) for window in staged_primary_windows]
     main = assemble_windows(staged_primary_windows, primary_records, duration_seconds)
+    if not main["ready_for_chirp_comparison"]:
+        raise ValueError("Gemini source-window overlap requires audio-guided reconciliation")
 
     # Chirp hears original audio without exposure to any Gemini candidate text.
     words = chirp_independent_runner()
