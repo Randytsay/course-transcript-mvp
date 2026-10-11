@@ -1,7 +1,7 @@
 # Golden Transcript V2 — 驗收 Gate 狀態追蹤
 
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
-執行進度：**V2 Draft PR #142 已建立；P0–P4 正在開發，全部 Gate 均未取得正式 PASS**。
+執行進度：**V2 Draft PR #142 開發中；P0–P5、P7 各有部分程式或規格成果，但 G0–G8 均未達正式 PASS**。
 
 Draft PR：https://github.com/Randytsay/course-transcript-mvp/pull/142
 
@@ -16,16 +16,16 @@ Draft PR：https://github.com/Randytsay/course-transcript-mvp/pull/142
 | P2 Gemini 3.8 音訊主稿 | G2 | PARTIAL | `gemini_audio_primary_v2.py` 實作單音檔呼叫原型、分段規劃／重疊合併／截斷檢測及付費守門；尚未接 durable worker 或實際錄音完整性 |
 | P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `engine_comparison_v2.py` 產出差異／Chirp 聲學時間窗；尚未 V2 Chirp job orchestration、bounded repair 實測 |
 | P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_transcribe_v2.py` VERBATIM 及 capability/approval 檢查；尚未接 UI/worker 或 Vertex 真實模型驗證 |
-| P5 WebCodex 最終裁決與 Golden QA | G5 | NOT_RUN | 原有 CHATGPT_HANDOFF / Golden QA 可借鏡；新版未完成 |
+| P5 WebCodex 最終裁決與 Golden QA | G5 | PARTIAL | `golden_v2_finalizer.py` 可從 Chirp 定時且人工核准的 cue 同源產出 SRT/TXT 候選；10 個 stage/finalizer 測試通過；完整 WebCodex 裁決與 Acoustic/Golden QA 尚未接線 |
 | P6 實測評分與最佳化 | G6 | NOT_RUN | 尚未取得人工 Gold 基準與付費模型結果 |
-| P7 ChatGPT Skill / 持久任務 | G7 | NOT_RUN | V1 Skill 已存在，V2 新契約未建／驗證 |
+| P7 ChatGPT Skill / 持久任務 | G7 | PARTIAL | 已新增 `skills/golden-transcript-v2/SKILL.md` 作為**未啟用**交辦規格；正式 durable Worker、task API、對話重新接手仍未實作 |
 | P8 UI / 部署 / Drive 驗收 | G8 | NOT_RUN | 尚未 staging/canary/production／Drive 實測 |
 
 ## 2026-10-11 初次工程證據
 - PR: [#142 V2 WIP](https://github.com/Randytsay/course-transcript-mvp/pull/142)（Draft；不允許合併／發佈）
 - 隔離 Runner：`/tmp/golden-v2-20261011`（新複本；不同於 dirty production source）
-- 非付費測試：13/13 V2 初期成功；24/24 新增 V2 測試成功；74/74 既有+新增聚焦回歸成功
-- **全套測試**：已提交執行，結果待記錄；不得據聚焦測試宣告 G1–G4 PASS。
+- 非付費測試：13/13 V2 初期成功；24/24 新增 V2 測試成功；74/74 聚焦回歸成功；30/30 stage+引擎測試成功；10/10 stage+finalizer 測試成功；先前全套 701/701 PASS，最新整套重跑另待結果
+- **全套測試**：第一次因隔離環境缺少 PyYAML/pytest 而 703 項中有 8 個環境載入錯誤；安裝測試依賴後第二次 701 項 ALL PASS。最新新增程式後的第三次重跑另待結果；不得據聚焦測試宣告 G1–G8 PASS。
 - Vertex/Speech 真 API：NOT_RUN；Drive 寫入：NO；Production 改動：NO；付費金額：US$0。
 - 待完成：完整引擎序列、持久化與授權帳本、金標準音檔評測、Skill／UI、部署回滾及 Drive 遠端 SHA。
 - 每次續作先查最新 branch HEAD/PR CI/status 和 `CURRENT_STATE.md`，不得以本紀錄替代 live code。
