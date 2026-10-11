@@ -126,7 +126,7 @@ def audio_duration_ms(path: Path) -> int:
     return round(float(run.stdout.strip()) * 1000)
 
 
-def audit(snapshot_dir: Path) -> dict:
+def audit(snapshot_dir: Path, chirp_job: Path | None = None) -> dict:
     snap = verify_snapshot(snapshot_dir)
     srt = snapshot_dir / "20260927.srt"
     txt = snapshot_dir / "20260927_逐字稿.txt"
@@ -158,6 +158,16 @@ def audit(snapshot_dir: Path) -> dict:
                            for c in cues),
         "gaps_gt_30sec": [{"end_ms": a, "next_start_ms": b} for a, b in gaps],
     }
+    if chirp_job is not None:
+        try:
+            from .chirp_word_coverage import check_chirp_coverage
+        except ImportError:
+            from chirp_word_coverage import check_chirp_coverage
+        coverage = check_chirp_coverage(
+            snapshot_dir, chirp_job, cues, snap["sha256"]["20260927.MP3"])
+        metrics["chirp_word_coverage"] = coverage
+        if coverage["requires_acoustic_review"]:
+            blockers.append("Chirp 3 words without corresponding subtitle time spans")
     if metrics["gaps_gt_30sec"]:
         review.append(f"long_subtitle_gaps={len(gaps)} (check voice activity)")
     if metrics["short_500ms"] or metrics["long_7000ms"] or metrics["fast_8cps"]:
@@ -188,8 +198,9 @@ def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--snapshot", required=True, type=Path)
     p.add_argument("--out", required=True, type=Path)
+    p.add_argument("--chirp-job", type=Path, help="Existing immutable Chirp job evidence")
     args = p.parse_args()
-    result = audit(args.snapshot.resolve())
+    result = audit(args.snapshot.resolve(), args.chirp_job.resolve() if args.chirp_job else None)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.out.with_name(args.out.name + ".tmp")
     temporary.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n",

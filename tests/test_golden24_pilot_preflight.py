@@ -71,6 +71,41 @@ class PilotGateTests(unittest.TestCase):
             self.assertFalse(result["verified"])
             self.assertEqual(result["mismatched"], ["20260927.srt"])
 
+    def test_chirp_coverage_detects_silent_subtitle_gap(self):
+        from scripts.golden24.chirp_word_coverage import check_chirp_coverage
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            j = p / "job"
+            j.mkdir()
+            digest = hashlib.sha256(b"audio").hexdigest()
+            (p / "20260927.MP3").write_bytes(b"audio")
+            (j / "source-manifest.json").write_text(
+                json.dumps({"source_name": "20260927.MP3", "source_sha256": digest}))
+            words = [{"word": "說", "start_ms": 6000+i*300, "end_ms": 6240+i*300}
+                     for i in range(30)]
+            (j / "merged-words.json").write_text(
+                json.dumps({"words": words, "total_words": len(words)}))
+            result = check_chirp_coverage(p, j, [
+                {"start_ms": 0, "end_ms": 3000},
+                {"start_ms": 17000, "end_ms": 20000},
+            ], digest)
+            self.assertTrue(result["requires_acoustic_review"])
+            self.assertEqual(result["significant_uncovered_runs"], 1)
+            self.assertEqual(result["uncovered_chirp_words"], 30)
+
+    def test_chirp_coverage_rejects_wrong_source_media(self):
+        from scripts.golden24.chirp_word_coverage import check_chirp_coverage
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d)
+            j = p / "job"
+            j.mkdir()
+            (j / "source-manifest.json").write_text(
+                json.dumps({"source_name": "different.MP3", "source_sha256": "bad"}))
+            (j / "merged-words.json").write_text(
+                json.dumps({"words": [], "total_words": 0}))
+            with self.assertRaisesRegex(ValueError, "provenance"):
+                check_chirp_coverage(p, j, [], "expected-sha")
+
 
 if __name__ == "__main__":
     unittest.main()
