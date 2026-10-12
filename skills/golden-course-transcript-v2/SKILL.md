@@ -53,20 +53,25 @@ Model boundary: Gemini 3.8 Flash is the full-audio primary recognizer. Use Verte
 - `python scripts/golden_v2_status.py --database /path/to/ledger.db --job-id v2_<actual-id>` reads only existing SQLite data.
 - Disabled-by-default `GET /api/v1/golden-v2/jobs` and `GET /api/v1/golden-v2/jobs/{job_id}` require `COURSE_TRANSCRIPT_V2_STATUS_API_ENABLED=true`, a separate strong `COURSE_TRANSCRIPT_V2_STATUS_TOKEN` Bearer credential and an existing `COURSE_TRANSCRIPT_V2_LEDGER_PATH`. This is a trusted backend-only status route; it is not a user-browser token or proof of production availability.
 - `python scripts/golden_v2_review_overlaps.py --database ... --job-id ... --job-dir ... --normalized-audio ...` provides read-only pending-seam inspection. Applying JSON decisions also requires `--decisions-json`, `--reviewer`, `--review-reference`, `--confirm-listened`; this is local operator **self-attestation**, not independent human listening proof. Every overlap is tied to verified immutable raw response SHA, source lineage, audio SHA, original stage report and revision-CAS. No whole-file Golden PASS results from a seam review. Do not expose this CLI through HTTP.
+- `python -m scripts.golden_v2_review_candidates inspect ...` writes a new source/revision-bound candidate review template; `apply ... --reviewer ... --review-reference ... --confirm-listened` imports decisions only after rechecking audio SHA, provider evidence, comparison SHA, candidate snapshot, and ledger revision. `CORRECT_CHIRP` edits must bind to exact Chirp word evidence. This is still operator **self-attestation**, does not prove independent listening, and performs no provider or Drive calls.
 
-## Planned mutation/tool API (NOT YET IMPLEMENTED; placeholders, do not call as real endpoints)
+## Implemented source-level owner approval API (NOT DEPLOYED)
+
+- `POST /api/v1/golden-v2/jobs/{job_id}/approval` records a revision-bound job budget approval in the existing SQLite ledger.
+- `POST /api/v1/golden-v2/jobs/{job_id}/repair-approval` records an exact assessment-SHA and window-bound repair-plan approval in SQLite.
+- Both routes require the separate `COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED=true` flag and a strong `COURSE_TRANSCRIPT_V2_WRITE_TOKEN`; status routes use a different token. The configured per-job ceiling defaults to USD 10. These routes never submit a provider request, create a job, access Drive, or publish results. Keep both credentials server-side; do not put them in browser JavaScript.
+- `scripts/golden_v2_local_worker.py` runs provider-free local ledger stages for one existing job and exits with an explicit blocker at provider/reviewer gates. It is not a persistent VPS worker or task-creation endpoint.
+
+## Remaining task/handoff API (NOT IMPLEMENTED; placeholders, do not call as real endpoints)
 
 ```text
 preview(source_url, model_mode) -> inventory, canonical candidates, estimated cost
 submit_approved(preflight_id, source_sha, approval_revision) -> durable job_id
-job_status(job_id) -> stage, cost, evidence, QA, remaining blockers  # read-only CLI/HTTP snapshot exists in source, not live service
 compare(job_id) -> ordered discrepancy windows, audio excerpt locators
-adjudicate(job_id, revision, segment_edits, evidence) -> immutable decision audit
-finalize(job_id, revision) -> final SRT/TXT, Golden QA
 publish(job_id, revision, owner_approved) -> Drive safe-publish + verified SHA
 ```
 
-Until each operation is actually connected and tested, use existing authorized project tools read-only and report `NOT_IMPLEMENTED` rather than inventing endpoint success.
+The read-only `job_status` snapshot exists in source as CLI/HTTP, and local `adjudicate` / `finalize` building blocks exist; they are not connected as these orchestration endpoints. Until a task operation is actually connected and tested, report `NOT_IMPLEMENTED` rather than inventing endpoint success.
 
 ## Gate and handoff discipline
 
