@@ -56,7 +56,7 @@ Acoustic probing is limited to 16 gaps and 30 seconds per gap; longer/unexamined
 | SQLite durability | `app/jobs/golden_v2_ledger.py` | Additive `v2_*` tables; owner approval revision, stage claim, source SHA, staged GCS window digest, cost reservation, restart BLOCKED/UNKNOWN, evidence-only reconciliation |
 | Owner API | `app/golden_v2_routes.py` | Read and separately gated job/repair approval routes; independent bearer tokens, configured actor, default US$10 per-job ceiling, SQLite-only approval writes, no provider submission; not deployed |
 | Local stage bridge | `app/pipeline/golden_v2_stage_runner.py` | Provider-free comparison and QA reports; stage outcomes persist in SQLite; NOT_YET paid Chirp or final Drive publisher |
-| Model benchmark | `app/evaluation/golden_v2_benchmark.py` | Offline CER against *human-verified* gold, not model majority votes |
+| Model benchmark | `app/evaluation/golden_v2_benchmark.py`, `scripts/golden_v2_benchmark.py` | Paired, offline per-category CER against reviewer-referenced gold; exact source SHA/window pairing and raw-evidence SHA fields required; missing cost/latency stays unknown. Evaluator validates fields only, not artifact/reviewer authenticity |
 | Operator inspection | `scripts/golden_v2_status.py` | Read-only database task status; no token/approval secret, no DB migration, Drive changes or provider calls |
 | Future conversation interface | `skills/golden-course-transcript-v2/SKILL.md` | Draft command/authorization spec only; not installed and not yet connected to an API |
 
@@ -80,6 +80,13 @@ Read persisted status (only for V2 test DBs/currently installed V2 jobs):
 python scripts/golden_v2_status.py \
   --database /path/to/verified-v2-ledger.db \
   --job-id v2_<REAL_JOB_ID>
+```
+
+Build a local paired-engine report from JSON containing `human_gold_windows` and `engine_outputs`. The report path must not already exist; this command only reads/writes local files:
+```bash
+python -m scripts.golden_v2_benchmark \
+  --input /path/to/reviewed-paired-results.json \
+  --output /path/to/new-benchmark-report.json
 ```
 
 Prepare a local candidate review template, listen to the exact normalized audio, then edit `review_decisions` and any source-word-bound `replacements` before applying. The import requires the same source file and current ledger revision; it is only an operator attestation, not independent proof of listening:
@@ -110,7 +117,7 @@ Test evidence is supplied by GitHub Actions for the exact commit. **Do not copy 
 4. **P3:** Existing PASS-approved Chirp evidence can now be imported after Gemini primary when source SHA and acoustic evidence agree. Fake-provider V2 submission/recovery and offline Standard bounded repair are connected in one durable Chirp stage: positive speech evidence, exact owner-approved ranges/cost, Standard-only submit, crash-safe re-upload, target-only word replacement, and acoustic PASS before comparison. Production Worker/scheduler, invoice-bound billing, real Speech/VAD long-audio validation and human listening remain outstanding. Raw evidence and provider timing remain authoritative; final V2 Golden QA is mandatory.
 5. **P4:** Real Vertex 3.5 Transcribe SDK/endpoint smoke and provider usage pricing are not complete. Per current Vertex documentation, diarization+vocabulary is illustrated as supported; word_timestamp+vocabulary is conservatively kept separate. Taiwanese/Hokkien specific performance is **not yet verified**; test with real gold recordings. Source: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-transcribe
 6. **P5:** A local source-bound candidate review/export-import path now exists, but ChatGPT/WebCodex session transport and independently authenticated reviewer evidence remain unimplemented. No automatic difference resolution exists.
-7. **P6:** No trusted benchmark dataset or actual bill yet; current CER is only a calculation library.
+7. **P6:** The paired evaluator is ready for source-identical, reviewer-referenced corpus windows, but no trusted benchmark dataset or actual bill exists yet. Its SHA/reference checks do not authenticate reviewer or artifact bytes.
 8. **P7:** SQLite stage claim and provider adapter authorization are tested with mock clients; the read-only owner HTTP API/CLI and separately gated authenticated job/repair approval routes are implemented, but no endpoint or continuously running V2 Worker has been deployed and no owner UI/Skill is connected. Approvals only update the ledger; they never submit providers. Crash/outcome-unknown stays blocked until independent evidence verifier approves reconciliation.
 9. **P8:** UI and official Drive delivery hook are not integrated; final QA verdict does **not** perform publication. Existing V1 safe-publish remains intact.
 
