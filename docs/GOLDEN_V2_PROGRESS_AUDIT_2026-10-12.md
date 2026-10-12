@@ -4,11 +4,13 @@
 > 最初盤點對應 [PR #143](https://github.com/Randytsay/course-transcript-mvp/pull/143) 舊版提交 `73f1a8265bd4458699cd66da1c9d6f88cf0779f1`；2026-10-12 隔離續作進入 [Draft PR #144](https://github.com/Randytsay/course-transcript-mvp/pull/144)，新 SHA/CI 另以 Gate 狀態簿為準。
 > 權威規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[G0–G8 完整驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[最新狀態](GOLDEN_V2_GATE_STATUS.md)｜[整合交接](GOLDEN_V2_INTEGRATION_HANDOFF.md)。
 
+> **更新（2026-10-12）：**使用者已明確決定把 ASR 後的純文字校正由 3.7 改為 3.8。以下先前提到的 3.7 續報屬歷史記錄，不再代表預定正式模型。對應目前 Draft PR #144；實際 Vertex 3.8 校正仍待小額 smoke 與正式驗收。
+
 ## 1. 使用者原訂完工定義
 
 交付「從自然語言交辦 Google Drive 資料夾／音檔、到可安全發布的正式 Golden SRT 與 TXT」的持久系統：
 
-1. 使用 **Gemini 3.8 Flash** 首先完整獨立聽音形成繁體中文主稿；另外固定以 **Vertex Gemini 3.7 Flash** 做 ASR 後的純文字校正，兩個 adapter 不互相代替；長音檔截斷／分段、overlap 對齊與 coverage 不得漏話、重複或虛構經文。
+1. 使用 **Gemini 3.8 Flash** 首先完整獨立聽音形成繁體中文主稿；另外改用 **Vertex Gemini 3.8 Flash** 做 ASR 後的純文字校正，兩個 adapter 不互相代替；長音檔截斷／分段、overlap 對齊與 coverage 不得漏話、重複或虛構經文。
 2. 使用同一原始音檔由 **Chirp 3** 獨立辨識與提供真實字詞時間戳；沿用 Dynamic Batch 正常首輪、Standard bounded repair、VAD／聲學完整性 Gate、已有可信 chunk 只重用不重送。
 3. 可選 **Gemini 3.5 Transcribe**：品質優先跑全文，智慧最佳化只補高風險區間；Vertex API 端點能力與用量必須實測確認。
 4. **ChatGPT/WebCodex** 針對模型差異與可聽原音、同堂經文／資料做文字裁決；經文只用於查詞，不得補出未講內容，台語不確定區間保留 REVIEW。
@@ -61,7 +63,7 @@
 | 原階段 | 已實作／可證 | 缺口／不能宣告完成 |
 |---|---|---|
 | P0 基線及隔離 | GitHub 隔離分支／Draft PR；未破壞舊工作樹 | VPS production exact SHA、active jobs/leases、真正 DB 備份還原、media-inventory 分支整合 |
-| P1 模型角色分流 | Vertex Gemini 3.7 text correction 與 Gemini 3.8 audio primary 分離；模型政策單測／整體 CI | 兩種真實 Vertex 呼叫與相容性、IAM/region、功能旗標及正式切換 |
+| P1 模型角色分流 | Vertex Gemini 3.8 text correction 與 Gemini 3.8 audio primary 分離 Adapter/Schema；模型政策單測／整體 CI | 兩種真實 Vertex 呼叫與相容性、IAM/region、功能旗標及正式切換 |
 | P2 Gemini 全音訊主稿 | audio adapter、FFmpeg FLAC clipping、原始→normalized→clip SHA lineage、GCS opt-in、mock primary、重疊 seam 人工覆核及 SHA 綁定 | 真實 Drive 來源 attest、真人重疊聽音、長音檔完整 acoustic/VAD coverage、真 Vertex、VPS Worker |
 | P3 Chirp 比對 | Gemini-first mock orchestration、文字差異、Chirp word-time、可信舊證據重用、新 Chirp fake-provider async submit/recovery；新增保守 VAD 正語音證據、費用/範圍精確核准、≤5 分鐘 Standard 修復 clip、GCS 不覆寫與重啟補傳、target-only merge，QA REVIEW 阻擋 compare | 真 Speech-to-Text async、可稽核帳單、常駐 Worker、長音訊完整聲學 coverage、真人聽音與雙引擎 UAT |
 | P4 3.5 Transcribe | Vertex adapter、VERBATIM、≤15m 策略、選用模式/mock | 正式 SDK/模型可用性、真實 provider response 及用量、第三稿比對及 mode 路由持久整合 |
