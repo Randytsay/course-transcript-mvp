@@ -13,8 +13,8 @@
 
 - `GoldenV2Ledger.resume_chirp_submissions()` 可在 worker 中斷於多窗 Chirp 提交之間時，依 SQLite job revision 與 stage heartbeat CAS 旋轉 claim，只接續仍為 `PLANNED` 的窗段；先前 `SUBMITTED`/`DONE` operation identity 必須完整保留。
 - 任一窗段仍為 `SUBMITTING`（provider POST 可能已受理但 operation ID 未落盤）時，續跑會 fail closed；不會重送該窗，也不會核發新 claim。舊 claim 在續跑後失效，revision 不符或 recovery grace 未到也會拒絕。
-- 新增 3 個 fake Speech/SQLite restart regression cases；Chirp stage suite **10 PASS**，只使用合成 FLAC、fake GCS/Speech，沒有雲端呼叫。提交與 exact-SHA CI 尚待完成。
-- 已將改動接到同分支新進的有界恢復 worker 後，提交 `2f0792e` 的本機複驗為完整 Python **815 PASS**、V2 專項 **124 PASS**、handoff pytest **27 PASS**、compileall 與 `git diff --check` PASS；新 SHA exact-CI 尚待推送後核對。
+- 新增 3 個 fake Speech/SQLite restart regression cases；Chirp stage suite **10 PASS**，只使用合成 FLAC、fake GCS/Speech，沒有雲端呼叫。
+- 已將改動接到同分支有界恢復 worker 後，本機完整 Python **815 PASS**、V2 專項 **124 PASS**、handoff pytest **27 PASS**、compileall 與 `git diff --check` PASS。來源提交 `001ed9b9ecb1ef3d23df0b3e944bbc35cb7b065e` 的 [CI #38198541708](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38198541708) **PASS**（含 815 Python tests、Next.js tests/build、Docker image build、Compose）；[Release Compose #38198541691](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38198541691) **PASS**。
 - Gate 維持 **G0–G7 PARTIAL、G8 NOT_RUN、0/9 PASS**。真實 Chirp worker/雲端 operation、Standard repair、長音訊聲學覆蓋、真人 Gold、Drive/UI/部署仍未驗收。
 
 ### 2026-10-12 本地 Goal 執行續報（待本分支 exact-SHA CI）

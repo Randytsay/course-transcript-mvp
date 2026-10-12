@@ -10,7 +10,7 @@
 
 `GoldenV2Ledger.resume_chirp_submissions()` can rotate a stale `chirp_independent` claim with a job-revision CAS after verifying every previously attempted window has a persisted operation ID. It then allows the worker to submit only remaining `PLANNED` windows. The stage heartbeat and recovery grace avoid taking over an active worker; rotating the claim invalidates the old worker. Any `SUBMITTING` row is an ambiguous provider POST and remains frozen for manual reconciliation. This closes the known-operation/unsent-window restart case; it does not reconcile an operation ID lost after a POST or retry failed provider operations.
 
-After integrating the bounded saved-LRO recovery worker, local regression at commit `2f0792e` passed **815 full unittest**, **124 V2 unittest**, **27 handoff pytest**, Python compileall and `git diff --check`. All tests used local/fake providers; the commit still needs its own GitHub exact-SHA CI run. No paid provider call, GCS/Drive write, or production change occurred.
+After integrating the bounded saved-LRO recovery worker, local regression passed **815 full unittest**, **124 V2 unittest**, **27 handoff pytest**, Python compileall and `git diff --check`. Source commit `001ed9b9ecb1ef3d23df0b3e944bbc35cb7b065e` passed exact-SHA [GitHub CI #38198541708](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38198541708) and [Release Compose #38198541691](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38198541691). All tests used local/fake providers; no paid provider call, GCS/Drive write, or production change occurred.
 
 ## Newly integrated Goal-path components (isolated branch)
 
