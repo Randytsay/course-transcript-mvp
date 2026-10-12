@@ -32,6 +32,7 @@ type Snapshot = {
     revision: number;
     estimated_cents: number;
     approved_cents: number | null;
+    prior_approved_source_count: number;
     created_at: string;
   };
   stages: Stage[];
@@ -135,6 +136,7 @@ export default function GoldenV2AdminPage() {
   function formFor(job: Snapshot["job"]): GoldenV2ApprovalForm {
     return forms[job.id] ?? {
       amount: String(job.estimated_cents), reference: "", confirmed: false,
+      repeatSourceConfirmed: false,
     };
   }
 
@@ -159,6 +161,10 @@ export default function GoldenV2AdminPage() {
       setError("請填寫核准依據，並勾選已核對來源與預算。");
       return;
     }
+    if (snapshot.job.prior_approved_source_count > 0 && !form.repeatSourceConfirmed) {
+      setError("相同來源 SHA 曾核准其他任務，必須另外確認本次重新辨識可能再次收費。");
+      return;
+    }
     setSubmitting(snapshot.job.id);
     setError("");
     setNotice("");
@@ -173,6 +179,8 @@ export default function GoldenV2AdminPage() {
             approved_cents: amount,
             reference: form.reference.trim(),
             confirm: true,
+            ...(snapshot.job.prior_approved_source_count > 0
+              ? { repeat_source_confirmed: true } : {}),
           }),
         },
       );
@@ -180,7 +188,7 @@ export default function GoldenV2AdminPage() {
       if (!response.ok) throw new Error(errorDetail(payload, response.status));
       setNotice(`任務 ${snapshot.job.id} 已核准並排入佇列。`);
       setForms((previous) => ({ ...previous, [snapshot.job.id]: {
-        ...form, confirmed: false,
+        ...form, confirmed: false, repeatSourceConfirmed: false,
       } }));
       await refresh(true);
     } catch (cause) {
@@ -427,6 +435,13 @@ export default function GoldenV2AdminPage() {
                           />
                         </label>
                       </div>
+                      {job.prior_approved_source_count > 0 && (
+                        <label className={styles.confirmRow}>
+                          <input type="checkbox" checked={form.repeatSourceConfirmed}
+                            onChange={(event) => updateForm(job.id, { repeatSourceConfirmed: event.target.checked })} />
+                          <span>注意：相同音檔來源已有 {job.prior_approved_source_count} 筆其他已核准任務。我確認需要重新辨識，並理解本次可能再次計費。</span>
+                        </label>
+                      )}
                       <label className={styles.confirmRow}>
                         <input
                           type="checkbox" checked={form.confirmed}
@@ -435,7 +450,8 @@ export default function GoldenV2AdminPage() {
                         <span>我已核對這筆來源 SHA 與預算，並同意最高 {formatUsdCents(Number(form.amount))} 的費用上限。</span>
                       </label>
                       <button className={styles.approveButton} type="submit"
-                        disabled={!form.confirmed || submitting === job.id || submitting !== ""}>
+                        disabled={!form.confirmed || (job.prior_approved_source_count > 0 && !form.repeatSourceConfirmed)
+                          || submitting === job.id || submitting !== ""}>
                         {submitting === job.id ? "正在寫入核准…" : "核准預算並排入佇列"}
                       </button>
                     </form>
