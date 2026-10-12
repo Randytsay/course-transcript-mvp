@@ -25,16 +25,16 @@ def assigned_string(path: Path, name: str) -> str:
 
 
 class GeminiModelPolicyTests(unittest.TestCase):
-    def test_text_correction_targets_gemini37(self) -> None:
+    def test_text_correction_targets_gemini38(self) -> None:
         self.assertEqual(
             assigned_string(PROVIDERS / "correct_text.py", "MODEL"),
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
         )
 
-    def test_cascade_targets_gemini37(self) -> None:
+    def test_cascade_targets_gemini38(self) -> None:
         self.assertEqual(
             assigned_string(PROVIDERS / "correct_text_cascade.py", "ACTIVE_MODEL"),
-            "gemini-3.7-flash",
+            "gemini-3.8-flash",
         )
 
     def test_audio_primary_stays_gemini38(self) -> None:
@@ -46,7 +46,7 @@ class GeminiModelPolicyTests(unittest.TestCase):
     def test_prompt_versions_record_text_model_and_exclude_25(self) -> None:
         for file in ("correct_text.py", "correct_text_cascade.py"):
             source = (PROVIDERS / file).read_text(encoding="utf-8")
-            self.assertIn("gemini-3.7", source)
+            self.assertIn("gemini-3.8", source)
             self.assertNotIn("gemini-2.5", source)
 
     def test_legacy_generate_config_does_not_pass_disallowed_sampler_fields(self) -> None:
