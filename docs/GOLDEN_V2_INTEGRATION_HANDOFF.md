@@ -71,6 +71,15 @@ Acoustic probing is limited to 16 gaps and 30 seconds per gap; longer/unexamined
 | Operator inspection | `scripts/golden_v2_status.py` | Read-only database task status; no token/approval secret, no DB migration, Drive changes or provider calls |
 | Future conversation interface | `skills/golden-course-transcript-v2/SKILL.md` | Draft command/authorization spec only; not installed and not yet connected to an API |
 
+## Additional 2026-10-12 validated provider safety checkpoint
+
+- Gemini Primary (`gemini_primary_audio.py`) and Gemini 3.5 Transcribe (`gemini_third_transcribe.py`) now exclusively reserve the on-disk `REQUEST_STARTED` barrier with `os.O_CREAT | os.O_EXCL` **before** issuing a paid request. A second concurrent claimant may only reuse an exact `COMPLETE` record; ambiguous, truncated, corrupt or mismatched identities block new requests.
+- Both recognizers now name their paid-audit slot by **model, normalized source SHA and exact GCS audio window**, not mutable reference text or model options; full model-specific prompt/config identity remains checked before cached reuse. `golden_v2_primary_stage._primary_audit_path` uses that same slot key for source/raw SHA verification.
+- `app/pipeline/golden_v2_window_budget.py` checks cumulative provider costs **after each completed window** in both stage executors, before any further paid submission. Known overrun and unpriced usage produce an immutable hold artifact, persist an accounting/reconciliation blocker, and prohibit subsequent requests.
+- Offline fake-provider/FFmpeg concurrency and fault-injection tests were added. Exact implementation commit `ef489f0911d0a844e22b50d87ad7646e6d36d36d`: [CI #38238895306](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38238895306), 885 Python unittest, 27 handoff pytest, Next.js, Compose and Docker **PASS**; [Release Compose #38238895433](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38238895433) **PASS**.
+- **Do not cut over existing provider audit directories without migration/reconciliation.** Earlier V2 drafts keyed audit filenames using the complete prompt/config identity. Their immutable paid-request evidence must be independently identified and reindexed or held for review before new code can submit to the same original audio window. Do not clear files or re-run on missing new-format path.
+- G0–G8 remain unpassed. These improvements are **non-paid GitHub CI**, not live Vertex/Chirp billing, actual VPS volume/fault validation, production deployment or Google Drive publish evidence.
+
 ## Non-paid verification
 
 Run on a fresh isolated branch checkout with no credentials required:
