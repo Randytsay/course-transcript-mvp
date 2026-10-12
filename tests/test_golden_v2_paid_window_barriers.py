@@ -6,6 +6,7 @@ No cloud connections or paid calls are made; fake models only.
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import hashlib
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from threading import Event
@@ -120,6 +121,39 @@ class PaidWindowBarrierTests(unittest.TestCase):
                     self._run(kind, changed)
                 self.assertEqual(api.call_count, 1)
                 self.assertEqual(len(list(Path(tmp).rglob("*.json"))), 1)
+
+    def test_historical_paid_receipt_filename_blocks_new_model_call(self):
+        for kind in ("primary", "third"):
+            with self.subTest(kind=kind), TemporaryDirectory() as tmp:
+                api = Mock(return_value=fake_response())
+                client = SimpleNamespace(models=SimpleNamespace(generate_content=api))
+                args = self._args(kind, root=Path(tmp), client=client)
+                recorded = self._run(kind, args)
+                current, = Path(tmp).rglob("*.json")
+                old_digest = hashlib.sha256(
+                    json.dumps(recorded["identity"], ensure_ascii=False,
+                               sort_keys=True).encode("utf-8")
+                ).hexdigest()
+                archived = current.with_name(f"{old_digest}.json")
+                archived.write_bytes(current.read_bytes())
+                current.unlink()
+                with self.assertRaises(PrimaryTranscriptError):
+                    self._run(kind, args)
+                self.assertEqual(api.call_count, 1)
+                self.assertEqual(list(archived.parent.glob("*.json")), [archived])
+
+    def test_malformed_historical_receipt_fails_before_paid_call(self):
+        for kind in ("primary", "third"):
+            with self.subTest(kind=kind), TemporaryDirectory() as tmp:
+                api = Mock(return_value=fake_response())
+                client = SimpleNamespace(models=SimpleNamespace(generate_content=api))
+                args = self._args(kind, root=Path(tmp), client=client)
+                folder = Path(tmp) / ("gemini-primary" if kind == "primary" else "gemini-third")
+                folder.mkdir()
+                (folder / "old-incomplete.json").write_text("{", encoding="utf-8")
+                with self.assertRaises(PrimaryTranscriptError):
+                    self._run(kind, args)
+                api.assert_not_called()
 
     def test_approval_rejection_creates_no_barrier(self):
         for kind in ("primary", "third"):
