@@ -15,6 +15,8 @@ from typing import Any
 from app.providers.gemini_primary_audio import (
     PrimaryTranscriptError,
     _atomic_json,
+    _reserve_paid_window,
+    _load_completed_window,
     _finish_reason,
     _usage,
     validate_staged_windows,
@@ -75,10 +77,7 @@ def run_third_window(
     digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     record_path = job_dir / "gemini-third" / f"{digest}.json"
     if record_path.exists():
-        existing = json.loads(record_path.read_text(encoding="utf-8"))
-        if existing.get("identity") != identity or existing.get("status") != "COMPLETE":
-            raise PrimaryTranscriptError("previous third-model outcome requires operator reconciliation")
-        return existing
+        return _load_completed_window(record_path, identity)
 
     if part_factory is None or config_factory is None:
         from google.genai import types
@@ -90,7 +89,8 @@ def run_third_window(
             )
 
     # Reconcile unknown outcomes; never blindly repeat a potentially charged call.
-    _atomic_json(record_path, {"identity": identity, "status": "REQUEST_STARTED"})
+    if not _reserve_paid_window(record_path, identity):
+        return _load_completed_window(record_path, identity)
     try:
         response = client.models.generate_content(
             model=MODEL,
