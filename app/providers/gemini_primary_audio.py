@@ -90,6 +90,19 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
             os.unlink(name)
 
 
+def _paid_window_slot_digest(identity: dict[str, Any]) -> str:
+    """Lock one physical audio/model slot, independent of mutable prompt/config.
+
+    Any changed transcript hints, prompt version or third-model settings must
+    not buy a second recognition of the same audio window under the old claim.
+    The existing identity is still compared in full before cached reuse.
+    """
+    slot = {key: identity[key] for key in ("model", "source_sha256", "window")}
+    return hashlib.sha256(
+        json.dumps(slot, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
 def _reserve_paid_window(path: Path, identity: dict[str, Any]) -> bool:
     """Create the durable paid-request barrier using an exclusive filesystem op.
 
@@ -179,7 +192,7 @@ def run_window(
         "source_sha256": source_sha256, "window": {k: staged_window[k] for k in ("index", "start_seconds", "end_seconds", "gcs_uri", "mime_type")},
         "context_sha256": hashlib.sha256(reference_terms.encode("utf-8")).hexdigest(),
     }
-    digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    digest = _paid_window_slot_digest(identity)
     audit_path = job_dir / "gemini-primary" / f"{digest}.json"
     if audit_path.exists():
         return _load_completed_window(audit_path, identity)
