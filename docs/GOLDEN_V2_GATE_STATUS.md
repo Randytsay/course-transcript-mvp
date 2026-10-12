@@ -3,6 +3,12 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-12 — Historical window receipt compatibility and latest CI
+
+- 增加唯讀 `scripts/golden_v2_audit_slots.py --job-dir <V2-job-dir>`：掃描既有 3.8 主稿與 3.5 Transcribe 的付費紀錄，區分 canonical COMPLETE、legacy COMPLETE 需重新索引、重複 slot、未知狀態、損壞檔；**不刪檔、不搬移、不呼叫模型**。
+- 強制執行前相容性防護：即使舊版稽核檔使用 prompt/config 雜湊檔名，只要同 source SHA／model／GCS 視窗已經有舊紀錄，**禁止再次付費 POST**，並轉由人工核對／安全遷移；缺損或無法識別的歷史紀錄也先 fail-closed。
+- 程式 SHA `d40e81f330c77c7fa90d29022ea2ac0716b8cf8b` 的 [GitHub CI #38239849570](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38239849570) **Python 890/890 PASS、Handoff pytest 27 PASS、Next.js、Docker image、Compose PASS**；[Release Compose #38239849451](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38239849451) PASS。均為離線測試，尚未改正式 VPS、跑真模型或 Drive 回寫。**G0–G8 仍 0/9 PASS**。
+
 ### 2026-10-12 — Provider paid-window idempotency and budget checkpoints
 
 - 隔離分支 `codex/golden-v2-goal-completion`，程式驗證 SHA `ef489f0911d0a844e22b50d87ad7646e6d36d36d`。Gemini 3.8 音訊主稿及 Gemini 3.5 第三辨識引擎改為 POSIX `O_EXCL` 排他建立 `REQUEST_STARTED` 原始稽核檔；**同一模型／source SHA／GCS 視窗** 只能保有一筆請求，改提示詞／改第三引擎參數不得依原 claim 重複計費；崩潰殘留、空檔或讀取損壞均需 reconciliation，絕不盲目重送。
