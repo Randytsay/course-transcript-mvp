@@ -6,14 +6,20 @@
 
 > **Goal continuation, 2026-10-12:** Additional provider-free code and tests are being delivered separately on `codex/golden-v2-goal-completion`; the original PR #143 still tracks `feat/golden-v2-gemini38-primary`. This entry describes local source implementation only. CI must be checked against the *new commit SHA* before it can be called green; live billing, Drive and production remain untouched.
 
+### Chirp worker interruption between windows
+
+`GoldenV2Ledger.resume_chirp_submissions()` can rotate a stale `chirp_independent` claim with a job-revision CAS after verifying every previously attempted window has a persisted operation ID. It then allows the worker to submit only remaining `PLANNED` windows. The stage heartbeat and recovery grace avoid taking over an active worker; rotating the claim invalidates the old worker. Any `SUBMITTING` row is an ambiguous provider POST and remains frozen for manual reconciliation. This closes the known-operation/unsent-window restart case; it does not reconcile an operation ID lost after a POST or retry failed provider operations.
+
+After integrating the bounded saved-LRO recovery worker, local regression at commit `2f0792e` passed **815 full unittest**, **124 V2 unittest**, **27 handoff pytest**, Python compileall and `git diff --check`. All tests used local/fake providers; the commit still needs its own GitHub exact-SHA CI run. No paid provider call, GCS/Drive write, or production change occurred.
+
 ## Newly integrated Goal-path components (isolated branch)
 
 | Layer | Code | Current verified boundary |
 |---|---|---|
 | Crash-safe raw provenance | `app/providers/golden_v2_immutable.py`, `golden_v2_source_lineage.py` | Byte-exact, hardlink no-overwrite evidence for source manifest and raw provider JSON, tested with simulated conflicts and interrupted writes |
 | Persisted recoverability | `app/jobs/golden_v2_ledger.py` | Revision CAS, local stale-claim recovery, strict ban on implicit retry of unknown paid requests |
-| Independent acoustic stage | `app/pipeline/golden_v2_chirp_stage.py`, `app/providers/golden_v2_chirp_gateway.py` | Fake-provider asynchronous Chirp operation submission/recovery and persisted result identity; no actual Speech-to-Text call in this milestone |
 | Persisted Speech LRO recovery worker | `app/pipeline/golden_v2_chirp_recovery_worker.py`, `tests/test_golden_v2_chirp_recovery_worker.py` | Bounded GET/recover pass from saved operation identities, restart/idempotence tests with SQLite and fake Speech/GCS, and a real Speech V2 client factory. Never retries POST, refuses unknown SUBMITTING and verifies completed evidence SHA; **no live Speech request, independent invoice reconciliation, Standard repair or deployed scheduler** |
+| Independent acoustic stage | `app/pipeline/golden_v2_chirp_stage.py`, `app/providers/golden_v2_chirp_gateway.py`, `app/jobs/golden_v2_ledger.py` | Speech V2 adapter and fake-provider asynchronous submission/recovery; revision-bound restart may submit remaining PLANNED windows when prior operation IDs are known, while ambiguous SUBMITTING stays frozen; no actual Speech-to-Text call in this milestone |
 | Optional third stage | `app/pipeline/golden_v2_third_stage.py` | Budget-checked optional provider with isolated evidence; offline tests only |
 | Local adjudication flow | `app/pipeline/golden_v2_coordinator.py`, `golden_v2_stage_runner.py`, `app/providers/golden_v2_acoustic_qa.py` | SQLite-based comparison → block disputed speech → provider-free QA; no artificial human sign-off |
 | Subtitle exports | `app/subtitles/golden_v2_render.py` | SRT/TXT from original Chirp word timestamps; output validity and text equivalence checked locally |

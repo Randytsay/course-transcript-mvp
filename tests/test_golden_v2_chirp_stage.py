@@ -159,8 +159,50 @@ class ChirpStageIntegrationTests(unittest.TestCase):
         restarted = GoldenV2Ledger(self.ledger_path)
         with self.assertRaisesRegex(V2Conflict, "unresolved Chirp"):
             submit_planned_chirp(ledger=restarted, claim=self.claim, gateway=self.gateway)
+        state = restarted.status(self.job_id)
+        with self.assertRaisesRegex(V2Conflict, "ambiguous Chirp"):
+            restarted.resume_chirp_submissions(
+                self.job_id, worker_id="recovery", expected_revision=state["revision"],
+                minimum_age_seconds=0,
+            )
         self.assertEqual(len(self.speech.calls), 1)
         self.assertEqual(restarted.chirp_windows(self.job_id)[0]["status"], "SUBMITTING")
+
+    def test_restart_resumes_only_unsubmitted_windows_with_rotated_claim(self):
+        planned = self.plan()
+        first = planned[0]
+        intent = self.ledger.begin_chirp_submit(self.claim, first["window_id"])
+        operation_name = self.gateway.submit(intent)
+        self.ledger.record_chirp_submission(self.claim, first["window_id"], operation_name)
+
+        restarted = GoldenV2Ledger(self.ledger_path)
+        state = restarted.status(self.job_id)
+        resumed_claim = restarted.resume_chirp_submissions(
+            self.job_id, worker_id="recovery", expected_revision=state["revision"],
+            minimum_age_seconds=0,
+        )
+        with self.assertRaisesRegex(V2Conflict, "unrecognized/stale"):
+            submit_planned_chirp(ledger=restarted, claim=self.claim, gateway=self.gateway)
+        rows = submit_planned_chirp(
+            ledger=restarted, claim=resumed_claim, gateway=self.gateway)
+        self.assertEqual([row["status"] for row in rows], ["SUBMITTED", "SUBMITTED"])
+        self.assertEqual(rows[0]["operation_name"], operation_name)
+        self.assertEqual(len(self.speech.calls), 2)
+
+    def test_restart_resume_requires_fresh_revision_and_recovery_grace(self):
+        self.plan(max_window_seconds=10)
+        stale = self.ledger.status(self.job_id)
+        with self.assertRaisesRegex(V2Conflict, "recovery grace"):
+            self.ledger.resume_chirp_submissions(
+                self.job_id, worker_id="recovery", expected_revision=stale["revision"],
+                minimum_age_seconds=300,
+            )
+        with self.assertRaisesRegex(V2Conflict, "revision, job or stage"):
+            self.ledger.resume_chirp_submissions(
+                self.job_id, worker_id="recovery", expected_revision=stale["revision"] + 1,
+                minimum_age_seconds=0,
+            )
+        self.assertEqual(len(self.speech.calls), 0)
 
     def test_preflight_cost_and_source_guards_prevent_cloud(self):
         with self.assertRaises(V2Conflict):

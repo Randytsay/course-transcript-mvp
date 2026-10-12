@@ -709,6 +709,61 @@ class GoldenV2Ledger:
             db.execute("UPDATE v2_chirp_operations SET status='SUBMITTED',"
                        "operation_name=?,updated_at=? WHERE job_id=? AND window_id=?",
                        (operation_name, _now(), claim["job_id"], window_id))
+            db.execute("UPDATE v2_stages SET updated_at=? WHERE job_id=? "
+                       "AND name='chirp_independent'",
+                       (_now(), claim["job_id"]))
+
+    def resume_chirp_submissions(
+        self, job_id: str, *, worker_id: str, expected_revision: int,
+        minimum_age_seconds: int = 300,
+    ) -> dict[str, Any]:
+        """Rotate the Chirp claim only when known submissions leave planned windows.
+
+        This recovers a worker stopped between requests. A SUBMITTING row means
+        the provider may have accepted an unrecorded request, so it remains
+        frozen for manual reconciliation and can never be replayed here.
+        """
+        if (not worker_id.strip() or type(expected_revision) is not int
+                or type(minimum_age_seconds) is not int or minimum_age_seconds < 0):
+            raise V2Conflict("valid worker, revision and recovery age required")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stage = db.execute(
+                "SELECT * FROM v2_stages WHERE job_id=? AND name='chirp_independent'",
+                (job_id,),
+            ).fetchone()
+            rows = db.execute(
+                "SELECT * FROM v2_chirp_operations WHERE job_id=? ORDER BY start_ms,window_id",
+                (job_id,),
+            ).fetchall()
+            if (job["status"] != "PROCESSING" or job["revision"] != expected_revision
+                    or stage is None or stage["state"] != "RUNNING" or not rows):
+                raise V2Conflict("Chirp recovery revision, job or stage changed")
+            states = {row["status"] for row in rows}
+            if "SUBMITTING" in states:
+                raise V2Conflict("ambiguous Chirp submission requires manual reconciliation")
+            if "PLANNED" not in states or not states <= {"PLANNED", "SUBMITTED", "DONE"}:
+                raise V2Conflict("no safely resumable planned Chirp windows")
+            if any(row["status"] in {"SUBMITTED", "DONE"}
+                   and not row["operation_name"] for row in rows):
+                raise V2Conflict("known Chirp operation identity is missing")
+            try:
+                updated = datetime.fromisoformat(stage["updated_at"])
+                age = (datetime.now(timezone.utc) - updated).total_seconds()
+            except (TypeError, ValueError) as exc:
+                raise V2Conflict("missing verified Chirp stage heartbeat") from exc
+            if updated.tzinfo is None or age < minimum_age_seconds:
+                raise V2Conflict("Chirp worker is still inside its recovery grace")
+            token = secrets.token_urlsafe(32)
+            db.execute(
+                "UPDATE v2_stages SET claim_hash=?,updated_at=? WHERE job_id=? "
+                "AND name='chirp_independent'",
+                (hashlib.sha256(token.encode()).hexdigest(), _now(), job_id),
+            )
+            db.execute("UPDATE v2_jobs SET revision=revision+1 WHERE id=?", (job_id,))
+            return {"job_id": job_id, "stage": "chirp_independent", "claim": token,
+                    "source_sha": job["source_sha"],
+                    "estimate_cents": stage["estimate_cents"]}
 
     def record_chirp_result(self, claim: dict[str, Any], window_id: str,
                             *, operation_name: str, evidence_sha: str,

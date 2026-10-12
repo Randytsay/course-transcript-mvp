@@ -7,7 +7,15 @@
 
 - 新增 `app/pipeline/golden_v2_chirp_recovery_worker.py`：依 SQLite 已存的 `SUBMITTED` Speech operation ID 有界回收，提供正式 `us-speech.googleapis.com` Chirp 3／GCS client factory（未呼叫雲端）。`SUBMITTING` 結果未知不重送；超額成本暫停後仍允許對已提交操作回收已付費證據；`PLANNED` 不會被恢復程序自行提交。
 - 新增 `tests/test_golden_v2_chirp_recovery_worker.py`：使用短音檔、真 SQLite 與 fake Speech/GCS 測試 crash/restart、未知結果、超額回收、證據竄改及輪詢上限。已在來源程式提交 `082a367ee9edb2f412a491307817a99f38151d3e` 驗證：Python **813 tests PASS**、Next.js 行為測試／build PASS、Docker image build/Compose PASS；[CI #38187565339](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38187565339)、[Release Compose #38187565337](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38187565337) 均 PASS。此筆為實測綠燈的**來源 SHA**，文件更新所產生的新提交仍應另查 CI。
-- **G3 仍 PARTIAL**：本次只完成持久 operation 恢復整合；尚欠正式已核准付費提交的常駐調度、經可稽核帳單驗證的成本來源、Standard Batch bounded repair、真實 Speech API/UAT 與真人聲學 QA。**未發生任何 Chirp/Vertex 付費呼叫、GCS/Drive 寫入、production 變更**。
+- **G3 仍 PARTIAL**：持久 operation 恢復已整合；尚欠正式已核准付費提交的常駐調度、經可稽核帳單驗證的成本來源、Standard Batch bounded repair、真實 Speech API/UAT 與真人聲學 QA。**未發生任何 Chirp/Vertex 付費呼叫、GCS/Drive 寫入、production 變更**。
+
+### 2026-10-12 Goal continuation — Chirp partial-submit recovery
+
+- `GoldenV2Ledger.resume_chirp_submissions()` 可在 worker 中斷於多窗 Chirp 提交之間時，依 SQLite job revision 與 stage heartbeat CAS 旋轉 claim，只接續仍為 `PLANNED` 的窗段；先前 `SUBMITTED`/`DONE` operation identity 必須完整保留。
+- 任一窗段仍為 `SUBMITTING`（provider POST 可能已受理但 operation ID 未落盤）時，續跑會 fail closed；不會重送該窗，也不會核發新 claim。舊 claim 在續跑後失效，revision 不符或 recovery grace 未到也會拒絕。
+- 新增 3 個 fake Speech/SQLite restart regression cases；Chirp stage suite **10 PASS**，只使用合成 FLAC、fake GCS/Speech，沒有雲端呼叫。提交與 exact-SHA CI 尚待完成。
+- 已將改動接到同分支新進的有界恢復 worker 後，提交 `2f0792e` 的本機複驗為完整 Python **815 PASS**、V2 專項 **124 PASS**、handoff pytest **27 PASS**、compileall 與 `git diff --check` PASS；新 SHA exact-CI 尚待推送後核對。
+- Gate 維持 **G0–G7 PARTIAL、G8 NOT_RUN、0/9 PASS**。真實 Chirp worker/雲端 operation、Standard repair、長音訊聲學覆蓋、真人 Gold、Drive/UI/部署仍未驗收。
 
 ### 2026-10-12 本地 Goal 執行續報（待本分支 exact-SHA CI）
 
@@ -26,7 +34,7 @@
 | P0 基線／隔離 | G0 | PARTIAL | 2026-10-11 已確認 GitHub main/feature branch、另外隔離 V2 分支；WebCodex 的舊 source Project `.git/worktrees` 無效，正式 runtime SHA／active transcription jobs／備份尚未驗證。未 reset/clean/stash。 |
 | P1 3.7→3.8 | G1 | PARTIAL | V2 開發分支的 `correct_text.py`、`correct_text_cascade.py`、Worker/API/Proxy/UI 目標已改 3.8，模型政策與 SDK 配置非付費回歸 included 在提交 `73f1a826` 的 **743 項 Python CI PASS**；仍缺實際 Vertex smoke、相容權限／配額、正式部署與 rollback。 |
 | P2 Gemini 3.8 音訊主稿 | G2 | PARTIAL | 新增 `golden_v2_audio_staging.py` 的本機 FFmpeg source-SHA FLAC 分段、`golden_v2_gcs_staging.py` 的經核准 GCS 不覆寫上傳，以及 `golden_v2_primary_stage.py` 串接 Gemini 3.8→SQLite，含超額預估阻擋、結果不明停機及 mock 整合測試；**已加入來源→normalized→窗段 SHA lineage 的本機證據、逐窗 raw SHA/身份驗證及人工 overlap seam 裁切後原始證據 CAS 綁定**；仍未驗證真實 Drive 來源 SHA、正式 Worker/Vertex、長音訊整堂聲學 coverage。 |
-| P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py`/`golden_v2_flow.py` 具備獨立差異比對與先 Gemini 後 Chirp 的順序；新增 `golden_v2_chirp_reuse.py` 可核對相同 normalized FLAC SHA、既有 Chirp completeness PASS 與提交證據後直接使用已付費成果（本次新 ASR 成本=0）；**另已具備獨立 Chirp 非同步提交／回收的 fake-provider stage 與本地聲學 QA**；尚未接正式 Speech-to-Text、bounded Standard repair Worker 與真人完整聲學 QA。 |
+| P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py`/`golden_v2_flow.py` 具備獨立差異比對與先 Gemini 後 Chirp 的順序；新增 `golden_v2_chirp_reuse.py` 可核對相同 normalized FLAC SHA、既有 Chirp completeness PASS 與提交證據後直接使用已付費成果（本次新 ASR 成本=0）；**另有 Speech V2 adapter、非同步 fake-provider stage、已提交 LRO 的有界恢復 worker；revision CAS 可在已知 operation ID 的中斷後續送 PLANNED 窗段，未知 SUBMITTING 一律凍結**；尚缺常駐付費 Worker、可稽核帳單成本、bounded Standard repair 與真人完整聲學 QA。 |
 | P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_third_transcribe.py` 實作 Vertex generateContent/VERBATIM、≤15m hard cap、選用/禁用與 mock tests；**尚未實際 Vertex smoke/worker 用量帳本**。 |
 | P5 WebCodex 最終裁決與 Golden QA | G5 | PARTIAL | `golden_v2_final_gate.py` + `golden_v2_stage_runner.py` 已可寫入離線比對/QA 報告並持久化 `NEEDS_REVIEW`；**已以 mock 連接 Chirp 字詞時碼 SRT/TXT render 和 QA 報告**，仍未串接正式 handoff/真人整堂聲學驗收。 |
 | P6 實測評分與最佳化 | G6 | PARTIAL | `app/evaluation/golden_v2_benchmark.py` 提供人工 Gold 的 CER 計算與測試；**無真實人工金標／三引擎樣本／價格比較**。 |
