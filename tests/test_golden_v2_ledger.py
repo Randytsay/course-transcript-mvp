@@ -52,6 +52,17 @@ class GoldenV2LedgerTests(unittest.TestCase):
                                reference="test", actor="test")
         self.assertEqual(self.store.status(job)["status"], "AWAITING_APPROVAL")
 
+    def test_expected_stage_refuses_to_claim_a_paid_stage(self):
+        job = self.create()
+        self.approve(job)
+        with self.assertRaisesRegex(V2Conflict, "expected adjudication"):
+            self.store.claim_next(job, worker_id="local-review",
+                                  expected_stage="adjudication")
+        state = self.store.status(job)
+        self.assertEqual(state["revision"], 1)
+        self.assertEqual(state["stages"][0]["state"], "PENDING")
+        self.assertEqual(state["status"], "QUEUED")
+
     def test_claim_is_not_reclaimed_on_restart_and_unknown_is_blocker(self):
         job = self.create()
         self.approve(job)

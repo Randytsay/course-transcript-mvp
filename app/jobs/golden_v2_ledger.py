@@ -228,10 +228,13 @@ class GoldenV2Ledger:
             raise V2Conflict("missing persisted comparison decision")
         return not bool(item["review_required"])
 
-    def claim_next(self, job_id: str, *, worker_id: str) -> dict[str, Any]:
+    def claim_next(self, job_id: str, *, worker_id: str,
+                   expected_stage: str | None = None) -> dict[str, Any]:
         """Claim only the next stage, never re-claim RUNNING or unknown work."""
         if not worker_id.strip():
             raise ValueError("worker identity required")
+        if expected_stage is not None and expected_stage not in STAGES:
+            raise ValueError("unknown expected stage")
         with self._tx() as db:
             job = self._job(db, job_id)
             if job["status"] not in {"QUEUED", "PROCESSING"}:
@@ -248,6 +251,10 @@ class GoldenV2Ledger:
                         "WHERE job_id=? AND name=?", (_now(), job_id, row["name"]),
                     )
                     continue
+                if expected_stage is not None and row["name"] != expected_stage:
+                    raise V2Conflict(
+                        f"next stage is {row['name']}, expected {expected_stage}"
+                    )
                 committed = sum((x["actual_cents"] or 0) for x in stages)
                 if committed + row["estimate_cents"] > job["approved_cents"]:
                     raise V2Conflict("reserved/actual cost exceeds approved amount")

@@ -16,6 +16,9 @@ from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.pipeline.golden_v2_stage_runner import (
     complete_adjudication_or_hold, complete_comparison, complete_evidence_bound_qa,
 )
+from app.pipeline.golden_v2_review_bundle import (
+    apply_review_bundle, inspect_review_bundle,
+)
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.subtitles.golden_v2_render import _word_evidence
 
@@ -165,6 +168,106 @@ class V2AdjudicationTests(unittest.TestCase):
         result = complete_evidence_bound_qa(
             ledger=self.ledger, claim=qa_claim, job_dir=self.job_dir)
         self.assertEqual(result["status"], "PASS")
+
+    def test_review_bundle_is_read_only_and_imports_exact_listened_candidate(self):
+        hold = complete_adjudication_or_hold(
+            ledger=self.ledger, claim=self.claim, job_dir=self.job_dir,
+            reviewer="local-reviewer", review_reference="listen-session-01",
+        )
+        before = hashlib.sha256(self.ledger.database.read_bytes()).hexdigest()
+        bundle = inspect_review_bundle(
+            database=self.ledger.database, job_id=self.job,
+            job_dir=self.job_dir, normalized_audio=self.audio,
+        )
+        self.assertEqual(hashlib.sha256(self.ledger.database.read_bytes()).hexdigest(), before)
+        self.assertEqual(bundle["whole_file_qa"], "UNVERIFIED")
+        self.assertEqual(bundle["operator_listening_attestation"], "NOT_RECORDED")
+        self.assertEqual(bundle["previous_review_evidence_sha256"], hold["evidence_sha256"])
+        self.assertEqual(len(bundle["candidate_snapshot"]), 1)
+        bundle["review_decisions"] = [{
+            "candidate_index": 0, "status": "RESOLVED", "decision": "KEEP_CHIRP",
+            "reviewed_audio_window_ms": [1900, 4100],
+            "decision_reason": "Original audio confirms the Chirp wording.",
+        }]
+        spent = self.ledger.status(self.job)["spent_cents"]
+        result = apply_review_bundle(
+            database=self.ledger.database, job_id=self.job,
+            job_dir=self.job_dir, normalized_audio=self.audio, bundle=bundle,
+            reviewer="local-reviewer", review_reference="listen-session-02",
+            confirm_listened=True,
+        )
+        self.assertEqual(result["status"], "COMPLETE")
+        self.assertEqual(result["operator_listening_attestation"], "SELF_ATTESTED")
+        self.assertFalse(result["provider_calls_started"])
+        self.assertFalse(result["drive_mutation_started"])
+        self.assertEqual(self.ledger.status(self.job)["spent_cents"], spent)
+
+    def test_review_bundle_rejects_candidate_tamper_and_stale_revision(self):
+        hold = complete_adjudication_or_hold(
+            ledger=self.ledger, claim=self.claim, job_dir=self.job_dir,
+            reviewer="local-reviewer", review_reference="listen-session-01",
+        )
+        bundle = inspect_review_bundle(
+            database=self.ledger.database, job_id=self.job,
+            job_dir=self.job_dir, normalized_audio=self.audio,
+        )
+        bundle["candidate_snapshot"][0]["evidence"]["gemini_normalized_excerpt"] = "tampered"
+        kwargs = {
+            "database": self.ledger.database, "job_id": self.job,
+            "job_dir": self.job_dir, "normalized_audio": self.audio,
+            "bundle": bundle, "reviewer": "local-reviewer",
+            "review_reference": "listen-session-02", "confirm_listened": True,
+        }
+        with self.assertRaisesRegex(V2Conflict, "candidate_snapshot"):
+            apply_review_bundle(**kwargs)
+
+        current = self.ledger.status(self.job)
+        self.ledger.resume_adjudication_review(
+            self.job, revision=current["revision"], reviewer="local-reviewer",
+            review_reference="resume-review", previous_evidence_sha=hold["evidence_sha256"],
+        )
+        clean_bundle = inspect_review_bundle(
+            database=self.ledger.database, job_id=self.job,
+            job_dir=self.job_dir, normalized_audio=self.audio,
+        )
+        self.assertNotEqual(clean_bundle["revision"], bundle["revision"])
+        with self.assertRaisesRegex(V2Conflict, "revision"):
+            apply_review_bundle(**{**kwargs, "bundle": bundle})
+
+    def test_review_bundle_correction_is_bound_to_exact_chirp_words(self):
+        complete_adjudication_or_hold(
+            ledger=self.ledger, claim=self.claim, job_dir=self.job_dir,
+            reviewer="local-reviewer", review_reference="listen-session-01",
+        )
+        bundle = inspect_review_bundle(
+            database=self.ledger.database, job_id=self.job,
+            job_dir=self.job_dir, normalized_audio=self.audio,
+        )
+        bundle["review_decisions"] = [{
+            "candidate_index": 0, "status": "RESOLVED", "decision": "CORRECT_CHIRP",
+            "reviewed_audio_window_ms": [1900, 4100],
+            "decision_reason": "The original audio clearly says 復此.",
+        }]
+        bundle["replacements"] = [{
+            "candidate_index": 0, "start_word": 0, "end_word": 1,
+            "corrected_text": "復此",
+            "chirp_word_evidence_shas": [_word_evidence(self.words[0], 0, self.sha)],
+        }]
+        result = apply_review_bundle(
+            database=self.ledger.database, job_id=self.job,
+            job_dir=self.job_dir, normalized_audio=self.audio, bundle=bundle,
+            reviewer="local-reviewer", review_reference="listen-session-02",
+            confirm_listened=True,
+        )
+        self.assertEqual(result["status"], "COMPLETE")
+        self.assertEqual(len(result["replacements"]), 1)
+        qa = complete_evidence_bound_qa(
+            ledger=GoldenV2Ledger.open_existing(self.ledger.database),
+            claim=self.ledger.claim_next(self.job, worker_id="local-qa"),
+            job_dir=self.job_dir,
+        )
+        self.assertEqual(qa["status"], "PASS")
+        self.assertIn("復此", (self.v2dir / "final.srt").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

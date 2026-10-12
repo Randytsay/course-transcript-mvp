@@ -26,6 +26,7 @@ After integrating the bounded saved-LRO recovery worker, local regression passed
 | Subtitle exports | `app/subtitles/golden_v2_render.py` | SRT/TXT from original Chirp word timestamps; output validity and text equivalence checked locally |
 | Operator entry point | `scripts/golden_v2_local_worker.py` | One pass of safe local stages, explicit provider/reviewer blockers, no cloud calls or Drive writes |
 | Verified overlap adjudication | `verify_primary_overlap_artifacts`, `finalize_reviewed_primary_overlaps`, `scripts/golden_v2_review_overlaps.py` | Fail-closed source/lineage/window/raw-audit SHA and model identity checks; manual per-seam listened-audio decisions produce separate immutable reviewed artifact and revision-CAS resume; local reviewer self-attestation cannot prove listening |
+| Comparison candidate review bundle | `app/pipeline/golden_v2_review_bundle.py`, `scripts/golden_v2_review_candidates.py` | Read-only inspect validates source, normalized audio, provider evidence, comparison SHA, candidate snapshots and revision; apply requires explicit listening attestation, checks exact Chirp word corrections, claims only `adjudication`, and performs no provider or Drive calls. Reviewer identity/listening remain self-attested; not ChatGPT-connected |
 | Owner status and approval API | `app/jobs/golden_v2_read.py`, `app/golden_v2_routes.py`, `app/jobs/golden_v2_ledger.py` | Status read uses its own token; job/repair approval has a separate write token and feature flag, configured actor, exact revision/confirmation, and default US$10 per-job ceiling. Approval writes SQLite only and never calls a provider. Disabled by default; not deployed or exposed to a browser |
 
 The previous acoustic milestone source SHA `de52cc9af27ac13d91210f0c65f4d5cde178a00b` passed **824 full unittest**, **33 focused repair/QA/worker unittest**, **27 handoff pytest**, Python compileall, and `git diff --check`. Exact-SHA [GitHub CI #38204588170](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38204588170) and [Release Compose #38204588132](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38204588132) both passed, including frontend tests/build, Docker image build, and Compose validation.
@@ -77,6 +78,24 @@ python scripts/golden_v2_status.py \
   --job-id v2_<REAL_JOB_ID>
 ```
 
+Prepare a local candidate review template, listen to the exact normalized audio, then edit `review_decisions` and any source-word-bound `replacements` before applying. The import requires the same source file and current ledger revision; it is only an operator attestation, not independent proof of listening:
+```bash
+python -m scripts.golden_v2_review_candidates inspect \
+  --database /path/to/verified-v2-ledger.db \
+  --job-id v2_<REAL_JOB_ID> \
+  --job-dir /path/to/verified-job-dir \
+  --output /path/to/local-review.json
+python -m scripts.golden_v2_review_candidates apply \
+  --database /path/to/verified-v2-ledger.db \
+  --job-id v2_<REAL_JOB_ID> \
+  --job-dir /path/to/verified-job-dir \
+  --normalized-audio /path/to/normalized.flac \
+  --bundle /path/to/local-review.json \
+  --reviewer local-operator \
+  --review-reference listening-session-id \
+  --confirm-listened
+```
+
 Test evidence is supplied by GitHub Actions for the exact commit. **Do not copy PASS from an older commit to this milestone without checking the head commit's CI.** In particular, frequent branch commits can CANCEL older in-progress CI runs, which is not the same as a test failure.
 
 ## Engineering caveats / true blockers
@@ -86,7 +105,7 @@ Test evidence is supplied by GitHub Actions for the exact commit. **Do not copy 
 3. **P2:** Local normalized-FLAC chunk extraction, SHA revalidation, GCS upload adapter and Gemini primary stage are implemented and tested with offline fake clients. **Local original-file SHA → normalized FLAC SHA → clip SHA manifests and byte-bound raw audit verification are implemented.** Independent original Drive object attestation, on-VPS bucket permissions, real Vertex pricing and end-to-end Worker wiring remain unverified. Long overlapping windows fail closed pending manual seam audio review; whole-file acoustic coverage remains unverified.
 4. **P3:** Existing PASS-approved Chirp evidence can now be imported after Gemini primary when source SHA and acoustic evidence agree. Fake-provider V2 submission/recovery and offline Standard bounded repair are connected in one durable Chirp stage: positive speech evidence, exact owner-approved ranges/cost, Standard-only submit, crash-safe re-upload, target-only word replacement, and acoustic PASS before comparison. Production Worker/scheduler, invoice-bound billing, real Speech/VAD long-audio validation and human listening remain outstanding. Raw evidence and provider timing remain authoritative; final V2 Golden QA is mandatory.
 5. **P4:** Real Vertex 3.5 Transcribe SDK/endpoint smoke and provider usage pricing are not complete. Per current Vertex documentation, diarization+vocabulary is illustrated as supported; word_timestamp+vocabulary is conservatively kept separate. Taiwanese/Hokkien specific performance is **not yet verified**; test with real gold recordings. Source: https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-transcribe
-6. **P5:** Actual ChatGPT/WebCodex audio evidence adjudication and handoff imports remain to implement; no automatic difference resolution exists.
+6. **P5:** A local source-bound candidate review/export-import path now exists, but ChatGPT/WebCodex session transport and independently authenticated reviewer evidence remain unimplemented. No automatic difference resolution exists.
 7. **P6:** No trusted benchmark dataset or actual bill yet; current CER is only a calculation library.
 8. **P7:** SQLite stage claim and provider adapter authorization are tested with mock clients; the read-only owner HTTP API/CLI and separately gated authenticated job/repair approval routes are implemented, but no endpoint or continuously running V2 Worker has been deployed and no owner UI/Skill is connected. Approvals only update the ledger; they never submit providers. Crash/outcome-unknown stays blocked until independent evidence verifier approves reconciliation.
 9. **P8:** UI and official Drive delivery hook are not integrated; final QA verdict does **not** perform publication. Existing V1 safe-publish remains intact.
