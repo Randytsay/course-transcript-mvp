@@ -7,8 +7,8 @@
 
 ## A. 已核定的產品決策
 
-1. 模型角色固定分開：Vertex `gemini-3.8-flash` 負責 full-audio primary recognition；Vertex `gemini-3.7-flash` 只負責 ASR 後的 text-only correction。保留每筆 raw response 的真實模型 ID，不得以文字校正 adapter 接收音訊。3.7 官方退役日為 2027-01-28，正式上線前須驗證並排定替代型號切換。
-2. 順序：**Gemini 3.8 Flash 音訊主稿先行 → Chirp 3 獨立辨識時間軸 → 可選 Gemini 3.5 Transcribe → Vertex Gemini 3.7 純文字校正／ChatGPT-WebCodex 裁決 → Golden SRT/TXT/QA → 安全 Drive 發布**。
+1. 模型角色固定分開：Vertex `gemini-3.8-flash` 負責 full-audio primary recognition；Vertex `gemini-3.8-flash` 也負責 ASR 後的 text-only correction，但使用獨立的文字 Adapter。保留每筆 raw response 的真實模型 ID，不得以文字校正 adapter 接收音訊。舊 3.7 預計 2027-01-28 退役，正式上線前須驗證並排定替代型號切換。
+2. 順序：**Gemini 3.8 Flash 音訊主稿先行 → Chirp 3 獨立辨識時間軸 → 可選 Gemini 3.5 Transcribe → Vertex Gemini 3.8 純文字校正／ChatGPT-WebCodex 裁決 → Golden SRT/TXT/QA → 安全 Drive 發布**。
 3. 第一輪驗證採 **`QUALITY_3WAY`**（三引擎完整比較），不以「多數決」代替真實錄音；有聲學爭議須音檔重聽或 REVIEW。
 4. Skill + VPS 任務引擎為主要操作流程；現有網站補輕量管理與差異審核，不另建一套邏輯。
 5. 首輪真實測試建議（且上限）US$10，**這是成本框架不是立即執行扣款授權**。逐批必須確認具體來源、預估費用與剩餘核准額度。
@@ -21,7 +21,7 @@
 | 階段 | 具體內容 | 核心交付 | Gate／可否由 Agent 自行完成 |
 |---|---|---|---|
 | **P0 安全盤點與隔離** | 找出 main、`feat/media-inventory-dedup`、dirty runtime worktree、實際生產 SHA、active jobs、V1 Skill 與 DB migration 狀態；備份計畫，獨立 V2 branch/worktree | inventory、branch divergence/dirty report、風險與 rollback 清單 | **G0**；唯讀探測與文件可自動做，備份要驗證 |
-| **P1 模型角色分流** | full-audio primary 使用 3.8；text-only correction 固定 Vertex 3.7；隔離 prompt/schema/config，保留 V1 歷史 evidence 與原始 model ID | 雙 adapter、mock tests、model/version usage 記錄 | **G1**；非付費自動，真 API smoke 需同意 |
+| **P1 模型角色分流** | full-audio primary 使用 3.8；text-only correction 固定 Vertex 3.8；隔離 prompt/schema/config，保留 V1 歷史 evidence 與原始 model ID | 雙 adapter、mock tests、model/version usage 記錄 | **G1**；非付費自動，真 API smoke 需同意 |
 | **P2 Gemini 3.8 音訊主稿** | 新增 audio-primary adapter、整檔上下文、必要時分段重疊與全文重組、截斷與完整性 Gate、繁中／台語／經文 prompt、不可變原稿 | `gemini-primary.txt`、raw、coverage manifest | **G2**；mock 自動，真音檔需核准 |
 | **P3 Chirp 獨立比對** | 在 P2 主稿驗證後才啟動 Chirp，同音檔獨立 ASR，沿用 Dynamic first pass / Standard repair；文本-聲學對齊、差異標記 | Chirp raw/timing、coverage、`engine-comparison.json`（雙引擎） | **G3**；mock 自動，已授權的真實聲學測試才付費 |
 | **P4 第三引擎** | 加 `gemini-3.5-transcribe` Vertex adapter，分段能力與 words/diarization/custom vocabulary 限制探測、可跳過與模型組合切換 | 第三稿與 usage、模式路由、三引擎比較 | **G4**；mock 自動，實際模型可用性需 API 核實 |
@@ -42,8 +42,8 @@
 - [ ] G0-05 現行 Golden v1.6/v1.7 分支與 main 合併方案已整理，未把 branch-only 規格稱為 production。
 
 ### G1 — 模型角色與 Vertex 設定
-- [ ] G1-01 full-audio primary 使用 `gemini-3.8-flash`；text-only correction 使用 Vertex `gemini-3.7-flash`；不得使用 Gemini 2.5 或混用 audio/text adapter。上線計畫須處理 3.7 在 2027-01-28 退役的期限。
-- [ ] G1-02 3.8 audio 與 3.7 text correction 各自使用相容的 generate config；錯參數會被測試攔下。
+- [ ] G1-01 full-audio primary 使用 `gemini-3.8-flash`；text-only correction 使用 Vertex `gemini-3.8-flash`；不得使用 Gemini 2.5 或混用 audio/text adapter。舊 3.7 已從新校正路徑移除；歷史 raw model ID 不可竄改。
+- [ ] G1-02 3.8 audio 與 3.8 text correction 各自使用相容的 generate config；錯參數會被測試攔下。
 - [ ] G1-03 可在未設定真實金鑰時用 fake provider 測試（不暗中使用實際 API）。
 - [ ] G1-04 使用 Vertex 同專案的權限/region/model probe 結果被記錄；真實 smoke 若未核准則 `NOT_RUN`。
 - [ ] G1-05 有 feature flag / rollback，且既有 V1 job resume 不受破壞。
