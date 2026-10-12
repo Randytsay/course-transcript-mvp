@@ -27,8 +27,8 @@
 | **P4 第三引擎** | 加 `gemini-3.5-transcribe` Vertex adapter，分段能力與 words/diarization/custom vocabulary 限制探測、可跳過與模型組合切換 | 第三稿與 usage、模式路由、三引擎比較 | **G4**；mock 自動，實際模型可用性需 API 核實 |
 | **P5 WebCodex 校對與 Golden QA** | 片段比對、經文與台語裁決、爭議區間重聽、word boundary 重建 SRT、TXT 同源渲染；衝突轉 review，不憑空補內容 | `adjudication.json`、`.srt`、校正版 `.txt`、Golden QA | **G5**；程式／規則可自動，模糊語音需人工裁決 |
 | **P6 比較與最佳化** | 至少用國語、國台語混用、密集經文、錄音品質較差各一組（可同一檔兼多特徵）；建立人工確認 Gold reference；評估 CER/WER、漏句、經文、時間碼、成本、速度 | 基準集、模型 benchmark、推薦模式與告警閾值 | **G6**；Agent 統計，自然語言判錯 Gold 需適量人工抽驗 |
-| **P7 對話 Skill + 任務 API** | 升級 Skill、VPS Durable Worker、恢復/重試/進度/成本/審核指令；與 UI 共用 API，避免 ChatGPT 對話中斷中止 jobs | V2 Skill、task endpoint、handoff contract、重啟測試 | **G7**；非付費自動 |
-| **P8 介面、試營運、正式切換** | 既有 UI 模式切換、並排逐字稿、疑點播放、進度、QA、費用、發布，CI/security/ARM64/exact-SHA staging→canary→rollback 演練 | 使用說明、deploy/rollback 證據、Drive sha 驗證 | **G8**；正式切換/Drive 突變需擁有人同意 |
+| **P7 對話 Skill + 任務 API** | 升級 Skill、VPS Durable Worker、恢復/重試/進度/成本/審核指令；與 UI 共用 API，避免 ChatGPT 對話中斷中止 jobs | V2 Skill、task endpoint、handoff contract、重啟測試；隔離分支已有 default-off owner status/approval console | **G7**；非付費自動 |
+| **P8 介面、試營運、正式切換** | 已有本機 responsive 六階段任務狀態頁與單筆預算核准入口；仍需音訊差異/裁決/發布功能、staging 真人驗收、CI/security/ARM64/exact-SHA staging→canary→rollback 演練 | 使用說明、部署/rollback 證據、真帳本 browser UAT、Drive SHA 驗證 | **G8**；正式切換/Drive 突變需擁有人同意 |
 
 可平行但不能偷跑：P1 的 API mock 與 P0 非破壞盤點可平行；P3 的 mock 開發可先做，但 paid Chirp **不得在 P2 主稿通過前依 V2 流程觸發**；P4 SDK probe 與 P2/P3 mock 可平行；P7 UI 設計可先構思但不能假造後端已可用。
 
@@ -142,4 +142,4 @@ Rollback path:
 3. 低可信台語／佛經語句需要人類裁決時，僅呈現特定音訊區段與三稿差異。
 4. 最終 production 部署、替換正式 SRT/TXT／回寫 Drive 前，由擁有人確認變更、驗收與回滾方案。
 
-**截至 2026-10-12 的執行範圍：**隔離 Draft PR #144 已交付 V2 provider-free pipeline、SQLite/恢復、聲學 review 與有界 Chirp repair；exact SHA `de52cc9af27ac13d91210f0c65f4d5cde178a00b` 的 [CI](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38204588170) 與 [Release Compose](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38204588132) 通過。後續隔離續作另加入本機 source-preflight CLI（snapshot→SHA→16 kHz FLAC→immutable lineage→冪等、待核准 job）與 opt-in、network-disabled、無雲端憑證的持久本機階段 worker。它們仍未接 Drive URL importer、付費 executor、reviewer handoff 或 production/VPS 執行；G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS。**沒有呼叫付費模型、沒有改 IAM/firewall、沒有寫入 Drive、沒有變更 production。** 真實付費 smoke、帳戶/IAM 變更、Drive 發布與 production cutover 仍依 G0–G8 的明確授權邊界處理。
+**截至 2026-10-12 的執行範圍：**隔離 Draft PR #144 已交付 V2 provider-free pipeline、SQLite/恢復、聲學 review、有界 Chirp repair、本機 source-preflight CLI、opt-in/network-disabled 本機 worker，以及 default-off 的 `/golden-v2` owner status/approval console source。owner 頁面可讀既有 SQLite job 並提交 revision-bound 預算核准，沒有 Drive intake、付費 executor、reviewer handoff、音訊差異播放或發布功能；UI/API 未配置與部署，VPS continuity 和 live provider 也未驗證。G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS。**沒有呼叫付費模型、沒有改 IAM/firewall、沒有寫入 Drive、沒有變更 production。** 真實付費 smoke、帳戶/IAM 變更、Drive 發布與 production cutover 仍依 G0–G8 的明確授權邊界處理。

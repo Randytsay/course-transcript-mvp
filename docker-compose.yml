@@ -291,6 +291,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    env_file:
+      - path: ${COURSE_TRANSCRIPT_V2_FRONTEND_ENV_FILE:-/dev/null}
+        required: false
     restart: unless-stopped
     stop_grace_period: 20s
     environment:

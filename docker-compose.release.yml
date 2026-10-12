@@ -183,3 +183,8 @@ services:
       args:
         VCS_REF: ${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
     image: course-transcript-frontend:${COURSE_TRANSCRIPT_RELEASE_TAG:?Set COURSE_TRANSCRIPT_RELEASE_TAG to the exact approved Git SHA}
+    env_file:
+      - path: ${COURSE_TRANSCRIPT_V2_FRONTEND_ENV_FILE:-/dev/null}
+        required: false
+    environment:
+      API_INTERNAL_BASE_URL: http://api:8000

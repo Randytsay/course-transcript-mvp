@@ -88,6 +88,14 @@ python scripts/golden_v2_source_preflight.py \
 
 The default-unenabled `golden-v2` Compose profile runs `scripts/golden_v2_worker_daemon.py` as a persistent, provider-free local-stage worker. Its container has no network and no cloud credentials. It processes only `QUEUED`/`PROCESSING` jobs with local artifacts and stops at provider, budget or human-review gates. The profile has not been enabled on VPS/production; this source-level worker is not proof of live task continuity.
 
+## Local owner status console (IMPLEMENTED IN SOURCE; DISABLED / NOT DEPLOYED)
+
+`/golden-v2` is a responsive status/approval console for jobs that already exist in the V2 SQLite ledger. It displays source SHA, mode, job/revision state, per-stage state and cost evidence. It can submit only a revision-bound budget approval for an `AWAITING_APPROVAL` job; approval updates SQLite and queues eligible local stages, but this UI does not create a source job, acquire Drive media, submit paid provider work, provide audio review, or publish files.
+
+The Next.js server routes proxy to the owner API with separate status and write bearer tokens held only in server environment variables. Keep `COURSE_TRANSCRIPT_V2_ADMIN_UI_ENABLED` unset/false by default. When intentionally configured for a private staging environment, the frontend and API tokens must match their corresponding backend tokens; status/write API feature flags remain independently disabled until that environment is reviewed. The optional frontend Compose env file defaults to `/dev/null`; it is not created by this source change. Production access is restricted to the transcript admin hostname and depends on Cloudflare Access being enforced at the edge; approval POSTs additionally require same-origin HTTPS. Do not expose the owner console through the public reviewer hostname.
+
+The UI currently cannot report real task status unless a ledger-backed owner API is configured and reachable. An unavailable ledger is shown as an unknown count, never as zero jobs. No live ledger, production token, Cloudflare policy, or deployment is implied by local browser review.
+
 ## Remaining task/handoff API (NOT IMPLEMENTED; placeholders, do not call as real endpoints)
 
 ```text
@@ -96,7 +104,7 @@ compare(job_id) -> ordered discrepancy windows, audio excerpt locators
 publish(job_id, revision, owner_approved) -> Drive safe-publish + verified SHA
 ```
 
-Use `scripts/golden_v2_source_preflight.py` for an already-downloaded local source when its read-only Drive observation is available. It records an unapproved ledger job but does not acquire the Drive source. `POST /api/v1/golden-v2/jobs` remains a separate caller-attested registration option; its approval endpoint changes an approved job to `QUEUED`. The default-offline Compose worker then advances only available local stages. Drive URL acquisition, user-facing task creation, paid provider execution, reviewer handoff and publication are not connected as a complete operation; report those gaps as `NOT_IMPLEMENTED`.
+Use `scripts/golden_v2_source_preflight.py` for an already-downloaded local source when its read-only Drive observation is available. It records an unapproved ledger job but does not acquire the Drive source. `POST /api/v1/golden-v2/jobs` remains a separate caller-attested registration option; its approval endpoint changes an approved job to `QUEUED`. The default-offline Compose worker then advances only available local stages. Drive URL acquisition, UI-based task creation, paid provider execution, reviewer handoff and publication are not connected as a complete operation; report those gaps as `NOT_IMPLEMENTED`.
 
 ## Gate and handoff discipline
 

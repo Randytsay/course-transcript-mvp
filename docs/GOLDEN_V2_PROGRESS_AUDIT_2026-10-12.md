@@ -27,6 +27,12 @@
 - source observation 僅與呼叫端提供資料及本機 bytes 比對，未由 Google Drive 認證；worker 未在 VPS 啟動。沒有付費模型呼叫、Drive/GCS 寫入、IAM/firewall 變更或 production 部署；G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS。
 - 後續 owner API registration 依 source SHA、mode 與完整 stage estimates 冪等；相同重送回傳最新 status/revision，不會建立重複待核准工作。回歸測試涵蓋核准後重送及變更估價的新 identity；最新本機完整 unittest **859 PASS**、handoff pytest **27 PASS**。此修正的 exact-SHA CI 尚待結果。
 
+### 2026-10-12 Goal continuation — responsive owner status console
+
+- 隔離分支新增 default-off `/golden-v2`：可查看既有 job 的來源 SHA、模式、ledger 狀態、六階段狀態及費用/證據；只對既有 `AWAITING_APPROVAL` job 提交 revision-bound 預算核准。它不建立 job、不讀取 Drive、不呼叫付費 provider、不發布結果。
+- Next.js same-origin server routes 將 status/write bearer token 留在伺服器，production 只允許設定的 transcript admin host 並要求 Cloudflare Access identity headers；核准 POST 要求 HTTPS same-origin。Compose optional env file 預設 `/dev/null`，功能未配置、未部署，Access edge 仍須實際阻擋未登入流量。
+- 前端 **60 tests**、production build、本機 web/offline worker Compose config 通過；release Compose config 用明確 SHA 與臨時掛載路徑完成 config-only 檢查，沒有 build image。瀏覽器檢視只有 responsive layout 和 unavailable-ledger state，沒有接真帳本或執行核准。新 commit 的 exact-SHA CI 待確認；沒有付費呼叫、Drive/GCS 寫入、IAM/firewall 變更或部署，G0–G7 PARTIAL、G8 NOT_RUN、0/9 PASS。
+
 - PR #143 **open、draft，47 files changed**，開發分支 `feat/golden-v2-gemini38-primary`，查核 HEAD `73f1a826…`。
 - GitHub Actions **CI run #38157612105**：Python **743 tests PASS**、Next.js build PASS、Docker image build PASS、Compose PASS。
 - GitHub Actions **Release Compose run #38157612126**：環境/來源驗證 PASS。**這些是離線 CI，不是 Vertex／Chirp 真實音檔或 VPS 部署驗收。**
@@ -54,8 +60,8 @@
 | P4 3.5 Transcribe | Vertex adapter、VERBATIM、≤15m 策略、選用模式/mock | 正式 SDK/模型可用性、真實 provider response 及用量、第三稿比對及 mode 路由持久整合 |
 | P5 校對/Golden QA | 比對 REVIEW、Chirp 字詞時間 SRT/TXT mock 出稿、QA 記入 SQLite、原始 SHA 受保護的 seam review CLI；新增 source/revision-bound comparison review package/import | ChatGPT/WebCodex 對話傳輸、獨立 reviewer 身分與真人整堂聲學驗收、Drive 出稿全流程 |
 | P6 實測評測 | 人工 gold CER 計算及 `scripts/golden_v2_benchmark.py` 配對引擎評測：同來源 SHA/window ID、reviewer reference、raw-evidence SHA、按類別 CER；未知成本/耗時不補零 | 真實金標樣本、三引擎相同音檔、國台語/經文/雜音、時碼/價格/耗時實測；helper 不認證 gold/reviewer/evidence 真實性 |
-| P7 Skill/任務入口 | SQLite stages、重試/未知結果限制、唯讀 CLI、預設關閉的 status API、write-token/flag 保護的 SQLite owner approval API、snapshot-first source-preflight CLI、network-disabled persistent local-stage worker profile；Skill 草案 | Drive URL acquisition、paid executor integration、VPS worker continuity evidence、owner UI/Skill handoff、staging identity |
-| P8 UI/發布 | V1 已有可借用前端/Drive publisher；分支更新模型文字 | V2 管理頁、音訊差異播放、手機適配、staging/canary、V2 Drive 回寫驗證、正式上線 |
+| P7 Skill/任務入口 | SQLite stages、重試/未知結果限制、唯讀 CLI、預設關閉的 status API、write-token/flag 保護的 SQLite owner approval API、snapshot-first source-preflight CLI、network-disabled persistent local-stage worker profile、隔離分支 default-off owner status/approval console；Skill 草案 | Drive URL acquisition、paid executor integration、VPS worker continuity evidence、ChatGPT/Skill handoff、staging identity |
+| P8 UI/發布 | 本機 responsive `/golden-v2` job/status 六階段頁與單筆預算核准 | 真帳本 browser UAT、音訊差異播放/人工裁決、staging/canary、V2 Drive 回寫驗證、正式上線 |
 
 ## 4. 剩餘工作重組成六個**完工波次**（現有 P0–P8 / G0–G8 不廢除）
 

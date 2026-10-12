@@ -11,12 +11,19 @@
 - 新增 `scripts/golden_v2_worker_daemon.py` 與隔離 Compose `golden-v2` profile。常駐程序只掃描已核准 active jobs，處理本機 compare/adjudication/QA，缺本機 artifacts、付費 stage 或真人聽音需求都回報 blocker。Compose 容器 `network_mode: none`，不掛載雲端憑證，未加入預設 profile，未在 VPS 啟動。
 - 離線驗證：完整 Python unittest **858 PASS**；`tests/test_chatgpt_handoff.py` pytest **27 PASS**；其中來源 preflight **10 PASS**、immutable evidence **6 PASS**、worker **7 PASS**、ledger **10 PASS**。Symlink regression 確認不可寫出 artifact root；兩個 CLI help、compileall、API import、local/release `golden-v2` Compose config 與 `git diff --check` PASS。使用 fake FFmpeg/ffprobe，沒有 Drive/GCS/Vertex/Chirp 呼叫或寫入。
 - exact source SHA `ab0431956052652d52bb93040f06407ccb7bb3b0` 的 [CI #38210501522](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38210501522) 與 [Release Compose #38210501398](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38210501398) 均 PASS，含 Python 3.12 tests、frontend tests/build、Docker images、Compose 與 release provenance。此為非付費 CI，不是 live provider、VPS 或 production 驗收。
-- **G7 仍 PARTIAL、G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS**：Drive URL 實際讀取、VPS 部署/持續性實測、付費 provider runner、owner UI/Skill transport、獨立真人 reviewer、Drive 發布與 production/staging 驗收仍未完成。沒有改 IAM/firewall 或 production。
+- **G7 仍 PARTIAL、G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS**：Drive URL 實際讀取、VPS 部署/持續性實測、付費 provider runner、Skill/session transport、獨立真人 reviewer、Drive 發布與 production/staging 驗收仍未完成。隔離分支已有 default-off owner console source，尚未配置或部署。沒有改 IAM/firewall 或 production。
 
 ### 2026-10-12 Goal continuation — idempotent owner registration
 
 - Owner job registration now derives a stable identity from source SHA, mode, and the complete per-stage estimate. An identical HTTP retry reuses the original job; it returns the current ledger status/revision after approval, while a changed request creates a distinct unapproved job.
 - Regression coverage verifies replay, changed-estimate identity, current-state reporting after approval, and unchanged write-token/feature-flag/cost-ceiling boundaries. Local Python 3.12 validation: full unittest **859 PASS**, handoff pytest **27 PASS**, compileall, production API import, and `git diff --check` PASS. Exact-SHA CI for this follow-up is pending; no provider, Drive/GCS, IAM/firewall, or production operation occurred.
+
+### 2026-10-12 Goal continuation — disabled owner console source implementation
+
+- Added `/golden-v2`, an owner status console for the existing SQLite ledger: source SHA, mode, current state, per-stage cost/evidence, and a six-stage progress rail. It can submit a revision-bound budget approval only for an already-registered `AWAITING_APPROVAL` job; it does not create jobs, fetch Drive files, run paid providers, or publish results.
+- Same-origin Next.js routes keep the distinct status/write bearer tokens on the server, validate the V2 job identity and exact approval payload, reject cross-origin mutations, and return `Cache-Control: no-store`. Production access is restricted to the configured transcript admin hostname and requires Cloudflare Access identity headers; approval POSTs also require same-origin HTTPS. The edge must continue enforcing Access on that hostname.
+- UI is default-off (`COURSE_TRANSCRIPT_V2_ADMIN_UI_ENABLED`); the optional Compose environment file defaults to `/dev/null`, and no tokens or V2 API flags were configured. The console/API are not deployed. Its responsive browser check covered only the unavailable-ledger state; no live ledger or approval was exercised.
+- Local verification: frontend **60 tests PASS**, Next.js production build PASS, local web/offline-worker Compose configuration PASS, and release Compose configuration PASS with an explicit SHA and temporary host paths (config parse only; no image build). Exact-SHA CI for the forthcoming commit is pending. No provider call, Drive/GCS mutation, IAM/firewall change, or production action occurred; G0–G7 remain PARTIAL, G8 NOT_RUN, 0/9 PASS.
 
 ### 2026-10-12 Goal G3 恢復工作者續報（已完成 source SHA CI）
 
@@ -82,8 +89,8 @@
 | P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_third_transcribe.py` 實作 Vertex generateContent/VERBATIM、≤15m hard cap、選用/禁用與 mock tests；**尚未實際 Vertex smoke/worker 用量帳本**。 |
 | P5 WebCodex 最終裁決與 Golden QA | G5 | PARTIAL | `golden_v2_final_gate.py` + `golden_v2_stage_runner.py` 可持久化離線比對/QA；`golden_v2_review_candidates.py` 新增來源 SHA／revision 綁定的本機人工候選 review/import，可選 KEEP_CHIRP 或以 Chirp word evidence 校正；**仍未串接 ChatGPT/WebCodex 對話傳輸、獨立 reviewer 身分或真人整堂聲學驗收**，無爭議也不等於正確。 |
 | P6 實測評分與最佳化 | G6 | PARTIAL | `app/evaluation/golden_v2_benchmark.py` + `scripts/golden_v2_benchmark.py` 新增離線配對引擎 CER 評測：強制同一來源 SHA/window IDs、人工 Gold provenance 與各引擎 raw-evidence SHA，按類別統計；成本/耗時缺值保留 unknown。**無真實人工金標／三引擎樣本／帳單比價，欄位 SHA 尚未獨立讀回驗證**。 |
-| P7 ChatGPT Skill / 持久任務 | G7 | PARTIAL | 新增 `app/jobs/golden_v2_ledger.py` SQLite task/claim/費用/來源視窗授權；`scripts/golden_v2_status.py` 唯讀查詢、`app/golden_v2_routes.py` 分離 read/write token 的 owner API（新增 source-SHA job register、job/repair approval，write 預設關閉、每 job ceiling 預設 US$10、只寫 SQLite、絕不提交 provider；呼叫端負責來源 SHA preflight）、`scripts/golden_v2_review_overlaps.py` overlap seam review 與 `scripts/golden_v2_review_candidates.py` 比對候選 review/import（操作者自述，無獨立聽音認證）；`golden_v2_primary_stage.py` 將核准 claim+FFmpeg+mock GCS/Vertex 整合、`golden_v2_stage_runner.py` 離線 QA 橋接；`skills/golden-course-transcript-v2/SKILL.md` 仍為草案。**未安裝 Skill、未接正式常駐 Worker／V2 管理 UI／付費 Vertex／Drive；owner API 未部署**。 |
-| P8 UI / 部署 / Drive 驗收 | G8 | NOT_RUN | 尚未 staging/canary/production／Drive 實測 |
+| P7 ChatGPT Skill / 持久任務 | G7 | PARTIAL | 新增 `app/jobs/golden_v2_ledger.py` SQLite task/claim/費用/來源視窗授權；`scripts/golden_v2_status.py` 唯讀查詢、`app/golden_v2_routes.py` 分離 read/write token 的 owner API（新增 source-SHA job register、job/repair approval，write 預設關閉、每 job ceiling 預設 US$10、只寫 SQLite、絕不提交 provider；呼叫端負責來源 SHA preflight）、`scripts/golden_v2_review_overlaps.py` overlap seam review 與 `scripts/golden_v2_review_candidates.py` 比對候選 review/import（操作者自述，無獨立聽音認證）；snapshot-first 本機 preflight、無網路 worker profile、隔離分支 default-off `/golden-v2` owner status/approval console。Skill 仍為草案。**未安裝 Skill、未部署 Worker/UI/API、未接付費 Vertex／Drive 或對話 handoff**。 |
+| P8 UI / 部署 / Drive 驗收 | G8 | NOT_RUN | 隔離分支有本機 default-off 任務／六階段狀態頁與單筆預算核准入口；未做真帳本 browser UAT、staging/canary/production 部署或 Drive 實測，音訊差異播放及出稿/發布整合仍未完成 |
 
 ## V2 文件提交紀錄
 
