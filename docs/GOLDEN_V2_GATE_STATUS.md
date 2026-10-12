@@ -3,6 +3,12 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-12 — Gemini 3.8 post-ASR text-correction migration
+
+- 依使用者最新指示，**新 ASR 後文字校正**從 Vertex `gemini-3.7-flash` 改用 `gemini-3.8-flash`。完整原音主稿仍使用 3.8，兩套 Adapter/Schema/Prompt **保持分離**，Chirp 3 仍提供時碼。
+- 已更新 correction 主程式／cascade／Vertex Adapter／provider route／MiniMax fallback／Worker／Proxy／前端與環境範例；移除 3.8 不建議的 `temperature`，刷新 prompt/cache 版本；3.8 文字費率依 [官方 Google Vertex 定價](https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing) 單獨入表，保留歷史 3.7 計價資料。
+- 變更仍在 Draft PR #144；**非正式環境切換，未呼叫真實付費 API，不代表 3.8 文字校正已完成真實驗收**。下列舊 3.7 續報屬當時的不可變歷史，不是最新模型選擇。
+
 ### 2026-10-12 Goal continuation — authenticated Drive source preflight
 
 - 新增 default-off `POST /api/v1/golden-v2/source-preflight` 與 `/golden-v2` 表單：只接受目前允許的 Drive 精確路徑、模式、六階段整數估價與明確確認；維持 admin-host／Cloudflare Access、same-origin HTTPS、獨立 write token、feature flag 與 job ceiling。
@@ -91,7 +97,7 @@
 | 階段 | Gate | 狀態 | 目前可核對成果／阻礙 |
 |---|---|---|---|
 | P0 基線／隔離 | G0 | PARTIAL | 2026-10-11 已確認 GitHub main/feature branch、另外隔離 V2 分支；WebCodex 的舊 source Project `.git/worktrees` 無效，正式 runtime SHA／active transcription jobs／備份尚未驗證。未 reset/clean/stash。 |
-| P1 模型角色分流 | G1 | PARTIAL | V2 full-audio primary 使用 3.8；Chirp 後純文字校正固定 Vertex Gemini 3.7。adapter/worker/API/proxy/UI defaults 與模型政策測試已分流；仍缺兩種模型的真實 Vertex smoke、權限／配額、正式部署與 rollback。Google 官方頁標示 Gemini 3.7 Flash 將於 2027-01-28 退役，上線前需核定替代型號與切換時程。 |
+| P1 模型角色分流 | G1 | PARTIAL | **最新 2026-10-12 使用者決策：Gemini 3.8 Flash 同時作為音訊主稿與 ASR 後純文字校正（各自獨立 Adapter）**。PR #144 分支已更新 correction/cascade/Vertex Router/Worker/Proxy/UI/價格與測試，保留原始 3.7 歷史 evidence；需以當前 HEAD CI 驗證，且**尚無真實 Vertex 3.8 純文字 API smoke、VPS 正式 SHA、配額／費用與 rollout 驗收，不得標為 PASS**。 |
 | P2 Gemini 3.8 音訊主稿 | G2 | PARTIAL | 新增 `golden_v2_audio_staging.py` 的本機 FFmpeg source-SHA FLAC 分段、`golden_v2_gcs_staging.py` 的經核准 GCS 不覆寫上傳，以及 `golden_v2_primary_stage.py` 串接 Gemini 3.8→SQLite，含超額預估阻擋、結果不明停機及 mock 整合測試；**已加入來源→normalized→窗段 SHA lineage 的本機證據、逐窗 raw SHA/身份驗證及人工 overlap seam 裁切後原始證據 CAS 綁定**；仍未驗證真實 Drive 來源 SHA、正式 Worker/Vertex、長音訊整堂聲學 coverage。 |
 | P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py`/`golden_v2_flow.py` 具備獨立差異比對與先 Gemini 後 Chirp 的順序；既有 Chirp PASS 可經 SHA/來源驗證重用；Speech V2 adapter、async fake-provider submit/recovery、已知 operation ID 的 revision-CAS 部分續送及未知 SUBMITTING 凍結均已離線驗證。**另新增 VAD positive-speech gate、exact-plan/cost-approved Standard bounded repair、不可變 clip/GCS identities、restart-safe re-upload、target-only merge；acoustic REVIEW 會阻擋 compare，只有 PASS 才完成 Chirp stage。**仍欠常駐付費 Worker、可稽核帳單、真實 Speech API/長音訊聲學 UAT 與真人聽音。 |
 | P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_third_transcribe.py` 實作 Vertex generateContent/VERBATIM、≤15m hard cap、選用/禁用與 mock tests；**尚未實際 Vertex smoke/worker 用量帳本**。 |
