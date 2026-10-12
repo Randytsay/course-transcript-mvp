@@ -43,9 +43,13 @@ def run_chirp_recovery_pass(
         return {"job_id": job_id, "action": "ALREADY_COMPLETE",
                 "recovered": 0, "pending": [], "unknown": [],
                 "provider_submissions": 0, "drive_mutations": 0}
-    if (stage["state"] != "RUNNING" or
-            state["status"] not in {"PROCESSING", "NEEDS_RECONCILIATION"}):
-        raise V2Conflict("Chirp recovery requires an active approved stage")
+    allowed_state = (
+        (stage["state"] == "RUNNING" and state["status"] == "PROCESSING")
+        or (stage["state"] == "OVER_BUDGET"
+            and state["status"] == "NEEDS_RECONCILIATION")
+    )
+    if not allowed_state:
+        raise V2Conflict("Chirp recovery requires an approved active or frozen stage")
 
     rows = ledger.chirp_windows(job_id)
     if not rows:
