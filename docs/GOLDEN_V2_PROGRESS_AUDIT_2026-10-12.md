@@ -29,6 +29,13 @@
 - **G0–G8 目前 0/9 過關；G0–G7 均 PARTIAL，G8 NOT_RUN。** 尚未取得任何正式 V2 三引擎真實音檔 Golden QA 通過證據。
 - 沒有已驗證的真實付費模型呼叫、正式 Drive V2 寫回或 production cutover 證據；截至此盤點不宣稱曾發生這些操作。
 
+### 2026-10-12 隔離續作：模型政策與 owner 核准入口
+
+- 在分支 `codex/golden-v2-goal-completion` 提交 `2c3243ad976b3f1c45ca16a0c4cedc5392e50436`：V2 ASR 後純文字校正使用 Vertex Gemini 3.7；通用 Vertex 文字生成保留獨立的 `VERTEX_MODEL` 設定，沒有 Gemini 2.5 呼叫路徑。Google 官方標示 Gemini 3.7 Flash 將於 2027-01-28 退役，正式上線計畫需預先驗證替代型號。
+- 新增獨立 write token/feature flag 的 job 與 Chirp repair 核准 API：需核准精確 revision、費用、reference 和明確確認；每 job 預設 US$10 ceiling；只寫既有 SQLite ledger，不會啟動 provider。API 預設關閉、未部署，沒有 browser token 或 worker integration。
+- 本地 Python 3.12 驗證 **831 unittest／27 handoff pytest／54 frontend tests**、Next.js production build、compileall 及 `git diff --check` 全數通過。精確來源 SHA `2c3243ad976b3f1c45ca16a0c4cedc5392e50436` 的 [GitHub CI #38206197000](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38206197000) 與 [Release Compose #38206197011](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38206197011) 均 PASS；以上皆非付費模型或 production UAT。
+- Gate 維持 **G0–G7 PARTIAL、G8 NOT_RUN、0/9 PASS**；沒有 live provider 呼叫、IAM/網路變更、Drive/GCS 寫入或部署。仍缺真實模型/帳單驗證、持久 Worker、聽音及人工 Gold、review UI/Skill、Drive 和 staging 驗收。
+
 ## 3. P0–P8 真實進度和缺口
 
 | 原階段 | 已實作／可證 | 缺口／不能宣告完成 |

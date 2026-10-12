@@ -34,6 +34,13 @@
 - Fake Speech/GCS integration covers base recognition → positive-speech proposal → exact cost approval → Standard submission → restart-safe clip upload → target-only merge → acoustic PASS → compare unlock. In exact HEAD `de52cc9af27ac13d91210f0c65f4d5cde178a00b`, GitHub [CI #38204588170](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38204588170) and [Release Compose #38204588132](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38204588132) both PASS, including all 824 Python tests, frontend tests/build, Docker image build and Compose validation. All cloud-shaped calls were fake; no paid API call, real GCS/Drive write or production change occurred.
 - **G3 remains PARTIAL**: no live Speech request or real long-course/VAD UAT; no independent invoice reconciliation or deployed submission/recovery scheduler; the separately gated SQLite-only owner approval API is implemented but disabled and undeployed; review UI/API, 真人聽音及完整雙引擎驗收仍未完成. G0–G7 remain PARTIAL, G8 NOT_RUN, 0/9 PASS.
 
+### 2026-10-12 模型政策與 owner 核准入口（exact-SHA CI PASS）
+
+- 精確來源 SHA `2c3243ad976b3f1c45ca16a0c4cedc5392e50436` 已推到隔離分支 `codex/golden-v2-goal-completion`，PR #144 維持 Draft。V2 ASR 後純文字校正使用 Vertex Gemini 3.7；通用 Vertex 文字生成保留獨立設定；測試確認不配置 Gemini 2.5。
+- `app/golden_v2_routes.py` 新增分開 token/flag 的 job 與 repair approval；強制 revision、明確確認及每 job 預設 US$10 上限，僅更新既有 SQLite ledger，無 provider 呼叫。API 預設關閉且未部署。
+- 本機 Python 3.12：**831 unittest、27 handoff pytest**；前端 **54 tests**、Next production build、compileall、`git diff --check` PASS。精確來源 [GitHub CI #38206197000](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38206197000) 與 [Release Compose #38206197011](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38206197011) 均 PASS，涵蓋 Python、前端、Docker image、Compose 與 release provenance。
+- Google 官方頁標示 Gemini 3.7 Flash 將於 **2027-01-28** 退役，正式上線前須驗證替代型號及切換；沒有付費模型呼叫、GCS/Drive 寫入、IAM/firewall 變更或 production 部署。G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS。
+
 規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[2026-10-12 實況盤點／六階段完工計畫](GOLDEN_V2_PROGRESS_AUDIT_2026-10-12.md)
 
 > 此文件是會隨 PR/驗收更新的狀態登記簿。**只有提交機器／人工可核對的 evidence link、commit、測試報告與操作者資訊後，才能把某一 Gate 設為 PASS。** 「文件已提交」不代表其他工程 Gate 已 PASS。禁止憑對話主觀印象標已完成。
