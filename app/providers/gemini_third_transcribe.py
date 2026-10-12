@@ -18,6 +18,7 @@ from app.providers.gemini_primary_audio import (
     _reserve_paid_window,
     _load_completed_window,
     _paid_window_slot_digest,
+    _reject_legacy_paid_slot,
     _finish_reason,
     _usage,
     validate_staged_windows,
@@ -79,6 +80,7 @@ def run_third_window(
     record_path = job_dir / "gemini-third" / f"{digest}.json"
     if record_path.exists():
         return _load_completed_window(record_path, identity)
+    _reject_legacy_paid_slot(record_path, identity)
 
     if part_factory is None or config_factory is None:
         from google.genai import types
