@@ -103,6 +103,24 @@ class PaidWindowBarrierTests(unittest.TestCase):
                             self._run(kind, args)
                         self.assertEqual(api.call_count, 1)
 
+    def test_same_audio_cannot_be_rebilled_by_changing_prompt_or_options(self):
+        for kind in ("primary", "third"):
+            with self.subTest(kind=kind), TemporaryDirectory() as tmp:
+                api = Mock(return_value=fake_response())
+                client = SimpleNamespace(models=SimpleNamespace(generate_content=api))
+                args = self._args(kind, root=Path(tmp), client=client)
+                first = self._run(kind, args)
+                self.assertEqual(first["status"], "COMPLETE")
+                changed = dict(args)
+                if kind == "primary":
+                    changed["reference_terms"] = "同一錄音不同的經文提示"
+                else:
+                    changed["custom_vocabulary"] = ["文殊師利"]
+                with self.assertRaises(PrimaryTranscriptError):
+                    self._run(kind, changed)
+                self.assertEqual(api.call_count, 1)
+                self.assertEqual(len(list(Path(tmp).rglob("*.json"))), 1)
+
     def test_approval_rejection_creates_no_barrier(self):
         for kind in ("primary", "third"):
             with self.subTest(kind=kind), TemporaryDirectory() as tmp:
