@@ -6,14 +6,14 @@ import unittest
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.pipeline.golden_v2_chirp_recovery_worker import run_chirp_recovery_pass
 from app.pipeline.golden_v2_chirp_stage import submit_planned_chirp
-from tests.test_golden_v2_chirp_stage import ChirpStageIntegrationTests
+from tests import test_golden_v2_chirp_stage as chirp_fixtures
 
 
 class ChirpRecoveryWorkerTests(unittest.TestCase):
     def setUp(self):
         # Reuse the real short FLAC / SQLite / fake provider fixture without
         # inheriting its tests, so these cover the production worker boundary.
-        self.h = ChirpStageIntegrationTests(methodName="test_restart_recovers_exact_operations_and_timing")
+        self.h = chirp_fixtures.ChirpStageIntegrationTests(methodName="test_restart_recovers_exact_operations_and_timing")
         self.h.setUp()
         self.addCleanup(self.h.tearDown)
 
@@ -44,6 +44,26 @@ class ChirpRecoveryWorkerTests(unittest.TestCase):
         self.assertEqual(second["word_count"], 2)
         self.assertEqual(second["acoustic_gate"], "NOT_RUN")
         self.assertEqual(self.recover()["action"], "ALREADY_COMPLETE")
+        self.assertEqual(len(self.h.speech.calls), 2)
+
+    def test_pending_operations_also_count_against_poll_limit(self):
+        self.h.plan()
+        rows = submit_planned_chirp(
+            ledger=self.h.ledger, claim=self.h.claim, gateway=self.h.gateway)
+        seen = []
+        original_get = self.h.speech.get_operation
+
+        def observed_get(name):
+            seen.append(name)
+            return original_get(name)
+
+        self.h.speech.transport.operations_client.get_operation = observed_get
+        outcome = self.recover(limit=1)
+        self.assertEqual(outcome["action"], "WAITING_FOR_EXISTING_OPERATIONS")
+        self.assertEqual(outcome["inspected"], 1)
+        self.assertEqual(outcome["recovered"], 0)
+        self.assertEqual(len(outcome["pending"]), 2)
+        self.assertEqual(seen, [rows[0]["operation_name"]])
         self.assertEqual(len(self.h.speech.calls), 2)
 
     def test_uncertain_submission_never_retried_by_recovery(self):
