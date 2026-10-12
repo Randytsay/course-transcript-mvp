@@ -464,6 +464,25 @@ class TestPricing(unittest.TestCase):
                                        on=date(2026, 8, 23))
         assert est["estimated_cost_usd"] == 0.375
 
+    def test_vertex_prices_are_model_identified_and_unknown_models_fail_closed(self):
+        live = estimate_correction_cost(
+            provider="vertex", model="gemini-3.8-flash", mode="REALTIME",
+            input_tokens=1_000_000, output_tokens=1_000_000, on=date(2026, 10, 12),
+        )
+        assert live["known"] is True
+        assert live["source"] == "google-official-gemini-3.8-global"
+        assert live["estimated_cost_usd"] == 4.5
+        historical = vertex_price(
+            mode="REALTIME", on=date(2026, 10, 12), model="gemini-3.7-flash",
+        )
+        assert historical["known"] is True  # historical invoices remain interpretable
+        unknown = estimate_correction_cost(
+            provider="vertex", model="not-real", mode="REALTIME",
+            input_tokens=1000, output_tokens=2000, on=date(2026, 10, 12),
+        )
+        assert unknown["known"] is False
+        assert unknown["estimated_cost_usd"] is None
+
     def test_nonglobal_region_unknown_safely(self):
         p = vertex_price(mode="REALTIME", on=date(2026, 8, 23), location="asia-east1")
         assert p["known"] is False and p["input"] is None
