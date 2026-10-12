@@ -65,7 +65,7 @@ class ModelConfigurationTests(unittest.TestCase):
         self.assertNotIn("model: vertex_ai/gemini-3.7-flash", content)
         self.assertEqual(content.count("model: vertex_ai/gemini-3.8-flash"), 3)
 
-    def test_gemini38_is_not_used_by_generic_text_generation(self) -> None:
+    def test_generic_text_generation_does_not_reference_legacy_37(self) -> None:
         for relative in GENERIC_VERTEX_TEXT_FILES:
             with self.subTest(path=relative):
                 content = (ROOT / relative).read_text(encoding="utf-8")
