@@ -3,6 +3,12 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-12 — Paid-stage readiness preflight (development, no paid executor)
+
+- 新增 `app/pipeline/golden_v2_paid_readiness.py` 及直接可執行的唯讀 CLI `scripts/golden_v2_paid_readiness.py --database ... --artifact-root ... --job-id v2p_...`。只接受已經過 Drive source-preflight 登錄並有有效預算核准的 V2 job；驗證穩定 job registration SHA、source original/FLAC SHA、lineage manifest、Drive observation、本機費用上限與階段順序。
+- 任務未核准、SHA／Drive 版本證據與註冊紀錄不一致、source-preflight 缺失、目錄 symlink、已有 Gemini 付費 receipt／異常 claim 都回傳明確 blocker。使用資料庫 `mode=ro`，**不 claim stage、不啟動模型、不上傳 GCS／Drive、不重新送出已付費視窗**；通過本地檢查依然輸出 `provider_calls_allowed=false`，必須另外完成真實 provider capability、計價與 Drive revision 驗證。
+- 已在無網路容器執行 fake-provider／來源寫入器整合與反向案例；**GitHub exact-SHA CI、真實 Vertex/Chirp/GCS/Drive、付費 Worker executor 尚待驗證，G0–G7 PARTIAL、G8 NOT_RUN，正式 Gate 0/9 PASS**。不可從此 CLI 推論真實付費就緒。
+
 ### 2026-10-12 — Follow-up safety hardening (verification pending)
 - Golden 3.8 primary / 3.5 third audio paid-call reservations now fsync parent directories after `O_EXCL` creation and after atomic audit-record replacement. A directory sync failure prevents calling a paid provider; barriers are never automatically discarded.
 - Owner approvals now guard against *cross-job* reuse of an already approved normalized audio SHA. A second job for the same source requires separate explicit `repeat_source_confirmed=true` approval, with an owner UI warning and fresh checkbox confirmation. This is not a cross-job distributed lock: reprocessing remains possible after explicit approval.
