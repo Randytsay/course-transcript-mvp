@@ -142,6 +142,41 @@ class GeminiStageIntegrationTests(unittest.TestCase):
         with self.assertRaises(V2Conflict):
             self.ledger.claim_next(self.job, worker_id="next")
 
+    def test_first_window_known_overrun_blocks_second_paid_request(self):
+        with self.assertRaises(V2Conflict):
+            self.execute(
+                max_window_seconds=2.5, overlap_seconds=0.5,
+                cost_accountant=lambda completed: 9 * len(completed),
+            )
+        self.assertEqual(self.vertex.models.generate_content.call_count, 1)
+        state = self.ledger.status(self.job)
+        stage = state["stages"][0]
+        self.assertEqual(stage["state"], "OUTCOME_UNKNOWN")
+        self.assertEqual(stage["actual_cents"], 9)
+        self.assertEqual(state["status"], "NEEDS_RECONCILIATION")
+        report = self.dir / "job/golden-v2/gemini_primary-window-cost-hold.json"
+        self.assertEqual(json.loads(report.read_text())["reason"], "KNOWN_OVERRUN")
+        with self.assertRaises(V2Conflict):
+            self.ledger.claim_next(self.job, worker_id="no-more-spend")
+
+    def test_unknown_first_window_billing_blocks_remaining_requests(self):
+        def cannot_reconcile(completed):
+            raise ValueError("provider usage data absent")
+
+        with self.assertRaises(V2Conflict):
+            self.execute(
+                max_window_seconds=2.5, overlap_seconds=0.5,
+                cost_accountant=cannot_reconcile,
+            )
+        self.assertEqual(self.vertex.models.generate_content.call_count, 1)
+        stage = self.ledger.status(self.job)["stages"][0]
+        self.assertEqual(stage["state"], "OUTCOME_UNKNOWN")
+        report = self.dir / "job/golden-v2/gemini_primary-window-cost-hold.json"
+        data = json.loads(report.read_text())
+        self.assertEqual(data["reason"], "UNPRICED_USAGE")
+        self.assertEqual(data["completed_window_count"], 1)
+        self.assertIsNone(data["observed_cents"])
+
     def test_review_inspection_checks_audio_raw_and_existing_immutable_report(self):
         self.execute(max_window_seconds=2.5, overlap_seconds=0.5)
         params = dict(database=self.dir / "jobs.db", job_id=self.job,
