@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import sqlite3
 import subprocess
 import sys
 from tempfile import TemporaryDirectory
@@ -177,6 +178,30 @@ class PaidReadinessTests(unittest.TestCase):
         folder.mkdir()
         (folder / "legacy.json").write_text('{"status":"REQUEST_STARTED"}')
         self.assertIn("EXISTING_PAID_RECEIPTS_RECONCILE", self.inspect()["blockers"])
+
+    def test_ambiguous_paid_outcome_holds_stage(self):
+        self.approve()
+        folder = self.dir / "golden-v2"
+        folder.mkdir()
+        (folder / "primary-ambiguous.json").write_text('{"unknown":true}')
+        self.assertIn("PAID_OUTCOME_HOLD_RECONCILE", self.inspect()["blockers"])
+
+    def test_chirp_operation_identity_requires_reconciliation(self):
+        self.approve()
+        claim = self.ledger.claim_next(self.job, worker_id="mock-primary")
+        self.ledger.complete(claim, evidence_sha="e" * 64, actual_cents=0)
+        with sqlite3.connect(self.db) as db:
+            db.execute(
+                "INSERT INTO v2_chirp_operations("
+                "job_id,window_id,source_sha,clip_sha,gcs_uri,start_ms,"
+                "end_ms,status,request_id,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (self.job, "w0", self.source_sha, "c" * 64,
+                 "gs://mock/w0", 0, 1000, "SUBMITTING",
+                 "immutable-request-1", "2026-10-12T00:00:00+00:00"),
+            )
+        report = self.inspect()
+        self.assertEqual(report["next_stage"], "chirp_independent")
+        self.assertIn("EXISTING_CHIRP_OPERATION_RECONCILE", report["blockers"])
 
     def test_cannot_expand_cost_ceiling_or_change_source(self):
         self.approve()

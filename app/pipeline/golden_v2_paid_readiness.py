@@ -108,6 +108,11 @@ def inspect_paid_readiness(
                     first = next((row for row in rows if row["state"]
                                   not in {"COMPLETE", "SKIPPED"}), None)
                     stage = first["name"] if first else None
+                    if stage == "chirp_independent" and db.execute(
+                        "SELECT 1 FROM v2_chirp_operations WHERE job_id=? LIMIT 1",
+                        (job_id,),
+                    ).fetchone():
+                        blockers.append("EXISTING_CHIRP_OPERATION_RECONCILE")
                     if job["status"] not in {"QUEUED", "PROCESSING"}:
                         blockers.append("OWNER_APPROVAL_NOT_ACTIVE")
                     if (type(approved_cents) is not int
@@ -180,6 +185,14 @@ def inspect_paid_readiness(
 
                             receipt_dirname = _RECEIPTS.get(stage)
                             if receipt_dirname:
+                                hold = "primary" if stage == "gemini_primary" else "third"
+                                for filename in (
+                                    f"{hold}-ambiguous.json",
+                                    f"{stage}-window-cost-hold.json",
+                                ):
+                                    marker = job_dir / "golden-v2" / filename
+                                    if marker.exists() or marker.is_symlink():
+                                        blockers.append("PAID_OUTCOME_HOLD_RECONCILE")
                                 folder = job_dir / receipt_dirname
                                 if folder.is_symlink() or (folder.exists() and not folder.is_dir()):
                                     blockers.append("PAID_RECEIPT_DIRECTORY_UNSAFE")
