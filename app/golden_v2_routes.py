@@ -22,6 +22,7 @@ from app.pipeline.golden_v2_drive_intake import (
     SourceIntakeBusyError,
     intake_drive_source,
 )
+from app.pipeline.golden_v2_paid_dispatch import preview_paid_dispatch
 
 router = APIRouter(prefix="/api/v1/golden-v2", tags=["golden-v2-owner"])
 
@@ -139,6 +140,30 @@ def job_status(job_id: str, authorization: str | None = Header(default=None)) ->
     if result is None:
         raise HTTPException(status_code=404, detail="Golden V2 job not found")
     return result
+
+
+@router.get("/jobs/{job_id}/paid-preview")
+def job_paid_preview(
+    job_id: str, authorization: str | None = Header(default=None),
+) -> dict:
+    """Owner-only read-only trial-budget review, NOT paid authorization."""
+    database = _authorized_database(authorization)
+    try:
+        cap = int(os.environ.get("COURSE_TRANSCRIPT_V2_TRIAL_CAP_CENTS", "1000"))
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="V2 trial cap is not configured") from exc
+    artifact_root = Path(os.environ.get(
+        "COURSE_TRANSCRIPT_V2_ARTIFACT_ROOT", str(database.parent),
+    ))
+    try:
+        return preview_paid_dispatch(
+            database=database, artifact_root=artifact_root,
+            job_id=job_id, aggregate_trial_cap_cents=cap,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid Golden V2 preview request") from exc
+    except sqlite3.Error as exc:
+        raise _read_error(exc) from exc
 
 
 @router.post("/jobs", status_code=201)

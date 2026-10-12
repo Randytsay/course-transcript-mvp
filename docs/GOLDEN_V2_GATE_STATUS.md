@@ -3,6 +3,13 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-12 — Atomic paid dispatch CAS and aggregate trial preview (not live executor)
+
+- 新增唯讀 `app/pipeline/golden_v2_paid_dispatch.py`、`scripts/golden_v2_paid_dispatch.py` 與 owner-token-only `GET /api/v1/golden-v2/jobs/{job_id}/paid-preview`（沿用 default-off V2 status API）。預覽輸出任務 revision、來源 SHA、下一付費模型、逐階段估價、整批已核准任務的保守總曝險與版本指紋；不外洩 approval reference 原文、claim token 或憑證。
+- `GoldenV2Ledger.claim_next` 新增可選的 `expected_revision`、`expected_source_sha`、`aggregate_cap_cents`，在同一個 `BEGIN IMMEDIATE` SQLite 原子交易比對。使用整個 V2 Ledger 內**已核准所有任務**的實際已結算金額＋未結算階段保守預算；超過共用試驗上限、有其他 RUNNING／OUTCOME_UNKNOWN／OVER_BUDGET 付費階段均禁止透過此受控入口 claim。維持既有呼叫者的相容性，因此**未呼叫新增參數的舊入口並不能宣稱已套用全域上限**。
+- 預覽指紋只是版本識別，**不是簽章、授權或金額保證**。成功預覽仍固定 `provider_calls_allowed=false`，實際付費前須由獨立可信實作確認即時 Drive 版本、模型可用性、價格與擁有者的逐來源核准。沒有接上可連網的付費 V2 Runner，也不代表 Provider 費用已由 Google 帳單驗證。
+- 隔離 VPS 無網路 Docker tests：Ledger/Preview/Owner API、預算越界、雙 Worker revision-CAS、來源證據與未結清付費請求的 **50 項相關測試通過**；完整 exact-SHA GitHub CI 待本輪提交後核對。G0–G7 PARTIAL、G8 NOT_RUN、正式 Gate 0/9 PASS。V1 production 與 Golden V2 隔離 canary 不在本次部署範圍。
+
 ### 2026-10-12 — Paid-stage readiness preflight (development, no paid executor)
 
 - 新增 `app/pipeline/golden_v2_paid_readiness.py` 及直接可執行的唯讀 CLI `scripts/golden_v2_paid_readiness.py --database ... --artifact-root ... --job-id v2p_...`。只接受已經過 Drive source-preflight 登錄並有有效預算核准的 V2 job；驗證穩定 job registration SHA、source original/FLAC SHA、lineage manifest、Drive observation、本機費用上限與階段順序。

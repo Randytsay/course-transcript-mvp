@@ -13,6 +13,35 @@
 - Do not start a real Chirp, Gemini, or Drive mutation test without explicit approval for the exact source and estimated cost.
 - Do not delete provider manifests, raw responses, operation names, usage evidence, or Drive transaction state during recovery or rollback.
 
+## Golden V2 paid-dispatch review (development branch only)
+
+Before any proposed paid-runner integration, run the **read-only** preview:
+
+```bash
+python scripts/golden_v2_paid_dispatch.py \
+  --database /app/data/golden-v2/ledger.sqlite \
+  --artifact-root /app/data/golden-v2 \
+  --job-id v2p_<exact-preflight-job-id> \
+  --trial-cap-cents 1000
+```
+
+The same report can be retrieved by an authenticated owner from the default-off
+`GET /api/v1/golden-v2/jobs/{job_id}/paid-preview`; it requires the read-only
+V2 owner token and is **not** a paid execution API. Exit 0 only means the
+local source/cost review found no blockers; it always returns
+`provider_calls_allowed=false`. Exit 2 is a blocker requiring reconciliation.
+The preview SHA is **not a cryptographic approval** and does not prove live
+Drive freshness, actual Vertex/Chirp availability, pricing, IAM or billing.
+
+An eventual separately authorized executor must independently recheck these
+live dependencies and call `GoldenV2Ledger.claim_next` with the approved
+exact `expected_stage`, `expected_revision`, `expected_source_sha` and
+`aggregate_cap_cents`, before using the audit-first paid provider adapters.
+The aggregate cap is only applied to callers explicitly providing it; older
+worker paths are not automatically upgraded by this development-only change.
+Never connect this route to provider requests or deploy to production without
+the distinct user-authorized live paid smoke and release gates.
+
 ## Production entry points
 
 - API: `app.api_hardened:app`

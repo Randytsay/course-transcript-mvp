@@ -78,6 +78,91 @@ class GoldenV2LedgerTests(unittest.TestCase):
         self.assertEqual(state["stages"][0]["state"], "PENDING")
         self.assertEqual(state["status"], "QUEUED")
 
+    def test_paid_claim_uses_revision_source_and_aggregate_cas(self):
+        job = self.create()
+        self.approve(job)
+        original = self.store.status(job)
+        revision = original["revision"]
+        with self.assertRaisesRegex(V2Conflict, "revision changed"):
+            self.store.claim_next(
+                job, worker_id="A", expected_stage="gemini_primary",
+                expected_revision=revision - 1,
+                expected_source_sha="a" * 64, aggregate_cap_cents=1000,
+            )
+        with self.assertRaisesRegex(V2Conflict, "source SHA changed"):
+            self.store.claim_next(
+                job, worker_id="A", expected_stage="gemini_primary",
+                expected_revision=revision,
+                expected_source_sha="b" * 64, aggregate_cap_cents=1000,
+            )
+        with self.assertRaisesRegex(V2Conflict, "aggregate approved V2 exposure"):
+            self.store.claim_next(
+                job, worker_id="A", expected_stage="gemini_primary",
+                expected_revision=revision,
+                expected_source_sha="a" * 64, aggregate_cap_cents=59,
+            )
+        self.assertEqual(self.store.status(job)["revision"], revision)
+        self.assertEqual(self.store.status(job)["stages"][0]["state"], "PENDING")
+        claim = self.store.claim_next(
+            job, worker_id="A", expected_stage="gemini_primary",
+            expected_revision=revision, expected_source_sha="a" * 64,
+            aggregate_cap_cents=60,
+        )
+        self.assertEqual(claim["stage"], "gemini_primary")
+        with self.assertRaisesRegex(V2Conflict, "revision changed"):
+            self.store.claim_next(
+                job, worker_id="B", expected_stage="gemini_primary",
+                expected_revision=revision, expected_source_sha="a" * 64,
+                aggregate_cap_cents=60,
+            )
+
+    def test_aggregate_trial_cap_is_shared_across_independent_approvals(self):
+        first = self.create()
+        self.approve(first)
+        second = self.create()
+        self.store.approve(
+            second, revision=0, approved_cents=60,
+            reference="repeat-owner-approved-test", actor="test-owner",
+            repeat_source_confirmed=True,
+        )
+        with self.assertRaisesRegex(V2Conflict, "aggregate approved V2 exposure"):
+            self.store.claim_next(
+                first, worker_id="A", expected_stage="gemini_primary",
+                expected_revision=1, aggregate_cap_cents=100,
+            )
+        claim = self.store.claim_next(
+            first, worker_id="A", expected_stage="gemini_primary",
+            expected_revision=1, aggregate_cap_cents=120,
+        )
+        self.assertEqual(claim["stage"], "gemini_primary")
+        self.assertEqual(self.store.status(second)["stages"][0]["state"], "PENDING")
+
+    def test_unreconciled_paid_stage_blocks_other_jobs_claim(self):
+        first = self.create()
+        second = self.create()
+        self.approve(first)
+        self.store.approve(
+            second, revision=0, approved_cents=60,
+            reference="reviewed-second-test", actor="test-owner",
+            repeat_source_confirmed=True,
+        )
+        claim = self.store.claim_next(
+            first, worker_id="A", expected_stage="gemini_primary",
+            expected_revision=1, aggregate_cap_cents=1000,
+        )
+        with self.assertRaisesRegex(V2Conflict, "unreconciled global paid stage"):
+            self.store.claim_next(
+                second, worker_id="B", expected_stage="gemini_primary",
+                expected_revision=1, aggregate_cap_cents=1000,
+            )
+        self.store.mark_outcome_unknown(claim)
+        with self.assertRaisesRegex(V2Conflict, "unreconciled global paid stage"):
+            self.store.claim_next(
+                second, worker_id="B", expected_stage="gemini_primary",
+                expected_revision=1, aggregate_cap_cents=1000,
+            )
+        self.assertEqual(self.store.status(second)["stages"][0]["state"], "PENDING")
+
     def test_claim_is_not_reclaimed_on_restart_and_unknown_is_blocker(self):
         job = self.create()
         self.approve(job)

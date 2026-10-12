@@ -41,6 +41,30 @@ def _digest(payload: Any) -> str:
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def approved_trial_exposure(db: sqlite3.Connection) -> int:
+    """Lifetime observed charges plus conservative remaining approved exposure.
+
+    Must run inside the caller's active SQLite transaction. For a pending or
+    uncertain paid stage reserve at least its full estimate; for completed
+    stages count the independently recorded actual, including overruns.
+    This is a local test-cap gate, not a replacement for provider billing.
+    """
+    total = 0
+    for item in db.execute(
+        "SELECT s.state,s.estimate_cents,s.actual_cents "
+        "FROM v2_stages s JOIN v2_jobs j ON s.job_id=j.id "
+        "WHERE j.approved_cents IS NOT NULL"
+    ):
+        estimate = int(item[1])
+        actual = item[2]
+        total += (
+            int(actual) if item[0] in {"COMPLETE", "SKIPPED"}
+            and actual is not None else
+            max(estimate, int(actual) if actual is not None else 0)
+        )
+    return total
+
+
 class GoldenV2Ledger:
     def __init__(self, database: Path):
         self.database = Path(database)
@@ -325,14 +349,35 @@ class GoldenV2Ledger:
         return not bool(item["review_required"])
 
     def claim_next(self, job_id: str, *, worker_id: str,
-                   expected_stage: str | None = None) -> dict[str, Any]:
+                   expected_stage: str | None = None,
+                   expected_revision: int | None = None,
+                   expected_source_sha: str | None = None,
+                   aggregate_cap_cents: int | None = None) -> dict[str, Any]:
         """Claim only the next stage, never re-claim RUNNING or unknown work."""
         if not worker_id.strip():
             raise ValueError("worker identity required")
         if expected_stage is not None and expected_stage not in STAGES:
             raise ValueError("unknown expected stage")
+        if expected_revision is not None and (
+                type(expected_revision) is not int or expected_revision < 0):
+            raise ValueError("invalid expected job revision")
+        if expected_source_sha is not None and (
+                not isinstance(expected_source_sha, str)
+                or len(expected_source_sha) != 64
+                or any(c not in "0123456789abcdef" for c in expected_source_sha)):
+            raise ValueError("invalid expected normalized source SHA")
+        if aggregate_cap_cents is not None and (
+                type(aggregate_cap_cents) is not int
+                or not 1 <= aggregate_cap_cents <= 100000):
+            raise ValueError("invalid aggregate budget cap")
         with self._tx() as db:
             job = self._job(db, job_id)
+            if (expected_revision is not None
+                    and job["revision"] != expected_revision):
+                raise V2Conflict("paid stage job revision changed since readiness review")
+            if (expected_source_sha is not None
+                    and job["source_sha"] != expected_source_sha):
+                raise V2Conflict("paid stage source SHA changed since readiness review")
             if job["status"] not in {"QUEUED", "PROCESSING"}:
                 raise V2Conflict("job not authorized/processing")
             stages = self._stages(db, job_id)
@@ -351,6 +396,27 @@ class GoldenV2Ledger:
                     raise V2Conflict(
                         f"next stage is {row['name']}, expected {expected_stage}"
                     )
+                if aggregate_cap_cents is not None and row["name"] in {
+                        "gemini_primary", "chirp_independent", "third_optional"}:
+                    # Serialize the aggregate decision together with this
+                    # stage claim under BEGIN IMMEDIATE. Preserve already
+                    # observed charges (even when above estimates), and
+                    # conservatively reserve every unfinished approved stage.
+                    if db.execute(
+                        "SELECT 1 FROM v2_stages s "
+                        "JOIN v2_jobs j ON s.job_id=j.id "
+                        "WHERE j.approved_cents IS NOT NULL "
+                        "AND s.name IN ('gemini_primary','chirp_independent','third_optional') "
+                        "AND s.state IN ('RUNNING','OUTCOME_UNKNOWN','OVER_BUDGET') "
+                        "LIMIT 1"
+                    ).fetchone():
+                        raise V2Conflict(
+                            "unreconciled global paid stage blocks further trial charges"
+                        )
+                    if approved_trial_exposure(db) > aggregate_cap_cents:
+                        raise V2Conflict(
+                            "aggregate approved V2 exposure exceeds trial cap"
+                        )
                 committed = sum((x["actual_cents"] or 0) for x in stages)
                 if committed + row["estimate_cents"] > job["approved_cents"]:
                     raise V2Conflict("reserved/actual cost exceeds approved amount")

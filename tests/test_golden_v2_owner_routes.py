@@ -81,6 +81,27 @@ class OwnerApiTests(unittest.TestCase):
         self.assertEqual(self.client.post("/api/v1/golden-v2/jobs", headers=self.headers,
                                          json=create_body).status_code, 404)
 
+    def test_paid_preview_is_owner_only_read_only_and_never_authorizes(self):
+        url = f"/api/v1/golden-v2/jobs/{self.job_id}/paid-preview"
+        before = hashlib.sha256(self.db.read_bytes()).digest()
+        self.assertEqual(self.client.get(url).status_code, 401)
+        self.assertEqual(self.client.get(url, headers=self.write_headers).status_code, 401)
+        response = self.client.get(url, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        result = response.json()
+        self.assertFalse(result["provider_calls_allowed"])
+        self.assertFalse(result["owner_paid_call_authorization_verified"])
+        self.assertFalse(result["ledger_modified"])
+        self.assertIn("SOURCE_INTAKE_REGISTRATION_REQUIRED", result["blockers"])
+        self.assertNotIn(self.token, str(result))
+        self.assertNotIn(self.write_token, str(result))
+        self.assertNotIn("approval_reference", str(result))
+        self.assertEqual(hashlib.sha256(self.db.read_bytes()).digest(), before)
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_TRIAL_CAP_CENTS": "invalid"}):
+            self.assertEqual(self.client.get(url, headers=self.headers).status_code, 503)
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_STATUS_API_ENABLED": "false"}):
+            self.assertEqual(self.client.get(url, headers=self.headers).status_code, 404)
+
     def test_job_creation_is_write_gated_bounded_and_never_starts_work(self):
         estimates = {name: 0 for name in STAGES}
         estimates["gemini_primary"] = 7
