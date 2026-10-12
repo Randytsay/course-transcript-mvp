@@ -3,6 +3,13 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-12 — Provider paid-window idempotency and budget checkpoints
+
+- 隔離分支 `codex/golden-v2-goal-completion`，程式驗證 SHA `ef489f0911d0a844e22b50d87ad7646e6d36d36d`。Gemini 3.8 音訊主稿及 Gemini 3.5 第三辨識引擎改為 POSIX `O_EXCL` 排他建立 `REQUEST_STARTED` 原始稽核檔；**同一模型／source SHA／GCS 視窗** 只能保有一筆請求，改提示詞／改第三引擎參數不得依原 claim 重複計費；崩潰殘留、空檔或讀取損壞均需 reconciliation，絕不盲目重送。
+- `golden_v2_primary_stage.py` 和 `golden_v2_third_stage.py` 新增 `golden_v2_window_budget.py` **逐窗累計費用 checkpoint**；前一窗已超額或未能核銷費用時，保存已取得的 provider receipts，記 `OUTCOME_UNKNOWN`／`NEEDS_RECONCILIATION` 並停止下個 POST。
+- 非付費測試覆蓋併發競態、改提示詞／設定繞過、受損 request barrier、來源授權失敗、第一窗超額及未知費用；exact-SHA [CI #38238895306](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38238895306) **Python unittest 885 PASS、handoff pytest 27 PASS、Next.js、Docker image、Compose 全部 PASS**，且 [Release Compose #38238895433](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38238895433) PASS。
+- **遷移缺口**：舊版 V2 可能有依完整 prompt/config 命名的 window raw 檔；部署前必須盤點／核對歷史 receipts 並決定安全索引遷移，不得僅因新 slot 檔名不存在就重新付費。尚未驗證 POSIX 持久 volume 在正式 VPS 的 fsync/多 Worker 行為、真 Vertex 配額／計費或實際帳單；P2/P4/G2/G4 仍 **PARTIAL**，G0–G8 **0/9 PASS**，不代表已部署。
+
 ### 2026-10-12 — Gemini 3.8 post-ASR text-correction migration
 
 - 依使用者最新指示，**新 ASR 後文字校正**從 Vertex `gemini-3.7-flash` 改用 `gemini-3.8-flash`。完整原音主稿仍使用 3.8，兩套 Adapter/Schema/Prompt **保持分離**，Chirp 3 仍提供時碼。
