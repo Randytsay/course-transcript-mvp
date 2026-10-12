@@ -75,6 +75,15 @@ def validate_staged_windows(windows: list[dict[str, Any]], duration_seconds: flo
         raise PrimaryTranscriptError("uncovered final audio interval")
 
 
+def _fsync_audit_directory(directory: Path) -> None:
+    """Durably persist audit namespace changes before any external paid call."""
+    fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".primary-", suffix=".tmp", dir=path.parent)
@@ -85,6 +94,7 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(name, path)
+        _fsync_audit_directory(path.parent)
     finally:
         if os.path.exists(name):
             os.unlink(name)
@@ -112,6 +122,8 @@ def _reserve_paid_window(path: Path, identity: dict[str, Any]) -> bool:
     Requires a shared, POSIX-like filesystem with exclusive-create semantics.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
+    # The audit directory might itself be newly created. Persist its entry.
+    _fsync_audit_directory(path.parent.parent)
     try:
         fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
@@ -126,9 +138,10 @@ def _reserve_paid_window(path: Path, identity: dict[str, Any]) -> bool:
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
-    except BaseException:
-        # Leave even an incomplete reservation in place: never auto-resubmit.
-        raise
+    finally:
+        # Also sync an incomplete reservation. If fsync fails, the caller
+        # must NOT proceed to a paid provider call.
+        _fsync_audit_directory(path.parent)
     return True
 
 
