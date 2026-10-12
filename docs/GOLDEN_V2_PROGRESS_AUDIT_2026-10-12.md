@@ -20,6 +20,12 @@
 
 ## 2. 查核到的客觀事實
 
+### 2026-10-12 Goal continuation — local source intake and persistent worker
+
+- 在隔離分支 `codex/golden-v2-goal-completion` 提交 `ab0431956052652d52bb93040f06407ccb7bb3b0`：加入 snapshot-first 本機 source preflight、不可重複的未核准 V2 registration、artifact-root/symlink 防逃逸，以及無網路、無雲端憑證、opt-in 的持續本機階段 worker。
+- Python 3.12 離線測試 **858 unittest／27 handoff pytest** 通過；compileall、production API import、兩個 CLI、local/release Compose 與 diff check 通過。exact-SHA [CI #38210501522](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38210501522) 和 [Release Compose #38210501398](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38210501398) 均 PASS。
+- source observation 僅與呼叫端提供資料及本機 bytes 比對，未由 Google Drive 認證；worker 未在 VPS 啟動。沒有付費模型呼叫、Drive/GCS 寫入、IAM/firewall 變更或 production 部署；G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS。
+
 - PR #143 **open、draft，47 files changed**，開發分支 `feat/golden-v2-gemini38-primary`，查核 HEAD `73f1a826…`。
 - GitHub Actions **CI run #38157612105**：Python **743 tests PASS**、Next.js build PASS、Docker image build PASS、Compose PASS。
 - GitHub Actions **Release Compose run #38157612126**：環境/來源驗證 PASS。**這些是離線 CI，不是 Vertex／Chirp 真實音檔或 VPS 部署驗收。**

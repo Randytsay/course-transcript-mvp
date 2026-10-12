@@ -9,6 +9,7 @@
 - Preflight 以完整 manifest SHA 派生穩定 job ID；同一來源/版本/模式/估價重跑不重複建立 SQLite job，Drive 版本或設定變更則產生新 identity。Job 僅停留在 `AWAITING_APPROVAL`；估價不是報價或核准。
 - 新增 `scripts/golden_v2_worker_daemon.py` 與隔離 Compose `golden-v2` profile。常駐程序只掃描已核准 active jobs，處理本機 compare/adjudication/QA，缺本機 artifacts、付費 stage 或真人聽音需求都回報 blocker。Compose 容器 `network_mode: none`，不掛載雲端憑證，未加入預設 profile，未在 VPS 啟動。
 - 離線驗證：完整 Python unittest **858 PASS**；`tests/test_chatgpt_handoff.py` pytest **27 PASS**；其中來源 preflight **10 PASS**、immutable evidence **6 PASS**、worker **7 PASS**、ledger **10 PASS**。Symlink regression 確認不可寫出 artifact root；兩個 CLI help、compileall、API import、local/release `golden-v2` Compose config 與 `git diff --check` PASS。使用 fake FFmpeg/ffprobe，沒有 Drive/GCS/Vertex/Chirp 呼叫或寫入。
+- exact source SHA `ab0431956052652d52bb93040f06407ccb7bb3b0` 的 [CI #38210501522](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38210501522) 與 [Release Compose #38210501398](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38210501398) 均 PASS，含 Python 3.12 tests、frontend tests/build、Docker images、Compose 與 release provenance。此為非付費 CI，不是 live provider、VPS 或 production 驗收。
 - **G7 仍 PARTIAL、G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS**：Drive URL 實際讀取、VPS 部署/持續性實測、付費 provider runner、owner UI/Skill transport、獨立真人 reviewer、Drive 發布與 production/staging 驗收仍未完成。沒有改 IAM/firewall 或 production。
 
 ### 2026-10-12 Goal G3 恢復工作者續報（已完成 source SHA CI）
