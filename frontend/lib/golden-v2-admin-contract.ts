@@ -3,12 +3,14 @@ export type GoldenV2ApprovalPayload = {
   approved_cents: number;
   reference: string;
   confirm: true;
+  repeat_source_confirmed?: true;
 };
 
 export type GoldenV2ApprovalForm = {
   amount: string;
   reference: string;
   confirmed: boolean;
+  repeatSourceConfirmed: boolean;
 };
 
 export const GOLDEN_V2_STAGES = [
@@ -70,11 +72,13 @@ export function patchGoldenV2ApprovalForm(
   current: GoldenV2ApprovalForm,
   patch: Partial<GoldenV2ApprovalForm>,
 ): GoldenV2ApprovalForm {
-  const requiresFreshConfirmation = "amount" in patch || "reference" in patch;
+  const requiresFreshConfirmation = "amount" in patch || "reference" in patch
+    || "repeatSourceConfirmed" in patch;
   return {
     ...current,
     ...patch,
     ...(requiresFreshConfirmation ? { confirmed: false } : {}),
+    ...( ("amount" in patch || "reference" in patch) ? { repeatSourceConfirmed: false } : {}),
   };
 }
 
@@ -84,7 +88,9 @@ export function parseGoldenV2ApprovalPayload(
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const body = value as Record<string, unknown>;
   const keys = Object.keys(body).sort();
-  if (keys.join(",") !== "approved_cents,confirm,reference,revision") return null;
+  if (keys.join(",") !== "approved_cents,confirm,reference,revision"
+      && keys.join(",") !== "approved_cents,confirm,reference,repeat_source_confirmed,revision") return null;
+  if ("repeat_source_confirmed" in body && body.repeat_source_confirmed !== true) return null;
   if (!Number.isSafeInteger(body.revision) || Number(body.revision) < 0) return null;
   if (!Number.isSafeInteger(body.approved_cents) || Number(body.approved_cents) < 0) return null;
   if (body.confirm !== true || typeof body.reference !== "string") return null;
@@ -95,6 +101,7 @@ export function parseGoldenV2ApprovalPayload(
     approved_cents: Number(body.approved_cents),
     reference,
     confirm: true,
+    ...(body.repeat_source_confirmed === true ? { repeat_source_confirmed: true as const } : {}),
   };
 }
 
