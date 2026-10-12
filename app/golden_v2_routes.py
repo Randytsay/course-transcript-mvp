@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field, StrictInt
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt
 
 from app.jobs.golden_v2_read import get_v2_status, list_v2_status
 from app.jobs.golden_v2_ledger import STAGES, GoldenV2Ledger, V2Conflict
@@ -58,6 +58,7 @@ class JobApprovalRequest(BaseModel):
     approved_cents: int = Field(ge=0)
     reference: str = Field(min_length=1, max_length=256)
     confirm: Literal[True]
+    repeat_source_confirmed: StrictBool = False
 
 
 class RepairApprovalRequest(BaseModel):
@@ -255,6 +256,7 @@ def approve_job(
         ledger.approve(
             job_id, revision=body.revision, approved_cents=body.approved_cents,
             reference=body.reference, actor=actor,
+            repeat_source_confirmed=body.repeat_source_confirmed,
         )
         return {"job_id": job_id, "status": "QUEUED", "revision": body.revision + 1}
     except (V2Conflict, ValueError, sqlite3.Error) as exc:
