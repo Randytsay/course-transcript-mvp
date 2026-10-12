@@ -447,6 +447,56 @@ class GoldenV2Ledger:
                 (job_id,),
             )
 
+    def complete_reviewed_primary(
+        self, job_id: str, *, revision: int, reviewer: str,
+        review_reference: str, previous_evidence_sha: str,
+        reviewed_evidence_sha: str, evidence_verifier: Any,
+    ) -> None:
+        """Promote a reviewed overlap without re-claiming Gemini or changing cost.
+
+        The caller must authenticate the reviewer and independently check the
+        original raw windows, audio-seam decisions, and immutable reviewed file.
+        CAS protects against stale approvals and concurrent resolution.
+        """
+        def sha(value: str) -> bool:
+            return isinstance(value, str) and len(value) == 64 and all(
+                char in "0123456789abcdef" for char in value)
+
+        if (type(revision) is not int or not reviewer.strip() or
+                not review_reference.strip() or not sha(previous_evidence_sha) or
+                not sha(reviewed_evidence_sha) or
+                reviewed_evidence_sha == previous_evidence_sha or
+                not callable(evidence_verifier)):
+            raise ValueError("independent, audit-bound primary review required")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stages = self._stages(db, job_id)
+            first = stages[0]
+            if (job["revision"] != revision or job["status"] != "NEEDS_REVIEW"
+                    or first["name"] != "gemini_primary"
+                    or first["state"] != "REVIEW_REQUIRED"
+                    or first["evidence_sha"] != previous_evidence_sha
+                    or any(stage["state"] != "PENDING" for stage in stages[1:])):
+                raise V2Conflict("primary review revision/state/evidence mismatch")
+            if not evidence_verifier(job_id=job_id, source_sha=job["source_sha"],
+                                     old_sha=previous_evidence_sha,
+                                     reviewed_sha=reviewed_evidence_sha):
+                raise V2Conflict("primary review evidence verification failed")
+            db.execute(
+                "INSERT INTO v2_review_resumptions VALUES(?,?,?,?,?,?,?)",
+                (job_id, "gemini_primary", previous_evidence_sha, reviewer,
+                 review_reference, revision, _now()),
+            )
+            db.execute(
+                "UPDATE v2_stages SET state='COMPLETE',evidence_sha=?,"
+                "claim_hash=NULL,updated_at=? WHERE job_id=? AND name='gemini_primary'",
+                (reviewed_evidence_sha, _now(), job_id),
+            )
+            db.execute(
+                "UPDATE v2_jobs SET status='PROCESSING',revision=revision+1 WHERE id=?",
+                (job_id,),
+            )
+
     def mark_outcome_unknown(
         self, claim: dict[str, Any], *, known_cents: int = 0,
         evidence_sha: str | None = None,

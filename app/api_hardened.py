@@ -8,6 +8,7 @@ from app.api_observed import app
 from app.canonical.admin import router as canonical_admin_router
 from app.chatgpt_handoff_routes import router as chatgpt_handoff_router
 from app.drive_api_routes import router as drive_api_router
+from app.golden_v2_routes import router as golden_v2_owner_router
 from app.learning.admin import router as learning_admin_router
 from app.learning.routes import router as learning_router
 from app.retranscription_routes import router as retranscription_router
@@ -167,6 +168,7 @@ app.include_router(canonical_admin_router)
 # YouTube owner import stays on a separate review-admin path and therefore keeps
 # the existing Cloudflare Access mutation boundary rather than reviewer auth.
 app.include_router(review_youtube_import_router)
+app.include_router(golden_v2_owner_router)
 app.openapi_schema = None
 _assert_publish_route()
 _assert_publish_status_route()

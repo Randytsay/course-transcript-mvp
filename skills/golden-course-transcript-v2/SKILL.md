@@ -46,12 +46,18 @@ Reference specifications:
 11. Do not overwrite, reset, clean or stash a dirty active development/production worktree; deployment is from a reviewed exact SHA only.
 12. User approval required for IAM/billing/security changes, per-source first real paid smoke, and production cutover/Drive publish if no pre-existing scoped authorization.
 
-## Planned Tool API (NOT YET IMPLEMENTED; placeholders, do not call as real endpoints)
+## Implemented source-level read-only operator status (NOT DEPLOYED)
+
+- `python scripts/golden_v2_status.py --database /path/to/ledger.db --job-id v2_<actual-id>` reads only existing SQLite data.
+- Disabled-by-default `GET /api/v1/golden-v2/jobs` and `GET /api/v1/golden-v2/jobs/{job_id}` require `COURSE_TRANSCRIPT_V2_STATUS_API_ENABLED=true`, a separate strong `COURSE_TRANSCRIPT_V2_STATUS_TOKEN` Bearer credential and an existing `COURSE_TRANSCRIPT_V2_LEDGER_PATH`. This is a trusted backend-only status route; it is not a user-browser token or proof of production availability.
+- `python scripts/golden_v2_review_overlaps.py --database ... --job-id ... --job-dir ... --normalized-audio ...` provides read-only pending-seam inspection. Applying JSON decisions also requires `--decisions-json`, `--reviewer`, `--review-reference`, `--confirm-listened`; this is local operator **self-attestation**, not independent human listening proof. Every overlap is tied to verified immutable raw response SHA, source lineage, audio SHA, original stage report and revision-CAS. No whole-file Golden PASS results from a seam review. Do not expose this CLI through HTTP.
+
+## Planned mutation/tool API (NOT YET IMPLEMENTED; placeholders, do not call as real endpoints)
 
 ```text
 preview(source_url, model_mode) -> inventory, canonical candidates, estimated cost
 submit_approved(preflight_id, source_sha, approval_revision) -> durable job_id
-job_status(job_id) -> stage, cost, evidence, QA, remaining blockers
+job_status(job_id) -> stage, cost, evidence, QA, remaining blockers  # read-only CLI/HTTP snapshot exists in source, not live service
 compare(job_id) -> ordered discrepancy windows, audio excerpt locators
 adjudicate(job_id, revision, segment_edits, evidence) -> immutable decision audit
 finalize(job_id, revision) -> final SRT/TXT, Golden QA

@@ -110,6 +110,34 @@ class GoldenPrimaryAudioTests(unittest.TestCase):
         self.assertEqual(result["text"].count("重複的佛經與內容"), 2)
         self.assertFalse(result["ready_for_chirp_comparison"])
 
+    def test_reviewed_multi_seam_keeps_every_window_contribution(self) -> None:
+        windows = [win(0, 0, 60), win(1, 50, 110, "gs://private-bucket/w1.wav"),
+                   win(2, 100, 160, "gs://private-bucket/w2.wav")]
+        texts = ["甲乙甲", "甲丙乙", "乙丁戊"]
+        records = [{"status": "COMPLETE", "text": text,
+                    "identity": {"window": {k: w[k] for k in (
+                        "index", "start_seconds", "end_seconds", "gcs_uri", "mime_type")}}}
+                   for w, text in zip(windows, texts)]
+        decisions = [
+            {"between_windows": [0, 1], "left_keep_chars": 3, "right_drop_chars": 1,
+             "reviewed_audio_start_ms": 50000, "reviewed_audio_end_ms": 60000,
+             "audio_review_confirmed": True, "notes": "Audio checked, repeated 甲."},
+            {"between_windows": [1, 2], "left_keep_chars": 3, "right_drop_chars": 1,
+             "reviewed_audio_start_ms": 100000, "reviewed_audio_end_ms": 110000,
+             "audio_review_confirmed": True, "notes": "Audio checked, repeated 乙."},
+        ]
+        review = primary.assemble_reviewed_overlaps(windows, records, 160,
+                                                    seam_decisions=decisions)
+        self.assertEqual(review["text"], "甲乙甲\n\n丙乙\n\n丁戊")
+        self.assertTrue(review["ready_for_chirp_comparison"])
+        self.assertEqual(review["acoustic_coverage"], "SEAMS_REVIEWED_WHOLE_FILE_UNVERIFIED")
+        with self.assertRaises(primary.PrimaryTranscriptError):
+            primary.assemble_reviewed_overlaps(windows, records, 160,
+                                               seam_decisions=decisions[:1])
+        with self.assertRaises(primary.PrimaryTranscriptError):
+            primary.assemble_reviewed_overlaps(windows, records, 160,
+                seam_decisions=[{**decisions[0], "left_keep_chars": 0}, decisions[1]])
+
 
 if __name__ == "__main__":
     unittest.main()

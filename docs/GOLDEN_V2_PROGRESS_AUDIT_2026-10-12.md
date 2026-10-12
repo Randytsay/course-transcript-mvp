@@ -1,7 +1,7 @@
 # Golden Transcript V2｜2026-10-12 實況盤點與六階段完工計畫
 
 > **性質：當日唯讀核驗 + 下一階段工程規劃。** 不代表已部署、執行付費 API 或修改 Google Drive。  
-> 對應 PR [#143](https://github.com/Randytsay/course-transcript-mvp/pull/143)，驗證 commit `73f1a8265bd4458699cd66da1c9d6f88cf0779f1`。  
+> 最初盤點對應 [PR #143](https://github.com/Randytsay/course-transcript-mvp/pull/143) 舊版提交 `73f1a8265bd4458699cd66da1c9d6f88cf0779f1`；2026-10-12 隔離續作進入 [Draft PR #144](https://github.com/Randytsay/course-transcript-mvp/pull/144)，新 SHA/CI 另以 Gate 狀態簿為準。
 > 權威規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[G0–G8 完整驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[最新狀態](GOLDEN_V2_GATE_STATUS.md)｜[整合交接](GOLDEN_V2_INTEGRATION_HANDOFF.md)。
 
 ## 1. 使用者原訂完工定義
@@ -25,6 +25,7 @@
 - GitHub Actions **Release Compose run #38157612126**：環境/來源驗證 PASS。**這些是離線 CI，不是 Vertex／Chirp 真實音檔或 VPS 部署驗收。**
 - 實際程式具 Gemini 音訊 adapter、FFmpeg 分段、模擬 GCS 上傳／費用核准、SQLite ledger、review-only Chirp text diff、可信既有 Chirp PASS evidence reuse、第三模型 adapter、SRT/TXT QA gate、CER 計算、狀態唯讀 CLI、V2 Skill 草稿。
 - WebCodex 對黃金字幕的 5 個已登錄 Project 顯示 `git_available=false` 且 `active_jobs=0`，**無法據此確認正式主機的 Git release SHA、已進行中的 ASR、實體 DB 備份、運行中 V2 Worker 或真實 Cloud API 權限**。
+- 本輪另外完成經 SHA/模型身分/來源 lineage 驗證的 Gemini 重疊 seam 原稿審查、人工裁切後 immutable artifact + ledger revision CAS、唯讀 owner status API（預設關閉，未部署）；離線驗證含 **807 unittest／27 重點 unittest／27 handoff pytest／54 frontend tests**。人工審查目前僅本機操作員自行宣告，未驗證實際聽音。
 - **G0–G8 目前 0/9 過關；G0–G7 均 PARTIAL，G8 NOT_RUN。** 尚未取得任何正式 V2 三引擎真實音檔 Golden QA 通過證據。
 - 沒有已驗證的真實付費模型呼叫、正式 Drive V2 寫回或 production cutover 證據；截至此盤點不宣稱曾發生這些操作。
 
@@ -34,12 +35,12 @@
 |---|---|---|
 | P0 基線及隔離 | GitHub 隔離分支／Draft PR；未破壞舊工作樹 | VPS production exact SHA、active jobs/leases、真正 DB 備份還原、media-inventory 分支整合 |
 | P1 Gemini 3.7→3.8 | 分支修訂校正入口／Worker/API/Proxy/UI 預設；模型政策單測／整體 CI | Vertex 實際模型呼叫與相容性、IAM/region、功能旗標及正式切換 |
-| P2 Gemini 全音訊主稿 | audio adapter、FFmpeg FLAC clipping、hash manifest、GCS opt-in adapter、SQLite claim/cost/mock primary stage | Drive 原始 SHA ↔ normalized SHA lineage、長音檔 overlap 去重、內容/VAD completeness、真 Vertex、VPS worker |
-| P3 Chirp 比對 | Gemini-first mock orchestration、文字差異、Chirp word-time、已 PASS 的舊 Chirp 證據免付費重用 | 新 Chirp async submission/recovery、bounded Standard repair、聲學 coverage、雙引擎真實整合 |
+| P2 Gemini 全音訊主稿 | audio adapter、FFmpeg FLAC clipping、原始→normalized→clip SHA lineage、GCS opt-in、mock primary、重疊 seam 人工覆核及 SHA 綁定 | 真實 Drive 來源 attest、真人重疊聽音、長音檔完整 acoustic/VAD coverage、真 Vertex、VPS Worker |
+| P3 Chirp 比對 | Gemini-first mock orchestration、文字差異、Chirp word-time、可信舊證據重用、新 Chirp fake-provider async submit/recovery、離線聲學 QA | 真 Speech-to-Text async、bounded Standard repair、完整聲學 coverage、雙引擎真實整合 |
 | P4 3.5 Transcribe | Vertex adapter、VERBATIM、≤15m 策略、選用模式/mock | 正式 SDK/模型可用性、真實 provider response 及用量、第三稿比對及 mode 路由持久整合 |
-| P5 校對/Golden QA | 比對 REVIEW、SRT/TXT/word-time gate、QA 記入 SQLite | WebCodex/ChatGPT 聲音裁決、自動高可信編修與人工 Review、可靠 cue render、Drive 出稿全流程 |
+| P5 校對/Golden QA | 比對 REVIEW、Chirp 字詞時間 SRT/TXT mock 出稿、QA 記入 SQLite、原始 SHA 受保護的 seam review CLI | ChatGPT 真人聲音裁決、可靠整堂聲學驗收、正式 handoff、Drive 出稿全流程 |
 | P6 實測評測 | 人工 gold CER 計算 library | 真實金標樣本、三引擎相同音檔、國台語/經文/雜音、時碼/價格/耗時 benchmark |
-| P7 Skill/任務入口 | SQLite stages、重試/未知結果限制、唯讀 CLI、Skill 草案 | 真正 V2 後端 worker、job API、owner auth、可對話提交/查詢/續跑、常駐服務 |
+| P7 Skill/任務入口 | SQLite stages、重試/未知結果限制、唯讀 CLI、預設關閉的 token-gated owner status API、Skill 草案 | V2 常駐 Worker、已部署 owner API、authenticated write/review、Skill 實裝、對話提交/續跑 |
 | P8 UI/發布 | V1 已有可借用前端/Drive publisher；分支更新模型文字 | V2 管理頁、音訊差異播放、手機適配、staging/canary、V2 Drive 回寫驗證、正式上線 |
 
 ## 4. 剩餘工作重組成六個**完工波次**（現有 P0–P8 / G0–G8 不廢除）
@@ -85,8 +86,8 @@
 
 真正阻擋完工的關鍵路徑：
 1. **可信 VPS source/runtime/backup**：無法確認 production SHA，不能安全部署。
-2. **V2 持久化 Worker + 真實 Chirp 非同步狀態**：現在只是 SQLite/adapter 模組；不能靠 chat session 當長工 runner。
-3. **原音聲學完整性 + Gemini 長音檔 overlap**：現在不能宣告已能完整處理長法會。
+2. **V2 持久化 Worker + 真實 Chirp 非同步狀態**：目前已有本機一次性 Worker 模擬及 SQLite/adapter，尚未部署真正可連續運轉的 Worker；不能靠 chat session 當長工 runner。
+3. **原音聲學完整性 + Gemini 長音檔 overlap**：重疊片段裁切已能在本機按原音區間逐段人工覆核並保留 SHA；但未驗證真人實聽或整堂 coverage，不能宣告已能完整處理長法會。
 4. **ChatGPT/WebCodex 最終裁決與 publisher**：目前的 QA gate 有規則，但沒有真正整堂正式出稿/Drive 寫回路徑。
 5. **經批准的真模型 smoke + 人工金標**：只靠 743 項 fake/offline 測試不能驗證台語/經文實際辨識品質。
 
@@ -103,6 +104,6 @@
 
 1. 只讀檢查實際 VPS: current release SHA、active ASR jobs+leases、五個 git unavailable WebCodex projects 的來源與可恢復 Git checkout、DB/Drive version lock。
 2. 於新的乾淨管理 worktree 接續 PR #143；不得 reset/clean/stash dirty source。
-3. 先處理 **原始音檔到 normalized SHA lineage** 和 **V2 支援 Chirp async submit/recover 的最小狀態契約**；利用 existing unit/mock tests 證明 provider/restart/idempotency。
+3. 已有本機來源 lineage 與 fake-provider Chirp async 狀態契約；接著補真實 Drive 來源 SHA attest、Speech-to-Text 非同步整合、完整覆聽與安全回復測試。
 4. 每次更新本文件與 `GOLDEN_V2_GATE_STATUS.md`，寫 commit、CI、spent USD、Drive/prod mutated 與未解 blocker；保持 PR draft 到 Gate 真正收斂。
 

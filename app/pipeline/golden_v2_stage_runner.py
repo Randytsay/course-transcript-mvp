@@ -112,9 +112,36 @@ def _bound_inputs(*, ledger: GoldenV2Ledger, claim: dict[str, Any],
                   job_dir: Path) -> tuple[str, dict[str, Any], dict[str, Any]]:
     """Use actual completed ledger artifacts as the sole comparison inputs."""
     stages = {item["name"]: item for item in ledger.status(claim["job_id"])["stages"]}
+    original = job_dir / "golden-v2" / "primary-stage.json"
+    # The paid stage may have completed directly or been promoted after an
+    # audio-reviewed seam resolution. Match the immutable file to its ledger
+    # SHA; an orphaned or forged review file cannot become input evidence.
+    try:
+        original_data = json.loads(original.read_text(encoding="utf-8"))
+        original_sha = file_sha256(original)
+    except (OSError, ValueError, TypeError) as exc:
+        raise V2Conflict("original immutable primary evidence missing or invalid") from exc
+    if (not isinstance(original_data, dict)
+            or original_data.get("job_id") != claim["job_id"]
+            or original_data.get("source_sha256") != claim["source_sha"]
+            or original_data.get("schema") != "golden-v2-primary-stage-v1"):
+        raise V2Conflict("original primary evidence source or job mismatch")
+    primary_filename = "primary-stage.json"
+    if original_sha != stages["gemini_primary"]["evidence_sha"]:
+        primary_filename = (
+            f"primary-stage-reviewed-{stages['gemini_primary']['evidence_sha']}.json"
+        )
     primary = _checked_stage_artifact(
-        job_dir=job_dir, filename="primary-stage.json",
+        job_dir=job_dir, filename=primary_filename,
         stage=stages["gemini_primary"], claim=claim)
+    if primary_filename != "primary-stage.json":
+        review = primary.get("audio_review")
+        if (not isinstance(review, dict)
+                or review.get("original_primary_evidence_sha256") != original_sha
+                or review.get("review_scope") != "OVERLAP_SEAMS_ONLY"
+                or review.get("whole_file_qa") != "UNVERIFIED"
+                or original_data.get("ready_for_chirp") is not False):
+            raise V2Conflict("reviewed primary is not bound to the original held evidence")
     merged = _checked_stage_artifact(
         job_dir=job_dir, filename="chirp-merged.json",
         stage=stages["chirp_independent"], claim=claim, raw_digest=True)

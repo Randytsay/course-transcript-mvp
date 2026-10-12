@@ -208,3 +208,66 @@ def assemble_windows(windows: list[dict[str, Any]], records: list[dict[str, Any]
         "review_items": review, "ready_for_chirp_comparison": not bool(review),
         "golden_approved": False,
     }
+
+
+def assemble_reviewed_overlaps(
+    windows: list[dict[str, Any]], records: list[dict[str, Any]],
+    duration_seconds: float, *, seam_decisions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Apply an authenticated operator's *audio-reviewed* text seam decisions.
+
+    Character offsets refer only to the original immutable model responses;
+    they are not synthetic timestamps. The exact audio overlap must be
+    inspected and cited for every seam. Any missing/invalid decision blocks
+    progress. This does NOT attest to whole-file acoustic completeness.
+    """
+    baseline = assemble_windows(windows, records, duration_seconds)
+    required = {tuple(item["between_windows"]) for item in baseline["review_items"]}
+    decisions: dict[tuple[int, int], dict[str, Any]] = {}
+    if not required:
+        raise PrimaryTranscriptError("no Gemini overlap review to resolve")
+    for decision in seam_decisions:
+        pair = decision.get("between_windows")
+        if (not isinstance(pair, list) or len(pair) != 2 or
+                any(type(i) is not int for i in pair)):
+            raise PrimaryTranscriptError("invalid overlap decision identity")
+        key = tuple(pair)
+        if key not in required or key in decisions:
+            raise PrimaryTranscriptError("duplicate or unknown overlap decision")
+        previous, following = windows[key[0]], windows[key[1]]
+        expected_start = round(float(following["start_seconds"]) * 1000)
+        expected_end = round(float(previous["end_seconds"]) * 1000)
+        if (type(decision.get("reviewed_audio_start_ms")) is not int or
+                type(decision.get("reviewed_audio_end_ms")) is not int or
+                decision["reviewed_audio_start_ms"] != expected_start or
+                decision["reviewed_audio_end_ms"] != expected_end or
+                decision.get("audio_review_confirmed") is not True or
+                not isinstance(decision.get("notes"), str) or
+                not decision["notes"].strip()):
+            raise PrimaryTranscriptError("full overlap audio review evidence required")
+        left = str(records[key[0]]["text"]).strip()
+        right = str(records[key[1]]["text"]).strip()
+        a, b = decision.get("left_keep_chars"), decision.get("right_drop_chars")
+        if (type(a) is not int or type(b) is not int or
+                not 0 < a <= len(left) or not 0 <= b < len(right)):
+            raise PrimaryTranscriptError("overlap text cuts out of bounds")
+        decisions[key] = decision
+    if set(decisions) != required:
+        raise PrimaryTranscriptError("every audio overlap needs an explicit decision")
+    texts = [str(record["text"]).strip() for record in records]
+    contributed = []
+    removed = []
+    for index, text in enumerate(texts):
+        start = decisions[(index - 1, index)]["right_drop_chars"] if (index - 1, index) in decisions else 0
+        end = decisions[(index, index + 1)]["left_keep_chars"] if (index, index + 1) in decisions else len(text)
+        if end <= start or not text[start:end].strip():
+            raise PrimaryTranscriptError("overlap cuts remove a complete window contribution")
+        contributed.append(text[start:end])
+        removed.append({"window": index, "prefix": text[:start], "suffix": text[end:]})
+    return {
+        "text": "\n\n".join(contributed), "window_count": len(windows),
+        "structural_coverage": "PASS", "acoustic_coverage": "SEAMS_REVIEWED_WHOLE_FILE_UNVERIFIED",
+        "review_items": [], "reviewed_seams": seam_decisions,
+        "discarded_window_text": removed,
+        "ready_for_chirp_comparison": True, "golden_approved": False,
+    }
