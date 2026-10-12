@@ -45,6 +45,21 @@ class ModelConfigurationTests(unittest.TestCase):
                 self.assertNotIn("gemini-2.5", content)
                 self.assertNotIn("gemini-3.7-flash", content)
 
+    def test_3_8_text_adapter_configuration_is_free_of_legacy_sampler_fields(self) -> None:
+        import ast
+        for relative in ("app/providers/correct_text.py", "app/providers/correction/vertex.py"):
+            with self.subTest(path=relative):
+                tree = ast.parse((ROOT / relative).read_text(encoding="utf-8"))
+                for call in ast.walk(tree):
+                    if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute):
+                        if call.func.attr == "GenerateContentConfig":
+                            self.assertFalse(
+                                {"temperature", "top_k", "top_p", "thinking_budget",
+                                 "candidate_count", "frequency_penalty", "presence_penalty"}
+                                & {kw.arg for kw in call.keywords},
+                                f"deprecated Gemini 3.8 field in {relative}",
+                            )
+
     def test_audio_primary_paths_use_gemini38(self) -> None:
         for relative in AUDIO_PRIMARY_FILES:
             with self.subTest(path=relative):
