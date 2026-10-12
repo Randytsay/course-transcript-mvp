@@ -13,12 +13,20 @@ from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.jobs.golden_v2_read import get_v2_status, list_v2_status
-from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
+from app.jobs.golden_v2_ledger import STAGES, GoldenV2Ledger, V2Conflict
 
 router = APIRouter(prefix="/api/v1/golden-v2", tags=["golden-v2-owner"])
+
+
+class JobCreateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    mode: Literal["QUALITY_3WAY", "SMART_2PLUS", "FLASH_CHIRP"]
+    estimated_stage_cents: dict[str, StrictInt]
+    confirm: Literal[True]
 
 
 class JobApprovalRequest(BaseModel):
@@ -107,6 +115,39 @@ def job_status(job_id: str, authorization: str | None = Header(default=None)) ->
     if result is None:
         raise HTTPException(status_code=404, detail="Golden V2 job not found")
     return result
+
+
+@router.post("/jobs", status_code=201)
+def create_job(
+    body: JobCreateRequest,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Register a source identity in the local ledger; never start providers.
+
+    The trusted caller supplies a digest previously established by its own
+    source/normalization preflight. This endpoint cannot attest media bytes.
+    """
+    database, _, max_approval_cents = _authorized_write_database(authorization)
+    estimates = body.estimated_stage_cents
+    if (set(estimates) != set(STAGES)
+            or any(type(value) is not int or value < 0 for value in estimates.values())):
+        raise HTTPException(status_code=422, detail="Invalid per-stage cost estimate")
+    estimate_total = sum(estimates.values())
+    if estimate_total > max_approval_cents:
+        raise HTTPException(status_code=422, detail="Estimate exceeds configured per-job ceiling")
+    try:
+        ledger = GoldenV2Ledger.open_existing(database)
+        job_id = ledger.create(
+            source_sha=body.source_sha256, mode=body.mode,
+            estimated_stage_cents=estimates,
+        )
+        return {
+            "job_id": job_id, "status": "AWAITING_APPROVAL", "revision": 0,
+            "estimated_cents": estimate_total,
+            "provider_calls_started": False, "drive_mutation_started": False,
+        }
+    except (V2Conflict, ValueError, sqlite3.Error) as exc:
+        raise _mutation_error(exc) from exc
 
 
 def _mutation_error(exc: Exception) -> HTTPException:

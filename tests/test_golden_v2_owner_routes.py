@@ -71,7 +71,47 @@ class OwnerApiTests(unittest.TestCase):
         self.assertNotIn("approval_reference", str(payload))
         self.assertNotIn("claim_hash", str(payload))
         self.assertEqual(hashlib.sha256(self.db.read_bytes()).digest(), before)
-        self.assertEqual(self.client.post("/api/v1/golden-v2/jobs", headers=self.headers).status_code, 405)
+        create_body = {
+            "source_sha256": "a" * 64, "mode": "FLASH_CHIRP",
+            "estimated_stage_cents": {name: 0 for name in STAGES},
+            "confirm": True,
+        }
+        self.assertEqual(self.client.post("/api/v1/golden-v2/jobs", headers=self.headers,
+                                         json=create_body).status_code, 404)
+
+    def test_job_creation_is_write_gated_bounded_and_never_starts_work(self):
+        estimates = {name: 0 for name in STAGES}
+        estimates["gemini_primary"] = 7
+        payload = {
+            "source_sha256": "a" * 64, "mode": "FLASH_CHIRP",
+            "estimated_stage_cents": estimates, "confirm": True,
+        }
+        url = "/api/v1/golden-v2/jobs"
+        self.assertEqual(self.client.post(url, headers=self.write_headers,
+                                          json=payload).status_code, 404)
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true"}):
+            self.assertEqual(self.client.post(url, headers=self.headers,
+                                              json=payload).status_code, 401)
+            self.assertEqual(self.client.post(url, headers=self.write_headers,
+                                              json={**payload, "confirm": False}).status_code, 422)
+            self.assertEqual(self.client.post(url, headers=self.write_headers,
+                                              json={**payload, "source_sha256": "z" * 64}).status_code, 422)
+            self.assertEqual(self.client.post(url, headers=self.write_headers,
+                                              json={**payload, "estimated_stage_cents": {}}).status_code, 422)
+            too_expensive = {**estimates, "gemini_primary": 1001}
+            self.assertEqual(self.client.post(url, headers=self.write_headers,
+                                              json={**payload, "estimated_stage_cents": too_expensive}).status_code, 422)
+            response = self.client.post(url, headers=self.write_headers, json=payload)
+        self.assertEqual(response.status_code, 201, response.text)
+        result = response.json()
+        self.assertEqual(result["status"], "AWAITING_APPROVAL")
+        self.assertEqual(result["estimated_cents"], 7)
+        self.assertFalse(result["provider_calls_started"])
+        self.assertFalse(result["drive_mutation_started"])
+        state = self.ledger.status(result["job_id"])
+        self.assertEqual(state["status"], "AWAITING_APPROVAL")
+        self.assertIsNone(state["approved_cents"])
+        self.assertEqual(state["estimated_cents"], 7)
 
     def test_missing_database_invalid_id_and_limit(self):
         self.assertEqual(self.client.get("/api/v1/golden-v2/jobs/v2_not-a-job", headers=self.headers).status_code, 404)
@@ -98,6 +138,19 @@ class OwnerApiTests(unittest.TestCase):
                 f"/api/v1/golden-v2/jobs/{self.job_id}/approval",
                 headers=self.write_headers, json=body,
             )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(hashlib.sha256(empty.read_bytes()).digest(), before)
+        create_body = {
+            "source_sha256": "a" * 64, "mode": "FLASH_CHIRP",
+            "estimated_stage_cents": {name: 0 for name in STAGES},
+            "confirm": True,
+        }
+        with patch.dict(os.environ, {
+            "COURSE_TRANSCRIPT_V2_LEDGER_PATH": str(empty),
+            "COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true",
+        }):
+            response = self.client.post("/api/v1/golden-v2/jobs",
+                                        headers=self.write_headers, json=create_body)
         self.assertEqual(response.status_code, 503)
         self.assertEqual(hashlib.sha256(empty.read_bytes()).digest(), before)
 

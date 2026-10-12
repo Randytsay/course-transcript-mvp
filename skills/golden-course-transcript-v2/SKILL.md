@@ -57,9 +57,10 @@ Model boundary: Gemini 3.8 Flash is the full-audio primary recognizer. Use Verte
 
 ## Implemented source-level owner approval API (NOT DEPLOYED)
 
+- `POST /api/v1/golden-v2/jobs` registers a source SHA, mode, and per-stage integer-cent estimates in the existing SQLite ledger. It creates an `AWAITING_APPROVAL` job only; the trusted caller must have independently established that the SHA identifies the intended normalized audio. This endpoint does not fetch or attest source media.
 - `POST /api/v1/golden-v2/jobs/{job_id}/approval` records a revision-bound job budget approval in the existing SQLite ledger.
 - `POST /api/v1/golden-v2/jobs/{job_id}/repair-approval` records an exact assessment-SHA and window-bound repair-plan approval in SQLite.
-- Both routes require the separate `COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED=true` flag and a strong `COURSE_TRANSCRIPT_V2_WRITE_TOKEN`; status routes use a different token. The configured per-job ceiling defaults to USD 10. These routes never submit a provider request, create a job, access Drive, or publish results. Keep both credentials server-side; do not put them in browser JavaScript.
+- All three write routes require the separate `COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED=true` flag and a strong `COURSE_TRANSCRIPT_V2_WRITE_TOKEN`; status routes use a different token. The configured per-job ceiling defaults to USD 10. They never submit a provider request, access Drive, or publish results. Keep both credentials server-side; do not put them in browser JavaScript.
 - `scripts/golden_v2_local_worker.py` runs provider-free local ledger stages for one existing job and exits with an explicit blocker at provider/reviewer gates. It is not a persistent VPS worker or task-creation endpoint.
 
 ## Remaining task/handoff API (NOT IMPLEMENTED; placeholders, do not call as real endpoints)
