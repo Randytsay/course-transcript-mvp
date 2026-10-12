@@ -32,17 +32,24 @@ test("owner approval payload requires exact fields, true confirmation and bounde
   assert.equal(parseGoldenV2ApprovalPayload({ ...valid, revision: Number.MAX_SAFE_INTEGER + 1 }), null);
   assert.equal(parseGoldenV2ApprovalPayload({ ...valid, reference: "  " }), null);
   assert.equal(parseGoldenV2ApprovalPayload({ ...valid, extra: "rejected" }), null);
+  assert.deepEqual(parseGoldenV2ApprovalPayload({ ...valid, repeat_source_confirmed: true }),
+    { ...valid, repeat_source_confirmed: true });
+  assert.equal(parseGoldenV2ApprovalPayload({ ...valid, repeat_source_confirmed: false }), null);
 });
 
 test("editing approval amount or reference requires fresh confirmation", () => {
-  const confirmed = { amount: "125", reference: "checked source", confirmed: true };
+  const confirmed = { amount: "125", reference: "checked source", confirmed: true,
+    repeatSourceConfirmed: true };
   assert.deepEqual(patchGoldenV2ApprovalForm(confirmed, { amount: "150" }), {
     amount: "150", reference: "checked source", confirmed: false,
+    repeatSourceConfirmed: false,
   });
   assert.deepEqual(patchGoldenV2ApprovalForm(confirmed, { reference: "new basis" }), {
     amount: "125", reference: "new basis", confirmed: false,
+    repeatSourceConfirmed: false,
   });
   assert.equal(patchGoldenV2ApprovalForm(confirmed, { confirmed: false }).confirmed, false);
+  assert.equal(patchGoldenV2ApprovalForm(confirmed, { repeatSourceConfirmed: true }).confirmed, false);
 });
 
 test("Drive source preflight requires exact path, estimates and explicit confirmation", () => {
