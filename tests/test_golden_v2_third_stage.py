@@ -79,6 +79,22 @@ class ThirdStageIntegrationTests(TestCase):
         self.assertEqual(state["spent_cents"], 4)
         self.assertEqual(self.vertex.models.generate_content.call_count, 1)
 
+    def test_first_window_actual_overrun_freezes_before_another_provider_call(self):
+        with self.assertRaises(V2Conflict):
+            self.execute(
+                max_window_seconds=2.5, overlap_seconds=0,
+                cost_accountant=lambda completed: 8 * len(completed),
+            )
+        self.assertEqual(self.vertex.models.generate_content.call_count, 1)
+        state = self.ledger.status(self.job)
+        third = next(s for s in state["stages"] if s["name"] == "third_optional")
+        self.assertEqual(third["state"], "OUTCOME_UNKNOWN")
+        self.assertEqual(third["actual_cents"], 8)
+        self.assertEqual(state["status"], "NEEDS_RECONCILIATION")
+        self.assertTrue((
+            self.fixture.dir / "job/golden-v2/third_optional-window-cost-hold.json"
+        ).is_file())
+
     def test_later_disconnection_retains_prior_success_cost(self):
         success = self.vertex.models.generate_content.return_value
         self.vertex.models.generate_content.side_effect = [success, TimeoutError("disconnect")]
