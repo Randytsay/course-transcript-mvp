@@ -60,10 +60,10 @@ Model boundary: Gemini 3.8 Flash is the full-audio primary recognizer. Use Verte
 - `POST /api/v1/golden-v2/jobs` registers a source SHA, mode, and per-stage integer-cent estimates in the existing SQLite ledger. It creates an `AWAITING_APPROVAL` job only; the trusted caller must have independently established that the SHA identifies the intended normalized audio. This endpoint does not fetch or attest source media.
 - `POST /api/v1/golden-v2/jobs/{job_id}/approval` records a revision-bound job budget approval in the existing SQLite ledger.
 - `POST /api/v1/golden-v2/jobs/{job_id}/repair-approval` records an exact assessment-SHA and window-bound repair-plan approval in SQLite.
-- All three write routes require the separate `COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED=true` flag and a strong `COURSE_TRANSCRIPT_V2_WRITE_TOKEN`; status routes use a different token. The configured per-job ceiling defaults to USD 10. They never submit a provider request, access Drive, or publish results. Keep both credentials server-side; do not put them in browser JavaScript.
+- All write routes require the separate `COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED=true` flag and a strong `COURSE_TRANSCRIPT_V2_WRITE_TOKEN`; status routes use a different token. The configured per-job ceiling defaults to USD 10. `source-preflight` performs read-only Drive GET plus isolated local writes; the job and repair approval routes update SQLite only. None submits a provider request or publishes results. Keep both credentials server-side; do not put them in browser JavaScript.
 - `scripts/golden_v2_local_worker.py` runs provider-free local ledger stages for one existing job and exits with an explicit blocker at provider/reviewer gates. It is not a persistent VPS worker or task-creation endpoint.
 
-## Implemented local source preflight (NOT a Drive importer)
+## Implemented local source-preflight CLI (caller supplies the Drive observation)
 
 - `scripts/golden_v2_source_preflight.py` accepts an already-downloaded local original plus a local JSON observation captured by a separate read-only Drive importer. Required observation fields are `provider: "google_drive"`, `file_id`, `version`, `size_bytes`, and `downloaded_sha256`.
 - The command snapshots and hashes the local bytes before FFmpeg, creates a 16 kHz mono FLAC, preserves both original and normalized files, and writes immutable source-lineage and preflight manifests. The bytes must match the supplied observation. This verifies consistency only; it does not authenticate Drive metadata, fetch a Drive URL, or upload anything.
@@ -88,9 +88,17 @@ python scripts/golden_v2_source_preflight.py \
 
 The default-unenabled `golden-v2` Compose profile runs `scripts/golden_v2_worker_daemon.py` as a persistent, provider-free local-stage worker. Its container has no network and no cloud credentials. It processes only `QUEUED`/`PROCESSING` jobs with local artifacts and stops at provider, budget or human-review gates. The profile has not been enabled on VPS/production; this source-level worker is not proof of live task continuity.
 
+## Implemented source-level Drive intake API (DISABLED / NOT DEPLOYED)
+
+`POST /api/v1/golden-v2/source-preflight` accepts one exact configured Drive path, mode, all six integer stage estimates and `confirm: true`. It is protected by the owner write token and feature flag, and the web console reaches it only through the same-origin server proxy under the admin-host/Cloudflare Access boundary.
+
+The backend resolves the path freshly and rejects duplicate names. It reads file ID, version, size, MD5, name, MIME and parent metadata before and after streaming `alt=media` into a private temporary directory (2 GiB default per-file cap). Any metadata or byte mismatch removes the temporary source and creates no job. A successful download is SHA-bound to the existing local FFmpeg snapshot/lineage preflight, preserves the original and normalized FLAC, then creates or reuses an `AWAITING_APPROVAL` ledger item. Replays report the ledger's current state. The endpoint performs Drive GET and local writes only: it does not write Drive/GCS, call Gemini/Chirp, or queue model stages.
+
+This importer is source code only: no live Drive credential test, long-request/Cloudflare test, production flag, or deployment is implied. Do not treat mocks or a created `AWAITING_APPROVAL` item as provider/ASR verification.
+
 ## Local owner status console (IMPLEMENTED IN SOURCE; DISABLED / NOT DEPLOYED)
 
-`/golden-v2` is a responsive status/approval console for jobs that already exist in the V2 SQLite ledger. It displays source SHA, mode, job/revision state, per-stage state and cost evidence. It can submit only a revision-bound budget approval for an `AWAITING_APPROVAL` job; approval updates SQLite and queues eligible local stages, but this UI does not create a source job, acquire Drive media, submit paid provider work, provide audio review, or publish files.
+`/golden-v2` is a responsive owner console for V2 source preflight, existing ledger status and revision-bound budget approval. Its source form reads an explicitly selected exact Drive path and creates/reuses only an unapproved job after version/checksum validation. Approval updates SQLite and queues eligible stages; it does not itself submit paid work, provide audio review, or publish files.
 
 The Next.js server routes proxy to the owner API with separate status and write bearer tokens held only in server environment variables. Keep `COURSE_TRANSCRIPT_V2_ADMIN_UI_ENABLED` unset/false by default. When intentionally configured for a private staging environment, the frontend and API tokens must match their corresponding backend tokens; status/write API feature flags remain independently disabled until that environment is reviewed. The optional frontend Compose env file defaults to `/dev/null`; it is not created by this source change. Production access is restricted to the transcript admin hostname and depends on Cloudflare Access being enforced at the edge; approval POSTs additionally require same-origin HTTPS. Do not expose the owner console through the public reviewer hostname.
 
@@ -104,7 +112,7 @@ compare(job_id) -> ordered discrepancy windows, audio excerpt locators
 publish(job_id, revision, owner_approved) -> Drive safe-publish + verified SHA
 ```
 
-Use `scripts/golden_v2_source_preflight.py` for an already-downloaded local source when its read-only Drive observation is available. It records an unapproved ledger job but does not acquire the Drive source. `POST /api/v1/golden-v2/jobs` remains a separate caller-attested registration option; its approval endpoint changes an approved job to `QUEUED`. The default-offline Compose worker then advances only available local stages. Drive URL acquisition, UI-based task creation, paid provider execution, reviewer handoff and publication are not connected as a complete operation; report those gaps as `NOT_IMPLEMENTED`.
+Use `POST /api/v1/golden-v2/source-preflight` only when the owner explicitly selects and confirms an exact Drive path. Use the CLI for already-downloaded local sources. `POST /api/v1/golden-v2/jobs` remains a separate caller-attested digest registration option; approval changes an approved job to `QUEUED`. The default-offline Compose worker advances only available local stages. Natural-language Drive URL resolution, paid provider execution, reviewer handoff and Drive publication are not connected as one complete operation; report those gaps as `NOT_IMPLEMENTED`.
 
 ## Gate and handoff discipline
 

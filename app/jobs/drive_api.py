@@ -7,15 +7,17 @@ tokens are refreshed in memory; mounted secrets are never rewritten.
 from __future__ import annotations
 
 import configparser
+import hashlib
 import json
 import os
+import re
 import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from app.jobs.source import DriveEntry, MEDIA_EXTENSIONS, SourceInspectionError
@@ -215,6 +217,8 @@ def _escape_query(value: str) -> str:
 def _normalize_path(source_path: str) -> str:
     value = source_path.strip().rstrip("/")
     root = _root_path()
+    if any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise DriveApiError("Google Drive 路徑包含不允許的控制字元")
     if value == root:
         return root
     if not value.startswith(root):
@@ -301,6 +305,174 @@ def _resolve_path_id(source_path: str) -> str:
         current_path = f"{current_path.rstrip('/')}/{part}" if current_path != _root_path() else f"{_root_path()}{part}"
         _remember(current_path, current_id)
     return current_id
+
+
+_DRIVE_METADATA_FIELDS = (
+    "id,name,mimeType,size,modifiedTime,version,md5Checksum,trashed,parents"
+)
+
+
+def _drive_media_metadata(source_path: str) -> dict[str, Any]:
+    normalized = _normalize_path(source_path)
+    relative = normalized[len(_root_path()):].strip("/")
+    parts = PurePosixPath(relative).parts
+    if not parts:
+        raise DriveApiError("請指定 Google Drive 音訊檔案路徑")
+    name = parts[-1]
+    if PurePosixPath(name).suffix.lower() not in MEDIA_EXTENSIONS:
+        raise DriveApiError("來源檔案格式不在支援的媒體清單")
+
+    # Navigation caches are an optimization for browsing, not evidence that a
+    # selected path still resolves to the same Drive folder.
+    clear_drive_path_cache()
+    parent_path = _root_path() + "/".join(parts[:-1]) if len(parts) > 1 else _root_path()
+    parent_id = _resolve_path_id(parent_path)
+    listing = _api_json("/files", {
+        "q": (
+            f"'{_escape_query(parent_id)}' in parents and "
+            f"name = '{_escape_query(name)}' and trashed = false"
+        ),
+        "pageSize": 2,
+        "fields": "files(id,name)",
+        "supportsAllDrives": "true",
+        "includeItemsFromAllDrives": "true",
+    })
+    files = listing.get("files")
+    if not isinstance(files, list) or len(files) != 1 or not isinstance(files[0], dict):
+        raise DriveApiError("Google Drive 音訊檔案路徑無法唯一解析")
+    file_id = str(files[0].get("id") or "").strip()
+    if not file_id:
+        raise DriveApiError("Google Drive 音訊檔案缺少識別碼")
+    item = _api_json(
+        f"/files/{urllib.parse.quote(file_id, safe='')}",
+        {"fields": _DRIVE_METADATA_FIELDS, "supportsAllDrives": "true"},
+    )
+    if (str(item.get("id") or "") != file_id
+            or str(item.get("name") or "") != name
+            or not isinstance(item.get("parents"), list)
+            or parent_id not in item["parents"]):
+        raise DriveApiError("Google Drive 音訊檔案路徑在檢查期間已變更")
+    return _validate_drive_media_metadata(item)
+
+
+def _validate_drive_media_metadata(item: dict[str, Any]) -> dict[str, Any]:
+    if item.get("trashed") is True:
+        raise DriveApiError("Google Drive 音訊檔案已移至垃圾桶")
+    if str(item.get("mimeType") or "").startswith("application/vnd.google-apps."):
+        raise DriveApiError("Google Drive 原生文件不是可下載的音訊來源")
+    file_id = str(item.get("id") or "").strip()
+    name = str(item.get("name") or "").strip()
+    version = str(item.get("version") or "").strip()
+    md5 = str(item.get("md5Checksum") or "").lower()
+    parents = item.get("parents")
+    try:
+        size = int(item.get("size"))
+    except (TypeError, ValueError) as exc:
+        raise DriveApiError("Google Drive 音訊檔案缺少有效大小") from exc
+    if (not file_id or not name or not version or size <= 0
+            or not re.fullmatch(r"[0-9a-f]{32}", md5)
+            or not isinstance(parents, list) or not parents):
+        raise DriveApiError("Google Drive 音訊檔案缺少版本或完整性 metadata")
+    if PurePosixPath(name).suffix.lower() not in MEDIA_EXTENSIONS:
+        raise DriveApiError("來源檔案格式不在支援的媒體清單")
+    return {
+        "id": file_id,
+        "name": name,
+        "mime_type": str(item.get("mimeType") or "application/octet-stream"),
+        "size_bytes": size,
+        "version": version,
+        "md5_checksum": md5,
+        "parents": tuple(sorted(str(parent) for parent in parents)),
+        "modified_time": str(item.get("modifiedTime") or ""),
+    }
+
+
+def download_drive_media(
+    source_path: str, destination: Path, *, max_bytes: int | None = None,
+) -> dict[str, Any]:
+    """Stream an exact Drive media path and verify its metadata before/after.
+
+    The destination is create-once. This function performs Drive GET requests
+    only; it never writes to Drive or calls an ASR/correction provider.
+    """
+    limit = max_bytes
+    if limit is None:
+        try:
+            limit = int(os.environ.get("COURSE_TRANSCRIPT_V2_SOURCE_MAX_BYTES", str(2 * 1024**3)))
+        except ValueError as exc:
+            raise DriveApiError("Golden V2 音訊下載上限設定不正確") from exc
+    if type(limit) is not int or limit <= 0:
+        raise DriveApiError("Golden V2 音訊下載上限設定不正確")
+
+    before = _drive_media_metadata(source_path)
+    if before["size_bytes"] > limit:
+        raise DriveApiError("Google Drive 音訊檔案超過單檔下載上限")
+    target = Path(destination)
+    if target.is_symlink() or target.exists():
+        raise DriveApiError("本機暫存目的地必須是新的普通檔案路徑")
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    digest = hashlib.sha256()
+    md5 = hashlib.md5(usedforsecurity=False)
+    total = 0
+    try:
+        request = urllib.request.Request(
+            f"{_DRIVE_API}/files/{urllib.parse.quote(before['id'], safe='')}?alt=media",
+            headers={"Authorization": f"Bearer {_refresh_access_token()}"},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=60) as response, target.open("xb") as output:
+            while True:
+                chunk = response.read(1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit or total > before["size_bytes"]:
+                    raise DriveApiError("Google Drive 下載內容超過 metadata 大小")
+                digest.update(chunk)
+                md5.update(chunk)
+                output.write(chunk)
+            output.flush()
+            os.fsync(output.fileno())
+    except urllib.error.HTTPError as exc:
+        target.unlink(missing_ok=True)
+        if exc.code == 401:
+            reset_drive_api_state()
+            raise DriveApiError("Google Drive OAuth 授權已失效，請重新授權") from exc
+        if exc.code == 403:
+            raise DriveApiError("Google Drive 音訊讀取權限不足或配額受限") from exc
+        if exc.code == 404:
+            raise DriveApiError("Google Drive 音訊檔案不存在或無權存取") from exc
+        raise DriveApiError(f"Google Drive 音訊下載錯誤 ({exc.code})") from exc
+    except (OSError, TimeoutError) as exc:
+        target.unlink(missing_ok=True)
+        raise DriveApiError("Google Drive 音訊下載失敗") from exc
+    except DriveApiError:
+        target.unlink(missing_ok=True)
+        raise
+
+    try:
+        after = _validate_drive_media_metadata(_api_json(
+            f"/files/{urllib.parse.quote(before['id'], safe='')}",
+            {"fields": _DRIVE_METADATA_FIELDS, "supportsAllDrives": "true"},
+        ))
+    except DriveApiError:
+        target.unlink(missing_ok=True)
+        raise
+    if before != after or total != before["size_bytes"] or md5.hexdigest() != before["md5_checksum"]:
+        target.unlink(missing_ok=True)
+        raise DriveApiError("Google Drive 音訊版本或下載校驗值在下載前後不一致")
+    return {
+        "provider": "google_drive",
+        "file_id": before["id"],
+        "version": before["version"],
+        "size_bytes": total,
+        "downloaded_sha256": digest.hexdigest(),
+        "downloaded_md5": md5.hexdigest(),
+        "source_path": _normalize_path(source_path),
+        "source_name": before["name"],
+        "mime_type": before["mime_type"],
+        "modified_time": before["modified_time"],
+    }
 
 
 def _parent_path(path: str) -> str | None:

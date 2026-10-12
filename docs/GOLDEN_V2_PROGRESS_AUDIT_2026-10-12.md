@@ -20,6 +20,13 @@
 
 ## 2. 查核到的客觀事實
 
+### 2026-10-12 Goal continuation — authenticated Drive source preflight
+
+- `/golden-v2` now accepts an explicitly confirmed Drive path, mode and six-stage estimate, then calls a default-off same-origin owner proxy and separately write-token-gated API route. The backend freshly resolves the exact path and rejects ambiguous duplicate names.
+- It streams at most 2 GiB by default into a private artifact-root temp directory; Drive file ID, version, size, MD5, name, MIME and parent must remain identical before/after. Downloaded size/MD5 are verified, local SHA-256 binds the snapshot, then existing FFmpeg lineage/preflight stores the original and normalized FLAC and registers the deterministic job. Only after successful verification does the ledger receive `AWAITING_APPROVAL`; replay returns the current ledger state.
+- Source intake performs Drive GET and local writes only. No Vertex/Chirp call, Drive mutation, IAM/firewall change, production configuration or deployment occurred. End-to-end Drive credentials, Cloudflare timeout and real-file behavior remain unverified; G7/G8 remain partial.
+- Local evidence: mock Drive intake **9 tests**, existing source preflight **10 tests**, owner API **12 tests**, full unittest **871 PASS**, handoff/output-safety pytest **30 PASS**, frontend **62 tests**, Next.js production build, Python compileall and diff checks pass. Local Python validation used a temporary 3.13 environment; exact-head Python 3.12 CI remains pending.
+
 ### 2026-10-12 Goal continuation — local source intake and persistent worker
 
 - 在隔離分支 `codex/golden-v2-goal-completion` 提交 `ab0431956052652d52bb93040f06407ccb7bb3b0`：加入 snapshot-first 本機 source preflight、不可重複的未核准 V2 registration、artifact-root/symlink 防逃逸，以及無網路、無雲端憑證、opt-in 的持續本機階段 worker。後續 owner API 也改為相同來源／模式／估價 request 冪等，避免 HTTP 重試建立重複待核准 job。
@@ -60,8 +67,8 @@
 | P4 3.5 Transcribe | Vertex adapter、VERBATIM、≤15m 策略、選用模式/mock | 正式 SDK/模型可用性、真實 provider response 及用量、第三稿比對及 mode 路由持久整合 |
 | P5 校對/Golden QA | 比對 REVIEW、Chirp 字詞時間 SRT/TXT mock 出稿、QA 記入 SQLite、原始 SHA 受保護的 seam review CLI；新增 source/revision-bound comparison review package/import | ChatGPT/WebCodex 對話傳輸、獨立 reviewer 身分與真人整堂聲學驗收、Drive 出稿全流程 |
 | P6 實測評測 | 人工 gold CER 計算及 `scripts/golden_v2_benchmark.py` 配對引擎評測：同來源 SHA/window ID、reviewer reference、raw-evidence SHA、按類別 CER；未知成本/耗時不補零 | 真實金標樣本、三引擎相同音檔、國台語/經文/雜音、時碼/價格/耗時實測；helper 不認證 gold/reviewer/evidence 真實性 |
-| P7 Skill/任務入口 | SQLite stages、重試/未知結果限制、唯讀 CLI、預設關閉的 status API、write-token/flag 保護的 SQLite owner approval API、snapshot-first source-preflight CLI、network-disabled persistent local-stage worker profile、隔離分支 default-off owner status/approval console；Skill 草案 | Drive URL acquisition、paid executor integration、VPS worker continuity evidence、ChatGPT/Skill handoff、staging identity |
-| P8 UI/發布 | 本機 responsive `/golden-v2` job/status 六階段頁與單筆預算核准 | 真帳本 browser UAT、音訊差異播放/人工裁決、staging/canary、V2 Drive 回寫驗證、正式上線 |
+| P7 Skill/任務入口 | SQLite stages、重試/未知結果限制、唯讀 CLI、default-off status/write owner API、snapshot-first CLI、network-disabled local worker、`/golden-v2` 狀態/核准頁及精確 Drive 路徑唯讀 intake（Drive metadata 前後比對後才建立未核准任務）；Skill 草案 | 自然語言 URL parsing、paid executor integration、VPS continuity、ChatGPT/Skill handoff、真實 Drive／Cloudflare 驗證、staging identity |
+| P8 UI/發布 | 本機 responsive `/golden-v2` 六階段狀態/預算核准與 source intake 表單 | 真帳本 browser UAT、Cloudflare 長請求/Drive 實測、音訊差異播放/人工裁決、staging/canary、V2 Drive 回寫驗證、正式上線 |
 
 ## 4. 剩餘工作重組成六個**完工波次**（現有 P0–P8 / G0–G8 不廢除）
 

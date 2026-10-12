@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  GOLDEN_V2_STAGES,
   formatUsdCents,
   isGoldenV2JobId,
   patchGoldenV2ApprovalForm,
+  patchGoldenV2SourceForm,
   parseGoldenV2ApprovalPayload,
+  parseGoldenV2SourcePreflightPayload,
 } from "../../lib/golden-v2-admin-contract.ts";
 import {
   goldenV2OwnerApiBase,
@@ -40,6 +43,38 @@ test("editing approval amount or reference requires fresh confirmation", () => {
     amount: "125", reference: "new basis", confirmed: false,
   });
   assert.equal(patchGoldenV2ApprovalForm(confirmed, { confirmed: false }).confirmed, false);
+});
+
+test("Drive source preflight requires exact path, estimates and explicit confirmation", () => {
+  const valid = {
+    source_path: "gdrive:課程/第一課.m4a", mode: "FLASH_CHIRP",
+    estimated_stage_cents: Object.fromEntries(GOLDEN_V2_STAGES.map((stage) => [stage, 0])),
+    confirm: true,
+  };
+  assert.deepEqual(parseGoldenV2SourcePreflightPayload(valid), valid);
+  assert.equal(parseGoldenV2SourcePreflightPayload({ ...valid, confirm: false }), null);
+  assert.equal(parseGoldenV2SourcePreflightPayload({ ...valid, source_path: "/tmp/audio.wav" }), null);
+  assert.equal(parseGoldenV2SourcePreflightPayload({ ...valid, mode: "UNSAFE" }), null);
+  assert.equal(parseGoldenV2SourcePreflightPayload({
+    ...valid, estimated_stage_cents: { ...valid.estimated_stage_cents, extra: 1 },
+  }), null);
+  assert.equal(parseGoldenV2SourcePreflightPayload({
+    ...valid, estimated_stage_cents: { ...valid.estimated_stage_cents, gemini_primary: -1 },
+  }), null);
+});
+
+test("changing source, mode or estimates resets preflight confirmation", () => {
+  const confirmed = {
+    sourcePath: "gdrive:lesson.mp3", mode: "FLASH_CHIRP",
+    estimates: Object.fromEntries(GOLDEN_V2_STAGES.map((stage) => [stage, "0"])),
+    confirmed: true,
+  };
+  assert.equal(patchGoldenV2SourceForm(confirmed, { sourcePath: "gdrive:other.mp3" }).confirmed, false);
+  assert.equal(patchGoldenV2SourceForm(confirmed, { mode: "SMART_2PLUS" }).confirmed, false);
+  assert.equal(patchGoldenV2SourceForm(confirmed, {
+    estimates: { ...confirmed.estimates, gemini_primary: "5" },
+  }).confirmed, false);
+  assert.equal(patchGoldenV2SourceForm(confirmed, { confirmed: false }).confirmed, false);
 });
 
 test("owner route accepts only real V2 job identities", () => {

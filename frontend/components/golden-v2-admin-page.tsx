@@ -4,9 +4,13 @@ import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { Check, CircleAlert, Clock3, FileAudio2, RefreshCw, ShieldCheck } from "lucide-react";
 
 import {
+  GOLDEN_V2_STAGES,
   formatUsdCents,
   patchGoldenV2ApprovalForm,
+  patchGoldenV2SourceForm,
+  parseGoldenV2SourcePreflightPayload,
   type GoldenV2ApprovalForm,
+  type GoldenV2SourceForm,
 } from "@/lib/golden-v2-admin-contract";
 import styles from "./golden-v2-admin-page.module.css";
 
@@ -69,6 +73,10 @@ const MODE_LABEL: Record<string, string> = {
   FLASH_CHIRP: "快速 Chirp 模式",
 };
 
+const EMPTY_ESTIMATES = Object.fromEntries(
+  GOLDEN_V2_STAGES.map((stage) => [stage, "0"]),
+) as GoldenV2SourceForm["estimates"];
+
 function statusLabel(value: string) {
   return STATE_LABEL[value] ?? value.replaceAll("_", " ");
 }
@@ -94,6 +102,10 @@ export default function GoldenV2AdminPage() {
   const [notice, setNotice] = useState("");
   const [forms, setForms] = useState<Record<string, GoldenV2ApprovalForm>>({});
   const [submitting, setSubmitting] = useState("");
+  const [sourceForm, setSourceForm] = useState<GoldenV2SourceForm>({
+    sourcePath: "", mode: "FLASH_CHIRP", estimates: EMPTY_ESTIMATES, confirmed: false,
+  });
+  const [sourceSubmitting, setSourceSubmitting] = useState(false);
 
   const refresh = useCallback(async (quiet = false) => {
     if (quiet) setRefreshing(true);
@@ -178,6 +190,42 @@ export default function GoldenV2AdminPage() {
     }
   }
 
+  async function preflightSource(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const estimated = Object.fromEntries(GOLDEN_V2_STAGES.map((stage) => [
+      stage, Number(sourceForm.estimates[stage]),
+    ]));
+    const body = parseGoldenV2SourcePreflightPayload({
+      source_path: sourceForm.sourcePath,
+      mode: sourceForm.mode,
+      estimated_stage_cents: estimated,
+      confirm: sourceForm.confirmed,
+    });
+    if (!body) {
+      setError("請填入有效 Drive 路徑、每階段整數估價，並確認你已核對來源。");
+      return;
+    }
+    setSourceSubmitting(true);
+    setError("");
+    setNotice("");
+    try {
+      const response = await fetch("/api/golden-v2/source-preflight", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(errorDetail(payload, response.status));
+      const currentStatus = typeof payload?.status === "string" ? payload.status : "UNKNOWN";
+      setNotice(`來源已完成版本與校驗值比對，任務 ${payload?.job_id ?? ""} 目前為「${statusLabel(currentStatus)}」。尚未呼叫辨識模型。`);
+      setSourceForm((current) => ({ ...current, confirmed: false }));
+      await refresh(true);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "來源預檢未完成，請更新狀態後再檢查。");
+    } finally {
+      setSourceSubmitting(false);
+    }
+  }
+
   return (
     <div className={styles.page}>
       <section className={styles.hero} aria-labelledby="golden-v2-title">
@@ -197,6 +245,73 @@ export default function GoldenV2AdminPage() {
           </div>
           <small>SHA → WORD TIME → GOLDEN QA</small>
         </div>
+      </section>
+
+      <section className={styles.sourceIntake} aria-labelledby="source-intake-title">
+        <div className={styles.sourceHeading}>
+          <div>
+            <p className={styles.sectionKicker}>READ-ONLY DRIVE INTAKE</p>
+            <h2 id="source-intake-title">建立來源預檢</h2>
+          </div>
+          <span className={styles.readOnlyMark}><ShieldCheck size={15} />唯讀下載</span>
+        </div>
+        <p className={styles.sourceNote}>
+          貼上已選定的 Google Drive 完整路徑。系統會在下載前後比對檔案版本、大小與 MD5，保存原始音檔及正規化副本，然後建立「待核准」任務；不會修改 Drive，也不會呼叫辨識模型。大檔可能需要數分鐘，請保持頁面開啟。
+        </p>
+        <form className={styles.sourceForm} onSubmit={(event) => void preflightSource(event)}>
+          <div className={styles.sourceTopGrid}>
+            <label>
+              <span>Drive 檔案路徑</span>
+              <input
+                type="text" required maxLength={2048} autoComplete="off"
+                placeholder="gdrive:課程/第一課.m4a" value={sourceForm.sourcePath}
+                onChange={(event) => setSourceForm((current) => patchGoldenV2SourceForm(
+                  current, { sourcePath: event.target.value },
+                ))}
+              />
+            </label>
+            <label>
+              <span>辨識流程</span>
+              <select value={sourceForm.mode} onChange={(event) => setSourceForm((current) => patchGoldenV2SourceForm(
+                current, { mode: event.target.value as GoldenV2SourceForm["mode"] },
+              ))}>
+                <option value="FLASH_CHIRP">快速 Chirp 模式</option>
+                <option value="SMART_2PLUS">智慧雙引擎模式</option>
+                <option value="QUALITY_3WAY">三引擎品質模式</option>
+              </select>
+            </label>
+          </div>
+          <fieldset className={styles.estimateFieldset}>
+            <legend>每階段估價（美分；估價不會自動核准）</legend>
+            <div className={styles.estimateGrid}>
+              {GOLDEN_V2_STAGES.map((stage) => (
+                <label key={stage}>
+                  <span>{STAGE_LABEL[stage]}</span>
+                  <input
+                    type="number" inputMode="numeric" min={0} step={1} required
+                    value={sourceForm.estimates[stage]}
+                    onChange={(event) => setSourceForm((current) => patchGoldenV2SourceForm(
+                      current, { estimates: { ...current.estimates, [stage]: event.target.value } },
+                    ))}
+                  />
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          <label className={styles.confirmRow}>
+            <input
+              type="checkbox" checked={sourceForm.confirmed}
+              onChange={(event) => setSourceForm((current) => patchGoldenV2SourceForm(
+                current, { confirmed: event.target.checked },
+              ))}
+            />
+            <span>我已核對選取的 Drive 路徑與各階段估價，並同意將檔案唯讀下載到私有預檢空間。</span>
+          </label>
+          <button className={styles.approveButton} type="submit"
+            disabled={!sourceForm.confirmed || sourceSubmitting || submitting !== ""}>
+            {sourceSubmitting ? "正在下載並比對來源…" : "唯讀下載並建立待核准任務"}
+          </button>
+        </form>
       </section>
 
       <section className={styles.listSection} aria-labelledby="job-list-title">
@@ -228,7 +343,7 @@ export default function GoldenV2AdminPage() {
           <div className={styles.empty}>
             <FileAudio2 size={23} />
             <h3>目前沒有 V2 任務</h3>
-            <p>完成唯讀來源下載後，可用 source-preflight CLI 建立待核准任務；此頁不會自行取得 Drive 檔案。</p>
+            <p>上方的來源預檢會建立待核准任務；任務需經獨立預算核准後才會排入處理佇列。</p>
           </div>
         ) : (
           <div className={styles.jobs}>

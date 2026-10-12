@@ -14,6 +14,8 @@ from fastapi.testclient import TestClient
 
 from app.golden_v2_routes import router
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, STAGES
+from app.jobs.drive_api import DriveApiError
+from app.pipeline.golden_v2_drive_intake import SourceIntakeBusyError
 
 
 class OwnerApiTests(unittest.TestCase):
@@ -119,12 +121,89 @@ class OwnerApiTests(unittest.TestCase):
         self.assertEqual(state["status"], "AWAITING_APPROVAL")
         self.assertIsNone(state["approved_cents"])
         self.assertEqual(state["estimated_cents"], 7)
-
         self.assertEqual(replay.status_code, 201, replay.text)
         self.assertEqual(replay.json()["job_id"], result["job_id"])
 
         self.assertEqual(distinct.status_code, 201, distinct.text)
         self.assertNotEqual(distinct.json()["job_id"], result["job_id"])
+
+    def test_drive_source_preflight_is_write_gated_confirmed_and_unapproved(self):
+        body = {
+            "source_path": "gdrive:課程/第一課.m4a",
+            "mode": "FLASH_CHIRP",
+            "estimated_stage_cents": {name: 0 for name in STAGES},
+            "confirm": True,
+        }
+        endpoint = "/api/v1/golden-v2/source-preflight"
+        self.assertEqual(self.client.post(endpoint, headers=self.write_headers, json=body).status_code, 404)
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true"}):
+            self.assertEqual(self.client.post(endpoint, headers=self.headers, json=body).status_code, 401)
+            self.assertEqual(self.client.post(endpoint, headers=self.write_headers,
+                                              json={**body, "confirm": False}).status_code, 422)
+            self.assertEqual(self.client.post(endpoint, headers=self.write_headers,
+                                              json={**body, "unexpected": True}).status_code, 422)
+            bad_estimates = {**body, "estimated_stage_cents": {**body["estimated_stage_cents"], "gemini_primary": 1001}}
+            self.assertEqual(self.client.post(endpoint, headers=self.write_headers,
+                                              json=bad_estimates).status_code, 422)
+            with patch("app.golden_v2_routes.intake_drive_source", side_effect=[{
+                "job_id": "v2p_" + "f" * 32,
+                "status": "AWAITING_APPROVAL",
+                "provider_calls_started": False,
+                "drive_mutation_started": False,
+                "drive_observation_authenticated": True,
+            }, {
+                "job_id": "v2p_" + "f" * 32,
+                "status": "QUEUED",
+                "provider_calls_started": False,
+                "drive_mutation_started": False,
+                "drive_observation_authenticated": True,
+            }]) as intake:
+                response = self.client.post(endpoint, headers=self.write_headers, json=body)
+                replay = self.client.post(endpoint, headers=self.write_headers, json=body)
+            self.assertEqual(intake.call_count, 2)
+            self.assertEqual(intake.call_args.kwargs["source_path"], body["source_path"])
+            self.assertEqual(intake.call_args.kwargs["mode"], body["mode"])
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["status"], "AWAITING_APPROVAL")
+        self.assertTrue(response.json()["approval_required"])
+        self.assertFalse(response.json()["provider_calls_started"])
+        self.assertFalse(response.json()["drive_mutation_started"])
+        self.assertEqual(replay.status_code, 201, replay.text)
+        self.assertEqual(replay.json()["status"], "QUEUED")
+        self.assertFalse(replay.json()["approval_required"])
+
+    def test_drive_version_mismatch_does_not_register_source(self):
+        body = {
+            "source_path": "gdrive:課程/第一課.m4a",
+            "mode": "FLASH_CHIRP",
+            "estimated_stage_cents": {name: 0 for name in STAGES},
+            "confirm": True,
+        }
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true"}), \
+                patch("app.golden_v2_routes.intake_drive_source",
+                      side_effect=DriveApiError("Google Drive 音訊版本或下載校驗值在下載前後不一致")):
+            response = self.client.post(
+                "/api/v1/golden-v2/source-preflight", headers=self.write_headers, json=body,
+            )
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("前後不一致", response.json()["detail"])
+
+    def test_concurrent_drive_intake_returns_conflict(self):
+        body = {
+            "source_path": "gdrive:課程/第一課.m4a",
+            "mode": "FLASH_CHIRP",
+            "estimated_stage_cents": {name: 0 for name in STAGES},
+            "confirm": True,
+        }
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true"}), \
+                patch("app.golden_v2_routes.intake_drive_source",
+                      side_effect=SourceIntakeBusyError("internal lock state")):
+            response = self.client.post(
+                "/api/v1/golden-v2/source-preflight", headers=self.write_headers, json=body,
+            )
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json()["detail"], "Another Golden V2 source preflight is active")
+        self.assertNotIn("internal lock state", response.text)
 
     def test_missing_database_invalid_id_and_limit(self):
         self.assertEqual(self.client.get("/api/v1/golden-v2/jobs/v2_not-a-job", headers=self.headers).status_code, 404)

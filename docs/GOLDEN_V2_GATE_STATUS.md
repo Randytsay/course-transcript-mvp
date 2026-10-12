@@ -3,6 +3,14 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-12 Goal continuation — authenticated Drive source preflight
+
+- 新增 default-off `POST /api/v1/golden-v2/source-preflight` 與 `/golden-v2` 表單：只接受目前允許的 Drive 精確路徑、模式、六階段整數估價與明確確認；維持 admin-host／Cloudflare Access、same-origin HTTPS、獨立 write token、feature flag 與 job ceiling。
+- Backend 重新解析精確路徑並拒絕重名，下載前後讀取 Google Drive metadata，串流下載（預設單檔上限 2 GiB），核對 file ID、version、size、MD5、名稱、MIME、parent 與本機 bytes。並行匯入會 fail-fast 回 409，避免同時佔用多份大音檔暫存空間。接著做本機 FFmpeg 正規化，保存 original、FLAC、lineage 與 manifest；只有全部成功才登錄 `AWAITING_APPROVAL`。下載／metadata 不一致會丟棄暫存檔且不建立任務。
+- 入口只執行 Drive GET 與本機隔離空間寫入，不改 Drive、不呼叫 Vertex／Chirp、不排隊辨識；估價不構成核准。來源 SHA 後續任務仍須獨立 revision-bound 預算核准。設定預設關閉，沒有真實 Drive 憑證呼叫或 production 啟用。
+- Local mock 驗證包含串流雜湊、重複路徑、超量、下載版本變動／錯誤內容清理、並行匯入 fail-fast 及孤立暫存；Drive intake suite **9 tests**、既有 preflight **10 tests**、owner API suite **12 tests**、完整 unittest **871 PASS**、pytest handoff/output-safety **30 PASS**、frontend **62 tests**、Next.js production build、compileall 與 `git diff --check` PASS。此次完整 unittest/pytest 使用暫存 Python 3.13 環境；正式 Python 3.12 exact-head CI 仍待確認。
+- 此功能仍屬 source-level code。未連真 Drive、未辨識任何檔案、未驗證 Cloudflare／production request timeout、未部署；G7 PARTIAL、G8 NOT_RUN、G0–G7 PARTIAL、0/9 PASS。
+
 ### 2026-10-12 Goal continuation — local source intake and persistent worker code
 
 - 新增 `scripts/golden_v2_source_preflight.py`：只接收本機已下載原始音訊與呼叫端提供的唯讀 Drive observation；先複製 immutable snapshot 並比對 bytes/SHA，再以 FFmpeg 建立 16 kHz mono FLAC，保留原件、正規化音訊、Drive observation lineage 及 source-preflight manifest。此處驗證的是欄位與本機 bytes 一致，未連接或認證 Google Drive。
@@ -89,8 +97,8 @@
 | P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_third_transcribe.py` 實作 Vertex generateContent/VERBATIM、≤15m hard cap、選用/禁用與 mock tests；**尚未實際 Vertex smoke/worker 用量帳本**。 |
 | P5 WebCodex 最終裁決與 Golden QA | G5 | PARTIAL | `golden_v2_final_gate.py` + `golden_v2_stage_runner.py` 可持久化離線比對/QA；`golden_v2_review_candidates.py` 新增來源 SHA／revision 綁定的本機人工候選 review/import，可選 KEEP_CHIRP 或以 Chirp word evidence 校正；**仍未串接 ChatGPT/WebCodex 對話傳輸、獨立 reviewer 身分或真人整堂聲學驗收**，無爭議也不等於正確。 |
 | P6 實測評分與最佳化 | G6 | PARTIAL | `app/evaluation/golden_v2_benchmark.py` + `scripts/golden_v2_benchmark.py` 新增離線配對引擎 CER 評測：強制同一來源 SHA/window IDs、人工 Gold provenance 與各引擎 raw-evidence SHA，按類別統計；成本/耗時缺值保留 unknown。**無真實人工金標／三引擎樣本／帳單比價，欄位 SHA 尚未獨立讀回驗證**。 |
-| P7 ChatGPT Skill / 持久任務 | G7 | PARTIAL | 新增 `app/jobs/golden_v2_ledger.py` SQLite task/claim/費用/來源視窗授權；`scripts/golden_v2_status.py` 唯讀查詢、`app/golden_v2_routes.py` 分離 read/write token 的 owner API（新增 source-SHA job register、job/repair approval，write 預設關閉、每 job ceiling 預設 US$10、只寫 SQLite、絕不提交 provider；呼叫端負責來源 SHA preflight）、`scripts/golden_v2_review_overlaps.py` overlap seam review 與 `scripts/golden_v2_review_candidates.py` 比對候選 review/import（操作者自述，無獨立聽音認證）；snapshot-first 本機 preflight、無網路 worker profile、隔離分支 default-off `/golden-v2` owner status/approval console。Skill 仍為草案。**未安裝 Skill、未部署 Worker/UI/API、未接付費 Vertex／Drive 或對話 handoff**。 |
-| P8 UI / 部署 / Drive 驗收 | G8 | NOT_RUN | 隔離分支有本機 default-off 任務／六階段狀態頁與單筆預算核准入口；未做真帳本 browser UAT、staging/canary/production 部署或 Drive 實測，音訊差異播放及出稿/發布整合仍未完成 |
+| P7 ChatGPT Skill / 持久任務 | G7 | PARTIAL | 新增 `app/jobs/golden_v2_ledger.py` SQLite task/claim/費用/來源視窗授權；`scripts/golden_v2_status.py` 唯讀查詢、`app/golden_v2_routes.py` 分離 read/write token 的 owner API（source-SHA registration、job/repair approval 與精確 Drive 路徑 source-preflight；write 預設關閉、估價受 US$10 預設上限約束，Drive 僅 GET、建立未核准工作，絕不提交 provider），`scripts/golden_v2_review_overlaps.py` overlap seam review 與 `scripts/golden_v2_review_candidates.py` 比對候選 review/import（操作者自述，無獨立聽音認證）；snapshot-first 本機 preflight、無網路 worker profile、隔離分支 default-off `/golden-v2` owner status/intake/approval console。Skill 仍為草案。**未安裝 Skill、未部署 Worker/UI/API、未接付費 Vertex／對話 handoff；live Drive/Cloudflare 驗證未執行**。 |
+| P8 UI / 部署 / Drive 驗收 | G8 | NOT_RUN | 隔離分支有本機 default-off 任務／六階段狀態、精確路徑唯讀來源預檢及單筆預算核准入口；未做真帳本 browser UAT、staging/canary/production 部署或 live Drive 實測，音訊差異播放及出稿/發布整合仍未完成 |
 
 ## V2 文件提交紀錄
 

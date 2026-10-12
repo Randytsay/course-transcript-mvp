@@ -16,6 +16,21 @@
 .listHeading { padding: 0 2px 13px; border-bottom: 1px solid #cbd5cc; display: flex; align-items: end; justify-content: space-between; gap: 16px; }
 .sectionKicker { color: #718078; }
 .listHeading h2 { margin: 8px 0 0; color: #223a31; font: 650 23px/1.25 "Noto Serif TC", "Source Han Serif TC", "Songti TC", serif; letter-spacing: .02em; }
+.sourceIntake { padding: 20px 22px; border: 1px solid #d7e0d6; background: #fffef9; box-shadow: 0 5px 20px rgba(26, 55, 42, .035); display: grid; gap: 12px; }
+.sourceHeading { display: flex; align-items: center; justify-content: space-between; gap: 14px; }
+.sourceHeading h2 { margin: 7px 0 0; color: #223a31; font: 650 21px/1.25 "Noto Serif TC", "Source Han Serif TC", "Songti TC", serif; }
+.readOnlyMark { display: inline-flex; align-items: center; gap: 6px; color: #47684e; font-size: 10px; font-weight: 750; white-space: nowrap; }
+.sourceNote { max-width: 880px; margin: 0; color: #68796e; font-size: 11px; line-height: 1.75; }
+.sourceForm { display: grid; gap: 12px; }
+.sourceTopGrid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(200px, .35fr); gap: 12px; }
+.sourceTopGrid label, .estimateGrid label { min-width: 0; display: grid; gap: 6px; }
+.sourceTopGrid label > span, .estimateGrid label > span { color: #506454; font-size: 10px; font-weight: 700; }
+.sourceTopGrid input, .sourceTopGrid select, .estimateGrid input { width: 100%; min-height: 39px; padding: 0 10px; border: 1px solid #ccd7c9; border-radius: 2px; color: #20372e; background: #fffef9; font-size: 12px; }
+.sourceTopGrid input:focus-visible, .sourceTopGrid select:focus-visible, .estimateGrid input:focus-visible, .confirmRow input:focus-visible, .refreshButton:focus-visible, .approveButton:focus-visible { outline: 3px solid #97b64f; outline-offset: 2px; }
+.estimateFieldset { min-width: 0; margin: 0; padding: 10px 12px 12px; border: 1px solid #e0e7dc; }
+.estimateFieldset legend { padding: 0 5px; color: #66786b; font-size: 10px; font-weight: 700; }
+.estimateGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.estimateGrid input { min-height: 35px; }
 .refreshButton { min-height: 39px; padding: 0 13px; border: 1px solid #cad7cb; display: inline-flex; align-items: center; justify-content: center; gap: 8px; color: #29483b; background: #fbfcf6; cursor: pointer; font-size: 12px; font-weight: 650; transition: background .15s ease, border-color .15s ease; }
 .refreshButton:hover:not(:disabled) { border-color: #7c9a83; background: #f0f4e8; }
 .refreshButton:disabled { cursor: wait; opacity: .65; }
@@ -69,7 +84,7 @@
 .formGrid label { min-width: 0; display: grid; gap: 6px; }
 .formGrid label > span { color: #506454; font-size: 10px; font-weight: 700; }
 .formGrid input { width: 100%; min-height: 39px; padding: 0 10px; border: 1px solid #ccd7c9; border-radius: 2px; color: #20372e; background: #fffef9; font-size: 13px; }
-.formGrid input:focus-visible, .confirmRow input:focus-visible, .refreshButton:focus-visible, .approveButton:focus-visible { outline: 3px solid #97b64f; outline-offset: 2px; }
+  .formGrid input:focus-visible { outline: 3px solid #97b64f; outline-offset: 2px; }
 .confirmRow { margin: 12px 0; display: flex; align-items: flex-start; gap: 9px; color: #506454; cursor: pointer; font-size: 11px; line-height: 1.6; }
 .confirmRow input { width: 16px; height: 16px; margin: 1px 0 0; flex: 0 0 auto; accent-color: #4d765a; }
 .approveButton { min-height: 42px; padding: 0 15px; border: 0; border-radius: 2px; color: #f8faef; background: #25473a; cursor: pointer; font-size: 11px; font-weight: 750; letter-spacing: .025em; }
@@ -106,8 +121,15 @@
   .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 8px; }
   .stageFacts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .formGrid { grid-template-columns: 1fr; }
+  .sourceIntake { padding: 17px 14px; }
+  .sourceHeading h2 { font-size: 19px; }
+  .sourceTopGrid, .estimateGrid { grid-template-columns: 1fr 1fr; }
   .approveButton { width: 100%; }
   .footerNote { justify-content: flex-start; }
+}
+
+@media (max-width: 430px) {
+  .sourceTopGrid, .estimateGrid { grid-template-columns: 1fr; }
 }
 
 @media (prefers-reduced-motion: reduce) {

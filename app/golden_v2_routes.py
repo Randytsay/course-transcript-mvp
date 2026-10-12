@@ -17,6 +17,11 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.jobs.golden_v2_read import get_v2_status, list_v2_status
 from app.jobs.golden_v2_ledger import STAGES, GoldenV2Ledger, V2Conflict
+from app.jobs.drive_api import DriveApiError
+from app.pipeline.golden_v2_drive_intake import (
+    SourceIntakeBusyError,
+    intake_drive_source,
+)
 
 router = APIRouter(prefix="/api/v1/golden-v2", tags=["golden-v2-owner"])
 
@@ -26,6 +31,24 @@ class JobCreateRequest(BaseModel):
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     mode: Literal["QUALITY_3WAY", "SMART_2PLUS", "FLASH_CHIRP"]
     estimated_stage_cents: dict[str, StrictInt]
+    confirm: Literal[True]
+
+
+class SourceStageEstimates(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    gemini_primary: StrictInt = Field(ge=0)
+    chirp_independent: StrictInt = Field(ge=0)
+    compare: StrictInt = Field(ge=0)
+    third_optional: StrictInt = Field(ge=0)
+    adjudication: StrictInt = Field(ge=0)
+    golden_qa: StrictInt = Field(ge=0)
+
+
+class SourcePreflightRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_path: str = Field(min_length=8, max_length=2048)
+    mode: Literal["QUALITY_3WAY", "SMART_2PLUS", "FLASH_CHIRP"]
+    estimated_stage_cents: SourceStageEstimates
     confirm: Literal[True]
 
 
@@ -150,6 +173,60 @@ def create_job(
         }
     except (V2Conflict, ValueError, sqlite3.Error) as exc:
         raise _mutation_error(exc) from exc
+
+
+@router.post("/source-preflight", status_code=201)
+def create_source_preflight(
+    body: SourcePreflightRequest,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Read one exact Drive source into an isolated, unapproved V2 job.
+
+    Drive access is GET-only. The request performs local normalization and
+    ledger writes, but never starts recognition or writes to Drive.
+    """
+    database, _, max_approval_cents = _authorized_write_database(authorization)
+    estimates = body.estimated_stage_cents.model_dump()
+    if (set(estimates) != set(STAGES)
+            or any(type(value) is not int or value < 0 for value in estimates.values())):
+        raise HTTPException(status_code=422, detail="Invalid per-stage cost estimate")
+    if sum(estimates.values()) > max_approval_cents:
+        raise HTTPException(status_code=422, detail="Estimate exceeds configured per-job ceiling")
+    configured_root = Path(os.environ.get(
+        "COURSE_TRANSCRIPT_V2_ARTIFACT_ROOT", str(database.parent),
+    )).expanduser()
+    if configured_root.is_symlink() or configured_root.resolve() != database.parent.resolve():
+        raise HTTPException(status_code=503, detail="Golden V2 artifact root is not isolated")
+    try:
+        result = intake_drive_source(
+            source_path=body.source_path,
+            artifact_root=configured_root,
+            database=database,
+            mode=body.mode,
+            estimated_stage_cents=estimates,
+            estimate_ceiling_cents=max_approval_cents,
+        )
+        return {
+            **result,
+            "approval_required": result.get("status") == "AWAITING_APPROVAL",
+        }
+    except SourceIntakeBusyError as exc:
+        raise HTTPException(
+            status_code=409, detail="Another Golden V2 source preflight is active",
+        ) from exc
+    except DriveApiError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Google Drive source intake failed: {exc}",
+        ) from exc
+    except (OSError, sqlite3.Error) as exc:
+        raise HTTPException(
+            status_code=503, detail="Golden V2 source preflight is unavailable",
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail=f"Golden V2 source preflight rejected: {exc}",
+        ) from exc
 
 
 def _mutation_error(exc: Exception) -> HTTPException:

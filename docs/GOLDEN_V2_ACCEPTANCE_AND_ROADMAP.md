@@ -85,13 +85,13 @@
 - [ ] G6-05 `SMART_2PLUS` 的模型加呼叫比例與節費效果先由真實數據證實，才宣稱最佳化。
 
 ### G7 — Skill / 長工流程
-- [ ] G7-01 自然語言 Drive URL + 模式 → durable job_id；能查最新進度、失敗原因、review 區間。
+- [ ] G7-01 自然語言 Drive URL + 模式 → durable job_id；**source-level partial**：owner UI/API now accept an explicitly selected exact Drive path, verify metadata/checksum around a read-only download, and create/reuse only an `AWAITING_APPROVAL` job. Natural-language URL resolution and live Drive/Cloudflare verification remain outstanding; status, failure and review-interval retrieval are only partially integrated.
 - [ ] G7-02 客戶端／ChatGPT 對話斷線後，VPS worker 可續跑；重連能以 job_id 查狀態。
 - [ ] G7-03 重啟、短暫 provider timeout、Drive 暫時中斷均不重送完成的付費步驟。
 - [ ] G7-04 Budget、Auth、Drive safe-publish 的審核與非授權拒絕都有自動測試。
 
 ### G8 — UI / 部署 / 發布
-- [ ] G8-01 桌機／平板／手機都能查看模型選擇、進度、三稿差異、疑點音檔、QA/費用。
+- [ ] G8-01 桌機／平板／手機查看模型選擇、進度、三稿差異、疑點音檔、QA/費用；**source-level partial**：responsive status/intake/approval UI exists, but real ledger browser UAT, transcript comparison/audio review and staging verification remain outstanding.
 - [ ] G8-02 所有 `pytest/unittest`、前後端 build、型別檢查、dependency audit、Compose 驗證和 smoke 全通過（若例外須逐項記錄）。
 - [ ] G8-03 staging/canary 確認舊 V1 job resume、資料庫遷移與 rollback；使用 exact commit SHA 而非 dirty runtime。
 - [ ] G8-04 真實付費測試有特定來源、單次預算與累計 US$10 核准，不因自動 cost threshold 而略過。
@@ -142,4 +142,4 @@ Rollback path:
 3. 低可信台語／佛經語句需要人類裁決時，僅呈現特定音訊區段與三稿差異。
 4. 最終 production 部署、替換正式 SRT/TXT／回寫 Drive 前，由擁有人確認變更、驗收與回滾方案。
 
-**截至 2026-10-12 的執行範圍：**隔離 Draft PR #144 已交付 V2 provider-free pipeline、SQLite/恢復、聲學 review、有界 Chirp repair、本機 source-preflight CLI、opt-in/network-disabled 本機 worker，以及 default-off 的 `/golden-v2` owner status/approval console source。owner 頁面可讀既有 SQLite job 並提交 revision-bound 預算核准，沒有 Drive intake、付費 executor、reviewer handoff、音訊差異播放或發布功能；UI/API 未配置與部署，VPS continuity 和 live provider 也未驗證。G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS。**沒有呼叫付費模型、沒有改 IAM/firewall、沒有寫入 Drive、沒有變更 production。** 真實付費 smoke、帳戶/IAM 變更、Drive 發布與 production cutover 仍依 G0–G8 的明確授權邊界處理。
+**截至 2026-10-12 的執行範圍：**隔離 Draft PR #144 已交付 V2 provider-free pipeline、SQLite/恢復、聲學 review、有界 Chirp repair、本機 source-preflight CLI、opt-in/network-disabled 本機 worker，以及 default-off `/golden-v2` owner status/intake/approval console source。頁面可讀既有 job、手動指定精確 Drive 路徑並執行唯讀 metadata/checksum 驗證；成功後只建立未核准 job，另可提交 revision-bound 預算核准。尚無付費 executor、reviewer handoff、音訊差異播放或 Drive 發布；UI/API 未配置與部署，VPS continuity、Cloudflare 和 live Drive/provider 也未驗證。G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS。**沒有呼叫付費模型、沒有改 IAM/firewall、沒有寫入 Drive、沒有變更 production。** 真實付費 smoke、帳戶/IAM 變更、Drive 發布與 production cutover 仍依 G0–G8 的明確授權邊界處理。
