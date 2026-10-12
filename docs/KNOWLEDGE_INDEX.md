@@ -16,7 +16,7 @@ This index tells future Agents which documents are current contracts versus hist
 
 ## Approved future specification (NOT yet deployed)
 
-- `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md` — V2 Gemini 3.8 full-audio primary, Chirp 3, optional Gemini 3.5 Transcribe, Vertex Gemini 3.7 text-only correction, and final WebCodex/Golden QA design.
+- `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md` — V2 Gemini 3.8 full-audio primary, Chirp 3, optional Gemini 3.5 Transcribe, Vertex Gemini 3.8 text-only correction, and final WebCodex/Golden QA design.
 - `docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md` — P0–P8 sequence, G0–G8 auditable release gates, user approval boundaries.
 - `docs/GOLDEN_V2_GATE_STATUS.md` — evidence-based milestone status. Initially all G0–G8 are NOT_RUN.
 
