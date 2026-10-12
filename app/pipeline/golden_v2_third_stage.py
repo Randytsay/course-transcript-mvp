@@ -15,6 +15,7 @@ from app.providers.gemini_third_transcribe import run_third_window, MAX_WINDOW_S
 from app.providers.golden_v2_audio_staging import prepare_local_clips
 from app.providers.golden_v2_gcs_staging import upload_approved_clips
 from app.providers.golden_v2_source_lineage import bind_source_lineage
+from app.pipeline.golden_v2_window_budget import check_paid_window_budget
 
 
 def execute_approved_third_stage(
@@ -80,6 +81,12 @@ def execute_approved_third_stage(
                 part_factory=part_factory, config_factory=config_factory,
                 approval_validator=ledger.provider_approval_validator(claim),
             ))
+            # Never send the next paid third-model request when previously
+            # returned usage is already over budget or cannot be priced.
+            check_paid_window_budget(
+                ledger=ledger, claim=claim, job_dir=job_dir,
+                completed_records=records, accountant=cost_accountant,
+            )
     except PrimaryTranscriptError as exc:
         if exc.known_record is not None:
             records.append(exc.known_record)
