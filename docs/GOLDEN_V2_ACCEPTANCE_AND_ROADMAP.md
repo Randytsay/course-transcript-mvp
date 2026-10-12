@@ -7,7 +7,7 @@
 
 ## A. 已核定的產品決策
 
-1. 模型角色固定分開：Vertex `gemini-3.8-flash` 負責 full-audio primary recognition；Vertex `gemini-3.8-flash` 也負責 ASR 後的 text-only correction，但使用獨立的文字 Adapter。保留每筆 raw response 的真實模型 ID，不得以文字校正 adapter 接收音訊。舊 3.7 預計 2027-01-28 退役，正式上線前須驗證並排定替代型號切換。
+1. 模型角色固定分開：Vertex `gemini-3.8-flash` 負責 full-audio primary recognition；Vertex `gemini-3.8-flash` 也負責 ASR 後的 text-only correction，但使用獨立的文字 Adapter。保留每筆 raw response 的真實模型 ID，不得以文字校正 adapter 接收音訊。舊 3.7 預計 2027-01-28 退役，新版校正目標已改為 3.8；正式上線前仍須驗證真實 Vertex 相容性與部署切換。
 2. 順序：**Gemini 3.8 Flash 音訊主稿先行 → Chirp 3 獨立辨識時間軸 → 可選 Gemini 3.5 Transcribe → Vertex Gemini 3.8 純文字校正／ChatGPT-WebCodex 裁決 → Golden SRT/TXT/QA → 安全 Drive 發布**。
 3. 第一輪驗證採 **`QUALITY_3WAY`**（三引擎完整比較），不以「多數決」代替真實錄音；有聲學爭議須音檔重聽或 REVIEW。
 4. Skill + VPS 任務引擎為主要操作流程；現有網站補輕量管理與差異審核，不另建一套邏輯。
