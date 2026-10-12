@@ -40,6 +40,21 @@ class GoldenV2LedgerTests(unittest.TestCase):
         self.store.complete(claim, evidence_sha="e"*64, actual_cents=0,
                             comparison_has_dispute=dispute)
 
+    def test_prior_approved_source_requires_explicit_repeat_confirmation(self):
+        first = self.create()
+        second = self.create()
+        self.assertNotEqual(first, second)
+        self.store.approve(first, revision=0, approved_cents=60,
+                           reference="first-source-approval", actor="test-owner")
+        with self.assertRaisesRegex(V2Conflict, "repeat_source_confirmed"):
+            self.store.approve(second, revision=0, approved_cents=60,
+                               reference="second-source-approval", actor="test-owner")
+        self.assertEqual(self.store.status(second)["status"], "AWAITING_APPROVAL")
+        self.store.approve(second, revision=0, approved_cents=60,
+                           reference="explicit-reprocessing-reviewed", actor="test-owner",
+                           repeat_source_confirmed=True)
+        self.assertEqual(self.store.status(second)["status"], "QUEUED")
+
     def test_no_claim_before_reviewed_approval(self):
         job = self.create()
         with self.assertRaises(V2Conflict):
