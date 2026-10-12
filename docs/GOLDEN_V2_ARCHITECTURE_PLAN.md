@@ -27,7 +27,7 @@
 | 文字校正 | `gemini-3.8-flash`，Vertex AI | 只校正 ASR 已產生的繁中字幕文字；不得接收音訊或改動 Chirp 字詞時碼 | 原始回應、文字修訂、prompt/model/usage |
 | 裁決 | ChatGPT + WebCodex | 差異比對、音檔回查／局部重聽、語意與標點修訂、SRT/TXT 一致性及 Golden QA | decision log、標準化文字修訂、驗收報告 |
 
-**模型角色政策：full-audio primary recognition 與 text-only correction 都指定 Vertex `gemini-3.8-flash`，但各自保留不同的 adapter、prompt、schema、輸入型態與稽核紀錄。** 兩者使用不同 adapter、prompt、schema 和內容型態。既有 raw evidence、manifest、統計及 production 說明必須保留實際 model ID，不能批次改寫。完成測試不代表正式 runtime 已切換。
+**模型角色政策：full-audio primary recognition 與 text-only correction 都指定 Vertex `gemini-3.8-flash`，但各自保留不同的 adapter、prompt、schema、輸入型態與稽核紀錄。** 既有 raw evidence、manifest、統計及 production 說明必須保留實際 model ID，不能批次改寫。完成測試不代表正式 runtime 已切換。
 
 **歷史模型生命週期：** Google 官方模型頁目前標示 `gemini-3.7-flash` 退役日為 **2027-01-28**，替代型號為 `gemini-3.8-flash`。因此 2026-10-12 已停止將 3.7 作為新校正預設型號；正式上線前仍須完成 3.8 真實 API 相容性與品質驗收。歷史 3.7 raw evidence 保持原始 ID。參考：[Gemini 3.7 Flash 模型頁](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-7-flash)（查核 2026-10-12）。
 
