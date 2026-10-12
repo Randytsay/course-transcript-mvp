@@ -3,6 +3,11 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-12 — Follow-up safety hardening (verification pending)
+- Golden 3.8 primary / 3.5 third audio paid-call reservations now fsync parent directories after `O_EXCL` creation and after atomic audit-record replacement. A directory sync failure prevents calling a paid provider; barriers are never automatically discarded.
+- Owner approvals now guard against *cross-job* reuse of an already approved normalized audio SHA. A second job for the same source requires separate explicit `repeat_source_confirmed=true` approval, with an owner UI warning and fresh checkbox confirmation. This is not a cross-job distributed lock: reprocessing remains possible after explicit approval.
+- Added provider-free regression tests for directory fsync and repeated source approval. CI/VPS evidence for this follow-up is pending; G0–G8 remain unchanged, 0/9 formal gates passed. Draft PR remains unmerged; no production/Drive/provider mutation.
+
 ### 2026-10-12 — Historical window receipt compatibility and latest CI
 
 - 增加唯讀 `scripts/golden_v2_audit_slots.py --job-dir <V2-job-dir>`：掃描既有 3.8 主稿與 3.5 Transcribe 的付費紀錄，區分 canonical COMPLETE、legacy COMPLETE 需重新索引、重複 slot、未知狀態、損壞檔；**不刪檔、不搬移、不呼叫模型**。
