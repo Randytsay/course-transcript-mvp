@@ -333,6 +333,43 @@ class TestVertexBatch(unittest.TestCase):
         assert _endpoint_host("us-central1") == "us-central1-aiplatform.googleapis.com"
 
 
+class TestLegacyCorrectionModelBlocked(unittest.TestCase):
+    """Prevent new 3.7 bills without destroying already-submitted 3.7 evidence."""
+
+    def test_explicit_legacy_vertex_realtime_and_batch_cannot_submit(self):
+        provider = VertexCorrectionProvider(model="gemini-3.7-flash")
+        with self.assertRaises(ProviderError):
+            provider.realtime_generate("text-only correction")
+        with self.assertRaises(ProviderError):
+            provider.submit_batch(
+                input_gcs_uri="gs://private/input.jsonl", display_name="new-batch",
+            )
+
+    def test_legacy_batch_can_still_be_polled_for_reconciliation(self):
+        provider = VertexCorrectionProvider(
+            model="gemini-3.7-flash",
+            http_get=lambda url, headers: (200, {"state": "JOB_STATE_SUCCEEDED"}),
+        )
+        with mock.patch.object(VertexCorrectionProvider, "_headers", lambda self: {}):
+            result = provider.get_batch("projects/p/locations/global/batchPredictionJobs/123")
+        self.assertEqual(result["status"], "completed")
+
+    def test_persisted_per_job_legacy_override_fails_before_provider_call(self):
+        from app.providers.correction_runtime_bridge import run_module
+        for provider, model in (
+            ("vertex", "gemini-3.7-flash"),
+            ("openrouter", "google/gemini-3.7-flash"),
+        ):
+            with self.subTest(provider=provider):
+                with self.assertRaises(ProviderError):
+                    run_module(ctx={
+                        "job_id": "historical-job",
+                        "correction_provider": provider,
+                        "correction_model": model,
+                        "correction_execution_mode": "REALTIME",
+                    })
+
+
 class TestBatchDurableState(unittest.TestCase):
     def setUp(self):
         self.conn = sqlite3.connect(":memory:")
