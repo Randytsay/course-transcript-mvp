@@ -25,13 +25,13 @@
 - 在隔離分支 `codex/golden-v2-goal-completion` 提交 `ab0431956052652d52bb93040f06407ccb7bb3b0`：加入 snapshot-first 本機 source preflight、不可重複的未核准 V2 registration、artifact-root/symlink 防逃逸，以及無網路、無雲端憑證、opt-in 的持續本機階段 worker。後續 owner API 也改為相同來源／模式／估價 request 冪等，避免 HTTP 重試建立重複待核准 job。
 - Python 3.12 離線測試 **858 unittest／27 handoff pytest** 通過；compileall、production API import、兩個 CLI、local/release Compose 與 diff check 通過。exact-SHA [CI #38210501522](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38210501522) 和 [Release Compose #38210501398](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38210501398) 均 PASS。
 - source observation 僅與呼叫端提供資料及本機 bytes 比對，未由 Google Drive 認證；worker 未在 VPS 啟動。沒有付費模型呼叫、Drive/GCS 寫入、IAM/firewall 變更或 production 部署；G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS。
-- 後續 owner API registration 依 source SHA、mode 與完整 stage estimates 冪等；相同重送回傳最新 status/revision，不會建立重複待核准工作。回歸測試涵蓋核准後重送及變更估價的新 identity；最新本機完整 unittest **859 PASS**、handoff pytest **27 PASS**。此修正的 exact-SHA CI 尚待結果。
+- 後續 owner API registration 依 source SHA、mode 與完整 stage estimates 冪等；相同重送回傳最新 status/revision，不會建立重複待核准工作。回歸測試涵蓋核准後重送及變更估價的新 identity；最新本機完整 unittest **859 PASS**、handoff pytest **27 PASS**。後續 exact source `c262a77c7bd955c0ac744cd2efd373c5f1407be2` 的 [CI #38231087163](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38231087163) 與 [Release Compose #38231087126](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38231087126) 均 PASS，涵蓋 Python 3.12、前端測試/build、Docker images 及 Compose。
 
 ### 2026-10-12 Goal continuation — responsive owner status console
 
 - 隔離分支新增 default-off `/golden-v2`：可查看既有 job 的來源 SHA、模式、ledger 狀態、六階段狀態及費用/證據；只對既有 `AWAITING_APPROVAL` job 提交 revision-bound 預算核准。它不建立 job、不讀取 Drive、不呼叫付費 provider、不發布結果。
 - Next.js same-origin server routes 將 status/write bearer token 留在伺服器，production 只允許設定的 transcript admin host 並要求 Cloudflare Access identity headers；核准 POST 要求 HTTPS same-origin。Compose optional env file 預設 `/dev/null`，功能未配置、未部署，Access edge 仍須實際阻擋未登入流量。
-- 前端 **60 tests**、production build、本機 web/offline worker Compose config 通過；release Compose config 用明確 SHA 與臨時掛載路徑完成 config-only 檢查，沒有 build image。瀏覽器檢視只有 responsive layout 和 unavailable-ledger state，沒有接真帳本或執行核准。新 commit 的 exact-SHA CI 待確認；沒有付費呼叫、Drive/GCS 寫入、IAM/firewall 變更或部署，G0–G7 PARTIAL、G8 NOT_RUN、0/9 PASS。
+- 前端 **60 tests**、production build、本機 web/offline worker Compose config 通過；release Compose config 用明確 SHA 與臨時掛載路徑完成 config-only 檢查，沒有 build image。瀏覽器檢視只有 responsive layout 和 unavailable-ledger state，沒有接真帳本或執行核准。exact source [CI #38231087163](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38231087163) 及 [Release Compose #38231087126](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38231087126) 均 PASS；沒有付費呼叫、Drive/GCS 寫入、IAM/firewall 變更或部署，G0–G7 PARTIAL、G8 NOT_RUN、0/9 PASS。
 
 - PR #143 **open、draft，47 files changed**，開發分支 `feat/golden-v2-gemini38-primary`，查核 HEAD `73f1a826…`。
 - GitHub Actions **CI run #38157612105**：Python **743 tests PASS**、Next.js build PASS、Docker image build PASS、Compose PASS。
