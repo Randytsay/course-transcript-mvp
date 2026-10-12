@@ -119,7 +119,11 @@ class GoldenV2LocalQATests(unittest.TestCase):
         }
         with patch.object(golden_v2_acoustic_qa, "_vad_assessment",
                           return_value=positive_speech):
-            report = inspect_v2_acoustic(job_dir=self.job_dir, merged=self.merged)
+            # This fixture also has a 2.05s leading interval; raise only the
+            # tail threshold so this test isolates the intended 4.1s tail gap
+            # consistently across ffmpeg builds.
+            report = inspect_v2_acoustic(
+                job_dir=self.job_dir, merged=self.merged, tail_min_ms=3000)
         self.assertEqual(report["status"], "REVIEW")
         self.assertTrue(report["repair_plan"]["intervals"])
         self.assertFalse(report["repair_plan"]["submit_authorized"])
@@ -139,7 +143,8 @@ class GoldenV2LocalQATests(unittest.TestCase):
         }
         with patch.object(golden_v2_acoustic_qa, "_vad_assessment",
                           return_value=uncertain_vad):
-            report = inspect_v2_acoustic(job_dir=self.job_dir, merged=self.merged)
+            report = inspect_v2_acoustic(
+                job_dir=self.job_dir, merged=self.merged, tail_min_ms=3000)
         self.assertEqual(report["status"], "REVIEW")
         self.assertEqual(report["uncertain_count"], 1)
         self.assertEqual(report["repair_plan"]["intervals"], [])
