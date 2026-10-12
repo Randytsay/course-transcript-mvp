@@ -17,6 +17,7 @@ from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.providers.gemini_primary_audio import (
     PROMPT_VERSION, assemble_windows, assemble_reviewed_overlaps,
     run_window, PrimaryTranscriptError, validate_staged_windows,
+    _paid_window_slot_digest,
 )
 from app.providers.golden_v2_audio_staging import file_sha256, prepare_local_clips
 from app.providers.golden_v2_gcs_staging import upload_approved_clips
@@ -30,8 +31,7 @@ def _persist_immutable(path: Path, payload: dict[str, Any]) -> str:
 
 
 def _primary_audit_path(job_dir: Path, identity: dict[str, Any]) -> Path:
-    digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False,
-                                       sort_keys=True).encode()).hexdigest()
+    digest = _paid_window_slot_digest(identity)
     return job_dir / "gemini-primary" / f"{digest}.json"
 
 
