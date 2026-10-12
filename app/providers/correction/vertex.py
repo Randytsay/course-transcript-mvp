@@ -58,7 +58,17 @@ class VertexCorrectionProvider:
 
     # -- realtime ----------------------------------------------------------
 
+    def _assert_submission_model(self) -> None:
+        # Historical 3.7 batch IDs must remain pollable/ingestable; prohibit
+        # only NEW paid submissions. Never silently reinterpret old raw evidence.
+        if self.model == "gemini-3.7-flash":
+            raise ProviderError(
+                "unknown",
+                "舊 Gemini 3.7 校正型號禁止新付費呼叫；請審核並選用 Gemini 3.8",
+            )
+
     def realtime_generate(self, prompt: str) -> str:
+        self._assert_submission_model()
         try:
             from google import genai
             from google.genai import types
@@ -79,6 +89,7 @@ class VertexCorrectionProvider:
 
     def submit_batch(self, *, input_gcs_uri: str, display_name: str) -> str:
         """Create a real BatchPrediction job from a GCS JSONL input."""
+        self._assert_submission_model()
         location = _location()
         host = _endpoint_host(location)
         url = (f"https://{host}/v1/projects/{_project()}/locations/{location}"
