@@ -11,7 +11,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.providers.golden_v2_audio_staging import duration_seconds, file_sha256
 from app.providers.golden_v2_immutable import store_immutable_bytes
@@ -34,6 +34,7 @@ def bind_source_lineage(
     *, original_media: Path, normalized_audio: Path,
     drive_observation: dict[str, Any], expected_normalized_sha256: str,
     output_path: Path, duration_tolerance_seconds: float = 0.5,
+    duration_probe: Callable[[Path], float] | None = None,
 ) -> dict[str, Any]:
     """Fail closed before a cloud upload; never overwrite an existing lineage.
 
@@ -65,8 +66,9 @@ def bind_source_lineage(
         raise SourceLineageError('original download disagrees with Drive observation')
     if file_sha256(normalized) != expected_normalized_sha256:
         raise SourceLineageError('normalized FLAC disagrees with approved job SHA')
-    original_duration = duration_seconds(original)
-    normalized_duration = duration_seconds(normalized)
+    probe = duration_probe or duration_seconds
+    original_duration = probe(original)
+    normalized_duration = probe(normalized)
     if abs(original_duration - normalized_duration) > duration_tolerance_seconds:
         raise SourceLineageError('normalization changed media duration')
     manifest = {

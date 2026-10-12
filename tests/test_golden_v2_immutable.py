@@ -37,6 +37,16 @@ class ImmutableEvidenceTests(unittest.TestCase):
             _persist_immutable(path, {"completed": True})
         self.assertEqual(path.read_bytes(), b'{"truncated":')
 
+    def test_symlinked_immutable_destination_is_rejected_even_when_bytes_match(self):
+        target = self.root / "outside.json"
+        target.write_bytes(b"same bytes")
+        path = self.root / "evidence.json"
+        path.symlink_to(target)
+        with self.assertRaisesRegex(V2Conflict, "symlink"):
+            store_immutable_bytes(path, b"same bytes")
+        self.assertEqual(target.read_bytes(), b"same bytes")
+        self.assertTrue(path.is_symlink())
+
     def test_atomic_link_failure_leaves_no_final_or_temporary_artifact(self):
         path = self.root / "nested" / "new-raw.json"
         with patch("app.providers.golden_v2_immutable.os.link",

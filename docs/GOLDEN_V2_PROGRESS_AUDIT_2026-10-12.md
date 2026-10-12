@@ -47,7 +47,7 @@
 | P4 3.5 Transcribe | Vertex adapter、VERBATIM、≤15m 策略、選用模式/mock | 正式 SDK/模型可用性、真實 provider response 及用量、第三稿比對及 mode 路由持久整合 |
 | P5 校對/Golden QA | 比對 REVIEW、Chirp 字詞時間 SRT/TXT mock 出稿、QA 記入 SQLite、原始 SHA 受保護的 seam review CLI；新增 source/revision-bound comparison review package/import | ChatGPT/WebCodex 對話傳輸、獨立 reviewer 身分與真人整堂聲學驗收、Drive 出稿全流程 |
 | P6 實測評測 | 人工 gold CER 計算及 `scripts/golden_v2_benchmark.py` 配對引擎評測：同來源 SHA/window ID、reviewer reference、raw-evidence SHA、按類別 CER；未知成本/耗時不補零 | 真實金標樣本、三引擎相同音檔、國台語/經文/雜音、時碼/價格/耗時實測；helper 不認證 gold/reviewer/evidence 真實性 |
-| P7 Skill/任務入口 | SQLite stages、重試/未知結果限制、唯讀 CLI、預設關閉的 status API，以及另以 write token/flag 保護、限額且只寫 SQLite 的 job/repair approval API；Skill 草案 | V2 常駐 Worker、owner UI/Skill 實裝、對話提交/續跑、staging 身分驗證 |
+| P7 Skill/任務入口 | SQLite stages、重試/未知結果限制、唯讀 CLI、預設關閉的 status API、write-token/flag 保護的 SQLite owner approval API、snapshot-first source-preflight CLI、network-disabled persistent local-stage worker profile；Skill 草案 | Drive URL acquisition、paid executor integration、VPS worker continuity evidence、owner UI/Skill handoff、staging identity |
 | P8 UI/發布 | V1 已有可借用前端/Drive publisher；分支更新模型文字 | V2 管理頁、音訊差異播放、手機適配、staging/canary、V2 Drive 回寫驗證、正式上線 |
 
 ## 4. 剩餘工作重組成六個**完工波次**（現有 P0–P8 / G0–G8 不廢除）

@@ -208,6 +208,24 @@ services:
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
     command: ["python", "-m", "app.jobs.delivery_worker", "--poll-seconds", "60"]
 
+  golden-v2-worker:
+    profiles: ["golden-v2"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-pipeline-worker:local
+    restart: unless-stopped
+    stop_grace_period: 30s
+    network_mode: none
+    environment:
+      COURSE_TRANSCRIPT_V2_LEDGER_PATH: /app/data/golden-v2/ledger.sqlite
+      COURSE_TRANSCRIPT_V2_ARTIFACT_ROOT: /app/data/golden-v2
+      COURSE_TRANSCRIPT_V2_WORKER_ID: golden-v2-worker-1
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./data:/app/data
+    command: ["python", "scripts/golden_v2_worker_daemon.py"]
+
   health-monitor:
     profiles: ["web"]
     build:

@@ -63,6 +63,31 @@ Model boundary: Gemini 3.8 Flash is the full-audio primary recognizer. Use Verte
 - All three write routes require the separate `COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED=true` flag and a strong `COURSE_TRANSCRIPT_V2_WRITE_TOKEN`; status routes use a different token. The configured per-job ceiling defaults to USD 10. They never submit a provider request, access Drive, or publish results. Keep both credentials server-side; do not put them in browser JavaScript.
 - `scripts/golden_v2_local_worker.py` runs provider-free local ledger stages for one existing job and exits with an explicit blocker at provider/reviewer gates. It is not a persistent VPS worker or task-creation endpoint.
 
+## Implemented local source preflight (NOT a Drive importer)
+
+- `scripts/golden_v2_source_preflight.py` accepts an already-downloaded local original plus a local JSON observation captured by a separate read-only Drive importer. Required observation fields are `provider: "google_drive"`, `file_id`, `version`, `size_bytes`, and `downloaded_sha256`.
+- The command snapshots and hashes the local bytes before FFmpeg, creates a 16 kHz mono FLAC, preserves both original and normalized files, and writes immutable source-lineage and preflight manifests. The bytes must match the supplied observation. This verifies consistency only; it does not authenticate Drive metadata, fetch a Drive URL, or upload anything.
+- It creates an idempotent `AWAITING_APPROVAL` SQLite job bound to the manifest digest. `--estimate STAGE=CENTS` must be supplied once for every ledger stage; the local estimate ceiling defaults to 1000 cents (USD 10). Estimates are caller input, not provider quotes and not approval. The command never starts providers, advances a stage, or changes Drive/GCS.
+
+Example (replace the observation path and local source with the result of an authorized read-only download; include all six stage estimates):
+
+```bash
+python scripts/golden_v2_source_preflight.py \
+  --source /path/to/already-downloaded-original.wav \
+  --drive-observation /path/to/local-drive-observation.json \
+  --artifact-root /path/to/private-data/golden-v2 \
+  --database /path/to/private-data/golden-v2/ledger.sqlite \
+  --mode QUALITY_3WAY \
+  --estimate gemini_primary=0 \
+  --estimate chirp_independent=0 \
+  --estimate compare=0 \
+  --estimate third_optional=0 \
+  --estimate adjudication=0 \
+  --estimate golden_qa=0
+```
+
+The default-unenabled `golden-v2` Compose profile runs `scripts/golden_v2_worker_daemon.py` as a persistent, provider-free local-stage worker. Its container has no network and no cloud credentials. It processes only `QUEUED`/`PROCESSING` jobs with local artifacts and stops at provider, budget or human-review gates. The profile has not been enabled on VPS/production; this source-level worker is not proof of live task continuity.
+
 ## Remaining task/handoff API (NOT IMPLEMENTED; placeholders, do not call as real endpoints)
 
 ```text
@@ -71,7 +96,7 @@ compare(job_id) -> ordered discrepancy windows, audio excerpt locators
 publish(job_id, revision, owner_approved) -> Drive safe-publish + verified SHA
 ```
 
-Use `POST /api/v1/golden-v2/jobs` only after an authorized caller has independently verified the source/normalized-audio SHA and per-stage estimates; it records an unapproved ledger job. A separate owner approval endpoint changes it to `QUEUED`, but neither endpoint fetches the Drive source nor starts a worker. The read-only `job_status` snapshot exists in source as CLI/HTTP, and local `adjudicate` / `finalize` building blocks exist; they are not connected as full orchestration endpoints. Until a task operation is actually connected and tested, report `NOT_IMPLEMENTED` rather than inventing endpoint success.
+Use `scripts/golden_v2_source_preflight.py` for an already-downloaded local source when its read-only Drive observation is available. It records an unapproved ledger job but does not acquire the Drive source. `POST /api/v1/golden-v2/jobs` remains a separate caller-attested registration option; its approval endpoint changes an approved job to `QUEUED`. The default-offline Compose worker then advances only available local stages. Drive URL acquisition, user-facing task creation, paid provider execution, reviewer handoff and publication are not connected as a complete operation; report those gaps as `NOT_IMPLEMENTED`.
 
 ## Gate and handoff discipline
 

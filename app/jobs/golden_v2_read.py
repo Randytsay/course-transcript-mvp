@@ -37,7 +37,8 @@ def _snapshot(db: sqlite3.Connection, job: sqlite3.Row) -> dict[str, Any]:
 
 
 def get_v2_status(database: Path, *, job_id: str) -> dict[str, Any] | None:
-    if not job_id.startswith("v2_") or len(job_id) != 35:
+    if not ((job_id.startswith("v2_") and len(job_id) == 35)
+            or (job_id.startswith("v2p_") and len(job_id) == 36)):
         return None
     with closing(_connection(database)) as db:
         db.execute("BEGIN")
@@ -59,3 +60,17 @@ def list_v2_status(database: Path, *, limit: int = 20) -> list[dict[str, Any]]:
             "ORDER BY created_at DESC,id DESC LIMIT ?", (limit,),
         ).fetchall()
         return [_snapshot(db, job) for job in jobs]
+
+
+def list_v2_active_jobs(database: Path, *, limit: int = 100) -> list[dict[str, str]]:
+    """Read active job identities for local workers without migrating SQLite."""
+    if not 1 <= limit <= 1000:
+        raise ValueError("invalid active-job query limit")
+    with closing(_connection(database)) as db:
+        db.execute("BEGIN")
+        rows = db.execute(
+            "SELECT id,status FROM v2_jobs WHERE status IN ('QUEUED','PROCESSING') "
+            "ORDER BY created_at,id LIMIT ?", (limit,),
+        ).fetchall()
+        return [{"job_id": str(row["id"]), "status": str(row["status"])}
+                for row in rows]

@@ -153,14 +153,50 @@ class GoldenV2Ledger:
 
     def create(self, *, source_sha: str, mode: str,
                estimated_stage_cents: dict[str, int]) -> str:
-        if len(source_sha) != 64 or any(x not in "0123456789abcdef" for x in source_sha):
-            raise ValueError("requires source SHA256")
-        if mode not in MODES or set(estimated_stage_cents) != set(STAGES):
-            raise ValueError("invalid V2 mode or stage estimates")
-        if any(type(v) is not int or v < 0 for v in estimated_stage_cents.values()):
-            raise ValueError("invalid integer USD-cent estimate")
+        self._validate_new_job(source_sha, mode, estimated_stage_cents)
         job_id = "v2_" + uuid.uuid4().hex
+        self._insert_job(job_id, source_sha, mode, estimated_stage_cents)
+        return job_id
+
+    @staticmethod
+    def preflight_job_id(registration_sha256: str) -> str:
+        """Stable local job identity for an immutable source-preflight package."""
+        if (not isinstance(registration_sha256, str) or len(registration_sha256) != 64
+                or any(x not in "0123456789abcdef" for x in registration_sha256)):
+            raise ValueError("requires registration SHA256")
+        return "v2p_" + uuid.uuid5(
+            uuid.NAMESPACE_URL,
+            "golden-v2-source-preflight:" + registration_sha256,
+        ).hex
+
+    def create_from_preflight(self, *, source_sha: str, mode: str,
+                              estimated_stage_cents: dict[str, int],
+                              registration_sha256: str) -> str:
+        """Idempotently register a verified local preflight, still unapproved.
+
+        The registration digest is derived from a source-preflight manifest
+        that binds the original bytes, normalized bytes, caller-supplied Drive
+        observation, mode, and estimates. Replays return the same job only when
+        every persisted source/mode/estimate value still agrees.
+        """
+        self._validate_new_job(source_sha, mode, estimated_stage_cents)
+        job_id = self.preflight_job_id(registration_sha256)
         with self._tx() as db:
+            existing = db.execute(
+                "SELECT source_sha,mode,estimated_cents FROM v2_jobs WHERE id=?",
+                (job_id,),
+            ).fetchone()
+            if existing is not None:
+                stages = {
+                    row["name"]: row["estimate_cents"]
+                    for row in self._stages(db, job_id)
+                }
+                if (existing["source_sha"] != source_sha
+                        or existing["mode"] != mode
+                        or existing["estimated_cents"] != sum(estimated_stage_cents.values())
+                        or stages != estimated_stage_cents):
+                    raise V2Conflict("preflight registration identity conflicts with ledger")
+                return job_id
             db.execute(
                 "INSERT INTO v2_jobs(id,source_sha,mode,estimated_cents,created_at) VALUES(?,?,?,?,?)",
                 (job_id, source_sha, mode, sum(estimated_stage_cents.values()), _now()),
@@ -170,6 +206,28 @@ class GoldenV2Ledger:
                 [(job_id, i, name, estimated_stage_cents[name]) for i, name in enumerate(STAGES)],
             )
         return job_id
+
+    @staticmethod
+    def _validate_new_job(source_sha: str, mode: str,
+                          estimated_stage_cents: dict[str, int]) -> None:
+        if len(source_sha) != 64 or any(x not in "0123456789abcdef" for x in source_sha):
+            raise ValueError("requires source SHA256")
+        if mode not in MODES or set(estimated_stage_cents) != set(STAGES):
+            raise ValueError("invalid V2 mode or stage estimates")
+        if any(type(v) is not int or v < 0 for v in estimated_stage_cents.values()):
+            raise ValueError("invalid integer USD-cent estimate")
+
+    def _insert_job(self, job_id: str, source_sha: str, mode: str,
+                    estimated_stage_cents: dict[str, int]) -> None:
+        with self._tx() as db:
+            db.execute(
+                "INSERT INTO v2_jobs(id,source_sha,mode,estimated_cents,created_at) VALUES(?,?,?,?,?)",
+                (job_id, source_sha, mode, sum(estimated_stage_cents.values()), _now()),
+            )
+            db.executemany(
+                "INSERT INTO v2_stages(job_id,ord,name,estimate_cents) VALUES(?,?,?,?)",
+                [(job_id, i, name, estimated_stage_cents[name]) for i, name in enumerate(STAGES)],
+            )
 
     def approve(self, job_id: str, *, revision: int, approved_cents: int,
                 reference: str, actor: str) -> None:

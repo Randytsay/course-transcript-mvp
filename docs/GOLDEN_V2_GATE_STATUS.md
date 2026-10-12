@@ -3,6 +3,14 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-12 Goal continuation — local source intake and persistent worker code
+
+- 新增 `scripts/golden_v2_source_preflight.py`：只接收本機已下載原始音訊與呼叫端提供的唯讀 Drive observation；先複製 immutable snapshot 並比對 bytes/SHA，再以 FFmpeg 建立 16 kHz mono FLAC，保留原件、正規化音訊、Drive observation lineage 及 source-preflight manifest。此處驗證的是欄位與本機 bytes 一致，未連接或認證 Google Drive。
+- Preflight 以完整 manifest SHA 派生穩定 job ID；同一來源/版本/模式/估價重跑不重複建立 SQLite job，Drive 版本或設定變更則產生新 identity。Job 僅停留在 `AWAITING_APPROVAL`；估價不是報價或核准。
+- 新增 `scripts/golden_v2_worker_daemon.py` 與隔離 Compose `golden-v2` profile。常駐程序只掃描已核准 active jobs，處理本機 compare/adjudication/QA，缺本機 artifacts、付費 stage 或真人聽音需求都回報 blocker。Compose 容器 `network_mode: none`，不掛載雲端憑證，未加入預設 profile，未在 VPS 啟動。
+- 離線驗證：完整 Python unittest **858 PASS**；`tests/test_chatgpt_handoff.py` pytest **27 PASS**；其中來源 preflight **10 PASS**、immutable evidence **6 PASS**、worker **7 PASS**、ledger **10 PASS**。Symlink regression 確認不可寫出 artifact root；兩個 CLI help、compileall、API import、local/release `golden-v2` Compose config 與 `git diff --check` PASS。使用 fake FFmpeg/ffprobe，沒有 Drive/GCS/Vertex/Chirp 呼叫或寫入。
+- **G7 仍 PARTIAL、G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS**：Drive URL 實際讀取、VPS 部署/持續性實測、付費 provider runner、owner UI/Skill transport、獨立真人 reviewer、Drive 發布與 production/staging 驗收仍未完成。沒有改 IAM/firewall 或 production。
+
 ### 2026-10-12 Goal G3 恢復工作者續報（已完成 source SHA CI）
 
 - 新增 `app/pipeline/golden_v2_chirp_recovery_worker.py`：依 SQLite 已存的 `SUBMITTED` Speech operation ID 有界回收，提供正式 `us-speech.googleapis.com` Chirp 3／GCS client factory（未呼叫雲端）。`SUBMITTING` 結果未知不重送；超額成本暫停後仍允許對已提交操作回收已付費證據；`PLANNED` 不會被恢復程序自行提交。

@@ -17,6 +17,8 @@ def store_immutable_bytes(path: Path, content: bytes) -> str:
     if not isinstance(content, bytes):
         raise TypeError("immutable evidence must be bytes")
     path = Path(path)
+    if path.is_symlink():
+        raise V2Conflict(f"immutable evidence path is a symlink: {path.name}")
     path.parent.mkdir(parents=True, exist_ok=True)
     digest = hashlib.sha256(content).hexdigest()
     tmp_name: str | None = None
@@ -28,9 +30,11 @@ def store_immutable_bytes(path: Path, content: bytes) -> str:
             stream.flush()
             os.fsync(stream.fileno())
         try:
+            if path.is_symlink():
+                raise V2Conflict(f"immutable evidence path is a symlink: {path.name}")
             os.link(tmp_name, path)
         except FileExistsError:
-            if path.read_bytes() != content:
+            if path.is_symlink() or path.read_bytes() != content:
                 raise V2Conflict(f"immutable evidence conflict: {path.name}")
         fd = os.open(path.parent, os.O_RDONLY)
         try:
