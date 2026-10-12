@@ -67,12 +67,11 @@ Model boundary: Gemini 3.8 Flash is the full-audio primary recognizer. Use Verte
 
 ```text
 preview(source_url, model_mode) -> inventory, canonical candidates, estimated cost
-submit_approved(preflight_id, source_sha, approval_revision) -> durable job_id
 compare(job_id) -> ordered discrepancy windows, audio excerpt locators
 publish(job_id, revision, owner_approved) -> Drive safe-publish + verified SHA
 ```
 
-The read-only `job_status` snapshot exists in source as CLI/HTTP, and local `adjudicate` / `finalize` building blocks exist; they are not connected as these orchestration endpoints. Until a task operation is actually connected and tested, report `NOT_IMPLEMENTED` rather than inventing endpoint success.
+Use `POST /api/v1/golden-v2/jobs` only after an authorized caller has independently verified the source/normalized-audio SHA and per-stage estimates; it records an unapproved ledger job. A separate owner approval endpoint changes it to `QUEUED`, but neither endpoint fetches the Drive source nor starts a worker. The read-only `job_status` snapshot exists in source as CLI/HTTP, and local `adjudicate` / `finalize` building blocks exist; they are not connected as full orchestration endpoints. Until a task operation is actually connected and tested, report `NOT_IMPLEMENTED` rather than inventing endpoint success.
 
 ## Gate and handoff discipline
 
