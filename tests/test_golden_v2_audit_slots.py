@@ -5,6 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
+import subprocess
+import sys
 import unittest
 
 from app.providers.gemini_primary_audio import _paid_window_slot_digest
@@ -36,6 +38,21 @@ def receipt(path: Path, ident: dict, *, status: str = "COMPLETE") -> None:
 
 
 class GoldenV2AuditSlotsTests(unittest.TestCase):
+    def test_direct_cli_invocation_works_without_pythonpath(self):
+        script = Path(__file__).resolve().parents[1] / "scripts" / "golden_v2_audit_slots.py"
+        with TemporaryDirectory() as tmp:
+            result = subprocess.run(
+                [sys.executable, str(script), "--job-dir", tmp],
+                cwd=tmp, capture_output=True, text=True, timeout=15,
+                env={"PATH": "/usr/bin:/bin"},
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertTrue(report["read_only"])
+            self.assertEqual(report["provider_calls"], 0)
+            self.assertEqual(report["blocker_count"], 0)
+
     def test_legacy_paid_record_is_flagged_without_modification(self):
         with TemporaryDirectory() as root:
             job_dir = Path(root)
