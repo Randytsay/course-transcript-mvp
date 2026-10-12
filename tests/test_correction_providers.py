@@ -361,7 +361,9 @@ class TestLegacyCorrectionModelBlocked(unittest.TestCase):
             ("openrouter", "google/gemini-3.7-flash"),
         ):
             with self.subTest(provider=provider):
-                with self.assertRaises(ProviderError):
+                # Some earlier tests reload the base module, so the class
+                # object may differ even though both raise ProviderError.
+                with self.assertRaisesRegex(Exception, "歷史 Gemini 3.7"):
                     run_module(ctx={
                         "job_id": "historical-job",
                         "correction_provider": provider,
