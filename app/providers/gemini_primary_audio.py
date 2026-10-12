@@ -90,6 +90,49 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
             os.unlink(name)
 
 
+def _reserve_paid_window(path: Path, identity: dict[str, Any]) -> bool:
+    """Create the durable paid-request barrier using an exclusive filesystem op.
+
+    The reservation is never unlinked on failure: even a torn/empty barrier
+    means an external request *might* have been sent and needs reconciliation.
+    O_EXCL prevents two independent workers from passing an exists() race.
+    Requires a shared, POSIX-like filesystem with exclusive-create semantics.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"identity": identity, "status": "REQUEST_STARTED",
+                 "human_review_required": True},
+                handle, ensure_ascii=False, indent=2,
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    except BaseException:
+        # Leave even an incomplete reservation in place: never auto-resubmit.
+        raise
+    return True
+
+
+def _load_completed_window(path: Path, identity: dict[str, Any]) -> dict[str, Any]:
+    """Only reuse a validated COMPLETE record; all other states fail closed."""
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PrimaryTranscriptError(
+            "unreadable previous paid-request barrier; operator reconciliation required"
+        ) from exc
+    if (not isinstance(cached, dict) or cached.get("identity") != identity
+            or cached.get("status") != "COMPLETE"):
+        raise PrimaryTranscriptError("previous attempt requires operator reconciliation")
+    return cached
+
+
 def _usage(response: Any) -> dict[str, Any]:
     value = getattr(response, "usage_metadata", None)
     if value is None:
@@ -139,10 +182,7 @@ def run_window(
     digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     audit_path = job_dir / "gemini-primary" / f"{digest}.json"
     if audit_path.exists():
-        cached = json.loads(audit_path.read_text(encoding="utf-8"))
-        if cached.get("identity") != identity or cached.get("status") != "COMPLETE":
-            raise PrimaryTranscriptError("previous attempt requires operator reconciliation")
-        return cached
+        return _load_completed_window(audit_path, identity)
     if part_factory is None:
         from google.genai import types
         part_factory = lambda uri, mime: types.Part.from_uri(file_uri=uri, mime_type=mime)
@@ -154,8 +194,10 @@ def run_window(
     # Persist a durable barrier BEFORE the external call. On timeout, the
     # provider may have charged/finished even if its response was lost. Never
     # automatically submit a second call with the same identity.
-    _atomic_json(audit_path, {"identity": identity, "status": "REQUEST_STARTED",
-                              "human_review_required": True})
+    if not _reserve_paid_window(audit_path, identity):
+        # Another process won the reservation. It may already have a
+        # verified COMPLETE response, but must never trigger another POST.
+        return _load_completed_window(audit_path, identity)
     try:
         response = client.models.generate_content(
             model=MODEL,
