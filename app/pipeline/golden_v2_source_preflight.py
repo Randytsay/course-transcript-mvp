@@ -179,6 +179,14 @@ def register_source_preflight(
             raise SourcePreflightError(
                 "local source snapshot disagrees with supplied Drive download observation"
             )
+        observed_md5 = drive_observation.get("downloaded_md5")
+        if observed_md5 is not None:
+            md5 = hashlib.md5(usedforsecurity=False)
+            with source_snapshot.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    md5.update(chunk)
+            if observed_md5 != md5.hexdigest():
+                raise SourcePreflightError("original source MD5 disagrees with Drive observation")
         normalized = temporary_root / "normalized.flac"
         try:
             run(
@@ -211,6 +219,12 @@ def register_source_preflight(
             "original_sha256": lineage["manifest"]["original_sha256"],
             "source_lineage_sha256": lineage["manifest_sha256"],
             "drive_observation": lineage["manifest"]["drive_observation"],
+            # The source path and Drive MD5 are needed for an independent
+            # metadata re-read immediately before a future paid claim. They
+            # remain caller-supplied unless intake_drive_source performed the
+            # authenticated Drive download.
+            "drive_source_path": drive_observation.get("source_path"),
+            "original_md5_checksum": drive_observation.get("downloaded_md5"),
             "mode": mode,
             "estimated_stage_cents": {
                 name: estimated_stage_cents[name] for name in STAGES

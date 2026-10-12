@@ -3,6 +3,11 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-12 — Read-only live Drive source revision check
+
+- Authenticated source intake now retains the exact Drive source path and downloaded MD5 in its immutable preflight record. A separate `verify_live_drive_revision` check re-resolves that path through Drive GET metadata and compares current file ID, version, size and MD5 with the saved original bytes. Changed or unavailable metadata blocks a future paid claim; older preflight records without these fields also fail closed. This check does not claim a stage, call a paid model, or grant permission to bill. A future trusted executor must recheck immediately before its revision-bound claim and handle any source change.
+- Offline fake-Drive tests cover unchanged source, changed identity/version/size/MD5, read failure and local tampering. Local Python 3.12 full unittest **926 PASS**, focused source/readiness/revision **28 PASS**, compileall and diff check PASS. Exact-SHA CI remains to be checked after push. No live Drive read or write, GCS write, provider call, or production change occurred; formal G0–G8 remain 0/9 PASS.
+
 ### 2026-10-12 — Atomic paid dispatch CAS and aggregate trial preview (not live executor)
 
 - 新增唯讀 `app/pipeline/golden_v2_paid_dispatch.py`、`scripts/golden_v2_paid_dispatch.py` 與 owner-token-only `GET /api/v1/golden-v2/jobs/{job_id}/paid-preview`（沿用 default-off V2 status API）。預覽輸出任務 revision、來源 SHA、下一付費模型、逐階段估價、整批已核准任務的保守總曝險與版本指紋；不外洩 approval reference 原文、claim token 或憑證。

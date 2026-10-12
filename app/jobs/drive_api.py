@@ -355,6 +355,16 @@ def _drive_media_metadata(source_path: str) -> dict[str, Any]:
     return _validate_drive_media_metadata(item)
 
 
+def read_drive_media_metadata(source_path: str) -> dict[str, Any]:
+    """Re-resolve an exact media path and return fresh, read-only Drive metadata.
+
+    This performs Drive GET requests only. It deliberately does not reuse the
+    browsing path cache as evidence that a previously approved source is still
+    the same object.
+    """
+    return _drive_media_metadata(source_path)
+
+
 def _validate_drive_media_metadata(item: dict[str, Any]) -> dict[str, Any]:
     if item.get("trashed") is True:
         raise DriveApiError("Google Drive 音訊檔案已移至垃圾桶")
