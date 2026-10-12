@@ -82,6 +82,12 @@ This log records durable Project-local decisions. Cross-project lessons are refe
 
 **Decision:** Use Vertex AI `gemini-3.8-flash` only for full-audio primary recognition. Use Vertex AI `gemini-3.7-flash` only for text-only correction after ASR. Keep adapters, prompts, schemas, and model identities separate; never send audio to text correction or use Gemini 2.5. Preserve each raw provider response and its actual model ID. This clarification supersedes any broader wording in the 2026-10-11 decision; it does not change the 3.8 full-audio → Chirp 3 recognition order.
 
+## 2026-10-12 — Superseding correction-model migration decision (3.8)
+
+**Decision (latest):** Use Vertex AI `gemini-3.8-flash` for **both** complete original-audio recognition and subsequent **text-only ASR segment correction**, each through a separate adapter/prompt/schema/input contract. Do not use 3.7 for new text-correction calls. Preserve historical 3.7 model IDs/raw data for audit. This supersedes the earlier 2026-10-12 separate-model-ID decision, **not** the separate-role architecture.
+
+**Implementation status:** Development-only on `codex/golden-v2-goal-completion` / Draft PR #144. Text-correction defaults, MiniMax fallback, proxy, costs, UI and model policy tests have been updated; actual Vertex capability/role, usage and production cutover are still unverified. Never rewrite existing in-flight jobs without explicit migration/approval.
+
 ## Deployment invariant — exact SHA only
 
 Production deployment must use an immutable reviewed release SHA. A dirty live or development working tree is never a release source. Production status must be verified by runtime revision evidence, not directory names or conversational claims.
