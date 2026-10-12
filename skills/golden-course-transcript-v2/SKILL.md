@@ -27,7 +27,7 @@ Reference specifications:
 - `黃金字幕：<Drive URL>，用三引擎，完成後回寫原資料夾`
 - `這批用 Gemini 3.8 + Chirp，第三引擎先不跑`
 
-Model boundary: Gemini 3.8 Flash is the full-audio primary recognizer. Use Vertex Gemini 3.7 Flash only for text-only correction of existing ASR text; never send audio to the correction adapter. Preserve each provider's raw result and actual model ID. Do not use Gemini 2.5.
+Model boundary: Gemini 3.8 Flash is the full-audio primary recognizer. Use Vertex Gemini 3.8 Flash through the separate text-only adapter for correction of existing ASR text; never send audio to the correction adapter. Preserve each provider's raw result and actual model ID. Do not use Gemini 2.5.
 - `比較三套模型的逐字稿、經文、台語、處理費用`
 - `續跑 job <id>，只修還沒過的差異`
 - `列出待人工查核片段及附近音訊`
