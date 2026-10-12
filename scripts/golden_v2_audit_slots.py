@@ -10,6 +10,11 @@ import argparse
 import json
 from pathlib import Path
 from typing import Any
+import sys
+
+# Direct CLI execution (python scripts/golden_v2_audit_slots.py) must work
+# without a caller-supplied PYTHONPATH, just like the V2 worker daemon.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.providers.gemini_primary_audio import _paid_window_slot_digest
 
