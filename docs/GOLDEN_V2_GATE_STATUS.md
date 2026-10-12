@@ -8,6 +8,7 @@
 - 依使用者最新指示，**新 ASR 後文字校正**從 Vertex `gemini-3.7-flash` 改用 `gemini-3.8-flash`。完整原音主稿仍使用 3.8，兩套 Adapter/Schema/Prompt **保持分離**，Chirp 3 仍提供時碼。
 - 已更新 correction 主程式／cascade／Vertex Adapter／provider route／MiniMax fallback／Worker／Proxy／前端與環境範例；移除 3.8 不建議的 `temperature`，刷新 prompt/cache 版本；3.8 文字費率依 [官方 Google Vertex 定價](https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing) 單獨入表，保留歷史 3.7 計價資料。
 - 變更仍在 Draft PR #144；**非正式環境切換，未呼叫真實付費 API，不代表 3.8 文字校正已完成真實驗收**。下列舊 3.7 續報屬當時的不可變歷史，不是最新模型選擇。
+- 已新增 **歷史舊任務阻擋**：若持久化任務仍帶 `gemini-3.7-flash`（含 OpenRouter 別名），新的校正提交會 fail-closed，不能靜默重寫核准模型或誤向 3.7 扣費；既已提交的 3.7 Vertex Batch 可繼續唯讀查詢及核對，不清除歷史 raw、operation 或用量。新增假 Provider 單測，正式模型切換仍需逐任務明確審核。
 
 ### 2026-10-12 Goal continuation — authenticated Drive source preflight
 
