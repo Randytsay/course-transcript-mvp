@@ -23,6 +23,7 @@ from app.providers.golden_v2_audio_staging import file_sha256, prepare_local_cli
 from app.providers.golden_v2_gcs_staging import upload_approved_clips
 from app.providers.golden_v2_source_lineage import bind_source_lineage
 from app.providers.golden_v2_immutable import store_immutable_bytes
+from app.pipeline.golden_v2_window_budget import check_paid_window_budget
 
 
 def _persist_immutable(path: Path, payload: dict[str, Any]) -> str:
@@ -186,6 +187,12 @@ def execute_approved_primary_stage(
                 part_factory=part_factory,
                 approval_validator=ledger.provider_approval_validator(claim),
             ))
+            # The next paid window cannot start until actual usage from all
+            # completed windows is recorded and still inside the stage cap.
+            check_paid_window_budget(
+                ledger=ledger, claim=claim, job_dir=job_dir,
+                completed_records=records, accountant=cost_accountant,
+            )
     except PrimaryTranscriptError as exc:
         if exc.known_record is not None:
             records.append(exc.known_record)
