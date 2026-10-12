@@ -68,7 +68,7 @@ class VertexCorrectionProvider:
             response = client.models.generate_content(
                 model=self.model, contents=prompt,
                 config=types.GenerateContentConfig(
-                    response_mime_type="application/json", temperature=0.2),
+                    response_mime_type="application/json"),
             )
             return response.text or ""
         except Exception as exc:
