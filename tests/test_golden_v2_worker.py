@@ -64,6 +64,20 @@ class GoldenV2WorkerTests(unittest.TestCase):
         self.assertEqual(result["action"], "LEDGER_PATH_REJECTED")
         self.assertEqual(external.read_bytes(), b"do-not-touch")
 
+    def test_rejects_symlinked_ledger_and_artifact_root(self):
+        ledger_link = self.artifact_root / "linked.sqlite"
+        ledger_link.symlink_to(self.database)
+        result = run_v2_worker_pass(
+            database=ledger_link, artifact_root=self.artifact_root,
+        )
+        self.assertEqual(result["action"], "LEDGER_PATH_REJECTED")
+        root_link = self.root / "linked-artifacts"
+        root_link.symlink_to(self.artifact_root, target_is_directory=True)
+        result = run_v2_worker_pass(
+            database=root_link / "ledger.sqlite", artifact_root=root_link,
+        )
+        self.assertEqual(result["action"], "LEDGER_PATH_REJECTED")
+
     def test_unapproved_jobs_are_not_dispatched(self):
         self.ledger.create(
             source_sha="a" * 64, mode="QUALITY_3WAY",
@@ -89,6 +103,9 @@ class GoldenV2WorkerTests(unittest.TestCase):
             "PROVIDER_STAGE_REQUIRED",
         )
         self.assertFalse(result["provider_calls_started"])
+        self.assertIn("SOURCE_INTAKE_REGISTRATION_REQUIRED",
+                      result["outcomes"][0]["paid_readiness"]["blockers"])
+        self.assertFalse(result["outcomes"][0]["paid_readiness"]["provider_calls_allowed"])
         state = self.ledger.status(job_id)
         self.assertEqual(state["revision"], 1)
         self.assertEqual(state["stages"][0]["state"], "PENDING")

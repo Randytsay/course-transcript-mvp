@@ -10,6 +10,11 @@
 - 預覽指紋只是版本識別，**不是簽章、授權或金額保證**。成功預覽仍固定 `provider_calls_allowed=false`，實際付費前須由獨立可信實作確認即時 Drive 版本、模型可用性、價格與擁有者的逐來源核准。沒有接上可連網的付費 V2 Runner，也不代表 Provider 費用已由 Google 帳單驗證。
 - 隔離 VPS 無網路 Docker tests：Ledger/Preview/Owner API、預算越界、雙 Worker revision-CAS、來源證據與未結清付費請求的 **50 項相關測試通過**；完整 exact-SHA GitHub CI 待本輪提交後核對。G0–G7 PARTIAL、G8 NOT_RUN、正式 Gate 0/9 PASS。V1 production 與 Golden V2 隔離 canary 不在本次部署範圍。
 
+### 2026-10-12 — Persistent worker exposes paid-stage blockers
+
+- Provider-free `golden_v2_worker` now includes the existing read-only paid-stage readiness assessment when a job stops at a provider stage. Operators can distinguish missing verified Drive intake, stale source evidence, insufficient approval, and prior ambiguous paid receipts from a generic provider wait. The worker still does not claim a paid stage or call Vertex, Speech, GCS, or Drive.
+- Reject symlinked V2 ledger files and artifact roots before opening the mutable SQLite ledger. Local Python 3.12 validation: full unittest **910 PASS**, focused worker/readiness **22 PASS**, compileall and diff check PASS. Exact-SHA GitHub CI remains to be checked after push. No provider call, Drive/GCS mutation, or production deployment occurred; G0–G7 remain PARTIAL, G8 NOT_RUN, 0/9 PASS.
+
 ### 2026-10-12 — Paid-stage readiness preflight (development, no paid executor)
 
 - 新增 `app/pipeline/golden_v2_paid_readiness.py` 及直接可執行的唯讀 CLI `scripts/golden_v2_paid_readiness.py --database ... --artifact-root ... --job-id v2p_...`。只接受已經過 Drive source-preflight 登錄並有有效預算核准的 V2 job；驗證穩定 job registration SHA、source original/FLAC SHA、lineage manifest、Drive observation、本機費用上限與階段順序。

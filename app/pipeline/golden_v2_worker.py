@@ -9,6 +9,7 @@ from typing import Any
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.jobs.golden_v2_read import list_v2_active_jobs
 from app.pipeline.golden_v2_coordinator import run_ready_local
+from app.pipeline.golden_v2_paid_readiness import inspect_paid_readiness
 
 _JOB_ID = re.compile(r"v2(?:p)?_[0-9a-f]{32}\Z")
 
@@ -27,10 +28,13 @@ def run_v2_worker_pass(
         raise ValueError("worker identity required")
     if type(max_jobs) is not int or not 1 <= max_jobs <= 1000:
         raise ValueError("worker job bound must be 1..1000")
-    database = Path(database)
-    root = Path(artifact_root).resolve()
-    if database.expanduser().resolve().parent != root:
+    database = Path(database).expanduser()
+    artifact_root = Path(artifact_root).expanduser()
+    if (artifact_root.is_symlink() or database.is_symlink()
+            or not artifact_root.is_dir()
+            or database.resolve().parent != artifact_root.resolve()):
         return {"action": "LEDGER_PATH_REJECTED", "jobs_seen": 0, "outcomes": []}
+    root = artifact_root.resolve()
     if not database.is_file():
         return {"action": "LEDGER_NOT_READY", "jobs_seen": 0, "outcomes": []}
     try:
@@ -60,7 +64,13 @@ def run_v2_worker_pass(
                 ledger=ledger, job_id=job_id, job_dir=resolved,
                 worker_id=worker_id,
             )
-            outcomes.append({"job_id": job_id, "actions": local_outcomes})
+            item: dict[str, Any] = {"job_id": job_id, "actions": local_outcomes}
+            if local_outcomes and local_outcomes[-1]["action"] == "PROVIDER_STAGE_REQUIRED":
+                readiness = inspect_paid_readiness(
+                    database=database, artifact_root=root, job_id=job_id,
+                )
+                item["paid_readiness"] = readiness
+            outcomes.append(item)
         except Exception as exc:
             outcomes.append({"job_id": job_id, "action": "JOB_REQUIRES_REVIEW",
                              "reason": str(exc)})
