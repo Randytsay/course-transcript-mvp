@@ -137,7 +137,6 @@ def generate_json(prompt: str, schema: dict[str, Any]) -> tuple[object, dict[str
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=schema,
-                    temperature=0,
                 ),
             )
             response_completed_at = iso()
