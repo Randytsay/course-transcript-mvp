@@ -17,6 +17,7 @@ from app.providers.gemini_primary_audio import (
     _atomic_json,
     _reserve_paid_window,
     _load_completed_window,
+    _paid_window_slot_digest,
     _finish_reason,
     _usage,
     validate_staged_windows,
@@ -74,7 +75,7 @@ def run_third_window(
         "window": {k: staged_window[k] for k in ("index", "start_seconds", "end_seconds", "gcs_uri", "mime_type")},
         "config": config_options,
     }
-    digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    digest = _paid_window_slot_digest(identity)
     record_path = job_dir / "gemini-third" / f"{digest}.json"
     if record_path.exists():
         return _load_completed_window(record_path, identity)
