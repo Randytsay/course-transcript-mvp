@@ -4,7 +4,7 @@ Last reviewed: 2026-10-12 (Draft PR #144 local implementation; production SHA re
 
 ## V2 work in an isolated Draft PR — not deployed
 
-- [V2 architecture specification](docs/GOLDEN_V2_ARCHITECTURE_PLAN.md) separates Gemini `gemini-3.8-flash` **full-audio recognition** from Vertex Gemini `gemini-3.7-flash` **text-only correction**; Chirp 3 remains the independent recognizer/time authority, with optional Gemini 3.5 Transcribe and ChatGPT/WebCodex QA.
+- [V2 architecture specification](docs/GOLDEN_V2_ARCHITECTURE_PLAN.md) separates Gemini `gemini-3.8-flash` **full-audio recognition** from Vertex Gemini `gemini-3.8-flash` **text-only correction** (independent adapter); Chirp 3 remains the independent recognizer/time authority, with optional Gemini 3.5 Transcribe and ChatGPT/WebCodex QA.
 - Isolated Draft PR #144 has provider-free source and fake-provider integration for durable stages, bounded repair, acoustic QA, and immutable evidence. Its last verified CI SHA is recorded in `docs/GOLDEN_V2_GATE_STATUS.md`; G0–G8 remain incomplete and no production state is inferred from CI.
 - [V2 development and acceptance gates](docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md) define P0–P8/G0–G8 milestones.
 - This is an **implementation in a draft branch only**, not proof of production deployment, active job state, credentials, billing, or live model availability. Do not rewrite historic model provenance.
