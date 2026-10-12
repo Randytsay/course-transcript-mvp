@@ -13,7 +13,9 @@ from threading import Event
 from types import SimpleNamespace
 import json
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
+
+from app.providers import gemini_primary_audio as primary_adapter
 
 from app.providers.gemini_primary_audio import (
     PrimaryTranscriptError, run_window,
@@ -151,6 +153,46 @@ class PaidWindowBarrierTests(unittest.TestCase):
                 folder = Path(tmp) / ("gemini-primary" if kind == "primary" else "gemini-third")
                 folder.mkdir()
                 (folder / "old-incomplete.json").write_text("{", encoding="utf-8")
+                with self.assertRaises(PrimaryTranscriptError):
+                    self._run(kind, args)
+                api.assert_not_called()
+
+    def test_paid_slot_and_completion_fsync_parent_directory(self):
+        with TemporaryDirectory() as tmp:
+            api = Mock(return_value=fake_response())
+            client = SimpleNamespace(models=SimpleNamespace(generate_content=api))
+            args = self._args("primary", root=Path(tmp), client=client)
+            with patch.object(
+                primary_adapter, "_fsync_audit_directory",
+                wraps=primary_adapter._fsync_audit_directory,
+            ) as sync:
+                self._run("primary", args)
+            audit_dir = Path(tmp) / "gemini-primary"
+            self.assertGreaterEqual(
+                sum(call.args[0] == audit_dir for call in sync.call_args_list), 2,
+                "reservation and COMPLETE rename must both fsync the audit directory",
+            )
+            api.assert_called_once()
+
+    def test_audit_directory_fsync_failure_blocks_paid_request(self):
+        for kind in ("primary", "third"):
+            with self.subTest(kind=kind), TemporaryDirectory() as tmp:
+                api = Mock(return_value=fake_response())
+                client = SimpleNamespace(models=SimpleNamespace(generate_content=api))
+                args = self._args(kind, root=Path(tmp), client=client)
+                folder = Path(tmp) / ("gemini-primary" if kind == "primary" else "gemini-third")
+                real_sync = primary_adapter._fsync_audit_directory
+
+                def sync_then_fail(path):
+                    if path == folder:
+                        raise OSError("simulated directory fsync failure")
+                    return real_sync(path)
+
+                with patch.object(primary_adapter, "_fsync_audit_directory", side_effect=sync_then_fail):
+                    with self.assertRaises(OSError):
+                        self._run(kind, args)
+                api.assert_not_called()
+                self.assertEqual(len(list(folder.glob("*.json"))), 1)
                 with self.assertRaises(PrimaryTranscriptError):
                     self._run(kind, args)
                 api.assert_not_called()
