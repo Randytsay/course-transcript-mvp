@@ -132,6 +132,39 @@ def _reserve_paid_window(path: Path, identity: dict[str, Any]) -> bool:
     return True
 
 
+def _reject_legacy_paid_slot(path: Path, identity: dict[str, Any]) -> None:
+    """Fail closed if older full-prompt-keyed receipts may represent this slot.
+
+    A pre-existing V2 job may use a different on-disk receipt filename.
+    Looking only for the new slot filename could otherwise cause duplicate
+    billing after a code upgrade. A human must reconcile and safely reindex
+    old immutable results; this function never modifies them.
+    """
+    for previous in path.parent.glob("*.json"):
+        if previous.name == path.name:
+            continue
+        if previous.is_symlink():
+            raise PrimaryTranscriptError(
+                "symlinked paid audit requires operator reconciliation"
+            )
+        try:
+            receipt = json.loads(previous.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise PrimaryTranscriptError(
+                "unreadable legacy paid audit; block further provider submissions"
+            ) from exc
+        if not isinstance(receipt, dict) or not isinstance(receipt.get("identity"), dict):
+            raise PrimaryTranscriptError(
+                "unbound legacy paid audit; operator reconciliation required"
+            )
+        old = receipt["identity"]
+        if all(old.get(key) == identity.get(key) for key in
+               ("model", "source_sha256", "window")):
+            raise PrimaryTranscriptError(
+                "prior paid audio window uses a legacy receipt; reconcile before resubmission"
+            )
+
+
 def _load_completed_window(path: Path, identity: dict[str, Any]) -> dict[str, Any]:
     """Only reuse a validated COMPLETE record; all other states fail closed."""
     try:
@@ -196,6 +229,7 @@ def run_window(
     audit_path = job_dir / "gemini-primary" / f"{digest}.json"
     if audit_path.exists():
         return _load_completed_window(audit_path, identity)
+    _reject_legacy_paid_slot(audit_path, identity)
     if part_factory is None:
         from google.genai import types
         part_factory = lambda uri, mime: types.Part.from_uri(file_uri=uri, mime_type=mime)
