@@ -41,6 +41,13 @@
 - 本機 Python 3.12：**831 unittest、27 handoff pytest**；前端 **54 tests**、Next production build、compileall、`git diff --check` PASS。精確來源 [GitHub CI #38206197000](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38206197000) 與 [Release Compose #38206197011](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38206197011) 均 PASS，涵蓋 Python、前端、Docker image、Compose 與 release provenance。
 - Google 官方頁標示 Gemini 3.7 Flash 將於 **2027-01-28** 退役，正式上線前須驗證替代型號及切換；沒有付費模型呼叫、GCS/Drive 寫入、IAM/firewall 變更或 production 部署。G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS。
 
+### 2026-10-12 Goal continuation — source-bound audio review bundle (exact-SHA CI PASS)
+
+- Source commit `2d74acbbb89bfdc7f43cc8abffa4b7ad93d9f017` adds an offline candidate review bundle bound to normalized-audio SHA, comparison evidence, candidate snapshots, and ledger revision. Applying a review can claim only the zero-cost `adjudication` stage; correction patches must match exact Chirp word evidence. Listening/reviewer identity remain explicit operator self-attestation, not independently authenticated evidence.
+- Python 3.12 local regression: **835 unittest**, **27 handoff pytest**, compileall, CLI help and `git diff --check` PASS. Exact-SHA [GitHub CI #38207135117](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38207135117) and [Release Compose #38207135128](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38207135128) both PASS, including frontend tests/build, Docker images, Compose and release provenance.
+- `skills/golden-course-transcript-v2/SKILL.md` now distinguishes implemented-but-undeployed status/approval APIs and local review commands from missing job creation, persistent VPS worker, and conversation handoff. It remains a draft and is not installed or connected.
+- No provider call, Drive/GCS mutation, IAM/firewall change or production deployment occurred. P5/P7 remain PARTIAL; G0–G7 remain PARTIAL, G8 NOT_RUN, 0/9 PASS.
+
 規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[2026-10-12 實況盤點／六階段完工計畫](GOLDEN_V2_PROGRESS_AUDIT_2026-10-12.md)
 
 > 此文件是會隨 PR/驗收更新的狀態登記簿。**只有提交機器／人工可核對的 evidence link、commit、測試報告與操作者資訊後，才能把某一 Gate 設為 PASS。** 「文件已提交」不代表其他工程 Gate 已 PASS。禁止憑對話主觀印象標已完成。
