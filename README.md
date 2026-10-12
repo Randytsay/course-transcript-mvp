@@ -19,7 +19,7 @@ The 2026-10-11 V2 upgrade specification is documented in:
 **V2 target:** Gemini 3.8 Flash full-audio transcript first → independent Chirp 3 acoustic/timing comparison → optional Gemini 3.5 Transcribe → Vertex Gemini 3.8 Flash text-only correction → ChatGPT/WebCodex adjudication and Golden SRT/TXT QA. V1 historical evidence may also contain Gemini 3.7. **Do not construe this documentation as proof that production has switched to the V2 pipeline.** Check `CURRENT_STATE.md` and runtime exact-SHA evidence before making a production claim.
 
 Private, resumable long-audio transcription MVP. Chirp 3 provides word-level
-timing; Google Vertex AI Gemini 3.7 Flash performs text-only correction after
+timing; Google Vertex AI Gemini 3.8 Flash performs text-only correction after
 the timing layer is complete.
 
 ## Security
