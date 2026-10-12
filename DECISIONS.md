@@ -72,11 +72,15 @@ This log records durable Project-local decisions. Cross-project lessons are refe
 
 ## 2026-10-11 — Golden V2 uses Gemini 3.8 primary transcript before independent Chirp
 
-**Decision:** All new V2 Gemini Flash development targets `gemini-3.8-flash`, replacing planned use of `gemini-3.7-flash`. V2 must obtain a complete Gemini 3.8 full-audio transcript first; Chirp 3 then independently transcribes original audio and retains authoritative word timing. Gemini 3.5 Transcribe is an optional third independent recognizer. ChatGPT/WebCodex resolves disagreements against original audio, assembles SRT and corrected TXT, then runs Golden QA.
+**Original decision:** Gemini 3.8 Flash is the full-audio primary transcript model before independent Chirp 3. The earlier wording was overly broad about text-only correction and is clarified below. V2 must obtain a complete Gemini 3.8 full-audio transcript first; Chirp 3 then independently transcribes original audio and retains authoritative word timing. Gemini 3.5 Transcribe is an optional third independent recognizer. ChatGPT/WebCodex resolves disagreements against original audio, assembles SRT and corrected TXT, then runs Golden QA.
 
 **Status:** approved design and acceptance baseline, **not implemented/deployed evidence**. Keep V1 3.7 raw/model history intact until proven migration. See `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md` and `docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md`. Initial measurement uses quality-first three-way comparison; first live testing stays behind explicit per-source cost approval and a proposed USD 10 aggregate test cap. Final production switch needs owner approval.
 
 **Reason:** user-validated Gemini audio semantics for Taiwanese + scripture combined with Chirp word-timing and independent acoustic completeness checks.
+
+## 2026-10-12 — Keep Gemini audio recognition and text correction on separate models
+
+**Decision:** Use Vertex AI `gemini-3.8-flash` only for full-audio primary recognition. Use Vertex AI `gemini-3.7-flash` only for text-only correction after ASR. Keep adapters, prompts, schemas, and model identities separate; never send audio to text correction or use Gemini 2.5. Preserve each raw provider response and its actual model ID. This clarification supersedes any broader wording in the 2026-10-11 decision; it does not change the 3.8 full-audio → Chirp 3 recognition order.
 
 ## Deployment invariant — exact SHA only
 

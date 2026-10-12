@@ -40,7 +40,7 @@ observed.build_performance_summary = enhanced_performance_summary
 
 # Explicit safe baseline marker used by configuration drift guards; actual per-job
 # routing is recorded separately from correction-routing.json.
-GEMINI_CORRECTION_BASELINE_MODEL = "gemini-3.8-flash"
+GEMINI_CORRECTION_BASELINE_MODEL = "gemini-3.7-flash"
 
 _CHIRP_COMPLETENESS_PREEXPORT_EVIDENCE = (
     "merged-words.json",

@@ -687,7 +687,7 @@ def _record_usage_evidence(
             or 0
         )
         bucket["records"] += 1
-        bucket["models"].add(str(payload.get("model") or ("MiniMax-M3" if provider == "minimax" else "gemini-3.8-flash")))
+        bucket["models"].add(str(payload.get("model") or ("MiniMax-M3" if provider == "minimax" else "gemini-3.7-flash")))
         bucket["requests"] = bucket.get("requests", 0) + int(usage.get("request_count") or 0)
     config = CostConfig.from_env()
     prompt_tokens = int(provider_usage["google-vertex-ai"]["input"])
@@ -705,7 +705,7 @@ def _record_usage_evidence(
         job_id=record["id"],
         dedupe_key="gemini-segment-correction",
         provider="google-vertex-ai",
-        model="gemini-3.8-flash",
+        model="gemini-3.7-flash",
         input_units=prompt_tokens,
         output_units=output_tokens,
         estimated_cost_usd=gemini_estimate,
@@ -719,7 +719,7 @@ def _record_usage_evidence(
     usage_records.append(
         {
             "provider": "google-vertex-ai",
-            "model": "gemini-3.8-flash",
+            "model": "gemini-3.7-flash",
             "estimated_cost_usd": str(gemini_estimate),
             "unit": "tokens",
             "input_units": prompt_tokens,
@@ -911,7 +911,7 @@ def run_paid_job(
                 worker_id,
                 stage="correction",
                 status="correcting",
-                detail="Gemini 3.8 Flash 固定 segment 純文字校正",
+                detail="Vertex Gemini 3.7 Flash 固定 segment 純文字校正",
                 progress_start=73,
                 progress_end=88,
                 module=(
@@ -1005,7 +1005,7 @@ def run_paid_job(
                 ),
                 "chirp_model": "chirp_3",
                 "correction_model": (
-                    "gemini-3.8-flash"
+                    "gemini-3.7-flash"
                     if leased["enable_gemini_correction"]
                     else None
                 ),

@@ -17,11 +17,11 @@
 - 已將改動接到同分支有界恢復 worker 後，本機完整 Python **815 PASS**、V2 專項 **124 PASS**、handoff pytest **27 PASS**、compileall 與 `git diff --check` PASS。來源提交 `001ed9b9ecb1ef3d23df0b3e944bbc35cb7b065e` 的 [CI #38198541708](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38198541708) **PASS**（含 815 Python tests、Next.js tests/build、Docker image build、Compose）；[Release Compose #38198541691](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38198541691) **PASS**。
 - Gate 維持 **G0–G7 PARTIAL、G8 NOT_RUN、0/9 PASS**。真實 Chirp worker/雲端 operation、Standard repair、長音訊聲學覆蓋、真人 Gold、Drive/UI/部署仍未驗收。
 
-### 2026-10-12 本地 Goal 執行續報（待本分支 exact-SHA CI）
+### 2026-10-12 本地 Goal 執行續報（exact-SHA CI PASS）
 
 - 隔離工作樹 `/private/tmp/course-transcript-golden-v2-goal`；新交付分支 `codex/golden-v2-goal-completion`，與既有 Draft PR #143 的 `feat/golden-v2-gemini38-primary` 分開審查。正式部署版本仍未確認。
 - 新增 provider-free V2 coordinator、獨立 Chirp 提交／回收 stage、可選 Gemini 3.5 third stage、聲學 QA、Chirp timestamp-only SRT/TXT render、來源 lineage 與 immutable evidence 寫入。SQLite 加上安全回收本地 claim 的版本檢查；可能已付費的 provider claim 不會被自動重送。
-- 2026-10-12 本輪離線驗證（提交前工作樹）：完整 unittest **807 PASS**、另行執行三份重點 unittest **27 PASS**、`tests/test_chatgpt_handoff.py` pytest **27 PASS**、前端測試 **54 PASS**、compileall PASS、Next.js build PASS（19/19 頁）、Compose config PASS、`git diff --check` PASS。上述結果需以**本次提交 SHA 重新核對 CI**；全屬 mock／provider-free 測試。
+- 2026-10-12 本輪離線驗證：完整 Python unittest **824 PASS**、修復/QA/worker 專項 **33 PASS**、`tests/test_chatgpt_handoff.py` pytest **27 PASS**、compileall 與 `git diff --check` PASS。初次 CI 揭露聲學測試夾具含第二個邊界 gap；已限定測試門檻隔離尾段案例，Python 3.12 重跑全數通過。
 - 已驗證 `SMART_2PLUS` 無爭議可省略第三模型；有爭議會停在 provider 或真人聲學審查；中斷後本地工作可恢復。未實際呼叫 Vertex／Chirp、未寫入 Drive、未部署，實際付費 **US$0**。
 - **Gate 結論維持 G0–G7 PARTIAL、G8 NOT_RUN，0/9 PASS**。仍缺 Vertex endpoint/IAM/價格真實驗證、真實長音訊完整聲學驗收、獨立可信 reviewer 身分與真人聽音、人工 Gold 比對、owner 寫入 API/UI、Drive safe-publish 整合與 staging/production 驗收。現有重疊文字裁切要求逐個 seam 人工確認，沒有宣稱自動去重或整堂完成。
 
@@ -31,8 +31,8 @@
 - Acoustic probing is bounded to 16 gaps and 30 seconds per gap. Any longer or unexamined gap remains REVIEW and cannot become a paid repair proposal.
 - Added source-SHA-bound, local-only repair clip extraction (≤5 minutes per clip, ≤12 clips / ≤10 minutes per proposal), a durable SQLite repair approval bound to the exact acoustic-report SHA, target ranges, clip/input/output identities and cent ceiling, plus immutable generation-guarded GCS staging. Resuming after a crash rotates the Chirp claim and recreates only missing objects from exact local clip identities.
 - Standard submissions require a gateway with Dynamic Batching disabled. Repair words replace base words only when their midpoint falls inside the approved target ranges; all raw base and repair result JSON stays immutable. `chirp_independent` remains RUNNING through acoustic REVIEW, so comparison cannot start until acoustic QA passes.
-- Fake Speech/GCS integration covers base recognition → positive-speech proposal → exact cost approval → Standard submission → restart-safe clip upload → target-only merge → acoustic PASS → compare unlock. Full Python suite: **824 PASS**; targeted repair/QA/worker suite: **33 PASS**; handoff pytest: **27 PASS**; `compileall` and `git diff --check` PASS. All cloud-shaped calls were fake; no paid API call, real GCS/Drive write or production change occurred. Exact-SHA CI for the resulting commit remains pending.
-- **G3 remains PARTIAL**: no live Speech request or real long-course/VAD UAT; no independent invoice reconciliation or deployed submission/recovery scheduler; the authenticated owner mutation UI/API,真人聽音及完整雙引擎驗收仍未完成. G0–G7 remain PARTIAL, G8 NOT_RUN, 0/9 PASS.
+- Fake Speech/GCS integration covers base recognition → positive-speech proposal → exact cost approval → Standard submission → restart-safe clip upload → target-only merge → acoustic PASS → compare unlock. In exact HEAD `de52cc9af27ac13d91210f0c65f4d5cde178a00b`, GitHub [CI #38204588170](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38204588170) and [Release Compose #38204588132](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38204588132) both PASS, including all 824 Python tests, frontend tests/build, Docker image build and Compose validation. All cloud-shaped calls were fake; no paid API call, real GCS/Drive write or production change occurred.
+- **G3 remains PARTIAL**: no live Speech request or real long-course/VAD UAT; no independent invoice reconciliation or deployed submission/recovery scheduler; the separately gated SQLite-only owner approval API is implemented but disabled and undeployed; review UI/API, 真人聽音及完整雙引擎驗收仍未完成. G0–G7 remain PARTIAL, G8 NOT_RUN, 0/9 PASS.
 
 規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[2026-10-12 實況盤點／六階段完工計畫](GOLDEN_V2_PROGRESS_AUDIT_2026-10-12.md)
 
@@ -41,18 +41,18 @@
 | 階段 | Gate | 狀態 | 目前可核對成果／阻礙 |
 |---|---|---|---|
 | P0 基線／隔離 | G0 | PARTIAL | 2026-10-11 已確認 GitHub main/feature branch、另外隔離 V2 分支；WebCodex 的舊 source Project `.git/worktrees` 無效，正式 runtime SHA／active transcription jobs／備份尚未驗證。未 reset/clean/stash。 |
-| P1 3.7→3.8 | G1 | PARTIAL | V2 開發分支的 `correct_text.py`、`correct_text_cascade.py`、Worker/API/Proxy/UI 目標已改 3.8，模型政策與 SDK 配置非付費回歸 included 在提交 `73f1a826` 的 **743 項 Python CI PASS**；仍缺實際 Vertex smoke、相容權限／配額、正式部署與 rollback。 |
+| P1 模型角色分流 | G1 | PARTIAL | V2 full-audio primary 使用 3.8；Chirp 後純文字校正固定 Vertex Gemini 3.7。adapter/worker/API/proxy/UI defaults 與模型政策測試已分流；仍缺兩種模型的真實 Vertex smoke、權限／配額、正式部署與 rollback。Google 官方頁標示 Gemini 3.7 Flash 將於 2027-01-28 退役，上線前需核定替代型號與切換時程。 |
 | P2 Gemini 3.8 音訊主稿 | G2 | PARTIAL | 新增 `golden_v2_audio_staging.py` 的本機 FFmpeg source-SHA FLAC 分段、`golden_v2_gcs_staging.py` 的經核准 GCS 不覆寫上傳，以及 `golden_v2_primary_stage.py` 串接 Gemini 3.8→SQLite，含超額預估阻擋、結果不明停機及 mock 整合測試；**已加入來源→normalized→窗段 SHA lineage 的本機證據、逐窗 raw SHA/身份驗證及人工 overlap seam 裁切後原始證據 CAS 綁定**；仍未驗證真實 Drive 來源 SHA、正式 Worker/Vertex、長音訊整堂聲學 coverage。 |
 | P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py`/`golden_v2_flow.py` 具備獨立差異比對與先 Gemini 後 Chirp 的順序；既有 Chirp PASS 可經 SHA/來源驗證重用；Speech V2 adapter、async fake-provider submit/recovery、已知 operation ID 的 revision-CAS 部分續送及未知 SUBMITTING 凍結均已離線驗證。**另新增 VAD positive-speech gate、exact-plan/cost-approved Standard bounded repair、不可變 clip/GCS identities、restart-safe re-upload、target-only merge；acoustic REVIEW 會阻擋 compare，只有 PASS 才完成 Chirp stage。**仍欠常駐付費 Worker、可稽核帳單、真實 Speech API/長音訊聲學 UAT 與真人聽音。 |
 | P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_third_transcribe.py` 實作 Vertex generateContent/VERBATIM、≤15m hard cap、選用/禁用與 mock tests；**尚未實際 Vertex smoke/worker 用量帳本**。 |
 | P5 WebCodex 最終裁決與 Golden QA | G5 | PARTIAL | `golden_v2_final_gate.py` + `golden_v2_stage_runner.py` 已可寫入離線比對/QA 報告並持久化 `NEEDS_REVIEW`；**已以 mock 連接 Chirp 字詞時碼 SRT/TXT render 和 QA 報告**，仍未串接正式 handoff/真人整堂聲學驗收。 |
 | P6 實測評分與最佳化 | G6 | PARTIAL | `app/evaluation/golden_v2_benchmark.py` 提供人工 Gold 的 CER 計算與測試；**無真實人工金標／三引擎樣本／價格比較**。 |
-| P7 ChatGPT Skill / 持久任務 | G7 | PARTIAL | 新增 `app/jobs/golden_v2_ledger.py` SQLite task/claim/費用/來源視窗授權；`scripts/golden_v2_status.py` 唯讀查詢、`app/golden_v2_routes.py` 預設關閉且獨立 Bearer 驗證的唯讀 owner status API、`scripts/golden_v2_review_overlaps.py` 本機人工 seam 檢視／套用（操作員自述，無獨立聽音認證）；`golden_v2_primary_stage.py` 將核准 claim+FFmpeg+mock GCS/Vertex 整合、`golden_v2_stage_runner.py` 離線 QA 橋接；`skills/golden-course-transcript-v2/SKILL.md` 仍為草案。**未安裝 Skill、未接正式常駐 Worker／可寫入 owner API／付費 Vertex／Drive；唯讀 API 仍未部署**。 |
+| P7 ChatGPT Skill / 持久任務 | G7 | PARTIAL | 新增 `app/jobs/golden_v2_ledger.py` SQLite task/claim/費用/來源視窗授權；`scripts/golden_v2_status.py` 唯讀查詢、`app/golden_v2_routes.py` 分離 read/write token 的 owner API（write 預設關閉、每 job ceiling 預設 US$10、只寫 SQLite approval，絕不提交 provider）、`scripts/golden_v2_review_overlaps.py` 本機人工 seam 檢視／套用（操作員自述，無獨立聽音認證）；`golden_v2_primary_stage.py` 將核准 claim+FFmpeg+mock GCS/Vertex 整合、`golden_v2_stage_runner.py` 離線 QA 橋接；`skills/golden-course-transcript-v2/SKILL.md` 仍為草案。**未安裝 Skill、未接正式常駐 Worker／V2 管理 UI／付費 Vertex／Drive；owner API 未部署**。 |
 | P8 UI / 部署 / Drive 驗收 | G8 | NOT_RUN | 尚未 staging/canary/production／Drive 實測 |
 
 ## V2 文件提交紀錄
 
-- `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md`：V2 分工、Gemini 3.8 遷移、完整流程、長檔/帳務/權限/安全。
+- `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md`：V2 模型角色分流（3.8 音訊、3.7 純文字校正）、完整流程、長檔/帳務/權限/安全。
 - `docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md`：P0–P8 施工序、G0–G8 逐項核准與資料證據。
 - `AGENTS.md`、`README.md`、`docs/KNOWLEDGE_INDEX.md`、`CURRENT_STATE.md`、`DECISIONS.md`：已更新 V2 索引/決策／舊系統現況界線。
 - `docs/GOLDEN_V2_INTEGRATION_HANDOFF.md`：現有 V2 SQLite/bridge 的實作交接與尚未整合項目。
@@ -78,8 +78,8 @@ drive_mutation_started: false
 production_mutated: false
 approval_reference: null
 blockers: []
-next_action: "Start P0 read-only repo/runtime inspection and isolated worktree design"
-updated_at: "2026-10-11"
+next_action: "Continue provider-free integration and exact-SHA verification; live gates remain unrun"
+updated_at: "2026-10-12"
 ```
 
 注意：上方 YAML 僅是結構示例，未來每一 Gate 應有自己的最新紀錄、連結及是否真的發生 API 使用的證據。即使原本 V1 有相關功能，未經 V2 回歸測試也不能將 V2 Gate 標 PASS。

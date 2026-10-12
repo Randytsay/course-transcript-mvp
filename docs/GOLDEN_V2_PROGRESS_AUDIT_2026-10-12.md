@@ -8,7 +8,7 @@
 
 交付「從自然語言交辦 Google Drive 資料夾／音檔、到可安全發布的正式 Golden SRT 與 TXT」的持久系統：
 
-1. 使用 **Gemini 3.8 Flash** 首先完整獨立聽音形成繁體中文主稿，替代新開發中的 3.7 Flash；長音檔截斷／分段、overlap 對齊與 coverage 不得漏話、重複或虛構經文。
+1. 使用 **Gemini 3.8 Flash** 首先完整獨立聽音形成繁體中文主稿；另外固定以 **Vertex Gemini 3.7 Flash** 做 ASR 後的純文字校正，兩個 adapter 不互相代替；長音檔截斷／分段、overlap 對齊與 coverage 不得漏話、重複或虛構經文。
 2. 使用同一原始音檔由 **Chirp 3** 獨立辨識與提供真實字詞時間戳；沿用 Dynamic Batch 正常首輪、Standard bounded repair、VAD／聲學完整性 Gate、已有可信 chunk 只重用不重送。
 3. 可選 **Gemini 3.5 Transcribe**：品質優先跑全文，智慧最佳化只補高風險區間；Vertex API 端點能力與用量必須實測確認。
 4. **ChatGPT/WebCodex** 針對模型差異與可聽原音、同堂經文／資料做文字裁決；經文只用於查詞，不得補出未講內容，台語不確定區間保留 REVIEW。
@@ -34,13 +34,13 @@
 | 原階段 | 已實作／可證 | 缺口／不能宣告完成 |
 |---|---|---|
 | P0 基線及隔離 | GitHub 隔離分支／Draft PR；未破壞舊工作樹 | VPS production exact SHA、active jobs/leases、真正 DB 備份還原、media-inventory 分支整合 |
-| P1 Gemini 3.7→3.8 | 分支修訂校正入口／Worker/API/Proxy/UI 預設；模型政策單測／整體 CI | Vertex 實際模型呼叫與相容性、IAM/region、功能旗標及正式切換 |
+| P1 模型角色分流 | Vertex Gemini 3.7 text correction 與 Gemini 3.8 audio primary 分離；模型政策單測／整體 CI | 兩種真實 Vertex 呼叫與相容性、IAM/region、功能旗標及正式切換 |
 | P2 Gemini 全音訊主稿 | audio adapter、FFmpeg FLAC clipping、原始→normalized→clip SHA lineage、GCS opt-in、mock primary、重疊 seam 人工覆核及 SHA 綁定 | 真實 Drive 來源 attest、真人重疊聽音、長音檔完整 acoustic/VAD coverage、真 Vertex、VPS Worker |
 | P3 Chirp 比對 | Gemini-first mock orchestration、文字差異、Chirp word-time、可信舊證據重用、新 Chirp fake-provider async submit/recovery；新增保守 VAD 正語音證據、費用/範圍精確核准、≤5 分鐘 Standard 修復 clip、GCS 不覆寫與重啟補傳、target-only merge，QA REVIEW 阻擋 compare | 真 Speech-to-Text async、可稽核帳單、常駐 Worker、長音訊完整聲學 coverage、真人聽音與雙引擎 UAT |
 | P4 3.5 Transcribe | Vertex adapter、VERBATIM、≤15m 策略、選用模式/mock | 正式 SDK/模型可用性、真實 provider response 及用量、第三稿比對及 mode 路由持久整合 |
 | P5 校對/Golden QA | 比對 REVIEW、Chirp 字詞時間 SRT/TXT mock 出稿、QA 記入 SQLite、原始 SHA 受保護的 seam review CLI | ChatGPT 真人聲音裁決、可靠整堂聲學驗收、正式 handoff、Drive 出稿全流程 |
 | P6 實測評測 | 人工 gold CER 計算 library | 真實金標樣本、三引擎相同音檔、國台語/經文/雜音、時碼/價格/耗時 benchmark |
-| P7 Skill/任務入口 | SQLite stages、重試/未知結果限制、唯讀 CLI、預設關閉的 token-gated owner status API、Skill 草案 | V2 常駐 Worker、已部署 owner API、authenticated write/review、Skill 實裝、對話提交/續跑 |
+| P7 Skill/任務入口 | SQLite stages、重試/未知結果限制、唯讀 CLI、預設關閉的 status API，以及另以 write token/flag 保護、限額且只寫 SQLite 的 job/repair approval API；Skill 草案 | V2 常駐 Worker、owner UI/Skill 實裝、對話提交/續跑、staging 身分驗證 |
 | P8 UI/發布 | V1 已有可借用前端/Drive publisher；分支更新模型文字 | V2 管理頁、音訊差異播放、手機適配、staging/canary、V2 Drive 回寫驗證、正式上線 |
 
 ## 4. 剩餘工作重組成六個**完工波次**（現有 P0–P8 / G0–G8 不廢除）

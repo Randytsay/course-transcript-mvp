@@ -1,4 +1,4 @@
-"""Non-paid guardrails for the proposed Gemini 3.8 correction migration.
+"""Non-paid guardrails separating Gemini audio recognition and text correction.
 
 This is a source-level regression test; it does not call Vertex and cannot
 substitute for a real provider smoke test or prove production cutover.
@@ -24,24 +24,30 @@ def assigned_string(path: Path, name: str) -> str:
     raise AssertionError(f"expected constant {name} in {path}")
 
 
-class Gemini38MigrationPolicyTests(unittest.TestCase):
-    def test_text_correction_targets_gemini38(self) -> None:
+class GeminiModelPolicyTests(unittest.TestCase):
+    def test_text_correction_targets_gemini37(self) -> None:
         self.assertEqual(
             assigned_string(PROVIDERS / "correct_text.py", "MODEL"),
-            "gemini-3.8-flash",
+            "gemini-3.7-flash",
         )
 
-    def test_cascade_targets_gemini38(self) -> None:
+    def test_cascade_targets_gemini37(self) -> None:
         self.assertEqual(
             assigned_string(PROVIDERS / "correct_text_cascade.py", "ACTIVE_MODEL"),
+            "gemini-3.7-flash",
+        )
+
+    def test_audio_primary_stays_gemini38(self) -> None:
+        self.assertEqual(
+            assigned_string(PROVIDERS / "gemini_primary_audio.py", "MODEL"),
             "gemini-3.8-flash",
         )
 
-    def test_prompt_versions_bumped_to_prevent_old_cache_reuse(self) -> None:
+    def test_prompt_versions_record_text_model_and_exclude_25(self) -> None:
         for file in ("correct_text.py", "correct_text_cascade.py"):
             source = (PROVIDERS / file).read_text(encoding="utf-8")
-            self.assertIn("gemini-3.8", source)
-            self.assertNotIn('gemini-3.7-flash', source)
+            self.assertIn("gemini-3.7", source)
+            self.assertNotIn("gemini-2.5", source)
 
     def test_legacy_generate_config_does_not_pass_disallowed_sampler_fields(self) -> None:
         for file in ("correct_text_legacy_hardened.py", "correct_text_cascade.py"):

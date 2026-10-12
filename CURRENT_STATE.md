@@ -1,13 +1,14 @@
 # Current State
 
-Last reviewed: 2026-10-11 (V2 specification note; production SHA remains unverified)
+Last reviewed: 2026-10-12 (Draft PR #144 local implementation; production SHA remains unverified)
 
-## Newly approved V2 work — design only (2026-10-11)
+## V2 work in an isolated Draft PR — not deployed
 
-- [V2 architecture specification](docs/GOLDEN_V2_ARCHITECTURE_PLAN.md) defines Gemini `gemini-3.8-flash` **full-audio first**, then independent Chirp 3, optional Gemini 3.5 Transcribe, then ChatGPT/WebCodex QA.
+- [V2 architecture specification](docs/GOLDEN_V2_ARCHITECTURE_PLAN.md) separates Gemini `gemini-3.8-flash` **full-audio recognition** from Vertex Gemini `gemini-3.7-flash` **text-only correction**; Chirp 3 remains the independent recognizer/time authority, with optional Gemini 3.5 Transcribe and ChatGPT/WebCodex QA.
+- Isolated Draft PR #144 has provider-free source and fake-provider integration for durable stages, bounded repair, acoustic QA, and immutable evidence. Its last verified CI SHA is recorded in `docs/GOLDEN_V2_GATE_STATUS.md`; G0–G8 remain incomplete and no production state is inferred from CI.
 - [V2 development and acceptance gates](docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md) define P0–P8/G0–G8 milestones.
-- This is an **intent/acceptance contract only**, not proof that source code, existing job state, credentials, billing or production release have migrated from 3.7 to 3.8. Do not rewrite historic model provenance.
-- Next authorized safe work: non-paid P0 review and isolated development preparation; no paid provider calls, IAM/billing mutations, Drive publish or production cutover without separate scope approval.
+- This is an **implementation in a draft branch only**, not proof of production deployment, active job state, credentials, billing, or live model availability. Do not rewrite historic model provenance.
+- Continue provider-free implementation and verification in the isolated branch. Paid provider calls, IAM/billing mutations, Drive publication, and production cutover remain outside scope without separate explicit authorization.
 
 
 This file is the entry point for the **current repository state**. It intentionally separates merged main, reviewed-but-unmerged work, and uncommitted runtime work. Do not infer production state from a development worktree.

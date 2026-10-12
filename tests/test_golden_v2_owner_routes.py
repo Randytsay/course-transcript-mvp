@@ -1,4 +1,4 @@
-"""Owner read-only status integration; no provider, production, or Drive access."""
+"""Owner status and approval API integration; no provider/Drive access."""
 from __future__ import annotations
 
 import hashlib
@@ -16,7 +16,7 @@ from app.golden_v2_routes import router
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, STAGES
 
 
-class OwnerReadOnlyTests(unittest.TestCase):
+class OwnerApiTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
@@ -27,10 +27,14 @@ class OwnerReadOnlyTests(unittest.TestCase):
             estimated_stage_cents={name: 0 for name in STAGES},
         )
         self.token = "test-unique-operator-secret-0123456789-0123456789"
+        self.write_token = "test-unique-write-secret-0123456789-0123456789"
         self.config = patch.dict(os.environ, {
             "COURSE_TRANSCRIPT_V2_STATUS_API_ENABLED": "true",
             "COURSE_TRANSCRIPT_V2_STATUS_TOKEN": self.token,
             "COURSE_TRANSCRIPT_V2_LEDGER_PATH": str(self.db),
+            "COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "false",
+            "COURSE_TRANSCRIPT_V2_WRITE_TOKEN": self.write_token,
+            "COURSE_TRANSCRIPT_V2_OWNER_ACTOR": "owner@example.test",
         })
         self.config.start()
         self.addCleanup(self.config.stop)
@@ -38,6 +42,7 @@ class OwnerReadOnlyTests(unittest.TestCase):
         app.include_router(router)
         self.client = TestClient(app)
         self.headers = {"Authorization": "Bearer " + self.token}
+        self.write_headers = {"Authorization": "Bearer " + self.write_token}
 
     def test_disabled_by_default_and_no_auth_fail_closed(self):
         with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_STATUS_API_ENABLED": "false"}):
@@ -82,6 +87,121 @@ class OwnerReadOnlyTests(unittest.TestCase):
             response = self.client.get("/api/v1/golden-v2/jobs", headers=self.headers)
         self.assertEqual(response.status_code, 503)
         self.assertNotIn("no such table", response.text)
+        before = hashlib.sha256(empty.read_bytes()).digest()
+        body = {"revision": 0, "approved_cents": 1,
+                "reference": "test", "confirm": True}
+        with patch.dict(os.environ, {
+            "COURSE_TRANSCRIPT_V2_LEDGER_PATH": str(empty),
+            "COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true",
+        }):
+            response = self.client.post(
+                f"/api/v1/golden-v2/jobs/{self.job_id}/approval",
+                headers=self.write_headers, json=body,
+            )
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(hashlib.sha256(empty.read_bytes()).digest(), before)
+
+    def test_write_routes_are_separately_disabled_and_owner_authenticated(self):
+        payload = {"revision": 0, "approved_cents": 1,
+                   "reference": "owner-approved-test", "confirm": True}
+        url = f"/api/v1/golden-v2/jobs/{self.job_id}/approval"
+        self.assertEqual(self.client.post(url, headers=self.headers, json=payload).status_code, 404)
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true"}):
+            self.assertEqual(self.client.post(url, headers=self.headers, json=payload).status_code, 401)
+            self.assertEqual(self.client.post(url, headers={
+                "Authorization": "Bearer " + self.write_token,
+                "Cf-Access-Authenticated-User-Email": "owner@example.test",
+                "Cf-Access-Jwt-Assertion": "unverified-header",
+            }, json=payload).status_code, 200)
+        self.assertEqual(self.ledger.status(self.job_id)["status"], "QUEUED")
+
+    def test_job_approval_requires_exact_cost_revision_and_confirmation(self):
+        estimates = {name: 0 for name in STAGES}
+        estimates["gemini_primary"] = 5
+        job_id = self.ledger.create(
+            source_sha="a" * 64, mode="FLASH_CHIRP",
+            estimated_stage_cents=estimates,
+        )
+        amount = {"revision": 0, "approved_cents": 5,
+                  "reference": "source-and-cost-reviewed", "confirm": True}
+        url = f"/api/v1/golden-v2/jobs/{job_id}/approval"
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true"}):
+            self.assertEqual(self.client.post(url, headers=self.write_headers,
+                                              json={**amount, "extra": "rejected"}).status_code, 422)
+            self.assertEqual(self.client.post(url, headers=self.write_headers,
+                                              json={**amount, "confirm": False}).status_code, 422)
+            self.assertEqual(self.client.post(url, headers=self.write_headers,
+                                              json={**amount, "approved_cents": 4}).status_code, 409)
+            self.assertEqual(self.client.post(url, headers=self.write_headers,
+                                              json={**amount, "approved_cents": 1001}).status_code, 422)
+            response = self.client.post(url, headers=self.write_headers, json=amount)
+            self.assertEqual(response.status_code, 200, response.text)
+            self.assertEqual(response.json(), {
+                "job_id": job_id, "status": "QUEUED", "revision": 1,
+            })
+            self.assertEqual(self.client.post(url, headers=self.write_headers,
+                                              json=amount).status_code, 409)
+            missing = self.client.post(
+                "/api/v1/golden-v2/jobs/v2_00000000000000000000000000000000/approval",
+                headers=self.write_headers, json=amount,
+            )
+            self.assertEqual(missing.status_code, 404)
+        status = self.ledger.status(job_id)
+        self.assertEqual(status["revision"], 1)
+        self.assertEqual(status["approved_cents"], 5)
+
+    def test_repair_approval_endpoint_persists_exact_plan_without_provider_calls(self):
+        estimates = {name: 0 for name in STAGES}
+        estimates["gemini_primary"] = 1
+        estimates["chirp_independent"] = 10
+        job_id = self.ledger.create(
+            source_sha="d" * 64, mode="FLASH_CHIRP",
+            estimated_stage_cents=estimates,
+        )
+        self.ledger.approve(job_id, revision=0, approved_cents=11,
+                            reference="base-test", actor="test")
+        primary = self.ledger.claim_next(job_id, worker_id="fake")
+        self.ledger.complete(primary, evidence_sha="a" * 64, actual_cents=1)
+        chirp = self.ledger.claim_next(job_id, worker_id="fake")
+        base_window = {
+            "window_id": "chunk-000", "source_sha": "d" * 64,
+            "clip_sha": "b" * 64, "gcs_uri": "gs://private/audio.flac",
+            "start_ms": 0, "end_ms": 3000,
+            "output_uri": "gs://private/out/", "estimated_cents": 2,
+        }
+        self.ledger.plan_chirp_window(chirp, base_window)
+        self.ledger.begin_chirp_submit(chirp, "chunk-000")
+        self.ledger.record_chirp_submission(chirp, "chunk-000", "operations/fake")
+        self.ledger.recover_submitted_chirp(
+            job_id, "chunk-000", operation_name="operations/fake",
+            evidence_sha="c" * 64, actual_cents=1,
+            verifier=lambda **row: row["clip_sha"] == "b" * 64,
+        )
+        state = self.ledger.status(job_id)
+        assessment_sha = "e" * 64
+        repair = {
+            "window_id": "repair-r01-00", "source_sha": "d" * 64,
+            "clip_sha": "f" * 64, "gcs_uri": "gs://private/repair.flac",
+            "start_ms": 0, "end_ms": 3000,
+            "output_uri": "gs://private/repair-output/", "estimated_cents": 1,
+            "assessment_sha": assessment_sha,
+            "target_intervals": [{"start_ms": 1000, "end_ms": 2000}],
+            "strategy": "STANDARD_BATCH",
+        }
+        body = {
+            "revision": state["revision"], "assessment_sha": assessment_sha,
+            "windows": [repair], "approved_cents": 1,
+            "reference": "exact-acoustic-plan-reviewed", "confirm": True,
+        }
+        url = f"/api/v1/golden-v2/jobs/{job_id}/repair-approval"
+        before_calls = self.ledger.status(job_id)["spent_cents"]
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true"}):
+            response = self.client.post(url, headers=self.write_headers, json=body)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["status"], "APPROVED")
+        self.assertEqual(response.json()["window_count"], 1)
+        self.assertEqual(self.ledger.status(job_id)["spent_cents"], before_calls)
+        self.assertEqual(self.ledger.chirp_windows(job_id)[0]["status"], "DONE")
 
 
 if __name__ == "__main__":

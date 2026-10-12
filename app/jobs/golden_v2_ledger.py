@@ -47,6 +47,22 @@ class GoldenV2Ledger:
         self.database.parent.mkdir(parents=True, exist_ok=True)
         self.initialize()
 
+    @classmethod
+    def open_existing(cls, database: Path) -> "GoldenV2Ledger":
+        """Bind to an initialized ledger without creating or migrating it."""
+        path = Path(database)
+        if not path.is_file():
+            raise FileNotFoundError("Golden V2 ledger does not exist")
+        with closing(sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)) as db:
+            tables = {row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+        if not {"v2_jobs", "v2_stages", "v2_chirp_operations"}.issubset(tables):
+            raise sqlite3.OperationalError("Golden V2 ledger schema is incomplete")
+        ledger = cls.__new__(cls)
+        ledger.database = path
+        return ledger
+
     @contextmanager
     def _tx(self) -> Iterator[sqlite3.Connection]:
         with closing(sqlite3.connect(self.database, timeout=15, isolation_level=None)) as db:
