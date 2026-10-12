@@ -375,7 +375,7 @@ def _job_summary(directory: Path) -> dict[str, Any]:
         "created_at": _iso_mtime(directory),
         "updated_at": _iso_mtime(timestamp_source),
         "language": "cmn-Hant-TW",
-        "model": "Chirp 3 + Vertex Gemini 3.7 Flash text correction",
+        "model": "Chirp 3 + Vertex Gemini 3.8 Flash text correction",
         "words": words,
         "review_terms": len(_read_json(directory / "review-terms.json", []) or []),
         "pipeline": stages,
@@ -506,7 +506,7 @@ def _database_job_summary(
             if record.get("workflow_mode") == "CHATGPT_HANDOFF"
             else "Chirp 3 Only"
             if record.get("workflow_mode") == "CHIRP_ONLY"
-            else "Chirp 3 + Vertex Gemini 3.7 Flash text correction"
+            else "Chirp 3 + Vertex Gemini 3.8 Flash text correction"
         ),
         "workflow_mode": record.get("workflow_mode") or FULL_AUTO,
         "words": int((qa or {}).get("chirp", {}).get("word_count", 0) or 0),
