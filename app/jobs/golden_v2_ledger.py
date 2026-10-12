@@ -256,19 +256,31 @@ class GoldenV2Ledger:
             )
 
     def approve(self, job_id: str, *, revision: int, approved_cents: int,
-                reference: str, actor: str) -> None:
+                reference: str, actor: str, repeat_source_confirmed: bool = False) -> None:
         """Owner-authenticated endpoint should call this only after review.
 
         A caller cannot assert approval through provider adapters. Account
         authorization and real financial controls are external dependencies.
         """
-        if type(approved_cents) is not int or approved_cents < 0 or not reference.strip() or not actor.strip():
+        if (type(approved_cents) is not int or approved_cents < 0
+                or type(repeat_source_confirmed) is not bool
+                or not reference.strip() or not actor.strip()):
             raise ValueError("invalid owner approval")
         with self._tx() as db:
             job = self._job(db, job_id)
             if (job["revision"] != revision or job["status"] != "AWAITING_APPROVAL"
                     or approved_cents < job["estimated_cents"]):
                 raise V2Conflict("approval revision, state, or amount mismatch")
+            prior_approval = db.execute(
+                "SELECT id FROM v2_jobs WHERE source_sha=? AND id<>? "
+                "AND approved_cents IS NOT NULL LIMIT 1",
+                (job["source_sha"], job_id),
+            ).fetchone()
+            if prior_approval is not None and not repeat_source_confirmed:
+                raise V2Conflict(
+                    "Source SHA has an earlier approved job; explicit "
+                    "repeat_source_confirmed=true is required before another budget approval"
+                )
             db.execute(
                 "UPDATE v2_jobs SET status='QUEUED',approval_reference=?,"
                 "approved_cents=?,revision=revision+1 WHERE id=?",
