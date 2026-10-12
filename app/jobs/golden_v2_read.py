@@ -26,8 +26,14 @@ def _snapshot(db: sqlite3.Connection, job: sqlite3.Row) -> dict[str, Any]:
         "review_required,updated_at FROM v2_stages WHERE job_id=? ORDER BY ord",
         (job["id"],),
     )]
+    job_data = dict(job)
+    job_data["prior_approved_source_count"] = db.execute(
+        "SELECT COUNT(*) FROM v2_jobs WHERE source_sha=? AND id<>? "
+        "AND approved_cents IS NOT NULL",
+        (job["source_sha"], job["id"]),
+    ).fetchone()[0]
     return {
-        "job": dict(job), "stages": stages,
+        "job": job_data, "stages": stages,
         "actual_cents": sum(int(stage["actual_cents"] or 0) for stage in stages),
         "provider_calls_started": "UNKNOWN_WITHOUT_PROVIDER_MANIFEST",
         "golden_qa_complete": any(stage["name"] == "golden_qa" and
