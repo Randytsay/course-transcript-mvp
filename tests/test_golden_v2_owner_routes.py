@@ -295,6 +295,31 @@ class OwnerApiTests(unittest.TestCase):
         self.assertEqual(status["revision"], 1)
         self.assertEqual(status["approved_cents"], 5)
 
+    def test_repeat_source_approval_requires_explicit_additional_ack(self):
+        estimates = {name: 0 for name in STAGES}
+        duplicate = self.ledger.create(
+            source_sha="c" * 64, mode="FLASH_CHIRP",
+            estimated_stage_cents=estimates,
+        )
+        self.ledger.approve(self.job_id, revision=0, approved_cents=0,
+                            reference="first-reviewed", actor="test-owner")
+        url = f"/api/v1/golden-v2/jobs/{duplicate}/approval"
+        payload = {"revision": 0, "approved_cents": 0,
+                   "reference": "second-reviewed", "confirm": True}
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true"}):
+            before = self.client.get(f"/api/v1/golden-v2/jobs/{duplicate}",
+                                     headers=self.headers)
+            self.assertEqual(before.status_code, 200)
+            self.assertEqual(before.json()["job"]["prior_approved_source_count"], 1)
+            blocked = self.client.post(url, headers=self.write_headers, json=payload)
+            self.assertEqual(blocked.status_code, 409)
+            self.assertIn("repeat_source_confirmed", blocked.text)
+            approved = self.client.post(
+                url, headers=self.write_headers,
+                json={**payload, "repeat_source_confirmed": True},
+            )
+            self.assertEqual(approved.status_code, 200)
+
     def test_registration_replay_reports_current_state_after_approval(self):
         estimates = {name: 0 for name in STAGES}
         estimates["gemini_primary"] = 3
