@@ -52,9 +52,11 @@ def run_chirp_recovery_pass(
         raise V2Conflict("no immutable Chirp plan exists")
 
     recovered = 0
+    inspected = 0
     for row in rows:
-        if row["status"] != "SUBMITTED" or recovered >= max_operations:
+        if row["status"] != "SUBMITTED" or inspected >= max_operations:
             continue
+        inspected += 1
         status = recover_chirp_window(
             ledger=ledger, job_id=job_id, window_id=row["window_id"],
             job_dir=job_dir, gateway=gateway, cost_accountant=cost_accountant,
@@ -67,7 +69,7 @@ def run_chirp_recovery_pass(
     unknown = [r["window_id"] for r in current if r["status"] == "SUBMITTING"]
     unsubmitted = [r["window_id"] for r in current if r["status"] == "PLANNED"]
     result: dict[str, Any] = {
-        "job_id": job_id, "recovered": recovered,
+        "job_id": job_id, "recovered": recovered, "inspected": inspected,
         "pending": pending, "unknown": unknown, "unsubmitted": unsubmitted,
         "provider_submissions": 0, "drive_mutations": 0,
     }
