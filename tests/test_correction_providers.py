@@ -459,7 +459,7 @@ class TestPricing(unittest.TestCase):
 
     def test_vertex_estimate_positive(self):
         est = estimate_correction_cost(provider="vertex",
-                                       model="gemini-3.7-flash", mode="BATCH",
+                                       model="gemini-3.8-flash", mode="BATCH",
                                        input_tokens=1_000_000, output_tokens=0,
                                        on=date(2026, 8, 23))
         assert est["estimated_cost_usd"] == 0.375
