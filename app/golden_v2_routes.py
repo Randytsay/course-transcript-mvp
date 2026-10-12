@@ -137,13 +137,15 @@ def create_job(
         raise HTTPException(status_code=422, detail="Estimate exceeds configured per-job ceiling")
     try:
         ledger = GoldenV2Ledger.open_existing(database)
-        job_id = ledger.create(
+        job_id = ledger.create_idempotent(
             source_sha=body.source_sha256, mode=body.mode,
             estimated_stage_cents=estimates,
         )
+        state = ledger.status(job_id)
         return {
-            "job_id": job_id, "status": "AWAITING_APPROVAL", "revision": 0,
-            "estimated_cents": estimate_total,
+            "job_id": job_id, "status": state["status"],
+            "revision": state["revision"],
+            "estimated_cents": state["estimated_cents"],
             "provider_calls_started": False, "drive_mutation_started": False,
         }
     except (V2Conflict, ValueError, sqlite3.Error) as exc:

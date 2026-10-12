@@ -158,6 +158,25 @@ class GoldenV2Ledger:
         self._insert_job(job_id, source_sha, mode, estimated_stage_cents)
         return job_id
 
+    def create_idempotent(self, *, source_sha: str, mode: str,
+                          estimated_stage_cents: dict[str, int]) -> str:
+        """Create/replay an owner registration by its exact immutable request."""
+        self._validate_new_job(source_sha, mode, estimated_stage_cents)
+        identity = _digest({
+            "source_sha": source_sha,
+            "mode": mode,
+            "estimated_stage_cents": {
+                name: estimated_stage_cents[name] for name in STAGES
+            },
+        })
+        job_id = "v2_" + uuid.uuid5(
+            uuid.NAMESPACE_URL, "golden-v2-owner-registration:" + identity,
+        ).hex
+        return self._create_or_replay(
+            job_id=job_id, source_sha=source_sha, mode=mode,
+            estimated_stage_cents=estimated_stage_cents,
+        )
+
     @staticmethod
     def preflight_job_id(registration_sha256: str) -> str:
         """Stable local job identity for an immutable source-preflight package."""
@@ -181,6 +200,13 @@ class GoldenV2Ledger:
         """
         self._validate_new_job(source_sha, mode, estimated_stage_cents)
         job_id = self.preflight_job_id(registration_sha256)
+        return self._create_or_replay(
+            job_id=job_id, source_sha=source_sha, mode=mode,
+            estimated_stage_cents=estimated_stage_cents,
+        )
+
+    def _create_or_replay(self, *, job_id: str, source_sha: str, mode: str,
+                          estimated_stage_cents: dict[str, int]) -> str:
         with self._tx() as db:
             existing = db.execute(
                 "SELECT source_sha,mode,estimated_cents FROM v2_jobs WHERE id=?",
@@ -195,7 +221,7 @@ class GoldenV2Ledger:
                         or existing["mode"] != mode
                         or existing["estimated_cents"] != sum(estimated_stage_cents.values())
                         or stages != estimated_stage_cents):
-                    raise V2Conflict("preflight registration identity conflicts with ledger")
+                    raise V2Conflict("registration identity conflicts with ledger")
                 return job_id
             db.execute(
                 "INSERT INTO v2_jobs(id,source_sha,mode,estimated_cents,created_at) VALUES(?,?,?,?,?)",

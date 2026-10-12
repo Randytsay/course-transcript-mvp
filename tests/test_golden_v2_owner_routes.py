@@ -102,6 +102,13 @@ class OwnerApiTests(unittest.TestCase):
             self.assertEqual(self.client.post(url, headers=self.write_headers,
                                               json={**payload, "estimated_stage_cents": too_expensive}).status_code, 422)
             response = self.client.post(url, headers=self.write_headers, json=payload)
+            replay = self.client.post(url, headers=self.write_headers, json=payload)
+            with sqlite3.connect(self.db) as db:
+                self.assertEqual(db.execute("SELECT COUNT(*) FROM v2_jobs").fetchone()[0], 2)
+            changed = {**payload, "estimated_stage_cents": {
+                **estimates, "gemini_primary": 8,
+            }}
+            distinct = self.client.post(url, headers=self.write_headers, json=changed)
         self.assertEqual(response.status_code, 201, response.text)
         result = response.json()
         self.assertEqual(result["status"], "AWAITING_APPROVAL")
@@ -112,6 +119,12 @@ class OwnerApiTests(unittest.TestCase):
         self.assertEqual(state["status"], "AWAITING_APPROVAL")
         self.assertIsNone(state["approved_cents"])
         self.assertEqual(state["estimated_cents"], 7)
+
+        self.assertEqual(replay.status_code, 201, replay.text)
+        self.assertEqual(replay.json()["job_id"], result["job_id"])
+
+        self.assertEqual(distinct.status_code, 201, distinct.text)
+        self.assertNotEqual(distinct.json()["job_id"], result["job_id"])
 
     def test_missing_database_invalid_id_and_limit(self):
         self.assertEqual(self.client.get("/api/v1/golden-v2/jobs/v2_not-a-job", headers=self.headers).status_code, 404)
@@ -202,6 +215,34 @@ class OwnerApiTests(unittest.TestCase):
         status = self.ledger.status(job_id)
         self.assertEqual(status["revision"], 1)
         self.assertEqual(status["approved_cents"], 5)
+
+    def test_registration_replay_reports_current_state_after_approval(self):
+        estimates = {name: 0 for name in STAGES}
+        estimates["gemini_primary"] = 3
+        payload = {
+            "source_sha256": "f" * 64, "mode": "FLASH_CHIRP",
+            "estimated_stage_cents": estimates, "confirm": True,
+        }
+        with patch.dict(os.environ, {"COURSE_TRANSCRIPT_V2_WRITE_API_ENABLED": "true"}):
+            created = self.client.post(
+                "/api/v1/golden-v2/jobs", headers=self.write_headers, json=payload,
+            )
+            job_id = created.json()["job_id"]
+            approved = self.client.post(
+                f"/api/v1/golden-v2/jobs/{job_id}/approval",
+                headers=self.write_headers,
+                json={"revision": 0, "approved_cents": 3,
+                      "reference": "explicit-test", "confirm": True},
+            )
+            replay = self.client.post(
+                "/api/v1/golden-v2/jobs", headers=self.write_headers, json=payload,
+            )
+        self.assertEqual(created.status_code, 201)
+        self.assertEqual(approved.status_code, 200)
+        self.assertEqual(replay.status_code, 201)
+        self.assertEqual(replay.json()["job_id"], job_id)
+        self.assertEqual(replay.json()["status"], "QUEUED")
+        self.assertEqual(replay.json()["revision"], 1)
 
     def test_repair_approval_endpoint_persists_exact_plan_without_provider_calls(self):
         estimates = {name: 0 for name in STAGES}
