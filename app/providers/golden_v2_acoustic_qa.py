@@ -28,7 +28,7 @@ def _peak_db(job_dir: Path, start: int, end: int) -> float | None:
              f"{start / 1000:.3f}", "-i", str(job_dir / "normalized.flac"),
              "-t", f"{(end-start)/1000:.3f}", "-af", "volumedetect",
              "-f", "null", "-"],
-            capture_output=True, text=True, timeout=120, check=False,
+            capture_output=True, text=True, timeout=30, check=False,
         )
         if result.returncode:
             return None
@@ -44,7 +44,8 @@ def inspect_v2_acoustic(
     *, job_dir: Path, merged: dict[str, Any],
     gap_min_ms: int = 3000, tail_min_ms: int = 2000,
     max_repair_intervals: int = 12, max_repair_total_ms: int = 600_000,
-    word_boundary_grace_ms: int = 200,
+    word_boundary_grace_ms: int = 200, max_gaps_to_probe: int = 16,
+    max_gap_probe_ms: int = 30_000,
 ) -> dict[str, Any]:
     """Validate source and Chirp timebase and flag only audibly suspicious gaps.
 
@@ -54,7 +55,9 @@ def inspect_v2_acoustic(
     if (not 0 < gap_min_ms <= 30_000 or not 0 < tail_min_ms <= 30_000
             or not 0 < max_repair_intervals <= 100
             or not 0 < max_repair_total_ms <= 3_600_000
-            or not 0 <= word_boundary_grace_ms <= 500):
+            or not 0 <= word_boundary_grace_ms <= 500
+            or type(max_gaps_to_probe) is not int or not 1 <= max_gaps_to_probe <= 64
+            or type(max_gap_probe_ms) is not int or not 1000 <= max_gap_probe_ms <= 120_000):
         raise V2Conflict("invalid bounded acoustic QA settings")
     audio = Path(job_dir) / "normalized.flac"
     if (not audio.is_file() or merged.get("timing_authority") != "chirp_3"
@@ -81,7 +84,9 @@ def inspect_v2_acoustic(
         gaps.append((previous_end, duration, "TAIL"))
 
     intervals: list[dict[str, Any]] = []
-    for start, end, position in gaps:
+    probed = gaps[:max_gaps_to_probe]
+    unprobed = gaps[max_gaps_to_probe:]
+    for start, end, position in probed:
         # Chirp offsets are approximate at phoneme edges. Treat at most 200 ms
         # adjacent to recognized words as part of the word, not missing speech.
         # Inspect the remaining interval; a genuine multi-second omission still
@@ -90,47 +95,101 @@ def inspect_v2_acoustic(
         probe_end = end - (word_boundary_grace_ms if position != "TAIL" else 0)
         if probe_end <= probe_start:
             raise V2Conflict("acoustic gap smaller than allowed probe window")
-        audible = _audible(Path(job_dir), probe_start, probe_end)
-        vad = _vad_assessment(Path(job_dir), probe_start, probe_end)
+        if probe_end - probe_start > max_gap_probe_ms:
+            intervals.append({
+                "start_ms": start, "end_ms": end, "position": position,
+                "acoustic_probe_start_ms": probe_start,
+                "acoustic_probe_end_ms": probe_end,
+                "audible_above_rms_threshold": None, "max_volume_dbfs": None,
+                "vad": None, "disposition": "REVIEW",
+                "reason": "gap_exceeds_local_probe_cap",
+            })
+            continue
+        try:
+            audible = _audible(Path(job_dir), probe_start, probe_end)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            audible = None
+        try:
+            vad = _vad_assessment(Path(job_dir), probe_start, probe_end)
+        except (OSError, subprocess.TimeoutExpired, ValueError):
+            vad = None
         peak_db = _peak_db(Path(job_dir), probe_start, probe_end)
         # Near-digital silence is stronger evidence than an RMS threshold;
         # audible nonspeech with VAD uncertainty remains in review.
         strong_silence = peak_db is not None and peak_db <= -65
         non_speech = strong_silence or bool(vad and vad.get("robust_non_speech"))
+        speech = (not non_speech and audible is True and bool(vad)
+                  and vad.get("robust_speech") is True)
+        disposition = (
+            "NONSPEECH_CONFIRMED" if non_speech else
+            "SPEECH_CONFIRMED" if speech else "REVIEW"
+        )
         interval = {
             "start_ms": start, "end_ms": end, "position": position,
             "acoustic_probe_start_ms": probe_start,
             "acoustic_probe_end_ms": probe_end,
             "audible_above_rms_threshold": audible,
             "max_volume_dbfs": peak_db,
-            "vad": vad, "disposition": "NONSPEECH_CONFIRMED" if non_speech else "REVIEW",
-            "reason": "non_speech_evidence" if non_speech else "possible_audible_untranscribed_audio",
+            "vad": vad, "disposition": disposition,
+            "reason": ("non_speech_evidence" if non_speech else
+                       "positive_speech_evidence" if speech else
+                       "audio_character_uncertain"),
         }
         intervals.append(interval)
+    for start, end, position in unprobed:
+        intervals.append({
+            "start_ms": start, "end_ms": end, "position": position,
+            "acoustic_probe_start_ms": None, "acoustic_probe_end_ms": None,
+            "audible_above_rms_threshold": None, "max_volume_dbfs": None,
+            "vad": None, "disposition": "REVIEW",
+            "reason": "acoustic_gap_probe_limit_reached",
+        })
 
-    blockers = [interval for interval in intervals if interval["disposition"] == "REVIEW"]
+    blockers = [interval for interval in intervals
+                if interval["disposition"] != "NONSPEECH_CONFIRMED"]
+    speech_gaps = [interval for interval in intervals
+                   if interval["disposition"] == "SPEECH_CONFIRMED"]
     repair_intervals: list[dict[str, Any]] = []
     total = 0
-    for gap in blockers:
-        if len(repair_intervals) >= max_repair_intervals:
+    for gap_index, gap in enumerate(speech_gaps):
+        cursor = gap["start_ms"]
+        while cursor < gap["end_ms"]:
+            if len(repair_intervals) >= max_repair_intervals:
+                break
+            # Leave room for 2.5 seconds of audio context on both sides while
+            # staying inside Speech Batch's 5-minute per-file ceiling.
+            target_end = min(gap["end_ms"], cursor + 295_000)
+            start = max(0, cursor - 2500)
+            end = min(duration, target_end + 2500)
+            if total + end - start > max_repair_total_ms:
+                break
+            repair_intervals.append({
+                "start_ms": start, "end_ms": end,
+                "target_intervals": [{"start_ms": cursor, "end_ms": target_end,
+                                      "gap_index": gap_index}],
+                "strategy": "STANDARD_BATCH", "submit_authorized": False,
+            })
+            total += end - start
+            cursor = target_end
+        if cursor < gap["end_ms"]:
             break
-        # Proposal only, paid Standard Batch requires separate source/cost approval.
-        start = max(0, gap["start_ms"] - 2500)
-        end = min(duration, gap["end_ms"] + 2500, start + 300_000)
-        if total + end - start > max_repair_total_ms:
-            continue
-        repair_intervals.append({"start_ms": start, "end_ms": end,
-                                 "strategy": "STANDARD_BATCH", "submit_authorized": False})
-        total += end - start
+    nonspeech_count = sum(i["disposition"] == "NONSPEECH_CONFIRMED" for i in intervals)
+    uncertain_count = sum(i["disposition"] == "REVIEW" for i in intervals)
+    repair_truncated = len(repair_intervals) < len(speech_gaps)
     return {
         "schema": "golden-v2-acoustic-qa-v1", "source_sha256": merged["source_sha"],
         "merged_sha256": hashlib.sha256(_wire(merged)).hexdigest(),
         "duration_ms": duration, "word_count": len(words),
         "status": "PASS" if not blockers else "REVIEW",
         "gaps_examined": intervals, "blocker_count": len(blockers),
+        "nonspeech_confirmed_count": nonspeech_count,
+        "speech_confirmed_count": len(speech_gaps),
+        "uncertain_count": uncertain_count,
+        "unexamined_gap_count": len(unprobed),
         "repair_plan": {"strategy": "STANDARD_BATCH", "submit_authorized": False,
                         "status": "PROPOSED_REQUIRES_APPROVAL" if repair_intervals else "NONE",
                         "intervals": repair_intervals, "total_duration_ms": total,
-                        "truncated": len(repair_intervals) < len(blockers)},
+                        "truncated": repair_truncated,
+                        "manual_review_required": uncertain_count > 0 or repair_truncated},
         "local_only": True, "provider_calls_started": False,
     }

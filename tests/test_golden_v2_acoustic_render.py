@@ -7,6 +7,7 @@ import math
 import struct
 import subprocess
 import unittest
+from unittest.mock import patch
 import wave
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -16,6 +17,7 @@ from app.pipeline.golden_v2_stage_runner import (
     complete_comparison, complete_evidence_bound_qa,
 )
 from app.providers.golden_v2_acoustic_qa import inspect_v2_acoustic
+from app.providers import golden_v2_acoustic_qa
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.subtitles.golden_v2_render import _word_evidence, render_golden_v2
 
@@ -110,11 +112,59 @@ class GoldenV2LocalQATests(unittest.TestCase):
             complete_evidence_bound_qa(
                 ledger=self.store, claim=self.qa_claim, job_dir=self.job_dir)
         # Independently inspect verified alternate waveform without weakening ledger evidence.
-        report = inspect_v2_acoustic(job_dir=self.job_dir, merged=self.merged)
+        positive_speech = {
+            "engine": "webrtcvad", "mode0_speech_ratio": 0.72,
+            "mode3_speech_ratio": 0.44, "rms_dbfs": -18.0,
+            "robust_non_speech": False, "robust_speech": True,
+        }
+        with patch.object(golden_v2_acoustic_qa, "_vad_assessment",
+                          return_value=positive_speech):
+            report = inspect_v2_acoustic(job_dir=self.job_dir, merged=self.merged)
         self.assertEqual(report["status"], "REVIEW")
         self.assertTrue(report["repair_plan"]["intervals"])
         self.assertFalse(report["repair_plan"]["submit_authorized"])
         self.assertEqual(report["gaps_examined"][-1]["position"], "TAIL")
+        self.assertEqual(report["speech_confirmed_count"], 1)
+        self.assertEqual(report["repair_plan"]["intervals"][0]["target_intervals"],
+                         [{"start_ms": 3900, "end_ms": 8000, "gap_index": 0}])
+
+    def test_audible_but_unclassified_gap_stays_manual_and_is_not_paid_candidate(self):
+        self._make_audio(audible_tail=True)
+        self.sha = file_sha256(self.audio)
+        self.merged["source_sha"] = self.sha
+        uncertain_vad = {
+            "engine": "webrtcvad", "mode0_speech_ratio": 0.20,
+            "mode3_speech_ratio": 0.04, "rms_dbfs": -24.0,
+            "robust_non_speech": False, "robust_speech": False,
+        }
+        with patch.object(golden_v2_acoustic_qa, "_vad_assessment",
+                          return_value=uncertain_vad):
+            report = inspect_v2_acoustic(job_dir=self.job_dir, merged=self.merged)
+        self.assertEqual(report["status"], "REVIEW")
+        self.assertEqual(report["uncertain_count"], 1)
+        self.assertEqual(report["repair_plan"]["intervals"], [])
+        self.assertTrue(report["repair_plan"]["manual_review_required"])
+
+    def test_large_gap_over_probe_cap_stays_review_without_full_rerun_proposal(self):
+        self._make_audio(audible_tail=True)
+        self.sha = file_sha256(self.audio)
+        self.merged["source_sha"] = self.sha
+        report = inspect_v2_acoustic(
+            job_dir=self.job_dir, merged=self.merged, max_gap_probe_ms=3000)
+        tail = report["gaps_examined"][-1]
+        self.assertEqual(tail["reason"], "gap_exceeds_local_probe_cap")
+        self.assertEqual(tail["disposition"], "REVIEW")
+        self.assertIsNone(tail["vad"])
+        self.assertEqual(report["repair_plan"]["intervals"], [])
+        self.assertTrue(report["repair_plan"]["manual_review_required"])
+
+    def test_gap_probe_count_is_bounded_and_uninspected_gaps_remain_blockers(self):
+        report = inspect_v2_acoustic(
+            job_dir=self.job_dir, merged=self.merged, max_gaps_to_probe=1)
+        self.assertEqual(report["unexamined_gap_count"], 1)
+        self.assertEqual(report["gaps_examined"][-1]["reason"],
+                         "acoustic_gap_probe_limit_reached")
+        self.assertEqual(report["status"], "REVIEW")
 
     def test_tampered_chirp_evidence_refuses_final(self):
         merged_path = self.root_v2 / "chirp-merged.json"

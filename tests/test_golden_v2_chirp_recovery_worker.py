@@ -1,6 +1,8 @@
 """Provider-free Chirp worker restart and partial-cost regression tests."""
 from __future__ import annotations
 
+import hashlib
+import json
 import unittest
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
@@ -17,11 +19,13 @@ class ChirpRecoveryWorkerTests(unittest.TestCase):
         self.h.setUp()
         self.addCleanup(self.h.tearDown)
 
-    def recover(self, *, limit=8, cents=2):
+    def recover(self, *, limit=8, cents=2, acoustic_inspector=None):
         return run_chirp_recovery_pass(
             ledger=self.h.ledger, job_id=self.h.job_id, job_dir=self.h.job_dir,
             gateway=self.h.gateway, cost_accountant=lambda _: cents,
             max_operations=limit,
+            acoustic_inspector=(acoustic_inspector
+                                or chirp_fixtures.passing_acoustic_inspector),
         )
 
     def test_restart_recovers_saved_operations_without_new_post(self):
@@ -42,7 +46,7 @@ class ChirpRecoveryWorkerTests(unittest.TestCase):
         second = self.recover()
         self.assertEqual(second["action"], "CHIRP_COMPLETE")
         self.assertEqual(second["word_count"], 2)
-        self.assertEqual(second["acoustic_gate"], "NOT_RUN")
+        self.assertEqual(second["acoustic_gate"], "PASS")
         self.assertEqual(self.recover()["action"], "ALREADY_COMPLETE")
         self.assertEqual(len(self.h.speech.calls), 2)
 
@@ -104,6 +108,34 @@ class ChirpRecoveryWorkerTests(unittest.TestCase):
         artifact.write_bytes(b"tampered")
         with self.assertRaisesRegex(V2Conflict, "missing or changed"):
             self.recover()
+
+    def test_acoustic_review_keeps_chirp_stage_open_for_approved_repair(self):
+        self.h.plan(max_window_seconds=10)
+        rows = submit_planned_chirp(
+            ledger=self.h.ledger, claim=self.h.claim, gateway=self.h.gateway)
+        self.h._complete_outputs(rows)
+
+        def review(*, job_dir, merged):
+            digest = hashlib.sha256(json.dumps(
+                merged, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")).hexdigest()
+            return {
+                "schema": "golden-v2-acoustic-qa-v1", "status": "REVIEW",
+                "source_sha256": merged["source_sha"], "merged_sha256": digest,
+                "repair_plan": {"strategy": "STANDARD_BATCH", "submit_authorized": False,
+                                "intervals": [{"start_ms": 0, "end_ms": 2500,
+                                               "target_intervals": [{"start_ms": 200,
+                                                                     "end_ms": 1000}]}],
+                                "manual_review_required": False},
+            }
+
+        outcome = self.recover(acoustic_inspector=review)
+        self.assertEqual(outcome["action"], "STANDARD_REPAIR_APPROVAL_REQUIRED")
+        self.assertEqual(outcome["acoustic_gate"], "REVIEW")
+        self.assertFalse((self.h.job_dir / "golden-v2" / "chirp-merged.json").exists())
+        with self.assertRaisesRegex(V2Conflict, "unresolved: RUNNING"):
+            self.h.ledger.claim_next(self.h.job_id, worker_id="compare-too-early")
 
     def test_invalid_limit_is_rejected(self):
         with self.assertRaisesRegex(V2Conflict, "bounded"):

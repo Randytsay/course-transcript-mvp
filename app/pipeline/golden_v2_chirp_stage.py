@@ -7,6 +7,7 @@ Recovery uses persisted operation IDs only. V1 production is unchanged.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 from pathlib import Path
 from typing import Any, Callable
@@ -98,6 +99,9 @@ def submit_planned_chirp(
         raise V2Conflict("Chirp input not staged/approved")
     for row in rows:
         if row["status"] == "PLANNED":
+            if (row.get("purpose") == "REPAIR"
+                    and getattr(gateway, "dynamic_batching", None) is not False):
+                raise V2Conflict("Standard repair requires dynamic batching to be disabled")
             submission = ledger.begin_chirp_submit(claim, row["window_id"])
             # No exception path may revert SUBMITTING to PLANNED, even when a
             # timeout conceals a successfully submitted paid request.
@@ -209,25 +213,36 @@ def recover_chirp_window(
     return "DONE"
 
 
-def finish_approved_chirp(*, ledger: GoldenV2Ledger, job_id: str,
-                          job_dir: Path) -> dict[str, Any]:
-    """Merge immutable Chirp words using midpoint ownership; acoustic QA pending."""
+def finish_approved_chirp(
+    *, ledger: GoldenV2Ledger, job_id: str, job_dir: Path,
+    acoustic_inspector: Callable[..., dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Merge base+repair evidence; complete only after local acoustic PASS.
+
+    A REVIEW result preserves every immutable attempt and returns an explicit
+    bounded Standard repair proposal or a manual-review disposition. It never
+    submits a provider request.
+    """
     windows = ledger.chirp_windows(job_id)
     if not windows or any(w["status"] != "DONE" for w in windows):
         raise V2Conflict("all Chirp operations must have verified results")
+    base = [w for w in windows if w.get("purpose", "BASE") == "BASE"]
+    repairs = [w for w in windows if w.get("purpose") == "REPAIR"]
+    if not base:
+        raise V2Conflict("no original full-coverage Chirp windows")
     source = job_dir / "normalized.flac"
-    if not source.is_file() or file_sha256(source) != windows[0]["source_sha"]:
+    if not source.is_file() or file_sha256(source) != base[0]["source_sha"]:
         raise V2Conflict("normalized audio missing or changed before Chirp merge")
     # Windows must cover the entire normalized source. FFprobe duration is
     # checked independently; no unrecorded time span can be skipped.
     from app.providers.golden_v2_audio_staging import duration_seconds
     duration_ms = round(duration_seconds(source) * 1000)
-    if windows[0]["start_ms"] != 0 or abs(windows[-1]["end_ms"] - duration_ms) > 250:
+    if base[0]["start_ms"] != 0 or abs(base[-1]["end_ms"] - duration_ms) > 250:
         raise V2Conflict("Chirp plan does not cover original normalized audio")
-    for earlier, later in zip(windows, windows[1:]):
+    for earlier, later in zip(base, base[1:]):
         if later["start_ms"] > earlier["end_ms"]:
             raise V2Conflict("missing Chirp window region")
-    records: list[list[dict[str, Any]]] = []
+    records: dict[str, list[dict[str, Any]]] = {}
     for row in windows:
         root = job_dir / "golden-v2" / "chirp-evidence" / row["window_id"]
         saved = json.loads((root / "window.json").read_bytes())
@@ -236,29 +251,80 @@ def finish_approved_chirp(*, ledger: GoldenV2Ledger, job_id: str,
                 or saved["request_id"] != row["request_id"]
                 or file_sha256(root / "provider-raw.json") != row["result_sha"]):
             raise V2Conflict("Chirp raw evidence or cost changed after recovery")
-        records.append(_parse_words((root / "provider-raw.json").read_bytes(), row))
+        records[row["window_id"]] = _parse_words((root / "provider-raw.json").read_bytes(), row)
     boundaries = [(earlier["end_ms"] + later["start_ms"]) // 2
-                  for earlier, later in zip(windows, windows[1:])]
+                  for earlier, later in zip(base, base[1:])]
     merged: list[dict[str, Any]] = []
-    for idx, words in enumerate(records):
+    for idx, row in enumerate(base):
         lower = boundaries[idx - 1] if idx else 0
         upper = boundaries[idx] if idx < len(boundaries) else duration_ms + 250
-        for word in words:
+        for word in records[row["window_id"]]:
             mid = (word["start_ms"] + word["end_ms"]) / 2
             if lower <= mid < upper:
                 if merged and word["start_ms"] < merged[-1]["start_ms"]:
                     raise V2Conflict("merged Chirp timestamps are not monotonic")
                 merged.append(word)
+    for row in repairs:
+        try:
+            targets = json.loads(row["target_intervals_json"])
+        except (TypeError, ValueError) as exc:
+            raise V2Conflict("persisted repair target evidence is invalid") from exc
+        if not targets:
+            raise V2Conflict("repair operation has no approved target interval")
+        def targeted(word: dict[str, Any]) -> bool:
+            midpoint = (word["start_ms"] + word["end_ms"]) / 2
+            return any(target["start_ms"] <= midpoint < target["end_ms"] for target in targets)
+        merged = [word for word in merged if not targeted(word)]
+        merged.extend(word for word in records[row["window_id"]] if targeted(word))
+    merged.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
+    previous_end = 0
+    for word in merged:
+        if word["start_ms"] < previous_end:
+            raise V2Conflict("merged base/repair Chirp words overlap")
+        previous_end = word["end_ms"]
     if not merged:
         raise V2Conflict("empty merged Chirp words require acoustic review")
-    report = {
+    candidate = {
         "schema": "golden-v2-chirp-merged-v1", "job_id": job_id,
-        "source_sha": windows[0]["source_sha"], "duration_ms": duration_ms,
+        "source_sha": base[0]["source_sha"], "duration_ms": duration_ms,
         "window_result_shas": [w["result_sha"] for w in windows],
+        "repair_result_shas": [w["result_sha"] for w in repairs],
         "actual_cents": sum(int(w["actual_cents"]) for w in windows),
         "words": merged, "timing_authority": "chirp_3",
         "acoustic_gate": "NOT_RUN", "golden_pass": False,
     }
+    candidate_sha = hashlib.sha256(_wire(candidate)).hexdigest()
+    candidate_path = (job_dir / "golden-v2" /
+                      f"chirp-merged-candidate-{candidate_sha[:20]}.json")
+    _immutable(candidate_path, _wire(candidate))
+    if acoustic_inspector is None:
+        from app.providers.golden_v2_acoustic_qa import inspect_v2_acoustic
+        acoustic_inspector = inspect_v2_acoustic
+    acoustic = acoustic_inspector(job_dir=job_dir, merged=candidate)
+    if (not isinstance(acoustic, dict) or acoustic.get("status") not in {"PASS", "REVIEW"}
+            or acoustic.get("source_sha256") != candidate["source_sha"]
+            or acoustic.get("merged_sha256") != candidate_sha):
+        raise V2Conflict("independent acoustic QA did not bind to this Chirp merge")
+    acoustic_bytes = _wire(acoustic)
+    acoustic_sha = hashlib.sha256(acoustic_bytes).hexdigest()
+    acoustic_path = (job_dir / "golden-v2" /
+                     f"chirp-acoustic-qa-{acoustic_sha[:20]}.json")
+    _immutable(acoustic_path, acoustic_bytes)
+    if acoustic["status"] != "PASS":
+        result = dict(candidate)
+        result.update({
+            "acoustic_gate": "REVIEW", "acoustic_qa_sha256": acoustic_sha,
+            "acoustic_qa_path": str(acoustic_path),
+            "candidate_path": str(candidate_path),
+            "repair_plan": acoustic.get("repair_plan", {}),
+            "manual_review_required": bool(
+                acoustic.get("repair_plan", {}).get("manual_review_required", True)
+            ),
+        })
+        return result
+
+    report = dict(candidate)
+    report.update({"acoustic_gate": "PASS", "acoustic_qa_sha256": acoustic_sha})
     dest = job_dir / "golden-v2" / "chirp-merged.json"
     digest = _immutable(dest, _wire(report))
 

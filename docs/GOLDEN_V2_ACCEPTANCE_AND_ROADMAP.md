@@ -58,7 +58,7 @@
 ### G3 — Chirp 和雙引擎比較
 - [ ] G3-01 初次 Chirp 是獨立辨識，沒有提前使用 Gemini 主稿直接作其答案。
 - [ ] G3-02 Chirp word timestamps monotonic、midpoint ownership、overlap merge 正確；舊成功 chunk 不重送。
-- [ ] G3-03 Coverage/VAD 對真空白區與 audible gap 可區分；bounded Standard repair 而非 full rerun。
+- [ ] G3-03 Coverage/VAD 對真空白區與 audible gap 可區分；bounded Standard repair 而非 full rerun。離線 V2 路徑已可區分確認語音／確認非語音／不確定缺口，並以精確範圍、clip SHA、費用上限、Standard-only 與 target-only merge 執行 fake-provider 修復；仍待真實 Speech/VAD 長音訊驗收與真人複核。
 - [ ] G3-04 差異報告至少有 `source_time_start/end`、Gemini/Chirp 候選、差異類別、風險、引用的 evidence IDs。
 - [ ] G3-05 無法對齊的 Gemini 段落會被列 review，不產生模型虛構時間碼。
 

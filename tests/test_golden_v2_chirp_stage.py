@@ -1,6 +1,7 @@
 """Real local FLAC plus fake cloud, Speech and restart: no paid API involved."""
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import unittest
@@ -12,6 +13,11 @@ from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.pipeline.golden_v2_chirp_stage import (
     finish_approved_chirp, plan_approved_chirp, recover_chirp_window,
     submit_planned_chirp,
+)
+from app.pipeline.golden_v2_chirp_repair import (
+    approve_and_stage_standard_repairs, propose_standard_repair_plan,
+    resume_committed_standard_repair_uploads, submit_approved_standard_repairs,
+    upload_committed_standard_repair_clips,
 )
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.providers.golden_v2_source_lineage import bind_source_lineage
@@ -66,6 +72,16 @@ def speech_words(*words):
         {"word": text, "startOffset": f"{start:.3f}s", "endOffset": f"{end:.3f}s"}
         for text, start, end in words
     ]}]}]}, ensure_ascii=False).encode()
+
+
+def passing_acoustic_inspector(*, job_dir, merged):
+    encoded = json.dumps(merged, ensure_ascii=False, sort_keys=True,
+                         separators=(",", ":")).encode("utf-8")
+    return {"schema": "golden-v2-acoustic-qa-v1", "status": "PASS",
+            "source_sha256": merged["source_sha"],
+            "merged_sha256": hashlib.sha256(encoded).hexdigest(),
+            "gaps_examined": [], "repair_plan": {"intervals": []},
+            "local_only": True, "provider_calls_started": False}
 
 
 class ChirpStageIntegrationTests(unittest.TestCase):
@@ -143,10 +159,12 @@ class ChirpStageIntegrationTests(unittest.TestCase):
                 job_dir=self.job_dir, gateway=self.gateway,
                 cost_accountant=lambda _: 2), "DONE")
         result = finish_approved_chirp(ledger=self.ledger, job_id=self.job_id,
-                                      job_dir=self.job_dir)
+                                      job_dir=self.job_dir,
+                                      acoustic_inspector=passing_acoustic_inspector)
         self.assertEqual([w["word"] for w in result["words"]], ["第1句", "第2句"])
         self.assertEqual(result["timing_authority"], "chirp_3")
         self.assertFalse(result["golden_pass"])
+        self.assertEqual(result["acoustic_gate"], "PASS")
         self.assertEqual(self.ledger.status(self.job_id)["spent_cents"], 5)
         self.assertEqual(self.ledger.claim_next(self.job_id, worker_id="next")["stage"], "compare")
         self.assertEqual(len(self.speech.calls), 2)
@@ -203,6 +221,205 @@ class ChirpStageIntegrationTests(unittest.TestCase):
                 minimum_age_seconds=0,
             )
         self.assertEqual(len(self.speech.calls), 0)
+
+    def test_standard_repair_is_plan_bound_budgeted_and_uses_standard_gateway(self):
+        self.plan(max_window_seconds=10)
+        base = submit_planned_chirp(
+            ledger=self.ledger, claim=self.claim, gateway=self.gateway)
+        self._complete_outputs(base)
+        self.assertEqual(recover_chirp_window(
+            ledger=self.ledger, job_id=self.job_id, window_id=base[0]["window_id"],
+            job_dir=self.job_dir, gateway=self.gateway,
+            cost_accountant=lambda _: 2), "DONE")
+
+        clip_sha = "a" * 64
+        assessment_sha = "b" * 64
+        repair = {
+            "window_id": "repair-r01-00", "source_sha": self.sha,
+            "clip_sha": clip_sha,
+            "gcs_uri": (f"gs://private-test-bucket/v2/staging/{self.job_id}/"
+                        f"{self.sha}/chirp-repair-inputs/{clip_sha}.flac"),
+            "start_ms": 0, "end_ms": 3000,
+            "target_intervals": [{"start_ms": 1000, "end_ms": 2000}],
+            "output_uri": (f"gs://private-test-bucket/v2/staging/{self.job_id}/"
+                           f"{self.sha}/chirp-repair-outputs/repair-r01-00/"),
+            "estimated_cents": 1, "assessment_sha": assessment_sha,
+            "strategy": "STANDARD_BATCH",
+        }
+        state = self.ledger.status(self.job_id)
+        approval = self.ledger.approve_chirp_repair_plan(
+            self.job_id, expected_revision=state["revision"],
+            assessment_sha=assessment_sha, windows=[repair], approved_cents=1,
+            reference="owner-approved-test-plan", actor="unit-test-owner",
+        )
+        changed = {**repair, "output_uri": repair["output_uri"].replace(
+            "repair-r01-00/", "different-operation/")}
+        with self.assertRaisesRegex(V2Conflict, "differ from owner-approved"):
+            self.ledger.plan_chirp_repair_windows(
+                self.claim, plan_sha=approval["plan_sha"], windows=[changed])
+        self.ledger.plan_chirp_repair_windows(
+            self.claim, plan_sha=approval["plan_sha"], windows=[repair])
+        planned = [row for row in self.ledger.chirp_windows(self.job_id)
+                   if row.get("purpose") == "REPAIR"]
+        self.assertEqual(len(planned), 1)
+        self.assertEqual(planned[0]["assessment_sha"], assessment_sha)
+        self.assertEqual(json.loads(planned[0]["target_intervals_json"]),
+                         [{"start_ms": 1000, "end_ms": 2000}])
+
+        calls_before = len(self.speech.calls)
+        with self.assertRaisesRegex(V2Conflict, "Standard repair requires"):
+            submit_planned_chirp(
+                ledger=self.ledger, claim=self.claim, gateway=self.gateway)
+        self.assertEqual(len(self.speech.calls), calls_before)
+        self.gateway.dynamic_batching = False
+        submitted = submit_planned_chirp(
+            ledger=self.ledger, claim=self.claim, gateway=self.gateway)
+        self.assertEqual(submitted[-1]["purpose"], "REPAIR")
+        self.assertEqual(submitted[-1]["status"], "SUBMITTED")
+        self.assertEqual(len(self.speech.calls), calls_before + 1)
+
+    def test_standard_repair_approval_fails_before_base_evidence_and_above_budget(self):
+        self.plan(max_window_seconds=10)
+        repair = {
+            "window_id": "repair-r01-00", "source_sha": self.sha,
+            "clip_sha": "a" * 64,
+            "gcs_uri": "gs://private-test-bucket/v2/in.flac",
+            "start_ms": 0, "end_ms": 3000,
+            "target_intervals": [{"start_ms": 1000, "end_ms": 2000}],
+            "output_uri": "gs://private-test-bucket/v2/out/",
+            "estimated_cents": 1, "assessment_sha": "b" * 64,
+            "strategy": "STANDARD_BATCH",
+        }
+        state = self.ledger.status(self.job_id)
+        with self.assertRaisesRegex(V2Conflict, "all prior Chirp operations complete"):
+            self.ledger.approve_chirp_repair_plan(
+                self.job_id, expected_revision=state["revision"],
+                assessment_sha="b" * 64, windows=[repair], approved_cents=1,
+                reference="owner-test", actor="unit-test-owner")
+        self.assertEqual(len(self.speech.calls), 0)
+
+    def test_end_to_end_standard_repair_preserves_base_and_gates_compare(self):
+        base = self.plan(max_window_seconds=10, estimate_window_cents=lambda _: 8)
+        submitted = submit_planned_chirp(
+            ledger=self.ledger, claim=self.claim, gateway=self.gateway)
+        self.speech.operations[submitted[0]["operation_name"]].done = True
+        input_prefix = submitted[0]["output_uri"].split("private-test-bucket/", 1)[1]
+        self.cloud.results[input_prefix + "output.json"] = FakeResult(
+            input_prefix + "output.json", speech_words(("舊辨識", 1.2, 1.5)))
+        self.assertEqual(recover_chirp_window(
+            ledger=self.ledger, job_id=self.job_id, window_id=submitted[0]["window_id"],
+            job_dir=self.job_dir, gateway=self.gateway,
+            cost_accountant=lambda _: 2), "DONE")
+
+        def review_one_gap(*, job_dir, merged):
+            digest = hashlib.sha256(json.dumps(
+                merged, ensure_ascii=False, sort_keys=True,
+                separators=(",", ":"),
+            ).encode("utf-8")).hexdigest()
+            return {
+                "schema": "golden-v2-acoustic-qa-v1", "status": "REVIEW",
+                "source_sha256": self.sha, "merged_sha256": digest,
+                "gaps_examined": [{"start_ms": 1000, "end_ms": 2000,
+                                   "disposition": "SPEECH_CONFIRMED"}],
+                "repair_plan": {
+                    "strategy": "STANDARD_BATCH", "submit_authorized": False,
+                    "status": "PROPOSED_REQUIRES_APPROVAL",
+                    "intervals": [{
+                        "start_ms": 500, "end_ms": 2500,
+                        "target_intervals": [{"start_ms": 1000, "end_ms": 2000,
+                                              "gap_index": 0}],
+                    }],
+                    "total_duration_ms": 2000, "truncated": False,
+                    "manual_review_required": False,
+                },
+                "local_only": True, "provider_calls_started": False,
+            }
+
+        review = finish_approved_chirp(
+            ledger=self.ledger, job_id=self.job_id, job_dir=self.job_dir,
+            acoustic_inspector=review_one_gap)
+        self.assertEqual(review["acoustic_gate"], "REVIEW")
+        self.assertFalse((self.job_dir / "golden-v2" / "chirp-merged.json").exists())
+        with self.assertRaisesRegex(V2Conflict, "unresolved: RUNNING"):
+            self.ledger.claim_next(self.job_id, worker_id="compare-too-early")
+
+        proposal = propose_standard_repair_plan(
+            ledger=self.ledger, claim=self.claim, job_dir=self.job_dir,
+            normalized_audio=self.audio,
+            acoustic_report_path=Path(review["acoustic_qa_path"]),
+            bucket_name="private-test-bucket", object_prefix="v2/staging",
+            estimate_window_cents=lambda _: 3,
+        )
+        staged = approve_and_stage_standard_repairs(
+            ledger=self.ledger, claim=self.claim, proposal=proposal,
+            approved_cents=3, approval_reference="exact-gap-test-approval",
+            approving_actor="unit-test-owner", bucket_name="private-test-bucket",
+            object_prefix="v2/staging", storage_client=self.cloud,
+        )
+        self.assertEqual(staged["status"], "STANDARD_REPAIR_STAGED")
+        self.assertEqual(staged["provider_submissions"], 0)
+        repair_row = next(row for row in self.ledger.chirp_windows(self.job_id)
+                          if row.get("purpose") == "REPAIR")
+        self.assertEqual(repair_row["status"], "PLANNED")
+        upload_count = sum(blob.uploads for blob in self.cloud.objects.values())
+        retry = upload_committed_standard_repair_clips(
+            ledger=self.ledger, claim=self.claim, proposal=proposal,
+            bucket_name="private-test-bucket", object_prefix="v2/staging",
+            storage_client=self.cloud,
+        )
+        self.assertEqual(retry["uploaded_windows"], 1)
+        self.assertEqual(sum(blob.uploads for blob in self.cloud.objects.values()),
+                         upload_count)
+
+        # Simulate an upload that was absent after process restart. The ledger
+        # retains the exact plan and rotates its claim before safe re-upload.
+        object_key = repair_row["gcs_uri"].split("private-test-bucket/", 1)[1]
+        self.cloud.objects.pop(object_key)
+        self.ledger = GoldenV2Ledger(self.ledger_path)
+        state = self.ledger.status(self.job_id)
+        resumed_claim = self.ledger.resume_chirp_submissions(
+            self.job_id, worker_id="repair-upload-recovery",
+            expected_revision=state["revision"], minimum_age_seconds=0,
+        )
+        with self.assertRaisesRegex(V2Conflict, "unrecognized/stale"):
+            resume_committed_standard_repair_uploads(
+                ledger=self.ledger, claim=self.claim, job_dir=self.job_dir,
+                normalized_audio=self.audio, bucket_name="private-test-bucket",
+                object_prefix="v2/staging", storage_client=self.cloud,
+            )
+        recovered_upload = resume_committed_standard_repair_uploads(
+            ledger=self.ledger, claim=resumed_claim, job_dir=self.job_dir,
+            normalized_audio=self.audio, bucket_name="private-test-bucket",
+            object_prefix="v2/staging", storage_client=self.cloud,
+        )
+        self.assertEqual(recovered_upload["uploaded_windows"], 1)
+
+        standard_gateway = ChirpV2Gateway(
+            speech_client=self.speech, storage_client=self.cloud,
+            project="fake-project", dynamic_batching=False,
+            request_factory=lambda row: dict(row),
+        )
+        repair_submitted = submit_approved_standard_repairs(
+            ledger=self.ledger, claim=resumed_claim, gateway=standard_gateway)
+        self.assertEqual(len(repair_submitted), 1)
+        self.assertFalse(standard_gateway.dynamic_batching)
+        repair = repair_submitted[0]
+        self.speech.operations[repair["operation_name"]].done = True
+        repair_prefix = repair["output_uri"].split("private-test-bucket/", 1)[1]
+        self.cloud.results[repair_prefix + "output.json"] = FakeResult(
+            repair_prefix + "output.json", speech_words(("新辨識", 0.7, 1.0)))
+        self.assertEqual(recover_chirp_window(
+            ledger=self.ledger, job_id=self.job_id, window_id=repair["window_id"],
+            job_dir=self.job_dir, gateway=standard_gateway,
+            cost_accountant=lambda _: 1), "DONE")
+        final = finish_approved_chirp(
+            ledger=self.ledger, job_id=self.job_id, job_dir=self.job_dir,
+            acoustic_inspector=passing_acoustic_inspector)
+        self.assertEqual(final["acoustic_gate"], "PASS")
+        self.assertEqual([word["word"] for word in final["words"]], ["新辨識"])
+        self.assertTrue((self.job_dir / "golden-v2" / "chirp-merged.json").is_file())
+        self.assertEqual(self.ledger.claim_next(self.job_id, worker_id="compare") ["stage"],
+                         "compare")
 
     def test_preflight_cost_and_source_guards_prevent_cloud(self):
         with self.assertRaises(V2Conflict):

@@ -36,7 +36,7 @@
 | P0 基線及隔離 | GitHub 隔離分支／Draft PR；未破壞舊工作樹 | VPS production exact SHA、active jobs/leases、真正 DB 備份還原、media-inventory 分支整合 |
 | P1 Gemini 3.7→3.8 | 分支修訂校正入口／Worker/API/Proxy/UI 預設；模型政策單測／整體 CI | Vertex 實際模型呼叫與相容性、IAM/region、功能旗標及正式切換 |
 | P2 Gemini 全音訊主稿 | audio adapter、FFmpeg FLAC clipping、原始→normalized→clip SHA lineage、GCS opt-in、mock primary、重疊 seam 人工覆核及 SHA 綁定 | 真實 Drive 來源 attest、真人重疊聽音、長音檔完整 acoustic/VAD coverage、真 Vertex、VPS Worker |
-| P3 Chirp 比對 | Gemini-first mock orchestration、文字差異、Chirp word-time、可信舊證據重用、新 Chirp fake-provider async submit/recovery、離線聲學 QA | 真 Speech-to-Text async、bounded Standard repair、完整聲學 coverage、雙引擎真實整合 |
+| P3 Chirp 比對 | Gemini-first mock orchestration、文字差異、Chirp word-time、可信舊證據重用、新 Chirp fake-provider async submit/recovery；新增保守 VAD 正語音證據、費用/範圍精確核准、≤5 分鐘 Standard 修復 clip、GCS 不覆寫與重啟補傳、target-only merge，QA REVIEW 阻擋 compare | 真 Speech-to-Text async、可稽核帳單、常駐 Worker、長音訊完整聲學 coverage、真人聽音與雙引擎 UAT |
 | P4 3.5 Transcribe | Vertex adapter、VERBATIM、≤15m 策略、選用模式/mock | 正式 SDK/模型可用性、真實 provider response 及用量、第三稿比對及 mode 路由持久整合 |
 | P5 校對/Golden QA | 比對 REVIEW、Chirp 字詞時間 SRT/TXT mock 出稿、QA 記入 SQLite、原始 SHA 受保護的 seam review CLI | ChatGPT 真人聲音裁決、可靠整堂聲學驗收、正式 handoff、Drive 出稿全流程 |
 | P6 實測評測 | 人工 gold CER 計算 library | 真實金標樣本、三引擎相同音檔、國台語/經文/雜音、時碼/價格/耗時 benchmark |
@@ -53,7 +53,7 @@
 
 ### W2 真正可續跑的三引擎管線（P2/P3/P4/P7）
 - 將 V2 `v2_*` ledger / primary adapter 接到真正私有 VPS Worker；在 provider 呼叫前嚴格核准 source+window+model+費用。
-- 將既有 hardened Chirp Dynamic submit/async recovery/Standard repair 透過**V2 階段契約**接入，成功 evidence 重用；加 operation-id/window 級付費用量紀錄及 crash/reconcile。
+- 將既有 hardened Chirp Dynamic submit/async recovery/Standard repair 透過**V2 階段契約**接入，成功 evidence 重用；新增 offline Standard repair plan、精確範圍/費用核准及 crash-safe clip upload，但仍需接正式 Worker、invoice-bound usage reconciliation 及 live UAT。
 - 第三引擎 QUALITY_3WAY 全文／SMART_2PLUS 差異片段選擇、費用限額和 disabled=zero-cost。
 - **交付／驗收：**以 fake provider 在真 Worker 演練 source→Gemini→Chirp→optional third，kill/restart 無重送、無超額、無時間軸造假；G2–G4 工程整合部分完成。
 

@@ -77,7 +77,7 @@ def _audible(job_dir: Path, start_ms: int, end_ms: int) -> bool | None:
         capture_output=True,
         text=True,
         check=False,
-        timeout=180,
+        timeout=30,
     )
     match = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", result.stderr)
     if not match:
@@ -115,7 +115,7 @@ def _vad_assessment(job_dir: Path, start_ms: int, end_ms: int) -> dict[str, Any]
         ],
         capture_output=True,
         check=False,
-        timeout=180,
+        timeout=30,
     )
     if result.returncode != 0 or not result.stdout:
         return None
@@ -159,6 +159,14 @@ def _vad_assessment(job_dir: Path, start_ms: int, end_ms: int) -> dict[str, Any]
         and mode3_ratio < mode3_max
         and rms_dbfs <= rms_max_dbfs
     )
+    mode0_speech_min = float(os.environ.get("CHIRP_VAD_SPEECH_MODE0_MIN", "0.45"))
+    mode3_speech_min = float(os.environ.get("CHIRP_VAD_SPEECH_MODE3_MIN", "0.20"))
+    rms_speech_min_dbfs = float(os.environ.get("CHIRP_VAD_SPEECH_RMS_MIN_DBFS", "-35"))
+    robust_speech = (
+        mode0_ratio >= mode0_speech_min
+        and mode3_ratio >= mode3_speech_min
+        and rms_dbfs >= rms_speech_min_dbfs
+    )
     return {
         "engine": "webrtcvad",
         "sample_rate_hz": sample_rate,
@@ -171,8 +179,12 @@ def _vad_assessment(job_dir: Path, start_ms: int, end_ms: int) -> dict[str, Any]
             "mode0_max": mode0_max,
             "mode3_max": mode3_max,
             "rms_max_dbfs": rms_max_dbfs,
+            "mode0_speech_min": mode0_speech_min,
+            "mode3_speech_min": mode3_speech_min,
+            "rms_speech_min_dbfs": rms_speech_min_dbfs,
         },
         "robust_non_speech": robust_non_speech,
+        "robust_speech": robust_speech,
     }
 
 

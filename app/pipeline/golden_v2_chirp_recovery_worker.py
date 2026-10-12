@@ -20,6 +20,7 @@ def run_chirp_recovery_pass(
     *, ledger: GoldenV2Ledger, job_id: str, job_dir: Path,
     gateway: Any, cost_accountant: Callable[[dict[str, Any]], int],
     max_operations: int = 8,
+    acoustic_inspector: Callable[..., dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Process at most max_operations saved LROs; caller schedules later passes.
 
@@ -88,10 +89,22 @@ def run_chirp_recovery_pass(
     elif unsubmitted:
         result["action"] = "APPROVED_SUBMISSION_WORKER_REQUIRED"
     elif all(r["status"] == "DONE" for r in current):
-        merged = finish_approved_chirp(ledger=ledger, job_id=job_id, job_dir=job_dir)
-        result["action"] = "CHIRP_COMPLETE"
+        merged = finish_approved_chirp(
+            ledger=ledger, job_id=job_id, job_dir=job_dir,
+            acoustic_inspector=acoustic_inspector,
+        )
         result["word_count"] = len(merged["words"])
         result["acoustic_gate"] = merged["acoustic_gate"]
+        result["acoustic_qa_sha256"] = merged.get("acoustic_qa_sha256")
+        if merged["acoustic_gate"] == "PASS":
+            result["action"] = "CHIRP_COMPLETE"
+        elif merged.get("repair_plan", {}).get("intervals"):
+            result["action"] = "STANDARD_REPAIR_APPROVAL_REQUIRED"
+            result["repair_interval_count"] = len(merged["repair_plan"]["intervals"])
+            result["manual_review_required"] = merged.get("manual_review_required", True)
+        else:
+            result["action"] = "MANUAL_ACOUSTIC_REVIEW_REQUIRED"
+            result["manual_review_required"] = True
     else:
         raise V2Conflict("unexpected Chirp recovery state")
     return result

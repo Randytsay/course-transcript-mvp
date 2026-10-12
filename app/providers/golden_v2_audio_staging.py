@@ -140,3 +140,118 @@ def prepare_local_clips(
     else:
         _atomic_json(destination, manifest)
     return manifest
+
+
+def prepare_local_repair_clips(
+    *, source: Path, expected_source_sha256: str, output_dir: Path,
+    intervals: list[dict[str, Any]], max_intervals: int = 12,
+    max_total_ms: int = 600_000, run: Callable[..., Any] = subprocess.run,
+) -> dict[str, Any]:
+    """Create SHA-bound <=5-minute Standard-repair clips locally only.
+
+    The target intervals identify exact missing-speech ranges; clip ranges may
+    include acoustic context. This helper never uploads or calls a provider.
+    """
+    source = source.resolve(strict=True)
+    if (source.suffix.lower() != ".flac" or len(expected_source_sha256) != 64
+            or file_sha256(source) != expected_source_sha256):
+        raise AudioStagingError("repair source must match normalized FLAC SHA256")
+    if (not isinstance(intervals, list) or not intervals
+            or type(max_intervals) is not int or not 1 <= max_intervals <= 12
+            or type(max_total_ms) is not int or not 1 <= max_total_ms <= 600_000
+            or len(intervals) > max_intervals):
+        raise AudioStagingError("invalid bounded Standard repair limits")
+    duration = duration_seconds(source, run=run)
+    duration_ms = round(duration * 1000)
+    specs: list[dict[str, Any]] = []
+    total = 0
+    for index, item in enumerate(intervals):
+        if not isinstance(item, dict):
+            raise AudioStagingError("invalid repair interval")
+        start, end = item.get("start_ms"), item.get("end_ms")
+        targets = item.get("target_intervals")
+        if (type(start) is not int or type(end) is not int or start < 0
+                or end <= start or end > duration_ms + 250
+                or end - start > 300_000 or not isinstance(targets, list) or not targets):
+            raise AudioStagingError("repair clip must be a bounded source interval")
+        normalized_targets = []
+        previous = start
+        for target in targets:
+            if (not isinstance(target, dict)
+                    or type(target.get("start_ms")) is not int
+                    or type(target.get("end_ms")) is not int
+                    or not start <= target["start_ms"] < target["end_ms"] <= end
+                    or target["start_ms"] < previous):
+                raise AudioStagingError("repair target escapes or overlaps its clip")
+            normalized_targets.append({"start_ms": target["start_ms"],
+                                       "end_ms": target["end_ms"]})
+            previous = target["end_ms"]
+        total += end - start
+        if total > max_total_ms:
+            raise AudioStagingError("repair plan exceeds total duration cap")
+        specs.append({"index": index, "start_ms": start, "end_ms": end,
+                      "target_intervals": normalized_targets})
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    if source.parent == output_dir.resolve():
+        raise AudioStagingError("repair output directory must differ from source")
+    clips = []
+    for spec in specs:
+        index, start, end = spec["index"], spec["start_ms"], spec["end_ms"]
+        filename = (f"{expected_source_sha256[:20]}.repair-{index:02d}."
+                    f"{start:012d}-{end:012d}.flac")
+        target = output_dir / filename
+        sidecar = target.with_suffix(".flac.sha256")
+        if target.exists() or sidecar.exists():
+            if not target.is_file() or not sidecar.is_file():
+                raise AudioStagingError("partial repair clip requires review")
+            _validate_existing(target, sidecar.read_text(encoding="ascii").strip())
+        else:
+            temporary = output_dir / (filename + ".partial")
+            if temporary.exists():
+                raise AudioStagingError("unreconciled partial repair clip")
+            try:
+                run(
+                    ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+                     "-ss", f"{start / 1000:.3f}", "-i", str(source),
+                     "-t", f"{(end-start) / 1000:.3f}", "-vn", "-ac", "1",
+                     "-ar", "16000", "-c:a", "flac", "-y", "-f", "flac",
+                     str(temporary)],
+                    check=True, capture_output=True, text=True, timeout=180,
+                )
+                if not temporary.is_file() or temporary.stat().st_size <= 0:
+                    raise AudioStagingError("FFmpeg did not produce repair clip")
+                measured = duration_seconds(temporary, run=run)
+                if abs(measured - (end - start) / 1000) > 0.20:
+                    raise AudioStagingError("repair clip duration deviates from source")
+                digest = file_sha256(temporary)
+                temporary.replace(target)
+                sidecar.write_text(digest + "\n", encoding="ascii")
+            finally:
+                temporary.unlink(missing_ok=True)
+        clips.append({
+            **spec, "start_seconds": start / 1000,
+            "end_seconds": end / 1000, "clip_filename": filename,
+            "clip_sha256": file_sha256(target),
+            "clip_bytes": target.stat().st_size, "mime_type": "audio/flac",
+        })
+    identity = hashlib.sha256(json.dumps(
+        {"source_sha256": expected_source_sha256, "intervals": specs},
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    manifest = {
+        "schema": "golden-v2-local-repair-windows-v1",
+        "source_kind": "normalized_flac_sha256",
+        "source_sha256": expected_source_sha256,
+        "source_duration_seconds": duration,
+        "repair_window_count": len(clips), "total_clip_duration_ms": total,
+        "windows": clips, "gcs_uploaded": False, "paid_model_called": False,
+    }
+    destination = output_dir / f"repairs.{identity[:24]}.json"
+    if destination.exists():
+        previous = json.loads(destination.read_text(encoding="utf-8"))
+        if previous != manifest:
+            raise AudioStagingError("existing repair manifest differs; fail closed")
+    else:
+        _atomic_json(destination, manifest)
+    return manifest

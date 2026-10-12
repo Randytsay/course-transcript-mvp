@@ -25,6 +25,15 @@
 - 已驗證 `SMART_2PLUS` 無爭議可省略第三模型；有爭議會停在 provider 或真人聲學審查；中斷後本地工作可恢復。未實際呼叫 Vertex／Chirp、未寫入 Drive、未部署，實際付費 **US$0**。
 - **Gate 結論維持 G0–G7 PARTIAL、G8 NOT_RUN，0/9 PASS**。仍缺 Vertex endpoint/IAM/價格真實驗證、真實長音訊完整聲學驗收、獨立可信 reviewer 身分與真人聽音、人工 Gold 比對、owner 寫入 API/UI、Drive safe-publish 整合與 staging/production 驗收。現有重疊文字裁切要求逐個 seam 人工確認，沒有宣稱自動去重或整堂完成。
 
+### 2026-10-12 Standard bounded repair implementation
+
+- `chirp_completeness_gate._vad_assessment()` now records conservative positive-speech evidence separately from robust non-speech. Acoustic QA sends only `SPEECH_CONFIRMED` gaps to a paid-repair proposal; confirmed silence passes and audible-but-uncertain gaps remain manual review.
+- Acoustic probing is bounded to 16 gaps and 30 seconds per gap. Any longer or unexamined gap remains REVIEW and cannot become a paid repair proposal.
+- Added source-SHA-bound, local-only repair clip extraction (≤5 minutes per clip, ≤12 clips / ≤10 minutes per proposal), a durable SQLite repair approval bound to the exact acoustic-report SHA, target ranges, clip/input/output identities and cent ceiling, plus immutable generation-guarded GCS staging. Resuming after a crash rotates the Chirp claim and recreates only missing objects from exact local clip identities.
+- Standard submissions require a gateway with Dynamic Batching disabled. Repair words replace base words only when their midpoint falls inside the approved target ranges; all raw base and repair result JSON stays immutable. `chirp_independent` remains RUNNING through acoustic REVIEW, so comparison cannot start until acoustic QA passes.
+- Fake Speech/GCS integration covers base recognition → positive-speech proposal → exact cost approval → Standard submission → restart-safe clip upload → target-only merge → acoustic PASS → compare unlock. Full Python suite: **824 PASS**; targeted repair/QA/worker suite: **33 PASS**; handoff pytest: **27 PASS**; `compileall` and `git diff --check` PASS. All cloud-shaped calls were fake; no paid API call, real GCS/Drive write or production change occurred. Exact-SHA CI for the resulting commit remains pending.
+- **G3 remains PARTIAL**: no live Speech request or real long-course/VAD UAT; no independent invoice reconciliation or deployed submission/recovery scheduler; the authenticated owner mutation UI/API,真人聽音及完整雙引擎驗收仍未完成. G0–G7 remain PARTIAL, G8 NOT_RUN, 0/9 PASS.
+
 規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[2026-10-12 實況盤點／六階段完工計畫](GOLDEN_V2_PROGRESS_AUDIT_2026-10-12.md)
 
 > 此文件是會隨 PR/驗收更新的狀態登記簿。**只有提交機器／人工可核對的 evidence link、commit、測試報告與操作者資訊後，才能把某一 Gate 設為 PASS。** 「文件已提交」不代表其他工程 Gate 已 PASS。禁止憑對話主觀印象標已完成。
@@ -34,7 +43,7 @@
 | P0 基線／隔離 | G0 | PARTIAL | 2026-10-11 已確認 GitHub main/feature branch、另外隔離 V2 分支；WebCodex 的舊 source Project `.git/worktrees` 無效，正式 runtime SHA／active transcription jobs／備份尚未驗證。未 reset/clean/stash。 |
 | P1 3.7→3.8 | G1 | PARTIAL | V2 開發分支的 `correct_text.py`、`correct_text_cascade.py`、Worker/API/Proxy/UI 目標已改 3.8，模型政策與 SDK 配置非付費回歸 included 在提交 `73f1a826` 的 **743 項 Python CI PASS**；仍缺實際 Vertex smoke、相容權限／配額、正式部署與 rollback。 |
 | P2 Gemini 3.8 音訊主稿 | G2 | PARTIAL | 新增 `golden_v2_audio_staging.py` 的本機 FFmpeg source-SHA FLAC 分段、`golden_v2_gcs_staging.py` 的經核准 GCS 不覆寫上傳，以及 `golden_v2_primary_stage.py` 串接 Gemini 3.8→SQLite，含超額預估阻擋、結果不明停機及 mock 整合測試；**已加入來源→normalized→窗段 SHA lineage 的本機證據、逐窗 raw SHA/身份驗證及人工 overlap seam 裁切後原始證據 CAS 綁定**；仍未驗證真實 Drive 來源 SHA、正式 Worker/Vertex、長音訊整堂聲學 coverage。 |
-| P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py`/`golden_v2_flow.py` 具備獨立差異比對與先 Gemini 後 Chirp 的順序；新增 `golden_v2_chirp_reuse.py` 可核對相同 normalized FLAC SHA、既有 Chirp completeness PASS 與提交證據後直接使用已付費成果（本次新 ASR 成本=0）；**另有 Speech V2 adapter、非同步 fake-provider stage、已提交 LRO 的有界恢復 worker；revision CAS 可在已知 operation ID 的中斷後續送 PLANNED 窗段，未知 SUBMITTING 一律凍結**；尚缺常駐付費 Worker、可稽核帳單成本、bounded Standard repair 與真人完整聲學 QA。 |
+| P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py`/`golden_v2_flow.py` 具備獨立差異比對與先 Gemini 後 Chirp 的順序；既有 Chirp PASS 可經 SHA/來源驗證重用；Speech V2 adapter、async fake-provider submit/recovery、已知 operation ID 的 revision-CAS 部分續送及未知 SUBMITTING 凍結均已離線驗證。**另新增 VAD positive-speech gate、exact-plan/cost-approved Standard bounded repair、不可變 clip/GCS identities、restart-safe re-upload、target-only merge；acoustic REVIEW 會阻擋 compare，只有 PASS 才完成 Chirp stage。**仍欠常駐付費 Worker、可稽核帳單、真實 Speech API/長音訊聲學 UAT 與真人聽音。 |
 | P4 Gemini 3.5 Transcribe | G4 | PARTIAL | `gemini_third_transcribe.py` 實作 Vertex generateContent/VERBATIM、≤15m hard cap、選用/禁用與 mock tests；**尚未實際 Vertex smoke/worker 用量帳本**。 |
 | P5 WebCodex 最終裁決與 Golden QA | G5 | PARTIAL | `golden_v2_final_gate.py` + `golden_v2_stage_runner.py` 已可寫入離線比對/QA 報告並持久化 `NEEDS_REVIEW`；**已以 mock 連接 Chirp 字詞時碼 SRT/TXT render 和 QA 報告**，仍未串接正式 handoff/真人整堂聲學驗收。 |
 | P6 實測評分與最佳化 | G6 | PARTIAL | `app/evaluation/golden_v2_benchmark.py` 提供人工 Gold 的 CER 計算與測試；**無真實人工金標／三引擎樣本／價格比較**。 |

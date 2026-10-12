@@ -94,6 +94,9 @@ class GoldenV2Ledger:
                     operation_name TEXT, request_id TEXT NOT NULL,
                     output_uri TEXT NOT NULL DEFAULT '',
                     estimated_cents INTEGER NOT NULL DEFAULT 0,
+                    purpose TEXT NOT NULL DEFAULT 'BASE',
+                    assessment_sha TEXT,
+                    target_intervals_json TEXT NOT NULL DEFAULT '[]',
                     result_sha TEXT, actual_cents INTEGER,
                     updated_at TEXT NOT NULL,
                     PRIMARY KEY(job_id,window_id),
@@ -112,12 +115,23 @@ class GoldenV2Ledger:
                     resumed_at TEXT NOT NULL,
                     PRIMARY KEY(job_id,stage_name,from_revision)
                 );
+                CREATE TABLE IF NOT EXISTS v2_chirp_repair_approvals (
+                    job_id TEXT NOT NULL, plan_sha TEXT NOT NULL,
+                    assessment_sha TEXT NOT NULL, plan_json TEXT NOT NULL,
+                    approved_cents INTEGER NOT NULL, reference TEXT NOT NULL,
+                    actor TEXT NOT NULL, consumed_at TEXT,
+                    PRIMARY KEY(job_id,plan_sha),
+                    FOREIGN KEY(job_id) REFERENCES v2_jobs(id)
+                );
             """)
             # Existing isolated V2 test databases may predate per-window
             # reservations. Migrate additively without touching V1 tables.
             cols = {r["name"] for r in db.execute("PRAGMA table_info(v2_chirp_operations)")}
             for name, definition in (("output_uri", "TEXT NOT NULL DEFAULT ''"),
-                                     ("estimated_cents", "INTEGER NOT NULL DEFAULT 0")):
+                                     ("estimated_cents", "INTEGER NOT NULL DEFAULT 0"),
+                                     ("purpose", "TEXT NOT NULL DEFAULT 'BASE'"),
+                                     ("assessment_sha", "TEXT"),
+                                     ("target_intervals_json", "TEXT NOT NULL DEFAULT '[]'")):
                 if name not in cols:
                     db.execute(f"ALTER TABLE v2_chirp_operations ADD COLUMN {name} {definition}")
 
@@ -666,11 +680,180 @@ class GoldenV2Ledger:
                  end, "PLANNED", request_id, output_uri, estimated_cents, _now()),
             )
 
+    @staticmethod
+    def _repair_plan_rows(windows: list[dict[str, Any]], source_sha: str) -> list[dict[str, Any]]:
+        if not isinstance(windows, list) or not windows or len(windows) > 12:
+            raise V2Conflict("bounded Standard repair plan must contain 1-12 windows")
+        normalized: list[dict[str, Any]] = []
+        ids: set[str] = set()
+        for row in windows:
+            if not isinstance(row, dict):
+                raise V2Conflict("invalid Standard repair window")
+            try:
+                window_id, clip_sha = row["window_id"], row["clip_sha"]
+                uri, output = row["gcs_uri"], row["output_uri"]
+                start, end, cents = row["start_ms"], row["end_ms"], row["estimated_cents"]
+                assessment_sha = row["assessment_sha"]
+                targets = row["target_intervals"]
+            except KeyError as exc:
+                raise V2Conflict("incomplete Standard repair identity") from exc
+            if (not isinstance(window_id, str) or not window_id.startswith("repair-")
+                    or len(window_id) > 128 or window_id in ids
+                    or row.get("source_sha") != source_sha
+                    or not isinstance(clip_sha, str) or len(clip_sha) != 64
+                    or any(c not in "0123456789abcdef" for c in clip_sha)
+                    or not isinstance(assessment_sha, str) or len(assessment_sha) != 64
+                    or any(c not in "0123456789abcdef" for c in assessment_sha)
+                    or not isinstance(uri, str) or not uri.startswith("gs://")
+                    or not isinstance(output, str) or not output.startswith("gs://")
+                    or not output.endswith("/") or output.startswith(uri + "/")
+                    or type(start) is not int or type(end) is not int
+                    or start < 0 or end <= start or end - start > 300_000
+                    or type(cents) is not int or cents < 0
+                    or row.get("strategy") != "STANDARD_BATCH"
+                    or not isinstance(targets, list) or not targets):
+                raise V2Conflict("invalid bounded Standard repair window")
+            target_rows = []
+            for target in targets:
+                if (not isinstance(target, dict)
+                        or type(target.get("start_ms")) is not int
+                        or type(target.get("end_ms")) is not int
+                        or not start <= target["start_ms"] < target["end_ms"] <= end):
+                    raise V2Conflict("repair target must be inside its source clip")
+                target_rows.append({"start_ms": target["start_ms"],
+                                    "end_ms": target["end_ms"]})
+            ids.add(window_id)
+            normalized.append({
+                "window_id": window_id, "source_sha": source_sha,
+                "clip_sha": clip_sha, "gcs_uri": uri,
+                "start_ms": start, "end_ms": end, "output_uri": output,
+                "estimated_cents": cents, "assessment_sha": assessment_sha,
+                "target_intervals": target_rows,
+                "strategy": "STANDARD_BATCH",
+            })
+        return normalized
+
+    def approve_chirp_repair_plan(
+        self, job_id: str, *, expected_revision: int, assessment_sha: str,
+        windows: list[dict[str, Any]], approved_cents: int,
+        reference: str, actor: str,
+    ) -> dict[str, Any]:
+        """Persist explicit, plan-bound owner approval for bounded Standard repair.
+
+        Approval is limited to the exact source ranges, clip/object identities,
+        assessment evidence and cent ceiling. It cannot widen the job or stage
+        budget, and it is consumed once when the immutable plan is committed.
+        """
+        if (not isinstance(assessment_sha, str) or len(assessment_sha) != 64
+                or any(c not in "0123456789abcdef" for c in assessment_sha)
+                or type(approved_cents) is not int or approved_cents < 0
+                or not isinstance(reference, str) or not reference.strip()
+                or not isinstance(actor, str) or not actor.strip()):
+            raise V2Conflict("repair approval requires reviewer, reference, evidence and cost ceiling")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stage = db.execute("SELECT * FROM v2_stages WHERE job_id=? "
+                               "AND name='chirp_independent'", (job_id,)).fetchone()
+            if (job["revision"] != expected_revision or job["status"] != "PROCESSING"
+                    or stage is None or stage["state"] != "RUNNING"):
+                raise V2Conflict("repair approval revision, job or Chirp stage changed")
+            existing = db.execute("SELECT * FROM v2_chirp_operations WHERE job_id=?",
+                                  (job_id,)).fetchall()
+            if (not existing or any(row["status"] != "DONE" for row in existing)):
+                raise V2Conflict("repair approval requires all prior Chirp operations complete")
+            rows = self._repair_plan_rows(windows, job["source_sha"])
+            if any(row["assessment_sha"] != assessment_sha for row in rows):
+                raise V2Conflict("repair plan does not match acoustic assessment")
+            estimate = sum(row["estimated_cents"] for row in rows)
+            chirp_actual = sum(int(row["actual_cents"] or 0) for row in existing)
+            other_actual = sum(int(row["actual_cents"] or 0) for row in self._stages(db, job_id)
+                               if row["name"] != "chirp_independent")
+            available = min(int(stage["estimate_cents"]) - chirp_actual,
+                            int(job["approved_cents"] or 0) - other_actual - chirp_actual)
+            if (estimate <= 0 or estimate > approved_cents
+                    or approved_cents > available):
+                raise V2Conflict("repair cost approval exceeds available preapproved budget")
+            plan_json = json.dumps({"assessment_sha": assessment_sha, "windows": rows,
+                                    "approved_cents": approved_cents},
+                                   ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            plan_sha = _digest(json.loads(plan_json))
+            prior = db.execute("SELECT * FROM v2_chirp_repair_approvals WHERE job_id=? AND plan_sha=?",
+                               (job_id, plan_sha)).fetchone()
+            if prior is not None:
+                if (prior["plan_json"] != plan_json or prior["reference"] != reference
+                        or prior["actor"] != actor or prior["approved_cents"] != approved_cents):
+                    raise V2Conflict("conflicting approval for existing repair plan")
+            else:
+                db.execute("INSERT INTO v2_chirp_repair_approvals(job_id,plan_sha,assessment_sha,"
+                           "plan_json,approved_cents,reference,actor) VALUES(?,?,?,?,?,?,?)",
+                           (job_id, plan_sha, assessment_sha, plan_json, approved_cents,
+                            reference.strip(), actor.strip()))
+            return {"job_id": job_id, "plan_sha": plan_sha,
+                    "approved_cents": approved_cents, "window_count": len(rows)}
+
+    def plan_chirp_repair_windows(
+        self, claim: dict[str, Any], *, plan_sha: str,
+        windows: list[dict[str, Any]],
+    ) -> None:
+        """Commit only the exact repair windows explicitly approved above."""
+        if (not isinstance(plan_sha, str) or len(plan_sha) != 64
+                or any(c not in "0123456789abcdef" for c in plan_sha)):
+            raise V2Conflict("invalid approved Standard repair plan identity")
+        with self._tx() as db:
+            self._verify_claim(db, claim)
+            if claim["stage"] != "chirp_independent":
+                raise V2Conflict("active Chirp claim required for repair plan")
+            job = self._job(db, claim["job_id"])
+            stage = db.execute("SELECT * FROM v2_stages WHERE job_id=? "
+                               "AND name='chirp_independent'", (claim["job_id"],)).fetchone()
+            approval = db.execute("SELECT * FROM v2_chirp_repair_approvals "
+                                  "WHERE job_id=? AND plan_sha=?",
+                                  (claim["job_id"], plan_sha)).fetchone()
+            if approval is None or approval["consumed_at"] is not None:
+                raise V2Conflict("owner-approved Standard repair plan is missing or already used")
+            existing = db.execute("SELECT * FROM v2_chirp_operations WHERE job_id=?",
+                                  (claim["job_id"],)).fetchall()
+            if not existing or any(row["status"] != "DONE" for row in existing):
+                raise V2Conflict("all prior Chirp operations must complete before repair")
+            rows = self._repair_plan_rows(windows, job["source_sha"])
+            approved = json.loads(approval["plan_json"])
+            if (rows != approved["windows"] or approved["assessment_sha"] != approval["assessment_sha"]
+                    or _digest(approved) != plan_sha):
+                raise V2Conflict("repair windows differ from owner-approved plan")
+            total = sum(row["estimated_cents"] for row in rows)
+            if total > approval["approved_cents"]:
+                raise V2Conflict("repair window estimates exceed owner-approved ceiling")
+            actual = sum(int(row["actual_cents"] or 0) for row in existing)
+            if actual + total > stage["estimate_cents"]:
+                raise V2Conflict("repair estimates exceed remaining Chirp stage budget")
+            other = sum(int(row["actual_cents"] or 0) for row in self._stages(db, claim["job_id"])
+                        if row["name"] != "chirp_independent")
+            if other + actual + total > int(job["approved_cents"] or 0):
+                raise V2Conflict("repair estimates exceed remaining job approval")
+            for row in rows:
+                request_id = _digest({"job": claim["job_id"], **row})
+                db.execute(
+                    "INSERT INTO v2_chirp_operations(job_id,window_id,source_sha,clip_sha,"
+                    "gcs_uri,start_ms,end_ms,status,request_id,output_uri,estimated_cents,"
+                    "purpose,assessment_sha,target_intervals_json,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (claim["job_id"], row["window_id"], row["source_sha"], row["clip_sha"],
+                     row["gcs_uri"], row["start_ms"], row["end_ms"], "PLANNED", request_id,
+                     row["output_uri"], row["estimated_cents"], "REPAIR",
+                     row["assessment_sha"], json.dumps(row["target_intervals"],
+                         sort_keys=True, separators=(",", ":")), _now()),
+                )
+            db.execute("UPDATE v2_chirp_repair_approvals SET consumed_at=? "
+                       "WHERE job_id=? AND plan_sha=?", (_now(), claim["job_id"], plan_sha))
+            db.execute("UPDATE v2_stages SET updated_at=? WHERE job_id=? "
+                       "AND name='chirp_independent'", (_now(), claim["job_id"]))
+
     def chirp_windows(self, job_id: str) -> list[dict[str, Any]]:
         with self._tx() as db:
             self._job(db, job_id)
             return [dict(row) for row in db.execute(
-                "SELECT * FROM v2_chirp_operations WHERE job_id=? ORDER BY start_ms,window_id",
+                "SELECT * FROM v2_chirp_operations WHERE job_id=? "
+                "ORDER BY CASE purpose WHEN 'BASE' THEN 0 ELSE 1 END,start_ms,window_id",
                 (job_id,),
             ).fetchall()]
 
@@ -688,8 +871,11 @@ class GoldenV2Ledger:
             # billable set was preflighted as one stage reservation.
             stage = db.execute("SELECT estimate_cents FROM v2_stages WHERE job_id=? "
                                "AND name='chirp_independent'", (claim["job_id"],)).fetchone()
-            reserved = db.execute("SELECT COALESCE(SUM(estimated_cents),0) "
-                                  "FROM v2_chirp_operations WHERE job_id=?", (claim["job_id"],)).fetchone()[0]
+            reserved = db.execute(
+                "SELECT COALESCE(SUM(CASE WHEN purpose='BASE' AND status='DONE' "
+                "THEN actual_cents ELSE estimated_cents END),0) "
+                "FROM v2_chirp_operations WHERE job_id=?", (claim["job_id"],),
+            ).fetchone()[0]
             if reserved > stage["estimate_cents"]:
                 raise V2Conflict("Chirp preflight reservation insufficient")
             db.execute("UPDATE v2_chirp_operations SET status='SUBMITTING',updated_at=? "
@@ -854,7 +1040,8 @@ class GoldenV2Ledger:
             stage = db.execute("SELECT * FROM v2_stages WHERE job_id=? AND name='chirp_independent'",
                                (job_id,)).fetchone()
             windows = db.execute(
-                "SELECT * FROM v2_chirp_operations WHERE job_id=? ORDER BY start_ms,window_id",
+                "SELECT * FROM v2_chirp_operations WHERE job_id=? "
+                "ORDER BY CASE purpose WHEN 'BASE' THEN 0 ELSE 1 END,start_ms,window_id",
                 (job_id,),
             ).fetchall()
             if (job["status"] != "PROCESSING" or stage is None
