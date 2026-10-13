@@ -41,14 +41,23 @@ def probe_read_only(
             f"https://aiplatform.googleapis.com/v1/projects/{project}/"
             "locations/global/publishers/google/models/gemini-3.5-transcribe"
         ),
-        "speech_v2_recognizers_list": (
-            f"https://speech.googleapis.com/v2/projects/{project}/"
+        "speech_v2_us_recognizers_list": (
+            f"https://us-speech.googleapis.com/v2/projects/{project}/"
             "locations/us/recognizers?pageSize=1"
         ),
     }
     if bucket is not None:
-        endpoints["gcs_bucket_get"] = (
-            f"https://storage.googleapis.com/storage/v1/b/{bucket}"
+        # Listing objects and checking exact IAM permissions are meaningful
+        # for this acceptance workload even when storage.buckets.get is denied.
+        endpoints["gcs_objects_list"] = (
+            f"https://storage.googleapis.com/storage/v1/b/{bucket}/o?maxResults=1"
+        )
+        endpoints["gcs_test_iam_permissions"] = (
+            f"https://storage.googleapis.com/storage/v1/b/{bucket}/iam/testPermissions"
+            "?permissions=storage.objects.create"
+            "&permissions=storage.objects.get"
+            "&permissions=storage.objects.list"
+            "&permissions=storage.objects.delete"
         )
     results: dict[str, Any] = {}
     for key, url in endpoints.items():
@@ -62,6 +71,25 @@ def probe_read_only(
                 "http_status": status if type(status) is int else None,
                 "metadata_accessible": status == 200,
             }
+            if key == "gcs_test_iam_permissions" and status == 200:
+                # The provider returns only permission strings; exclude
+                # arbitrary response bodies and never log identity/secret.
+                try:
+                    payload = response.json()
+                    actual = payload.get("permissions", [])
+                    approved = (actual if isinstance(actual, list)
+                                and all(isinstance(x, str) for x in actual)
+                                else [])
+                    results[key]["object_permissions"] = {
+                        perm: perm in approved for perm in (
+                            "storage.objects.create",
+                            "storage.objects.get",
+                            "storage.objects.list",
+                            "storage.objects.delete",
+                        )
+                    }
+                except (TypeError, ValueError, AttributeError):
+                    results[key]["object_permissions"] = None
         except Exception as exc:
             # Error type only: provider exception text might include tokens.
             results[key] = {

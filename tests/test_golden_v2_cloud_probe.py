@@ -25,10 +25,10 @@ class CloudProbeTests(unittest.TestCase):
             project="test-example-project", bearer=secret, http_get=read,
             bucket="test-private-bucket",
         )
-        self.assertEqual(len(calls), 4)
+        self.assertEqual(len(calls), 5)
         self.assertTrue(all(url.startswith("https://") for url in calls))
         self.assertIn("/locations/global/", calls[0])
-        self.assertIn("/locations/us/", calls[2])
+        self.assertIn("us-speech.googleapis.com", calls[2])
         self.assertNotIn(secret, json.dumps(report))
         self.assertNotIn("test-example-project", json.dumps(report))
         self.assertFalse(report["safe_to_charge"])
@@ -47,6 +47,30 @@ class CloudProbeTests(unittest.TestCase):
         self.assertTrue(all(item["error_type"] == "PermissionError"
                             for item in report["results"].values()))
         self.assertNotIn("sensitive token", json.dumps(report))
+        self.assertFalse(report["safe_to_charge"])
+
+    def test_gcs_object_permission_grants_are_explicit_not_inferred(self):
+        calls = []
+        def fake_get(url, *, headers, timeout):
+            calls.append(url)
+            if "testPermissions" in url:
+                return SimpleNamespace(
+                    status_code=200,
+                    json=lambda: {"permissions": [
+                        "storage.objects.create",
+                        "storage.objects.get",
+                        "storage.objects.list",
+                    ]},
+                )
+            return SimpleNamespace(status_code=403)
+        report = probe_read_only(
+            project="test-example-project", bearer="long-test-token",
+            http_get=fake_get, bucket="test-private-bucket",
+        )
+        self.assertEqual(len(calls), 5)
+        perms = report["results"]["gcs_test_iam_permissions"]["object_permissions"]
+        self.assertTrue(perms["storage.objects.create"])
+        self.assertFalse(perms["storage.objects.delete"])
         self.assertFalse(report["safe_to_charge"])
 
     def test_bad_project_and_bucket_fail_closed(self):

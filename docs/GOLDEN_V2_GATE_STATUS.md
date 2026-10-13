@@ -3,6 +3,14 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-13 — Isolated one-clip paid dispatch ledger (fake-provider acceptance)
+
+- 實際 4 分鐘來源已在 VPS `golden-v2-real-audio-test-ad01f98/data/smoke/clip-trial.sqlite` 建立 create-once 測試帳本，三個模型階段均 `PENDING`、總上限 1000¢、`provider_calls_started=false`；沒有提交付費請求。
+- 在既有受信任 V1 Worker 使用 Google IAM `testPermissions` 唯讀檢查現有 GCS bucket，`storage.objects.create/get/list/delete` 全為 True，`storage.buckets.get` False。後者的 HTTP 403 不等於不能上傳物件。唯讀 Cloud Probe 已修正為 Speech regional `us-speech.googleapis.com`、GCS 物件清單與精確 IAM 查詢；Gemini metadata GET 404 仍不足以判定推論不支援。未更動任何 V1 工作檔案。
+
+- 新增 `app/pipeline/golden_v2_smoke_ledger.py` 與 `scripts/golden_v2_smoke_trial.py`：將前一輪的來源綁定 4 分鐘方案寫入**獨立 SQLite 一次性帳本**；初始化和狀態查詢不可付費，模型順序為 Gemini 3.8 → Chirp 3 → Gemini 3.5；各階段標準預留 200¢，累計不得超過 user-approved 1000¢。每階段 `BEGIN IMMEDIATE` 與 `REQUEST_STARTED` 先於 provider call 持久化，結果和實際費用儲存 immutable receipt；逾時／中斷／費用不明一律 `OUTCOME_UNKNOWN` 防重送；雙 worker 競爭僅一人可派發。
+- 僅在**雙重受信任 callback**（owner authorization、provider+pricing）均通過後，developer adapter 才能 dispatch。當前**沒有真實 provider adapter／GCS 權限或 SDK 付費路徑接線**，測試全部注入 fake provider。這是開發進展，**非真實三模型／正式 G0–G8 Gate 通過**。不可用 Google Drive 母檔 ID 冒充 4 分鐘衍生音訊。
+
 ### 2026-10-13 — Owner approved USD10 short real-audio paid-smoke scope (execution blocked)
 
 - 使用者已同意為現成的 **4 分鐘衍生真音檔**付費測試，總上限 USD 10；不擴大到 141 分鐘原始音檔。完整音檔既有 `v2p_b075478d5d505ee49c330016c6d12023` **仍 AWAITING_APPROVAL、付費估價全 0**，不得把它當成 4 分鐘測試的已核准付費來源。精確 source/clip 雜湊與測試路徑見 [真正音檔付費測試交接](GOLDEN_V2_REAL_AUDIO_PAID_SMOKE_RUNBOOK.md)。

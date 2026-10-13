@@ -45,6 +45,23 @@ any paid request until trusted prices, endpoint compatibility and quotas
 are verified. The user specifically approved one **4-minute** test, never
 unbounded retries, 141-minute ASR, or all available jobs.
 
+### Durable one-clip trial state (2026-10-13 development)
+
+`scripts/golden_v2_smoke_trial.py --root /path/to/independent/data --init
+--owner-reference chat-approved-20261013-four-minute-usd10` creates an
+**isolated** SQLite trial ledger once; `--status` displays stages. The CLI
+cannot make a provider call, access credentials, or mark stages approved.
+It rechecks both the full Drive source SHA and exact derived 4-minute sample
+SHA, source preflight, source version and the immutable USD 10 plan. Each
+future **authorized** stage's SQLite `REQUEST_STARTED` state must commit
+*before* its single external call. The stage cannot be retried after an
+ambiguous result, restart or timeout. Over-cap charge blocks the next stage.
+`SingleClipSmokeLedger.execute_one` currently needs an injected provider
+adapter and **independent trusted owner + capability/pricing verifiers**.
+The development tests use fake providers; no real provider is wired.
+This narrow acceptance ledger is **not yet integrated** with the general V2
+paid worker and does not make cloud access safe by itself.
+
 ## Read-only cloud capability probe
 
 Only an **operator-controlled trusted workload runtime** with existing Google
@@ -58,8 +75,14 @@ python scripts/golden_v2_cloud_probe.py \
 ```
 
 This makes **GET-only** Vertex publisher model metadata calls for Gemini 3.8
-Flash and Gemini 3.5 Transcribe, a Speech V2 recognizer list GET in `us`,
-and an optional private GCS bucket metadata GET. It returns only HTTP status,
+Flash and Gemini 3.5 Transcribe, a regional Speech V2 recognizer list GET at
+`us-speech.googleapis.com`, and optional private GCS object-list and
+object IAM permission checks. Existing trusted runtime authenticated checks
+of the intended bucket reported `storage.objects.create/get/list/delete=true`,
+while `storage.buckets.get=false`: bucket-metadata 403 does not, on its own,
+block using objects. The model-metadata GETs returned HTTP 404 and are
+**inconclusive about paid inference** (not proof that the models are disabled).
+The tool returns only HTTP status,
 credential-neutral project hash, and no token, project name or provider text.
 **It does not check actual inference, paid GCS writes or real billing.**
 Without `--check-live` it never accesses ADC/network. No one should copy
