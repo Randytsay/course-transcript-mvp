@@ -3,6 +3,12 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-13 — Owner approved USD10 short real-audio paid-smoke scope (execution blocked)
+
+- 使用者已同意為現成的 **4 分鐘衍生真音檔**付費測試，總上限 USD 10；不擴大到 141 分鐘原始音檔。完整音檔既有 `v2p_b075478d5d505ee49c330016c6d12023` **仍 AWAITING_APPROVAL、付費估價全 0**，不得把它當成 4 分鐘測試的已核准付費來源。精確 source/clip 雜湊與測試路徑見 [真正音檔付費測試交接](GOLDEN_V2_REAL_AUDIO_PAID_SMOKE_RUNBOOK.md)。
+- 新增隔離的、預設離線 `scripts/golden_v2_cloud_probe.py`（受信任 operator 設置 `--check-live` 時才做 GET-only Vertex/Speech/GCS metadata probe），不印憑證或帳戶 ID；不做 paid inference / GCS writes / Drive writes。新 `scripts/golden_v2_live_smoke_plan.py` 驗證原始 Drive preflight 與完整 MP3、600–840 秒衍生片段的 SHA、版本、片段長度，並以不可覆寫的 JSON 記錄 USD 10 提議預算與模型順序。**該文件不是帳單核准簽章或可執行 Ledger claim，`paid_execution_enabled=false`**。
+- 對現有 V1 服務帳戶憑證的跨容器掛載探測遭安全檢查阻擋，因此未繼續嘗試或繞過。後續必須在獲核准的受信任執行環境完成單獨 V2 identity/私有 bucket 和真實 endpoint/cost 驗證，再開發可審計的一次性付費 stage runner。本輪禁止宣稱有真 Gemini/Chirp 模型使用，G0–G7 PARTIAL、G8 NOT_RUN、正式 0/9 PASS。
+
 ### 2026-10-12 — Read-only live Drive source revision check
 
 - Authenticated source intake now retains the exact Drive source path and downloaded MD5 in its immutable preflight record. A separate `verify_live_drive_revision` check re-resolves that path through Drive GET metadata and compares current file ID, version, size and MD5 with the saved original bytes. Changed or unavailable metadata blocks a future paid claim; older preflight records without these fields also fail closed. This check does not claim a stage, call a paid model, or grant permission to bill. A future trusted executor must recheck immediately before its revision-bound claim and handle any source change.
