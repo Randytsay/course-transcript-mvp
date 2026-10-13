@@ -3,6 +3,9 @@
 ARG BASE_IMAGE=golden-v2-realtest:4f75c1
 FROM ${BASE_IMAGE}
 
+ARG VCS_REF=unknown
+LABEL org.opencontainers.image.revision="${VCS_REF}"
+
 # Gemini 3.5 Transcribe requires newer AudioTranscriptionConfig schema.
 # Production V1 intentionally stays pinned at google-genai 1.x.
 RUN python -m pip install --no-cache-dir "google-genai==2.29.0"
