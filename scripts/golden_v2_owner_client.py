@@ -29,12 +29,20 @@ def main() -> int:
     create_input = create.add_mutually_exclusive_group(required=True)
     create_input.add_argument("--request-file", type=Path)
     create_input.add_argument("--request-stdin", action="store_true")
+    quote = sub.add_parser('quote')
+    quote_input = quote.add_mutually_exclusive_group(required=True)
+    quote_input.add_argument('--request-file', type=Path)
+    quote_input.add_argument('--request-stdin', action='store_true')
+    qs = sub.add_parser('quote-status'); qs.add_argument('quote_id')
     status = sub.add_parser("batch-status"); status.add_argument("batch_id")
     sub.add_parser("jobs")
     sub.add_parser("service-status")
     sub.add_parser("drive-health")
     job = sub.add_parser("job-status"); job.add_argument("job_id")
     approve = sub.add_parser("approve-job"); approve.add_argument("job_id"); approve.add_argument("--request-file", type=Path, required=True)
+    paid = sub.add_parser('authorize-paid'); paid.add_argument('job_id')
+    pi = paid.add_mutually_exclusive_group(required=True)
+    pi.add_argument('--request-file',type=Path); pi.add_argument('--request-stdin',action='store_true')
     args = parser.parse_args()
     base = os.environ.get("COURSE_TRANSCRIPT_V2_OWNER_API_URL", "http://127.0.0.1:8000").rstrip("/")
     try:
@@ -45,7 +53,7 @@ def main() -> int:
             raise ValueError
     except ValueError:
         parser.error("Owner API requires an HTTPS origin or private loopback/container origin")
-    write = args.action in {"create-batch", "approve-job"}
+    write = args.action in {"create-batch", "approve-job", 'quote', 'authorize-paid'}
     token = os.environ.get("COURSE_TRANSCRIPT_V2_WRITE_TOKEN" if write else "COURSE_TRANSCRIPT_V2_STATUS_TOKEN", "")
     if len(token) < 32:
         parser.error("Required scoped owner token is not configured")
@@ -53,6 +61,10 @@ def main() -> int:
     if args.action == "preview":
         route = "link-preview"; body = {"link": args.link, "recursive": args.recursive}
     elif args.action == "create-batch": route = "link-batches"
+    elif args.action == 'quote': route = 'quotes'
+    elif args.action == 'quote-status':
+        if not re.fullmatch(r'v2q_[0-9a-f]{32}', args.quote_id): parser.error('Invalid quote ID')
+        route = 'quotes/' + args.quote_id
     elif args.action == "batch-status":
         if not re.fullmatch(r"v2b_[0-9a-f]{32}", args.batch_id): parser.error("Invalid batch ID")
         route = "link-batches/" + args.batch_id
@@ -61,7 +73,8 @@ def main() -> int:
     elif args.action == "drive-health": route = "drive-health"
     else:
         if not re.fullmatch(r"v2p?_[0-9a-f]{32}", args.job_id): parser.error("Invalid job ID")
-        route = "jobs/" + args.job_id + ("/approval" if write else "")
+        suffix = '/authorize-paid' if args.action == 'authorize-paid' else '/approval' if write else ''
+        route = "jobs/" + args.job_id + suffix
     if write:
         try:
             if getattr(args, "request_stdin", False):

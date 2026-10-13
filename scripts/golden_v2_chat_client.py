@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.golden_v2_owner_client import main as owner_main
 
-_ALLOWED = {'service-status', 'drive-health', 'preview', 'create-batch', 'batch-status', 'jobs', 'job-status'}
+_ALLOWED = {'service-status', 'drive-health', 'preview', 'create-batch', 'batch-status', 'jobs', 'job-status', 'quote', 'quote-status', 'authorize-paid'}
 _KEYS = {'COURSE_TRANSCRIPT_V2_OWNER_API_URL', 'COURSE_TRANSCRIPT_V2_STATUS_TOKEN', 'COURSE_TRANSCRIPT_V2_WRITE_TOKEN'}
 
 

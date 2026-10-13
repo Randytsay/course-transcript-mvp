@@ -10,10 +10,23 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
+import sqlite3
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException
+from pydantic import Field
 from app.jobs.drive_api import DriveApiError, drive_health
-from app.golden_v2_routes import _authorized_database, router
+from app.golden_v2_routes import (_authorized_database, _authorized_write_database,
+                                 LinkPreviewRequest, router, _mutation_error)
+from app.pipeline.golden_v2_link_discovery import preview_drive_link
+from app.pipeline.golden_v2_quote_intake import enqueue_quote, read_quote
+from app.jobs.golden_v2_ledger import V2Conflict
+from pydantic import BaseModel, ConfigDict, StrictInt
+from app.pipeline.golden_v2_runtime_services import signed_grant
+from app.providers.golden_v2_immutable import store_immutable_bytes
+from app.providers.golden_v2_audio_staging import file_sha256
+from app.pipeline.golden_v2_quote_intake import wire
+from app.jobs.golden_v2_ledger import GoldenV2Ledger
 
 app = FastAPI(title="Golden Transcript V2 Chat Entry", docs_url=None, redoc_url=None, openapi_url=None)
 allowed = {
@@ -25,6 +38,81 @@ limited = APIRouter()
 limited.routes.extend(route for route in router.routes
                       if route.path in allowed and not (route.path.endswith('/jobs') and 'POST' in route.methods))
 app.include_router(limited)
+
+
+class QuoteRequest(LinkPreviewRequest):
+    preview_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    file_id: str = Field(min_length=10, max_length=256, pattern=r'^[A-Za-z0-9_-]+$')
+    confirm: Literal[True]
+
+
+@app.post('/api/v1/golden-v2/quotes', status_code=202)
+def request_quote(body: QuoteRequest, authorization: str | None = Header(default=None)):
+    database, actor, _ = _authorized_write_database(authorization)
+    try:
+        preview = preview_drive_link(body.link, recursive=body.recursive)
+        if preview['preview_sha256'] != body.preview_sha256:
+            raise V2Conflict('Drive preview changed; refresh before quoting')
+        return enqueue_quote(database=database, preview=preview, file_id=body.file_id, actor=actor)
+    except DriveApiError as exc:
+        raise HTTPException(status_code=422, detail='Drive source unavailable') from exc
+    except (V2Conflict, ValueError, sqlite3.Error) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@app.get('/api/v1/golden-v2/quotes/{quote_id}')
+def quote_status(quote_id: str, authorization: str | None = Header(default=None)):
+    database = _authorized_database(authorization)
+    try:
+        result = read_quote(database, quote_id)
+    except sqlite3.Error as exc:
+        raise HTTPException(status_code=503, detail='Quote ledger unavailable') from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail='Quote not found')
+    return result
+
+
+class PaidGrantRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    revision: StrictInt = Field(ge=0)
+    quote_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    source_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
+    approved_cents: StrictInt = Field(gt=0)
+    reference: str = Field(min_length=1,max_length=256)
+    confirm: Literal[True]
+
+
+@app.post('/api/v1/golden-v2/jobs/{job_id}/authorize-paid')
+def authorize_paid(job_id: str, body: PaidGrantRequest, authorization: str | None = Header(default=None)):
+    database, actor, ceiling = _authorized_write_database(authorization)
+    if os.environ.get('COURSE_TRANSCRIPT_V2_PAID_API_ENABLED','').lower() != 'true':
+        raise HTTPException(status_code=404, detail='Paid runtime not enabled')
+    if not re.fullmatch(r'v2p_[0-9a-f]{32}',job_id) or body.approved_cents > ceiling:
+        raise HTTPException(status_code=422,detail='Invalid or over-cap paid grant')
+    job = database.parent/'jobs'/job_id
+    try:
+        quote_path = job/'trusted-quote.json'
+        if job.is_symlink() or quote_path.is_symlink() or file_sha256(quote_path) != body.quote_sha256:
+            raise V2Conflict('trusted quote hash changed')
+        quote = json.loads(quote_path.read_text())
+        from app.pipeline.golden_v2_pricing import assert_current
+        assert_current()
+        if quote['source_sha256'] != body.source_sha256 or quote['estimated_cents'] > body.approved_cents or quote['mode'] != 'FLASH_CHIRP':
+            raise V2Conflict('quote/source/cap mismatch')
+        ledger = GoldenV2Ledger.open_existing(database)
+        state = ledger.status(job_id)
+        if state['source_sha'] != body.source_sha256 or state['revision'] != body.revision or state['status'] != 'AWAITING_APPROVAL':
+            raise V2Conflict('reviewed job state changed; query status')
+        grant = {**body.model_dump(exclude={'confirm'}),'job_id':job_id,'actor':actor}
+        store_immutable_bytes(job/'owner-paid-grant.json',wire(signed_grant(grant)).encode())
+        ledger.approve(job_id,revision=body.revision,approved_cents=body.approved_cents,
+                       reference=body.reference,actor=actor)
+        return {'job_id':job_id,'status':'QUEUED','revision':body.revision+1,
+                'source_sha256':body.source_sha256,'approved_cents':body.approved_cents}
+    except (V2Conflict,ValueError,sqlite3.Error) as exc:
+        raise _mutation_error(exc) from exc
+    except (OSError,KeyError,TypeError) as exc:
+        raise HTTPException(status_code=503,detail='Trusted quote or grant unavailable') from exc
 
 
 def _revision() -> str:
@@ -64,8 +152,9 @@ def service_status(authorization: str | None = Header(default=None)) -> dict:
         "schema": "golden-v2-chat-service-v1", "release_sha": _revision(),
         "capabilities": {"drive_link_preview": True, "batch_source_intake": True,
                          "job_and_batch_status": True, "paid_execution": False,
+                         "trusted_duration_quote": True,
                          "drive_publication": False},
-        "intake_worker": worker, "cost_estimates": "OPERATOR_SUPPLIED_UNTIL_TRUSTED_PRICING",
+        "intake_worker": worker, "cost_estimates": "SERVER_DURATION_PROVIDER_RESERVATION",
         "golden_acceptance": "REQUIRED_SEPARATELY",
     }
 

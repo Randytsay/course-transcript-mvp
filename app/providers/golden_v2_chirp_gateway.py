@@ -177,3 +177,29 @@ class ChirpV2Gateway:
         if not isinstance(raw, bytes) or not raw:
             raise V2Conflict("empty Speech provider JSON response")
         return {"status": "COMPLETE", "operation_name": name, "raw_json": raw}
+
+    def billing_evidence(self, row: dict[str, Any]) -> dict[str, Any]:
+        """Read provider-reported billed duration from the exact completed LRO.
+
+        Never substitute clip length or the reservation when billing metadata
+        is absent. This is usage evidence, not a Cloud Billing invoice.
+        """
+        self._verify_row(row)
+        name = row.get('operation_name')
+        if not isinstance(name, str) or not name.startswith(self.operation_prefix):
+            raise V2Conflict('saved Speech operation required for billing')
+        operation = self.speech.transport.operations_client.get_operation(name)
+        if not operation.done:
+            raise V2Conflict('completed Speech billing metadata required')
+        self._validate_file_response(operation, row['gcs_uri'])
+        from google.cloud.speech_v2.types import cloud_speech
+        protobuf = cloud_speech.BatchRecognizeResponse.pb(cloud_speech.BatchRecognizeResponse())
+        if not operation.response.Unpack(protobuf):
+            raise V2Conflict('unrecognized Speech billing response')
+        duration = protobuf.total_billed_duration
+        seconds = duration.seconds + duration.nanos / 1_000_000_000
+        if seconds <= 0:
+            raise V2Conflict('Speech billed duration absent; do not guess charge')
+        return {'schema':'golden-v2-chirp-billing-usage-v1','operation_name':name,
+                'input_uri':row['gcs_uri'],'total_billed_seconds':seconds,
+                'dynamic_batching':self.dynamic_batching,'invoice_verified':False}

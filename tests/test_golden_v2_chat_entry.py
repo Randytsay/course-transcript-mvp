@@ -80,6 +80,22 @@ class ChatEntryTests(unittest.TestCase):
         self.assertEqual(result.status_code, 200)
         preview.assert_called_once()
 
+    def test_quote_uses_write_token_fresh_preview_and_no_caller_prices(self):
+        source = dict(file_id='drive-file-12345',version='7',source_path='gdrive:folder/a.MP3',
+                      name='a.MP3',size_bytes=3,md5_checksum='abc')
+        body = dict(link='https://drive.google.com/drive/folders/folder0123456789',
+                    file_id=source['file_id'],preview_sha256='b'*64,confirm=True)
+        with patch('app.golden_v2_chat_api.preview_drive_link',return_value={'files':[source],'preview_sha256':'b'*64}):
+            read_attempt=self.client.post('/api/v1/golden-v2/quotes',json=body,headers=self.headers)
+            self.assertEqual(read_attempt.status_code,401)
+            headers={'Authorization':'Bearer '+self.write}
+            result=self.client.post('/api/v1/golden-v2/quotes',json=body,headers=headers)
+            self.assertEqual(result.status_code,202)
+            quote_id=result.json()['quote_id']
+            self.assertEqual(self.client.get('/api/v1/golden-v2/quotes/'+quote_id,headers=self.headers).json()['state'],'PENDING')
+            self.assertEqual(self.client.post('/api/v1/golden-v2/quotes',json={**body,'preview_sha256':'c'*64},headers=headers).status_code,409)
+            self.assertEqual(self.client.post('/api/v1/golden-v2/quotes',json={**body,'estimated_cents':0},headers=headers).status_code,422)
+
     def config(self):
         path = self.root / 'private-client.env'
         path.write_text('COURSE_TRANSCRIPT_V2_OWNER_API_URL=http://127.0.0.1:8816\n'

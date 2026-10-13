@@ -422,6 +422,9 @@ def complete_evidence_bound_qa(
         _write_immutable_text(final_dir / "final.srt", rendered["srt"])
         _write_immutable_text(final_dir / "final-corrected-transcript.txt", rendered["transcript"])
         render_digest = _write_evidence(final_dir / "render-manifest.json", render_manifest)
+    # Bind the exact final manifest into the ledger-attested QA bytes. A later
+    # publisher must verify this chain rather than accepting a loose PASS file.
+    result['render_sha256'] = render_digest
     qa_digest = _write_evidence(job_dir / "golden-v2" / "golden-qa.json", result)
     if result["safe_publish_allowed"]:
         ledger.complete(claim, evidence_sha=qa_digest, actual_cents=0)
