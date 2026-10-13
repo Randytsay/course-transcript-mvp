@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 12
     env:
-      GOLDEN_V2_PAID_ENABLED: "false"
+      GOLDEN_V2_PAID_ENABLED: "true"
     steps:
       - name: Checkout exact approved development commit
         uses: actions/checkout@v4
