@@ -1,5 +1,25 @@
 # Current State
 
+## 2026-10-13 — Operational private ChatGPT Skill entry (non-paid)
+
+The owner requested first enabling direct ChatGPT invocation of 黃金字幕 V2.
+A private `golden-subtitles-v2` plugin/skill v0.1.0 is saved in the owner's
+ChatGPT account and uses the existing connected WebCodex VPS App. ChatGPT UI
+shows one skill and the connected App; the plugin is selected in an unsent
+status-check composer. Real WebCodex calls verified the deployed private V2
+API, intake heartbeat, Drive GET connectivity and shared ledger query.
+
+The independent `golden-v2-chat` API/intake deployment runs exact source
+`d80d0fd9d4f13a43a22d9891dc491e5d4d1384fa` on Oracle ARM64 and binds only
+`127.0.0.1:8816`. Local 1040 tests, image-contained 25 focused ARM64 tests,
+exact-SHA CI, auth rejection and V2 restart/volume checks passed. V1 remained at
+`adafd952b9b89db111730ab28e8e8baff9551021` and was not restarted. The new entry
+supports source preview/intake/status only; paid execution, Golden delivery and
+Drive publication remain disabled/unintegrated. No owner media was downloaded
+or live batch submitted in this installation. See
+[chat contract](docs/GOLDEN_V2_CHAT_ENTRY.md) and
+[deployment evidence](docs/evidence/golden-v2-chat-entry-deployment-20261013.json).
+
 ## 2026-10-13 — Drive link intake and persistent controller integration (development)
 
 New local source integration on PR #144's `7f6da90` baseline: bounded Drive

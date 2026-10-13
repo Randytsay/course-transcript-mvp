@@ -1,6 +1,6 @@
 # Golden Course Transcript V2 — Draft ChatGPT/WebCodex Operator Skill
 
-> **Status: DRAFT ONLY (P7 NOT YET INTEGRATED).** This repository file is NOT an installed/operational ChatGPT Skill. Do not claim a V2 worker is available merely because the file exists. Existing `skills/golden-course-transcript/SKILL.md` remains the production-compatible contract until formal migration.
+> **Status: FULL-WORKFLOW DRAFT.** This repository document remains the future full paid/Golden/publication contract. A separate private `golden-subtitles-v2` Skill v0.1.0 is now saved in the owner’s ChatGPT account and connects to a verified independent non-paid VPS entry. See `docs/GOLDEN_V2_CHAT_ENTRY.md` and its deployment evidence. Its real capabilities are source preview/intake/status; paid recognition and Golden delivery are not enabled. Existing `skills/golden-course-transcript/SKILL.md` remains the V1 production-compatible contract until formal migration.
 
 ## Purpose
 

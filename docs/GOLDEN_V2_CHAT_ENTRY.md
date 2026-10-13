@@ -60,3 +60,25 @@ verify its declared App binding and report any remaining install action.
 Retain a deployment evidence report with release SHA, container/image identity,
 client/Drive connectivity results, ledger integrity and unchanged V1 labels.
 Do not record credential values or access-bearing URLs in reports or Git.
+
+
+## Verified deployment — 2026-10-13
+
+Runtime source is `d80d0fd9d4f13a43a22d9891dc491e5d4d1384fa`; its five GitHub
+checks passed. The ARM64 image ran 25 focused tests without network/credentials.
+Real WebCodex calls verified service SHA, worker heartbeat, Drive account
+connectivity (GET only) and V2 ledger queries. Unauthenticated calls returned
+401. Both independent containers were restarted and the shared persistent-volume
+marker remained unchanged. SQLite integrity was ok, with zero jobs/approvals.
+
+Private plugin v0.1.0 was saved to the owner's account and its packaged Skill/App
+binding was read back. The actual ChatGPT plugin page shows 黃金字幕 V2, one skill
+and WebCodex VPS 已連線. The 試用 action selected the plugin and populated a
+status-check prompt in ChatGPT's composer. No browser prompt was sent and no
+source/media intake was run, because the owner has not supplied an acceptance
+Drive link. Server/App calls were verified directly with the same real tools.
+
+See `docs/evidence/golden-v2-chat-entry-deployment-20261013.json`. Private account
+plugin identifiers and connection secrets are retained outside this public
+repository. This is a usable private non-paid chat entry, not a complete paid
+subtitle-service or Golden acceptance claim.
