@@ -99,6 +99,13 @@ jobs:
           test "$(docker image inspect course-transcript-ci:${GITHUB_SHA} --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${GITHUB_SHA}"
           test "$(docker image inspect course-transcript-frontend-ci:${GITHUB_SHA} --format '{{index .Config.Labels "org.opencontainers.image.revision"}}')" = "${GITHUB_SHA}"
 
+      - name: Verify packaged V2 daemon entrypoints without network or credentials
+        run: |
+          for script in golden_v2_worker_daemon golden_v2_batch_intake_daemon golden_v2_paid_executor_daemon golden_v2_owner_client; do
+            docker run --rm --network none --entrypoint python \
+              course-transcript-ci:${GITHUB_SHA} "scripts/${script}.py" --help
+          done
+
   compose:
     name: Docker Compose validation
     runs-on: ubuntu-latest
