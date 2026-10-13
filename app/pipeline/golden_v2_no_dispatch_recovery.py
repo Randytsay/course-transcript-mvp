@@ -24,6 +24,9 @@ NON_GENERATION_METHODS = frozenset({
     "google.cloud.aiplatform.v1.LlmUtilityService.CountTokens",
 })
 VISIBILITY_DELAY_SECONDS = 1800
+# The paid primary stage cannot run beyond this bounded window. Querying from
+# job creation mixes unrelated API traffic into the retry proof.
+MAX_PRIMARY_STAGE_SECONDS = 2700
 
 
 def _parse_time(value: str) -> datetime:
@@ -40,8 +43,15 @@ def _time_string(value: datetime) -> str:
 
 
 def _monitoring_window(created_at: str, stage_updated_at: str) -> tuple[str, str]:
-    start = _parse_time(created_at).replace(second=0, microsecond=0) - timedelta(minutes=1)
-    end = _parse_time(stage_updated_at) + timedelta(seconds=120)
+    created = _parse_time(created_at)
+    failed = _parse_time(stage_updated_at)
+    # Bound the evidence to the latest possible primary-stage attempt plus a
+    # small setup/clock-skew margin. Starting at job creation can span hours
+    # and falsely reject a no-dispatch proof due to unrelated earlier traffic.
+    start = max(created - timedelta(minutes=1),
+                failed - timedelta(seconds=MAX_PRIMARY_STAGE_SECONDS + 120))
+    start = start.replace(second=0, microsecond=0)
+    end = failed + timedelta(seconds=120)
     end = end.replace(second=0, microsecond=0) + (timedelta(minutes=1) if end.second or end.microsecond else timedelta())
     return _time_string(start), _time_string(end)
 

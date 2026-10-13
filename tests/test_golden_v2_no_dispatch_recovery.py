@@ -50,6 +50,14 @@ class NoDispatchRecoveryTests(unittest.TestCase):
             ],
         }
 
+    def test_monitoring_window_is_bounded_to_the_latest_primary_attempt(self):
+        start, end = _monitoring_window(
+            "2026-10-13T16:35:05.405693+00:00",
+            "2026-10-13T20:55:46.886952+00:00",
+        )
+        self.assertEqual(start, "2026-10-13T20:08:00Z")
+        self.assertEqual(end, "2026-10-13T20:58:00Z")
+
     def test_complete_positive_metric_window_accepts_only_non_generation_methods(self):
         evidence = self.evidence()
         _verify_metric_window(evidence, project="test-project",
