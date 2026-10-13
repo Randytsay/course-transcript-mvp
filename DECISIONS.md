@@ -102,3 +102,16 @@ development change. Chirp timing remains independent and authoritative.
 ## Deployment invariant — exact SHA only
 
 Production deployment must use an immutable reviewed release SHA. A dirty live or development working tree is never a release source. Production status must be verified by runtime revision evidence, not directory names or conversational claims.
+
+
+## 2026-10-13 — Owner decision: ChatGPT/WebCodex leads Golden QA; default two engines
+
+**Decision:** In Golden V2 P5, ChatGPT is the evidence-grounded semantic QA supervisor; WebCodex executes deterministic matching, bounded audio-window inspection, code/tests and audited artifact generation; an independently running VPS durable worker persists jobs, progress and crash recovery. Owner reviews materially ambiguous audio and authorizes final release. No LLM can claim acoustic certainty based solely on prose.
+
+**Three model roles:** Gemini 3.8 Flash is the semantic verbatim primary (plus a separate later text-only correction adapter), Chirp 3 supplies independent acoustics and authoritative word timestamps, and successful `gemini-3.5-transcribe-preview` is an **optional** ambiguity/benchmark model, not the default full-audio third call. The two previous `gemini-3.5-transcribe` GA failure/404 claims remain immutable and billed cost unknown.
+
+**Modes:** Recommend future `STANDARD_2WAY` (3.8+Chirp with mandatory QA), optional separately approved `SMART_2PLUS` (bounded third-model windows after capability/benchmark), and approved `QUALITY_3WAY`. Neither runtime default nor production deployment has been switched by this decision. Never spend money automatically under the guise of QA.
+
+**Quality policy:** distinguish `AUTO_PASS`, `AI_REVIEWED`, `HUMAN_REQUIRED`; true Golden PASS demands confirmed audio coverage, no pending QA blockers, Chirp-grounded SRT timing, same-source SRT/TXT text, immutable adjudication and owner/reviewer authorization. Model votes or plausible scriptures cannot override actual recording. An unattended ChatGPT conversation is NOT a persistent worker.
+
+**First P5 offline implementation:** `app/pipeline/golden_v2_p5_evidence_trial.py` and ten unit tests; real 4-minute source/3 receipts/12 model-preference decisions/explicit `所以比如有長行` correction validated, 60 SRT cues and 710 Chirp timing words verified, five QA blocker categories unresolved, `GOLDEN_PASS=false`. No provider call, Drive mutation, V1 cutover or model retrial. [Full handoff](docs/GOLDEN_V2_P5_CHATGPT_WEBCODEX_QA_2026-10-13.md).

@@ -1,6 +1,14 @@
 # Current State
 
-Last reviewed: 2026-10-12 (Draft PR #144 local implementation; production SHA remains unverified)
+## 2026-10-13 — Latest P5 ChatGPT/WebCodex QA implementation checkpoint (development only)
+
+- Draft PR #144 branch `codex/golden-v2-goal-completion`: new owner decision is 3.8 semantic primary + Chirp acoustic timing + optional Gemini 3.5 Preview for serious differences, under ChatGPT/WebCodex-supervised QA and a separately operated VPS durable worker. **No production default has changed.**
+- Three actual independently run **four-minute** model receipts exist in immutable private GCS. The owner made 12/12 segment model-preference choices and confirmed 「所以比如有長行」. Previous GA 3.5 attempts remain `OUTCOME_UNKNOWN`; the successful Preview receipt is separate, not a relabelled old attempt.
+- Newly tested **offline P5 review-only bridge**: `app/pipeline/golden_v2_p5_evidence_trial.py`, 10 focused unit tests PASS, live source/receipt/owner/cue check PASS. Five artifacts (candidate SRT/TXT, comparison, adjudication, QA report), 60 candidate cues, 710 Chirp acoustic words, 12 candidate pauses flagged as unchecked. `GOLDEN_PASS=false`, `REVIEW_REQUIRED`: VAD/full-audio audio check, word-level alignment and verified final Golden editing not yet done.
+- All paid actions default OFF. Main/V1 runtime not changed; long-duration paid jobs, G0–G8 final acceptance and Drive publication remain pending. Evidence and continuation plan: [P5 checkpoint](docs/GOLDEN_V2_P5_CHATGPT_WEBCODEX_QA_2026-10-13.md).
+
+
+Last reviewed: 2026-10-13 (P5 four-minute offline QA prototype; production SHA remains unverified)
 
 ## V2 work in an isolated Draft PR — not deployed
 

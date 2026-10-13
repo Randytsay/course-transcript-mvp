@@ -22,6 +22,11 @@ This index tells future Agents which documents are current contracts versus hist
 
 These documents have authority for **new V2 implementation intent**, not as evidence of current executable code or production status. For current behavior use exact commit/runtime code, `CURRENT_STATE.md`, and tested implementation evidence.
 
+## 2026-10-13 — Active P5 QA handoff
+
+- `docs/GOLDEN_V2_P5_CHATGPT_WEBCODEX_QA_2026-10-13.md` — owner decisions, supervised ChatGPT/WebCodex model roles, first **real four-minute** offline P5 rehearsal, evidence-bound blockers, and next integration gates. This is a development checkpoint, not production Golden PASS.
+- `app/pipeline/golden_v2_p5_evidence_trial.py` — provider-free create-only review candidate with immutable receipt/owner/SRT validation; no live paid models.
+
 ## Current implementation contracts
 
 Use as applicable:

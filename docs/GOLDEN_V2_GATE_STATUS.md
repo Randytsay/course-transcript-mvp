@@ -1,5 +1,14 @@
 # Golden Transcript V2 — 驗收 Gate 狀態追蹤
 
+### 2026-10-13 — P5 latest four-minute real-evidence QA rehearsal (does NOT advance G5 to PASS)
+
+- New owner policy: 3.8 main semantic transcript; Chirp 3 acoustic and original word timestamp authority; 3.5 Preview optional targeted review, not mandatory full third model. ChatGPT supervises semantic arbitration, WebCodex bounded QA execution, VPS Durable Worker intended for queued continuation, authenticated owner final authorization.
+- Real source `17db78ae…` (600–840 seconds, 240s), **all three genuine model receipts already completed** and reused without inference. Their estimated application cost totals US$0.10 for successes; old GA 3.5 failed request billing still unknown.
+- `app/pipeline/golden_v2_p5_evidence_trial.py` + ten offline regression tests: 3 receipts verified by source SHA; optional Preview's prior receipt hashes validated; 12/12 human choices and user's explicit 「所以比如有長行」 only. Pure comparison + immutable-cue candidate 60 SRT segments and deterministic TXT; 710 Chirp timing words; 12 >1.5s gaps flagged as unknown audio status.
+- Golden QA state **REVIEW_REQUIRED; GOLDEN_PASS=false; safe_publish_allowed=false** (5 blockers: no independently certified entire-audio listen, no VAD/Chirp coverage, no 3.8→Chirp word alignment, unresolved text differences, no final natural subtitle segmentation/approval).
+- No paid calls, no Drive write, no V1 change, no production cutover. G5 remains **PARTIAL**; G0–G8 have not all PASSED. Detailed decision/command/QA evidence: `docs/GOLDEN_V2_P5_CHATGPT_WEBCODEX_QA_2026-10-13.md`.
+
+
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
