@@ -24,6 +24,8 @@ jobs:
       GOLDEN_V2_CHIRP_PAID_ENABLED: "false"
       GOLDEN_V2_THIRD_PAID_ENABLED: "false"
       GOLDEN_V2_NEW35_PAID_ENABLED: "false"
+      GOLDEN_V2_PREVIEW35_PAID_ENABLED: "false"
+      GOLDEN_V2_PREVIEW35_OWNER_APPROVAL: ""
     steps:
       - name: Checkout exact approved development commit
         uses: actions/checkout@v4
@@ -54,3 +56,5 @@ jobs:
         run: python scripts/golden_v2_model_catalog_gate.py --project xenon-chain-506409-c3 --model gemini-3.5-transcribe --report-only
       - name: Gemini 3.5 new independent paid one-shot (default disabled)
         run: python scripts/golden_v2_new35_owner_approved.py
+      - name: Gemini 3.5 Preview candidate SDK and source dry-run (never paid by default)
+        run: python scripts/golden_v2_preview35_future_consent.py
