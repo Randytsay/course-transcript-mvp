@@ -59,6 +59,10 @@ class FakeTrial:
         self.sha = hashlib.sha256(self.excerpt_audio.read_bytes()).hexdigest()
         self.pending = True
         self.invocations = []
+        self.events = []
+
+    def record_provider_event(self, *, model, event):
+        self.events.append((model, event))
 
     def _scope(self):
         return {
@@ -178,6 +182,7 @@ class SmokeGcsTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["model"], "gemini-3.8-flash")
         self.assertEqual(self.trial.invocations, ["gemini-3.8-flash"])
+        self.assertEqual(self.trial.events[0][1]["kind"], "gemini_response")
 
 
 if __name__ == "__main__":

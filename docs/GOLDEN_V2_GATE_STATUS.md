@@ -3,6 +3,15 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-13 — 接手：3.8-only defaults、可信單階段派發、audit-first smoke 與 DB 還原
+
+- 最新 owner 指示「拿掉所有 3.7 的設定，只用 3.8」：已補齊 owner intake/provider UI、狀態 API、OpenRouter 和 fake-provider 預設；direct legacy Gemini 提交被阻擋，歷史模型/用量/raw 維持真實。詳見 [本輪完整盤點](GOLDEN_V2_RESUME_REPORT_2026-10-13.md)。
+- 一般 V2 `execute_trusted_paid_stage` 串接獨立核准/capability/pricing callback、live Drive check、source/stage/revision/aggregate-cap CAS 與現有 adapters；只有注入可信 clients 時可用，未配置 paid daemon/HTTP/CLI，**不是 runtime 部署或整堂付費授權**。
+- 四分鐘 smoke raw 在校验/核銷前落盤，Chirp operation 在等待前落盤，SDK paid retries 明確停用；下一階段核對 receipt SHA。新增只讀本機覆聽輸出、Chirp 同源候選 SRT/TXT/HTML/manifest，**真 receipts 尚未產生**。
+- Python 3.12 **986 unittest**、handoff **27 pytest**、前端 **62 tests/build**、dependency audit **0 vulnerabilities**、compileall/Compose/diff PASS；VPS 獨立 GenAI 2.29 image 的 `/tmp` source-copy 四分鐘套件 **38 fake-client tests PASS**。Exact-SHA GitHub CI 在 push 後另核對。
+- V1 runtime label `adafd952...`，0 unexpired source/review leases；52 running stage 均屬 completed/cancelled/awaiting_review jobs，尚未 live operation reconciliation。SQLite 25.7 MB 快照 SHA 校驗、跨主機獨立還原、integrity check 與全部表逐列比對 PASS；**12 GiB jobs artifacts 的備份/還原仍未完成**，詳見 [無秘密 JSON 證據](evidence/golden-v2-db-restore-20261013.json)。
+- 實際 smoke 三階段仍 PENDING；新模型支出 $0、無 Drive/GCS/IAM/firewall/production cutover。G0–G7 PARTIAL、G8 NOT_RUN、正式 **0/9 PASS**。
+
 ### 2026-10-13 — Provider API 與 GCS 接線、獨立 2.29 SDK 相容性驗證（尚無費用）
 
 - 新 `golden_v2_smoke_providers.py`：Gemini 3.8/3.5、Chirp 3 實際 SDK 方法和嚴格回應／用量證據處理；標準刊價與 token/音訊時間換算至美元分、向上進位。無用量／模型無輸出／Chirp 時碼錯誤皆不可推進。
@@ -160,7 +169,7 @@
 
 | 階段 | Gate | 狀態 | 目前可核對成果／阻礙 |
 |---|---|---|---|
-| P0 基線／隔離 | G0 | PARTIAL | 2026-10-11 已確認 GitHub main/feature branch、另外隔離 V2 分支；WebCodex 的舊 source Project `.git/worktrees` 無效，正式 runtime SHA／active transcription jobs／備份尚未驗證。未 reset/clean/stash。 |
+| P0 基線／隔離 | G0 | PARTIAL | 2026-10-13 已核對 V1 runtime label、128 jobs 與 0 未到期 source/review lease，SQLite 快照跨主機還原及全部表逐列一致；未 reset/clean/stash。仍欠 12 GiB jobs artifacts 備份還原、52 歷史 running stage 的 live operation reconciliation 和分支整合。 |
 | P1 模型角色分流 | G1 | PARTIAL | **最新 2026-10-12 使用者決策：Gemini 3.8 Flash 同時作為音訊主稿與 ASR 後純文字校正（各自獨立 Adapter）**。PR #144 分支已更新 correction/cascade/Vertex Router/Worker/Proxy/UI/價格與測試，保留原始 3.7 歷史 evidence；需以當前 HEAD CI 驗證，且**尚無真實 Vertex 3.8 純文字 API smoke、VPS 正式 SHA、配額／費用與 rollout 驗收，不得標為 PASS**。 |
 | P2 Gemini 3.8 音訊主稿 | G2 | PARTIAL | 新增 `golden_v2_audio_staging.py` 的本機 FFmpeg source-SHA FLAC 分段、`golden_v2_gcs_staging.py` 的經核准 GCS 不覆寫上傳，以及 `golden_v2_primary_stage.py` 串接 Gemini 3.8→SQLite，含超額預估阻擋、結果不明停機及 mock 整合測試；**已加入來源→normalized→窗段 SHA lineage 的本機證據、逐窗 raw SHA/身份驗證及人工 overlap seam 裁切後原始證據 CAS 綁定**；仍未驗證真實 Drive 來源 SHA、正式 Worker/Vertex、長音訊整堂聲學 coverage。 |
 | P3 Chirp 獨立聲學比對 | G3 | PARTIAL | `golden_v2_compare.py`/`golden_v2_flow.py` 具備獨立差異比對與先 Gemini 後 Chirp 的順序；既有 Chirp PASS 可經 SHA/來源驗證重用；Speech V2 adapter、async fake-provider submit/recovery、已知 operation ID 的 revision-CAS 部分續送及未知 SUBMITTING 凍結均已離線驗證。**另新增 VAD positive-speech gate、exact-plan/cost-approved Standard bounded repair、不可變 clip/GCS identities、restart-safe re-upload、target-only merge；acoustic REVIEW 會阻擋 compare，只有 PASS 才完成 Chirp stage。**仍欠常駐付費 Worker、可稽核帳單、真實 Speech API/長音訊聲學 UAT 與真人聽音。 |

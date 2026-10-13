@@ -28,12 +28,14 @@ def execute_trusted_smoke_stage(
     staged = verify_staged_clip(
         trial=trial, storage_client=storage_client, bucket=bucket)
     def invoke(_path, selected: str):
+        sink = lambda event: trial.record_provider_event(model=selected, event=event)
         if selected == "chirp_3":
             return chirp_smoke_call(
                 speech_client=speech_client, project=project,
                 bucket=bucket, clip_sha256=staged["clip_sha256"],
                 gcs_uri=staged["uri"],
                 request_factory=chirp_request_factory,
+                evidence_sink=sink,
             )
         return gemini_smoke_call(
             client=vertex_client, model=selected,
@@ -41,6 +43,7 @@ def execute_trusted_smoke_stage(
             gcs_uri=staged["uri"],
             part_factory=gemini_part_factory,
             config_factory=gemini_config_factory,
+            evidence_sink=sink,
         )
     return trial.execute_one(
         model=model, provider_call=invoke,

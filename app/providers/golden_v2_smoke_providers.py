@@ -11,6 +11,7 @@ from decimal import Decimal, ROUND_CEILING
 import math
 from typing import Any, Callable
 from urllib.parse import urlsplit
+from types import SimpleNamespace
 
 from app.providers.gemini_primary_audio import INSTRUCTION
 
@@ -41,6 +42,20 @@ def _to_mapping(response: Any) -> dict[str, Any]:
         return response
     if hasattr(response, "model_dump"):
         return response.model_dump(mode="json", exclude_none=True)
+    if hasattr(response, "_pb"):
+        from google.protobuf.json_format import MessageToDict
+        return MessageToDict(response._pb, preserving_proto_field_name=True)
+    if isinstance(response, SimpleNamespace):
+        # Offline fake clients exercise the same audit-before-validation path.
+        def wire(value):
+            if isinstance(value, SimpleNamespace):
+                return {k: wire(v) for k, v in vars(value).items()}
+            if isinstance(value, dict):
+                return {k: wire(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [wire(v) for v in value]
+            return value
+        return wire(response)
     raise SmokeProviderError("provider did not return a serializable response")
 
 
@@ -62,6 +77,7 @@ def gemini_smoke_call(
     *, client: Any, model: str, gcs_uri: str, bucket: str,
     clip_sha256: str, part_factory: Callable[..., Any] | None = None,
     config_factory: Callable[..., Any] | None = None,
+    evidence_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Exactly one Google GenAI generate_content invocation, never retries."""
     if model not in (MODELS[0], MODELS[2]):
@@ -87,10 +103,14 @@ def gemini_smoke_call(
         if config_factory is None:
             config_factory = (
                 lambda selected: types.GenerateContentConfig(
+                    http_options=types.HttpOptions(
+                        timeout=180000, retry_options=types.HttpRetryOptions(attempts=1)),
                     max_output_tokens=8192,
                     thinking_config=types.ThinkingConfig(thinking_level="LOW")
                 ) if selected == MODELS[0] else
                 types.GenerateContentConfig(
+                    http_options=types.HttpOptions(
+                        timeout=180000, retry_options=types.HttpRetryOptions(attempts=1)),
                     audio_transcription_config=types.AudioTranscriptionConfig(
                         mode="VERBATIM", word_timestamp=False)
                 )
@@ -101,8 +121,10 @@ def gemini_smoke_call(
         model=model, contents=contents,
         config=config_factory(model),
     )
-    text = _text_from_model(response, third=model == MODELS[2])
     raw = _to_mapping(response)
+    if evidence_sink is not None:
+        evidence_sink({"kind": "gemini_response", "raw_response": raw})
+    text = _text_from_model(response, third=model == MODELS[2])
     usage = raw.get("usage_metadata")
     if not text or not isinstance(usage, dict):
         raise SmokeProviderError("missing transcription text or auditable token usage")
@@ -134,6 +156,7 @@ def chirp_smoke_call(
     *, speech_client: Any, gcs_uri: str, bucket: str, clip_sha256: str,
     project: str, request_factory: Callable[[str, str], Any] | None = None,
     result_timeout: int = 900,
+    evidence_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """One Speech V2 batch_recognize on 4 minutes, with no automatic retry.
 
@@ -177,7 +200,14 @@ def chirp_smoke_call(
     if (not isinstance(op_name, str) or not op_name.startswith(
             f"projects/{project}/locations/us/operations/")):
         raise SmokeProviderError("Speech operation identity was not returned")
+    if evidence_sink is not None:
+        evidence_sink({"kind": "chirp_submitted", "operation_name": op_name,
+                       "gcs_uri": gcs_uri})
     result = operation.result(timeout=result_timeout)
+    raw = _to_mapping(result)
+    if evidence_sink is not None:
+        evidence_sink({"kind": "chirp_response", "operation_name": op_name,
+                       "raw_response": raw})
     billed = _duration_seconds(getattr(result, "total_billed_duration", None))
     if billed is None or not math.isfinite(billed) or not 0 < billed <= 300:
         raise SmokeProviderError("unverifiable 4-minute billed Speech duration")
@@ -206,14 +236,20 @@ def chirp_smoke_call(
             words.append({"word": str(getattr(word, "word", "") or ""),
                           "start_seconds": start, "end_seconds": end})
     text = "".join(utterances).strip()
-    if not text:
-        raise SmokeProviderError("Speech returned no recognized text")
+    if not text or not words:
+        raise SmokeProviderError("Speech returned no recognized text or word timing")
+    if any(words[i]["start_seconds"] < words[i-1]["end_seconds"]
+           for i in range(1, len(words))):
+        raise SmokeProviderError("nonmonotonic Speech word timing")
+    if any(not w["word"].strip() for w in words):
+        raise SmokeProviderError("empty Speech timed word")
     return {
         "schema": "golden-v2-single-clip-chirp-response-v1",
         "model": "chirp_3", "clip_sha256": clip_sha256,
         "operation_name": op_name, "transcript": text,
         "words": words, "billed_duration_seconds": billed,
         "language": "cmn-Hant-TW", "timing_authority": "CHIRP_3",
+        "raw_response": raw,
     }
 
 

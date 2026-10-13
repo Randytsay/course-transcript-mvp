@@ -91,6 +91,50 @@ to chat, Git, WebCodex logs or a new unaudited container.
 
 ## Safe next execution order
 
+### 2026-10-13 — Audit-first response handling and local review export
+
+The trusted smoke dispatch now persists `gemini_response.json` **before**
+checking text, finish reason or usage. Chirp persists `chirp_submitted.json`
+with the actual operation name **before** waiting, then preserves the complete
+protobuf response before validating billed duration and word timing. All these
+events are create-once, fsynced and bound to the committed request/clip/model.
+Any audit failure or ambiguous response blocks continuation; an operation
+timeout never submits another BatchRecognize request. Gemini's SDK HTTP retry
+policy is explicitly `attempts=1` (SDK default is five total attempts), with
+a 180-second request timeout. Injected test factories remain the trusted
+operator's responsibility; they must not re-enable retries in a live runner.
+
+The ledger saves the returned response separately **before** accounting, so
+missing usage does not discard paid evidence. It verifies prior completed
+receipt hashes and identities before claiming the next model, and rechecks
+source scope after the independent owner/capability verifiers. None of these
+checks supplies a cloud identity or a price/billing authorization.
+
+Only after all three genuine stages are COMPLETE, export a local review:
+
+```bash
+python scripts/golden_v2_smoke_bundle.py \
+  --root /path/to/independent/data \
+  --output /absolute/physical/path/to/separate/review-output
+```
+
+This command performs **no cloud request or ledger write**. It verifies all
+receipt/source checksums and generates an immutable bundle: the original
+four-minute FLAC, primary/third TXT, `candidate.chirp.srt` and
+`candidate.chirp.txt` rendered from the **same real Chirp word spans**, two
+text comparisons, `listening-review.json`, a local `review.html` player and
+SHA256 manifest. Clip times cite Chirp evidence; parent times add the known
+600-second source offset. Unanchored additions keep null timing. Existing
+modified output is never overwritten; copy the review JSON before editing.
+Interrupted exports can resume only when all existing bytes match.
+
+The bundle always remains `REVIEW_REQUIRED`, even if three transcripts agree.
+It does not certify acoustic coverage, human Gold, invoice costs, final
+correction, Golden acceptance or publication. A PENDING/UNKNOWN/over-budget
+stage, altered receipt or source, invalid/overlapping/out-of-sample word times
+blocks export. The actual VPS trial remains PENDING; offline fake responses
+are not a substitute for real receipts or a delivered transcript.
+
 ### 2026-10-13 — Google SDK compatibility and executable adapters
 
 The production application image pins `google-genai>=1,<2` and actually

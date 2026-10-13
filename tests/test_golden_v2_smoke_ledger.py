@@ -8,6 +8,7 @@ from tempfile import TemporaryDirectory
 import threading
 import unittest
 import uuid
+import sqlite3
 
 from app.pipeline.golden_v2_live_smoke_plan import (
     build_paid_smoke_plan, persist_plan_once,
@@ -163,6 +164,51 @@ class OneClipPaidSmokeTests(unittest.TestCase):
             self.run_one(model=MODELS[1])
         self.assertEqual(self.ledger.status()["stages"][0]["state"],
                          "OUTCOME_UNKNOWN")
+        saved = list((self.root / "receipts").glob("*/response.json"))
+        self.assertEqual(len(saved), 1)
+        self.assertEqual(json.loads(saved[0].read_text())["raw_response"]["text"],
+                         "fake: audible test only")
+
+    def test_raw_event_survives_adapter_validation_failure(self):
+        self.init()
+        def invalid_response(*_):
+            self.ledger.record_provider_event(model=MODELS[0], event={
+                "kind": "gemini_response", "raw_response": {"truncated": True}})
+            raise ValueError("truncated or unaccounted response")
+        with self.assertRaises(ValueError):
+            self.run_one(provider=invalid_response)
+        events = list((self.root / "receipts").glob("*/gemini_response.json"))
+        self.assertEqual(len(events), 1)
+        self.assertTrue(json.loads(events[0].read_text())["event"]["raw_response"]["truncated"])
+        self.assertEqual(self.ledger.status()["stages"][0]["state"], "OUTCOME_UNKNOWN")
+
+    def test_prior_tampered_receipt_blocks_next_request(self):
+        self.init()
+        self.run_one()
+        next((self.root / "receipts").glob("*.json")).write_text("{}")
+        sent = []
+        with self.assertRaisesRegex(SmokeConflict, "checksum"):
+            self.run_one(model=MODELS[1], provider=lambda *_: sent.append(1))
+        self.assertEqual(sent, [])
+        self.assertEqual(self.ledger.status()["stages"][1]["state"], "PENDING")
+
+    def test_verifier_source_mutation_cannot_claim(self):
+        self.init()
+        def mutate(_):
+            self.excerpt.write_bytes(b"changed while owner check ran")
+            return True
+        with self.assertRaises(SmokeConflict):
+            self.run_one(owner=mutate)
+        self.assertFalse(self.ledger.status()["provider_calls_started"])
+
+    def test_linked_receipt_root_cannot_send(self):
+        self.init()
+        outside = self.root / "outside"
+        outside.mkdir()
+        (self.root / "receipts").symlink_to(outside, target_is_directory=True)
+        with self.assertRaisesRegex(SmokeConflict, "linked"):
+            self.run_one()
+        self.assertFalse(self.ledger.status()["provider_calls_started"])
 
     def test_actual_over_budget_blocks_subsequent_stage(self):
         self.init()

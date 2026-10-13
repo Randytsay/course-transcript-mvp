@@ -15,6 +15,57 @@ URI = f"gs://{BUCKET}/golden-v2-smoke/{CLIP_SHA}/clip.flac"
 
 
 class ProviderAdapterTests(unittest.TestCase):
+    def test_real_sdk_primary_disables_hidden_automatic_retries(self):
+        requests = []
+        client = NS(models=NS(generate_content=lambda **kwargs: (
+            requests.append(kwargs) or NS(text="如是我聞", parts=[],
+                model_dump=lambda **_: {"candidates": [{"finish_reason": "STOP"}],
+                                       "usage_metadata": {"prompt_token_count": 100,
+                                                          "candidates_token_count": 10}}))))
+        gemini_smoke_call(client=client, model="gemini-3.8-flash", gcs_uri=URI,
+                          bucket=BUCKET, clip_sha256=CLIP_SHA)
+        self.assertEqual(requests[0]["config"].http_options.retry_options.attempts, 1)
+        self.assertEqual(requests[0]["config"].http_options.timeout, 180000)
+    def test_chirp_operation_saved_before_timeout(self):
+        events = []
+        def wait(**_):
+            self.assertEqual(events[0]["kind"], "chirp_submitted")
+            raise TimeoutError("pending provider operation")
+        client = NS(batch_recognize=lambda **_: NS(
+            operation=NS(name="projects/test-project/locations/us/operations/123"),
+            result=wait))
+        with self.assertRaises(TimeoutError):
+            chirp_smoke_call(speech_client=client, project="test-project",
+                            gcs_uri=URI, bucket=BUCKET, clip_sha256=CLIP_SHA,
+                            request_factory=lambda *_: {}, evidence_sink=events.append)
+        self.assertEqual(events[0]["operation_name"].split("/")[-1], "123")
+
+    def test_gemini_invalid_usage_raw_saved_before_rejection(self):
+        events = []
+        client = NS(models=NS(generate_content=lambda **_: NS(
+            text="raw text", parts=[], model_dump=lambda **_:
+                {"candidates": [{"finish_reason": "MAX_TOKENS"}]})))
+        with self.assertRaises(SmokeProviderError):
+            gemini_smoke_call(client=client, model="gemini-3.8-flash", gcs_uri=URI,
+                              bucket=BUCKET, clip_sha256=CLIP_SHA,
+                              part_factory=lambda x: x, config_factory=lambda x: x,
+                              evidence_sink=events.append)
+        self.assertEqual(events[0]["raw_response"]["candidates"][0]["finish_reason"],
+                         "MAX_TOKENS")
+
+    def test_failed_operation_audit_stops_before_poll(self):
+        polls = []
+        client = NS(batch_recognize=lambda **_: NS(
+            operation=NS(name="projects/test-project/locations/us/operations/123"),
+            result=lambda **_: polls.append(1)))
+        def failed_sink(_):
+            raise OSError("disk sync failed")
+        with self.assertRaises(OSError):
+            chirp_smoke_call(speech_client=client, project="test-project",
+                            gcs_uri=URI, bucket=BUCKET, clip_sha256=CLIP_SHA,
+                            request_factory=lambda *_: {}, evidence_sink=failed_sink)
+        self.assertEqual(polls, [])
+
     def test_uri_must_match_derived_clip(self):
         self.assertEqual(
             require_exact_smoke_uri(URI, bucket=BUCKET, clip_sha256=CLIP_SHA),
@@ -125,7 +176,8 @@ class ProviderAdapterTests(unittest.TestCase):
             total_billed_duration=NS(seconds=240, nanos=0),
             results={URI: NS(
                 transcript=NS(results=[NS(alternatives=[
-                    NS(transcript="這是一段測試", words=[]),
+                    NS(transcript="這是一段測試", words=[NS(
+                        word="這是一段測試", start_offset=0, end_offset=1)]),
                 ])]), error=NS(code=0),
             )},
         )
