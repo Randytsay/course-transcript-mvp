@@ -44,7 +44,8 @@ class NoDispatchRecoveryTests(unittest.TestCase):
                 {"service": "generativelanguage.googleapis.com",
                  "filter": 'metric.type="serviceruntime.googleapis.com/api/request_count" AND resource.type="consumed_api" AND resource.labels.service="generativelanguage.googleapis.com"',
                  "start": start, "end": end, "pages": [{"http_status": 200,
-                     "body": {"timeSeries": []}}]},
+                     # Cloud Monitoring omits empty repeated fields in JSON.
+                     "body": {"unit": "1"}}]},
             ],
         }
 
@@ -60,6 +61,14 @@ class NoDispatchRecoveryTests(unittest.TestCase):
         generation = json.loads(json.dumps(series))
         generation["resource"]["labels"]["method"] = "google.cloud.aiplatform.v1.PredictionService.GenerateContent"
         evidence["request_count_queries"][0]["pages"][0]["body"]["timeSeries"].append(generation)
+        with self.assertRaises(V2Conflict):
+            _verify_metric_window(evidence, project="test-project",
+                                  start=evidence["window_start"], end=evidence["window_end"],
+                                  captured_at=evidence["captured_at"])
+
+    def test_present_time_series_with_invalid_shape_is_rejected(self):
+        evidence = self.evidence()
+        evidence["request_count_queries"][1]["pages"][0]["body"]["timeSeries"] = {}
         with self.assertRaises(V2Conflict):
             _verify_metric_window(evidence, project="test-project",
                                   start=evidence["window_start"], end=evidence["window_end"],

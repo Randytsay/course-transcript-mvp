@@ -108,7 +108,10 @@ def _verify_metric_window(evidence: dict[str, Any], *, project: str,
                 raise V2Conflict("Cloud Monitoring response is incomplete")
             if page_index == len(item["pages"]) - 1 and page["body"].get("nextPageToken"):
                 raise V2Conflict("Cloud Monitoring response was not fully paged")
-            series = page["body"].get("timeSeries")
+            # Cloud Monitoring's protobuf JSON omits empty repeated fields.
+            # Treat an omitted timeSeries as an empty response, while still
+            # rejecting any present value with the wrong shape.
+            series = page["body"].get("timeSeries", [])
             if not isinstance(series, list):
                 raise V2Conflict("invalid Cloud Monitoring time series")
             for item_series in series:
