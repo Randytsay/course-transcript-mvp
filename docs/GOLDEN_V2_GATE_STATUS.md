@@ -3,6 +3,14 @@
 建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
 執行進度：**2026-10-12 重新盤點：G0–G7 八項 PARTIAL、G8 NOT_RUN，0/9 項通過。已驗證非付費 CI 不等於端到端或 production 驗收；main/production 未切換。**
 
+### 2026-10-13 — Provider API 與 GCS 接線、獨立 2.29 SDK 相容性驗證（尚無費用）
+
+- 新 `golden_v2_smoke_providers.py`：Gemini 3.8/3.5、Chirp 3 實際 SDK 方法和嚴格回應／用量證據處理；標準刊價與 token/音訊時間換算至美元分、向上進位。無用量／模型無輸出／Chirp 時碼錯誤皆不可推進。
+- 新 `golden_v2_smoke_gcs.py`：短片段 SHA 固定的私有 GCS 專屬路徑；上傳前建不可覆寫的 GCS 意圖紀錄、僅允許 generation=0 建立而非覆寫，timeout 不重送；消費前重新下載綁定 generation 的真實 bytes 驗雜湊；需注入受信任授權。
+- 新 `golden_v2_smoke_dispatch.py`：將 GCS 驗證、三模型 Adapter、費用核算與 SQLite `REQUEST_STARTED` 串接成一次性階段，預設不自動呼叫，沒有附帶可跳過 trusted owner/capability verifier 的付費 CLI。
+- 查出目前 image `google-genai 1.75.0` **不支援** Gemini 3.5 `AudioTranscriptionConfig.mode/word_timestamp` 與 `GenerateContentConfig.audio_transcription_config`；獨立 `Dockerfile.golden-v2-smoke` 將 V2 專用 SDK 固定為 `google-genai 2.29.0`，已在無憑證 Docker 內實測新 SDK 欄位與兩代 fail-closed 行為；**不修改生產 V1 的 dependencies**。
+- 付費模型實測 **NOT_RUN**、GCS 寫入 **NOT_RUN**、Drive 更動 **NONE**。剩餘阻擋為受信任的 V2 identity/私有 bucket／region+pricing entitlement 和實際收費結果驗證。此開發成果不是 Gate PASS。
+
 ### 2026-10-13 — Isolated one-clip paid dispatch ledger (fake-provider acceptance)
 
 - 實際 4 分鐘來源已在 VPS `golden-v2-real-audio-test-ad01f98/data/smoke/clip-trial.sqlite` 建立 create-once 測試帳本，三個模型階段均 `PENDING`、總上限 1000¢、`provider_calls_started=false`；沒有提交付費請求。

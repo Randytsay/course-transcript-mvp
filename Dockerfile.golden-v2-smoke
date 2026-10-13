@@ -1,0 +1,15 @@
+# Dedicated V2 test worker image: NEVER upgrade the production V1 image.
+# Build only using a locally tagged, exact-SHA V2 base image.
+ARG BASE_IMAGE=golden-v2-realtest:4f75c1
+FROM ${BASE_IMAGE}
+
+# Gemini 3.5 Transcribe requires newer AudioTranscriptionConfig schema.
+# Production V1 intentionally stays pinned at google-genai 1.x.
+RUN python -m pip install --no-cache-dir "google-genai==2.29.0"
+
+COPY app /app/app
+COPY scripts /app/scripts
+COPY tests /app/tests
+
+ENV GOLDEN_V2_SMOKE_PAID_DEFAULT_OFF=1
+CMD ["python", "scripts/golden_v2_smoke_trial.py", "--help"]

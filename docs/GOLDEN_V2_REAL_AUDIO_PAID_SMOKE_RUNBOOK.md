@@ -91,6 +91,78 @@ to chat, Git, WebCodex logs or a new unaudited container.
 
 ## Safe next execution order
 
+### 2026-10-13 — Google SDK compatibility and executable adapters
+
+The production application image pins `google-genai>=1,<2` and actually
+contains `google-genai==1.75.0`. Its `AudioTranscriptionConfig` only has
+`language_codes`, and its `GenerateContentConfig` has NO
+`audio_transcription_config`. **Do not attempt the third recognizer there**.
+The isolated trial image is built with `Dockerfile.golden-v2-smoke` using
+Google GenAI `2.29.0`. Verified with actual installed SDK schemas:
+`AudioTranscriptionConfig(mode="VERBATIM", word_timestamp=False)` succeeds.
+The paid SDK adapter checks the schema BEFORE the API call and fails closed
+when run under the production 1.x SDK. **Never upgrade V1 production to fix a
+V2-only transcription feature.**
+
+New modules `app/providers/golden_v2_smoke_providers.py`,
+`app/pipeline/golden_v2_smoke_gcs.py`, and
+`app/pipeline/golden_v2_smoke_dispatch.py` implement:
+
+1. Derived-clip-only URI namespace
+   `gs://PRIVATE_BUCKET/golden-v2-smoke/CLIP_SHA/clip.flac`; rejects
+   unrelated Drive files and arbitrary GCS paths.
+2. `stage_clip_once()`: parent/original/excerpt local provenance check,
+   trusted owner and bucket verifiers, a create-once fsynced upload-intent
+   BEFORE GCS mutation, and `if_generation_match=0` upload with no retries.
+   On upload uncertainty the intent blocks automatic replay.
+3. `verify_staged_clip()`: read actual GCS object bytes at its exact
+   generation and verify SHA and size, not merely an untrusted GCS URL.
+4. Gemini 3.8 / Gemini 3.5 real `generate_content` adapters and Chirp 3
+   `BatchRecognize` using `us` with inline response and word timestamps.
+   All requests use `SingleClipSmokeLedger.execute_one()`, which commits
+   `REQUEST_STARTED` before the paid API call. No automatic retry.
+5. Reconcile **reported token usage** to full-price conservative USD cents:
+   Gemini 3.8 Global standard rate (through 2026-12-31)
+   **$0.75 per million input / $3.75 per million output**;
+   Gemini 3.5 Transcribe **$2 per million audio input /
+   $12 per million text output**; Chirp 3 Standard
+   **$0.016/audio minute**. Each stage rounds UP to whole cents.
+   These are application estimates from known public rates, NOT an
+   invoice or hard service-side billing cap. Additional storage costs may
+   apply, and Google usage/billing can be delayed. Check actual prices and
+   region/account discounts before authorization.
+
+Official references:
+
+- https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing
+- https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-transcribe
+- https://cloud.google.com/speech-to-text/pricing
+- https://docs.cloud.google.com/speech-to-text/v2/docs/chirp-model
+
+The modules are now backed by **actual SDK request-shape tests with mocked
+network/provider clients**. This is transport integration, not proof of
+Cloud IAM/model inference entitlement. There is NO `--execute` CLI that
+silently supplies owner/pricing verifiers, and no accepted run can copy V1
+credentials to the isolated container. Real GCS staging and model POST remain
+blocked until a separately authorized trusted V2 workload identity can be
+provisioned and its current-region capabilities verified.
+
+The **trusted V2 operator** should use the dedicated SDK image and an
+independent workload identity, construct the Agent Platform client via
+`genai.Client(enterprise=True, project=PROJECT_ID, location="global")`
+(subject to actual model-access verification) and the Speech V2 client via
+`SpeechClient(client_options=ClientOptions(api_endpoint="us-speech.googleapis.com"))`.
+The operational sequence is:
+`stage_clip_once` → `verify_staged_clip` →
+`execute_trusted_smoke_stage(model="gemini-3.8-flash")` →
+`execute_trusted_smoke_stage(model="chirp_3")` →
+`execute_trusted_smoke_stage(model="gemini-3.5-transcribe")`.
+Each function expects actual trusted owner, bucket, billing and model
+capability verifiers; **do not replace these with lambdas that always return
+True** outside the isolated fake-provider unit tests. After any ambiguous
+step, stop and reconcile; never reset or delete the SQLite claim/receipt to
+get another attempt.
+
 1. Prepare a **dedicated restricted V2 test identity** and private staging
    bucket in a trusted operator runtime (or use a separately authorized
    workload identity, never copy V1 secrets). Verify the three Google Cloud
