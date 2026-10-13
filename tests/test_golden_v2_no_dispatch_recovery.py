@@ -9,12 +9,13 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
+from app.jobs.golden_v2_ledger import GoldenV2Ledger, STAGES, V2Conflict
 from app.providers.gemini_primary_audio import _paid_window_slot_digest
 from app.pipeline.golden_v2_no_dispatch_recovery import (
     _archive_attempt, _monitoring_window, _verify_metric_window,
     reconcile_primary_no_dispatch,
 )
+from app.pipeline.golden_v2_paid_readiness import inspect_paid_readiness
 
 
 class NoDispatchRecoveryTests(unittest.TestCase):
@@ -218,6 +219,148 @@ class NoDispatchRecoveryTests(unittest.TestCase):
             archived = job_dir / result["archived_attempt"]
             self.assertEqual(archived.read_bytes(), audit_raw)
             self.assertEqual(ledger.claim_next(job, worker_id="retry")["stage"], "gemini_primary")
+
+    def test_verified_no_dispatch_archive_allows_only_the_single_paid_retry(self):
+        class Response:
+            status_code = 200
+
+            def __init__(self, body):
+                self.body = body
+
+            def json(self):
+                return self.body
+
+        class Session:
+            def get(self, url, *, params, timeout):
+                service = params["filter"].split('resource.labels.service="', 1)[1].split('"', 1)[0]
+                if service == "aiplatform.googleapis.com":
+                    return Response({"unit": "1", "timeSeries": [{
+                        "resource": {"type": "consumed_api", "labels": {
+                            "service": service, "project_id": "test-project",
+                            "method": "google.cloud.aiplatform.v1beta1.ModelGardenService.GetPublisherModel",
+                        }},
+                        "points": [{"interval": {"endTime": params["interval.startTime"]},
+                                    "value": {"int64Value": "1"}}],
+                    }]})
+                # The API omits the repeated field when the result is empty.
+                return Response({"unit": "1"})
+
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp) / "v2"
+            database = root / "ledger.sqlite"
+            ledger = GoldenV2Ledger(database)
+            original = b"private original bytes"
+            normalized = b"private normalized bytes"
+            source_sha = hashlib.sha256(normalized).hexdigest()
+            estimates = {stage: 0 for stage in STAGES}
+            estimates.update(gemini_primary=30, chirp_independent=20)
+            observation = {
+                "provider": "google_drive", "file_id": "drive-file",
+                "version": "7", "size_bytes": len(original),
+                "downloaded_sha256": hashlib.sha256(original).hexdigest(),
+                "md5_checksum": hashlib.md5(original, usedforsecurity=False).hexdigest(),
+            }
+            lineage = {
+                "schema": "golden-v2-source-lineage-v1",
+                "normalized_sha256": source_sha,
+                "original_sha256": hashlib.sha256(original).hexdigest(),
+                "drive_observation": observation,
+            }
+            lineage_raw = json.dumps(lineage).encode()
+            preflight = {
+                "schema": "golden-v2-source-preflight-v1",
+                "source_sha256": source_sha,
+                "original_sha256": hashlib.sha256(original).hexdigest(),
+                "source_lineage_sha256": hashlib.sha256(lineage_raw).hexdigest(),
+                "drive_observation": observation,
+                "mode": "FLASH_CHIRP",
+                "estimated_stage_cents": estimates,
+                "owner_approval_required": True,
+                "estimates_are_authorization": False,
+                "estimates_are_provider_quotes": False,
+            }
+            preflight_raw = json.dumps(
+                preflight, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+            ).encode()
+            job = ledger.create_from_preflight(
+                source_sha=source_sha, mode="FLASH_CHIRP",
+                estimated_stage_cents=estimates,
+                registration_sha256=hashlib.sha256(preflight_raw).hexdigest(),
+            )
+            job_dir = root / "jobs" / job
+            job_dir.mkdir(parents=True)
+            (job_dir / "source.original").write_bytes(original)
+            (job_dir / "normalized.flac").write_bytes(normalized)
+            (job_dir / "source-lineage.json").write_bytes(lineage_raw)
+            (job_dir / "source-preflight.json").write_bytes(preflight_raw)
+            ledger.approve(job, revision=0, approved_cents=50,
+                           actor="owner", reference="one-task-test-scope")
+            claim = ledger.claim_next(job, worker_id="first-attempt")
+
+            golden = job_dir / "golden-v2"
+            golden.mkdir()
+            ambiguity = {
+                "schema": "golden-v2-ambiguous-primary-v1", "job_id": job,
+                "source_sha256": source_sha, "completed_records": [],
+                "unresolved_window_index": 0,
+            }
+            ambiguity_raw = json.dumps(ambiguity, sort_keys=True).encode()
+            (golden / "primary-ambiguous.json").write_bytes(ambiguity_raw)
+            ledger.mark_outcome_unknown(
+                claim, evidence_sha=hashlib.sha256(ambiguity_raw).hexdigest(),
+            )
+            state = ledger.status(job)
+            unknown_at = state["stages"][0]["updated_at"]
+            start, end = _monitoring_window(state["created_at"], unknown_at)
+            fake_now = datetime.fromisoformat(end.replace("Z", "+00:00")) + timedelta(seconds=1801)
+            identity = {
+                "model": "gemini-3.8-flash", "prompt_version": "golden-v2-primary-audio-v1",
+                "source_sha256": source_sha,
+                "window": {"index": 0, "start_seconds": 0, "end_seconds": 90,
+                           "gcs_uri": "gs://private-test/window.flac", "mime_type": "audio/flac"},
+                "context_sha256": "b" * 64,
+            }
+            primary = job_dir / "gemini-primary"
+            primary.mkdir()
+            raw_attempt = json.dumps({
+                "identity": identity, "status": "OUTCOME_UNKNOWN",
+                "error_type": "RuntimeError",
+            }, sort_keys=True).encode()
+            (primary / f"{_paid_window_slot_digest(identity)}.json").write_bytes(raw_attempt)
+
+            real_datetime = datetime
+
+            class FrozenDateTime(real_datetime):
+                @classmethod
+                def now(cls, tz=None):
+                    return fake_now if tz is not None else fake_now.replace(tzinfo=None)
+
+            with patch("app.pipeline.golden_v2_no_dispatch_recovery.datetime", FrozenDateTime):
+                result = reconcile_primary_no_dispatch(
+                    ledger=ledger, job_id=job, artifact_root=root,
+                    project="test-project", session=Session(),
+                )
+
+            before = database.read_bytes()
+            report = inspect_paid_readiness(
+                database=database, artifact_root=root, job_id=job,
+                expected_source_sha=source_sha,
+            )
+            self.assertEqual(result["status"], "REOPENED_PENDING")
+            self.assertEqual(report["blockers"], [])
+            self.assertTrue(report["unsubmitted_primary_reconciled"])
+            self.assertFalse(report["provider_calls_allowed"])
+            self.assertEqual(report["next_stage"], "gemini_primary")
+            self.assertEqual(database.read_bytes(), before)
+
+            archived_dir = job_dir / result["archived_attempt"]
+            (archived_dir.parent / "unexpected.json").write_text("{}")
+            blocked = inspect_paid_readiness(
+                database=database, artifact_root=root, job_id=job,
+                expected_source_sha=source_sha,
+            )
+            self.assertIn("PAID_OUTCOME_HOLD_RECONCILE", blocked["blockers"])
+            self.assertIn("EXISTING_PAID_RECEIPTS_RECONCILE", blocked["blockers"])
 
 
 if __name__ == "__main__":
