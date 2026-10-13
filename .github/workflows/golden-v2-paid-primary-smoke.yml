@@ -46,3 +46,5 @@ jobs:
         run: python scripts/golden_v2_one_shot_chirp_github.py
       - name: Gemini 3.5 Verbatim preflight and optional one-shot
         run: python scripts/golden_v2_one_shot_third_github.py
+      - name: Gemini 3.5 WAV lossless preparation validation (no charges)
+        run: python scripts/golden_v2_third_wav_preflight.py
