@@ -135,8 +135,10 @@ def run():
         api_endpoint="us-speech.googleapis.com"))
     operation=client.batch_recognize(request=request,retry=None,timeout=60)
     op=getattr(getattr(operation,"operation",None),"name",None)
-    if not isinstance(op,str) or not op.startswith(
-        f"projects/{PROJECT}/locations/us/operations/"):
+    if not isinstance(op,str) or not op.startswith((
+        f"projects/{PROJECT}/locations/us/operations/",
+        "projects/608343797618/locations/us/operations/",
+    )):
         raise RuntimeError("operation id not available: manual reconcile")
     write_once(bucket,CHIRP_OP,{
         "schema":"golden-v2-chirp3-operation-v1",
