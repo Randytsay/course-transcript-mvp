@@ -1,4 +1,5 @@
 # User-approved one-clip Golden V2 primary. FALSE by default; no side effects.
+# Validate new Gemini 3.5 WAV SHA correction without model usage.
 name: Golden V2 Paid Primary 4min
 on:
   push:

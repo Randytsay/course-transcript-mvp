@@ -11,6 +11,7 @@ PROJECT="xenon-chain-506409-c3"
 BUCKET=PROJECT+"-golden-v2-smoke"
 SOURCE_SHA="17db78ae930d28be3de930467ac256166de54fa62bb2e9cd361cdb58587d5621"
 BYTES=7680156
+WAV_SHA="b199e203f5500f92ea9c2962ca7e20497b94fad737b28775bae7c52480568447"
 SOURCE_KEY=f"golden-v2-smoke/{SOURCE_SHA}/clip-16000Hz-mono.wav"
 FOLDER=f"golden-v2-smoke/{SOURCE_SHA}/paid/"
 PRIMARY_KEY=FOLDER+"primary-gemini38.receipt.json"
@@ -49,7 +50,7 @@ def save_once(bucket,name,obj):
 
 def read_previous_and_audio(bucket):
     raw=bucket.blob(SOURCE_KEY).download_as_bytes(retry=None,timeout=65)
-    if len(raw)!=BYTES or hashlib.sha256(raw).hexdigest()!=SOURCE_SHA:
+    if len(raw)!=BYTES or hashlib.sha256(raw).hexdigest()!=WAV_SHA:
         raise RuntimeError("derived four-minute input SHA mismatch")
     proofs=[];total=0
     for uri,model in [(PRIMARY_KEY,"gemini-3.8-flash"),
