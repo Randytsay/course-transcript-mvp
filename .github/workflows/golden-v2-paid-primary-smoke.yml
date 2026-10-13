@@ -22,6 +22,7 @@ jobs:
       GOLDEN_V2_PAID_ENABLED: "false"
       GOLDEN_V2_CHIRP_PAID_ENABLED: "false"
       GOLDEN_V2_THIRD_PAID_ENABLED: "false"
+      GOLDEN_V2_NEW35_PAID_ENABLED: "false"
     steps:
       - name: Checkout exact approved development commit
         uses: actions/checkout@v4
@@ -48,3 +49,5 @@ jobs:
         run: python scripts/golden_v2_one_shot_third_github.py
       - name: Gemini 3.5 WAV lossless preparation validation (no charges)
         run: python scripts/golden_v2_third_wav_preflight.py
+      - name: Gemini 3.5 new independent paid one-shot (default disabled)
+        run: python scripts/golden_v2_new35_owner_approved.py
