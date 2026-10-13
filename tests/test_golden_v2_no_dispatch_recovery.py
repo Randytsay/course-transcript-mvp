@@ -402,6 +402,7 @@ class NoDispatchRecoveryTests(unittest.TestCase):
             self.assertIn(authorization, history[1][0])
             self.assertEqual([row[1] for row in history], [0, 0])
 
+            before_readiness = database.read_bytes()
             second_report = inspect_paid_readiness(
                 database=database, artifact_root=root, job_id=job,
                 expected_source_sha=source_sha,
@@ -410,6 +411,7 @@ class NoDispatchRecoveryTests(unittest.TestCase):
             self.assertTrue(second_report["unsubmitted_primary_reconciled"])
             self.assertEqual(second_report["next_stage"], "gemini_primary")
             self.assertFalse(second_report["provider_calls_allowed"])
+            self.assertEqual(database.read_bytes(), before_readiness)
 
             archived_dir = job_dir / second_result["archived_attempt"]
             (archived_dir.parent / "unexpected.json").write_text("{}")
