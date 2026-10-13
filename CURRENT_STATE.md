@@ -1,5 +1,16 @@
 # Current State
 
+## 2026-10-13 — Drive link intake and persistent controller integration (development)
+
+New local source integration on PR #144's `7f6da90` baseline: bounded Drive
+link discovery, shared-ledger durable intake batches, Next.js entry/proxies,
+restartable non-paid importer, scoped operator CLI and disabled paid controller
+using existing guarded dispatch/Chirp recovery. See
+[checkpoint](docs/GOLDEN_V2_LINK_TO_RUN_2026-10-13.md) for implemented contracts,
+verification and remaining runtime/QA/publication gates. Production remains V1
+`adafd952b9b89db111730ab28e8e8baff9551021` at this turn's read-only check.
+No provider call, Drive write or production activation is implied.
+
 ## 2026-10-13 — Latest P5 ChatGPT/WebCodex QA implementation checkpoint (development only)
 
 - Draft PR #144 branch `codex/golden-v2-goal-completion`: new owner decision is 3.8 semantic primary + Chirp acoustic timing + optional Gemini 3.5 Preview for serious differences, under ChatGPT/WebCodex-supervised QA and a separately operated VPS durable worker. **No production default has changed.**

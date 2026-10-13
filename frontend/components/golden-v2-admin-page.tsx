@@ -12,6 +12,7 @@ import {
   type GoldenV2ApprovalForm,
   type GoldenV2SourceForm,
 } from "@/lib/golden-v2-admin-contract";
+import GoldenV2LinkIntake from "./golden-v2-link-intake";
 import styles from "./golden-v2-admin-page.module.css";
 
 type Stage = {
@@ -254,6 +255,8 @@ export default function GoldenV2AdminPage() {
           <small>SHA → WORD TIME → GOLDEN QA</small>
         </div>
       </section>
+
+      <GoldenV2LinkIntake />
 
       <section className={styles.sourceIntake} aria-labelledby="source-intake-title">
         <div className={styles.sourceHeading}>

@@ -130,3 +130,29 @@ test("owner token stays server configured and API base defaults by runtime", () 
   assert.equal(formatUsdCents(125), "$1.25");
   assert.equal(formatUsdCents(null), "—");
 });
+
+import { parseLinkPreview, parseLinkBatch } from "../../lib/golden-v2-admin-contract.ts";
+
+test("Drive link contract rejects foreign hosts, resource keys and ambiguous IDs", () => {
+  const link = "https://drive.google.com/drive/folders/folder0123456789";
+  assert.deepEqual(parseLinkPreview({ link, recursive: false }), { link, recursive: false });
+  for (const value of [link.replace("drive.google.com", "drive.google.com.evil.test"), link + "#x", link + "?resourcekey=secret",
+    "https://drive.google.com/open?id=file0123456789&id=other0123456789", link + "\n"]) {
+    assert.equal(parseLinkPreview({ link: value, recursive: false }), null);
+  }
+  assert.equal(parseLinkPreview({ link, recursive: "false" }), null);
+  assert.equal(parseLinkPreview({ link, recursive: false, extra: true }), null);
+});
+
+test("batch contract requires explicit complete per-file estimates and confirmation", () => {
+  const valid = { link: "https://drive.google.com/file/d/file0123456789/view", recursive: false,
+    mode: "FLASH_CHIRP", preview_sha256: "a".repeat(64), confirm: true,
+    estimated_stage_cents_by_file: { file0123456789: Object.fromEntries(GOLDEN_V2_STAGES.map((s) => [s, 0])) } };
+  assert.deepEqual(parseLinkBatch(valid), valid);
+  assert.equal(parseLinkBatch({ ...valid, confirm: false }), null);
+  assert.equal(parseLinkBatch({ ...valid, estimated_stage_cents_by_file: {} }), null);
+  assert.equal(parseLinkBatch({ ...valid, estimated_stage_cents_by_file: { file0123456789: {} } }), null);
+  assert.equal(parseLinkBatch({ ...valid, unexpected: true }), null);
+  const nan = structuredClone(valid); nan.estimated_stage_cents_by_file.file0123456789.gemini_primary = NaN;
+  assert.equal(parseLinkBatch(nan), null);
+});

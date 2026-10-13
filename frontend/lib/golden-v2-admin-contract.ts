@@ -115,3 +115,53 @@ export function formatUsdCents(value: number | null | undefined): string {
     style: "currency", currency: "USD", minimumFractionDigits: 2,
   }).format(value / 100);
 }
+
+
+export type LinkPreviewInput = { link: string; recursive: boolean };
+export type LinkBatchInput = LinkPreviewInput & {
+  preview_sha256: string;
+  mode: GoldenV2Mode;
+  estimated_stage_cents_by_file: Record<string, Record<(typeof GOLDEN_V2_STAGES)[number], number>>;
+  confirm: true;
+};
+
+export function parseLinkPreview(value: unknown): LinkPreviewInput | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  if (Object.keys(body).sort().join(",") !== "link,recursive"
+      || typeof body.link !== "string" || typeof body.recursive !== "boolean"
+      || body.link.length > 2048 || /[\u0000-\u001f\u007f]/.test(body.link)) return null;
+  try {
+    const url = new URL(body.link.trim());
+    if (url.protocol !== "https:" || url.hostname !== "drive.google.com"
+        || url.port || url.username || url.password || url.hash
+        || url.searchParams.has("resourcekey")) return null;
+    const id = "[A-Za-z0-9_-]{10,200}";
+    if (!new RegExp(`^/drive/(?:u/\\d+/)?folders/${id}/?$`).test(url.pathname)
+        && !new RegExp(`^/file/d/${id}(?:/view|/preview)?/?$`).test(url.pathname)
+        && !(url.pathname === "/open" && url.searchParams.getAll("id").length === 1
+          && new RegExp(`^${id}$`).test(url.searchParams.get("id") ?? ""))) return null;
+  } catch { return null; }
+  return { link: body.link.trim(), recursive: body.recursive };
+}
+
+export function parseLinkBatch(value: unknown): LinkBatchInput | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const body = value as Record<string, unknown>;
+  if (Object.keys(body).sort().join(",") !== "confirm,estimated_stage_cents_by_file,link,mode,preview_sha256,recursive") return null;
+  const preview = parseLinkPreview({ link: body.link, recursive: body.recursive });
+  if (!preview || body.confirm !== true || typeof body.preview_sha256 !== "string"
+      || !/^[0-9a-f]{64}$/.test(body.preview_sha256)
+      || !["FLASH_CHIRP", "SMART_2PLUS", "QUALITY_3WAY"].includes(String(body.mode))) return null;
+  const estimates = body.estimated_stage_cents_by_file;
+  if (!estimates || typeof estimates !== "object" || Array.isArray(estimates)) return null;
+  const entries = Object.entries(estimates);
+  if (entries.length < 1 || entries.length > 100) return null;
+  for (const [id, costs] of entries) {
+    if (!/^[A-Za-z0-9_-]{10,200}$/.test(id) || !costs || typeof costs !== "object" || Array.isArray(costs)
+        || Object.keys(costs).sort().join(",") !== [...GOLDEN_V2_STAGES].sort().join(",")
+        || Object.values(costs).some((cost) => !Number.isSafeInteger(cost) || Number(cost) < 0)) return null;
+  }
+  return { ...preview, mode: body.mode as GoldenV2Mode, preview_sha256: body.preview_sha256,
+    estimated_stage_cents_by_file: estimates as LinkBatchInput["estimated_stage_cents_by_file"], confirm: true };
+}

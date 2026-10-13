@@ -419,3 +419,20 @@ Fail-closed behavior:
 Evidence is written to reference-chirp-completeness.json; the original merged timeline
 is preserved as merged-words.pre-reference-completeness.json whenever an accepted
 replacement changes merged-words.json.
+
+
+## V2 Drive link batches (development only)
+
+See `docs/GOLDEN_V2_LINK_TO_RUN_2026-10-13.md`. The shared owner API now has
+`link-preview`, `link-batches` and `link-batches/{id}`. Creating a batch persists
+non-paid source intake; it is not cost approval. The separately default-off
+`golden-v2-intake` Compose profile runs the restartable Drive-read-only importer.
+Use `scripts/golden_v2_owner_client.py` from a trusted server with scoped owner
+tokens in its environment; do not pass tokens in CLI arguments. A configured
+ChatGPT connector and production runtime are still required.
+
+The new paid executor daemon defaults OFF and requires trusted service factories
+when explicitly enabled. Never replace independent owner/provider/pricing
+verification with callbacks that always return true. See the checkpoint for
+SDK isolation and acceptance prerequisites; no paid execution or publication
+was authorized or performed by this development iteration.

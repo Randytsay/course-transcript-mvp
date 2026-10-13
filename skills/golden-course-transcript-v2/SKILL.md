@@ -112,7 +112,7 @@ compare(job_id) -> ordered discrepancy windows, audio excerpt locators
 publish(job_id, revision, owner_approved) -> Drive safe-publish + verified SHA
 ```
 
-Use `POST /api/v1/golden-v2/source-preflight` only when the owner explicitly selects and confirms an exact Drive path. Use the CLI for already-downloaded local sources. `POST /api/v1/golden-v2/jobs` remains a separate caller-attested digest registration option; approval changes an approved job to `QUEUED`. The default-offline Compose worker advances only available local stages. Natural-language Drive URL resolution, paid provider execution, reviewer handoff and Drive publication are not connected as one complete operation; report those gaps as `NOT_IMPLEMENTED`.
+Use `POST /api/v1/golden-v2/source-preflight` only when the owner explicitly selects and confirms an exact Drive path. Use the CLI for already-downloaded local sources. `POST /api/v1/golden-v2/jobs` remains a separate caller-attested digest registration option; approval changes an approved job to `QUEUED`. The default-offline Compose worker advances only available local stages. Drive URL preview and durable source intake are now implemented in source through `link-preview` and `link-batches`; use their exact contracts in `docs/GOLDEN_V2_LINK_TO_RUN_2026-10-13.md`. `scripts/golden_v2_owner_client.py` calls those same owner APIs with server-side scoped tokens. This CLI is not an installed ChatGPT connector. Trusted paid runtime factories, reviewer handoff and Drive publication are not connected as one deployed operation; report those gaps as `NOT_IMPLEMENTED`/`NOT_DEPLOYED`.
 
 ## Gate and handoff discipline
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import fcntl
 from pathlib import Path
 import tempfile
 import threading
@@ -27,16 +28,32 @@ def intake_drive_source(
     if not _INTAKE_LOCK.acquire(blocking=False):
         raise SourceIntakeBusyError("another Golden V2 source intake is active")
     try:
-        return _intake_drive_source_locked(
-            source_path=source_path,
-            artifact_root=artifact_root,
-            database=database,
-            mode=mode,
-            estimated_stage_cents=estimated_stage_cents,
-            estimate_ceiling_cents=estimate_ceiling_cents,
-            download=download,
-            register=register,
-        )
+        requested_root = Path(artifact_root).expanduser()
+        ledger_path = Path(database).expanduser()
+        if requested_root.is_symlink():
+            raise ValueError("Golden V2 artifact root cannot be a symlink")
+        if (ledger_path.is_symlink()
+                or ledger_path.resolve().parent != requested_root.resolve()):
+            raise ValueError("isolated Golden V2 intake root required")
+        requested_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        # The web importer and batch daemon share this lock across processes.
+        fd = os.open(requested_root / "source-intake.lock",
+                     os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise SourceIntakeBusyError("another Golden V2 source intake is active") from exc
+            return _intake_drive_source_locked(
+                source_path=source_path,
+                artifact_root=artifact_root,
+                database=database,
+                mode=mode,
+                estimated_stage_cents=estimated_stage_cents,
+                estimate_ceiling_cents=estimate_ceiling_cents,
+                download=download,
+                register=register,
+            )
     finally:
         _INTAKE_LOCK.release()
 

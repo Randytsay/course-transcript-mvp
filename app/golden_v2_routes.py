@@ -23,6 +23,8 @@ from app.pipeline.golden_v2_drive_intake import (
     intake_drive_source,
 )
 from app.pipeline.golden_v2_paid_dispatch import preview_paid_dispatch
+from app.pipeline.golden_v2_link_discovery import preview_drive_link
+from app.jobs.golden_v2_batches import enqueue_link_batch, read_link_batch
 
 router = APIRouter(prefix="/api/v1/golden-v2", tags=["golden-v2-owner"])
 
@@ -308,3 +310,57 @@ def approve_repair_plan(
         return {**result, "status": "APPROVED"}
     except (V2Conflict, ValueError, sqlite3.Error) as exc:
         raise _mutation_error(exc) from exc
+
+class LinkPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    link: str = Field(min_length=20, max_length=2048)
+    recursive: StrictBool = False
+
+
+class LinkBatchRequest(LinkPreviewRequest):
+    preview_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    mode: Literal["QUALITY_3WAY", "SMART_2PLUS", "FLASH_CHIRP"]
+    estimated_stage_cents_by_file: dict[str, SourceStageEstimates] = Field(min_length=1, max_length=100)
+    confirm: Literal[True]
+
+
+@router.post("/link-preview")
+def link_preview(body: LinkPreviewRequest, authorization: str | None = Header(default=None)) -> dict:
+    """Status-token-only Drive GET listing. No media or ledger writes."""
+    _authorized_database(authorization)
+    try:
+        return preview_drive_link(body.link, recursive=body.recursive)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid or unsupported Drive link") from exc
+    except DriveApiError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post("/link-batches", status_code=201)
+def create_link_batch(body: LinkBatchRequest, authorization: str | None = Header(default=None)) -> dict:
+    database, actor, ceiling = _authorized_write_database(authorization)
+    try:
+        preview = preview_drive_link(body.link, recursive=body.recursive)
+        if preview["preview_sha256"] != body.preview_sha256:
+            raise V2Conflict("Drive preview changed; refresh before submitting")
+        return enqueue_link_batch(
+            database=database, preview=preview, mode=body.mode, actor=actor,
+            estimates={key: value.model_dump() for key, value in body.estimated_stage_cents_by_file.items()},
+            ceiling_cents=ceiling,
+        )
+    except DriveApiError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (V2Conflict, ValueError, sqlite3.Error) as exc:
+        raise _mutation_error(exc) from exc
+
+
+@router.get("/link-batches/{batch_id}")
+def link_batch_status(batch_id: str, authorization: str | None = Header(default=None)) -> dict:
+    database = _authorized_database(authorization)
+    try:
+        result = read_link_batch(database, batch_id)
+    except sqlite3.Error as exc:
+        raise _read_error(exc) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="Golden V2 batch not found")
+    return result
