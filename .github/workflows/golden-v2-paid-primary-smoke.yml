@@ -20,6 +20,7 @@ jobs:
     timeout-minutes: 12
     env:
       GOLDEN_V2_PAID_ENABLED: "false"
+      GOLDEN_V2_CHIRP_PAID_ENABLED: "false"
     steps:
       - name: Checkout exact approved development commit
         uses: actions/checkout@v4
@@ -37,6 +38,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install isolated SDK dependencies
-        run: python -m pip install --disable-pip-version-check google-genai==2.29.0 'google-cloud-storage>=3.0.0,<4.0.0'
-      - name: One-shot verified source and optionally paid primary
+        run: python -m pip install --disable-pip-version-check google-genai==2.29.0 'google-cloud-storage>=3.0.0,<4.0.0' 'google-cloud-speech>=2.30.0,<3.0.0'
+      - name: Verify first model without resubmission
         run: python scripts/golden_v2_one_shot_github.py
+      - name: Chirp 3 word-offset preflight and optional one-shot
+        run: python scripts/golden_v2_one_shot_chirp_github.py
