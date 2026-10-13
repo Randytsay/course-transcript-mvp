@@ -1,4 +1,4 @@
-# Keyless authentication readiness only. Does NOT upload media or call paid AI.
+# Recheck restricted GitHub workflow_ref OIDC: no keys, media writes or paid AI.
 name: Golden V2 Keyless Identity Smoke
 on:
   push:
