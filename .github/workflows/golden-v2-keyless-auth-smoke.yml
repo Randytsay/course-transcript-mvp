@@ -79,6 +79,22 @@ jobs:
           if 'publishers/google/models/gemini-3.8-flash' not in names: raise RuntimeError('Known-good model absent; inconclusive')
           print('PAID_MODEL_REQUESTS=0')
           PY
+      - name: Read-only individual Model Garden GET for GA Preview and known good
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in "CONTROL gemini-3.8-flash" "GA gemini-3.5-transcribe" "PREVIEW gemini-3.5-transcribe-preview"; do
+            read -r label model <<< "${spec}"
+            status="$(curl --retry 0 --silent --show-error --max-time 20 \
+              --output /dev/null --write-out '%{http_code}' \
+              --header "Authorization: Bearer ${GCP_ACCESS_TOKEN}" \
+              --header "x-goog-user-project: xenon-chain-506409-c3" \
+              "https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${model}")"
+            echo "MODEL_GARDEN_GET_${label}_HTTP=${status}"
+          done
+          echo 'PUBLISHER_METADATA_GET_IS_NOT_INFERENCE_PROOF=true'
       - name: Mark keyless authentication smoke accepted
         run: |
           echo 'KEYLESS_GOOGLE_AUTH=PASS'

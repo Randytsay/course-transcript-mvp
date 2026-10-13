@@ -18,7 +18,7 @@ Date 2026-10-13. No further paid provider requests authorized or sent during thi
   \`CATALOG_TRANSCRIBE_GA_LISTED=false\`,
   \`CATALOG_TRANSCRIBE_PREVIEW_LISTED=true\`,
   \`PAID_MODEL_REQUESTS=0\`.
-- Public and dedicated SA query both agree. Catalog absence is a strong explanation of the 404, **not absolute proof of underlying entitlement or deployment rollout**; a listed Preview model isn't a guaranteed successful inference.
+- Public and dedicated SA query both agree. Catalog absence alone is **not** proof of model absence or of the inference 404 cause: with the correct `x-goog-user-project` header, read-only `GET /v1beta1/publishers/google/models/gemini-3.5-transcribe` returned **HTTP 200** (name, `launchStage=GA`) despite the GA model being absent from the list. `GET` for Preview also returned 200 (`PUBLIC_PREVIEW`) and known-good 3.8 returned 200 (`GA`). This makes it an API/listing asymmetry; a successful metadata GET does **not** establish successful inference authorization. Preserve the 404 as a serving/entitlement issue to escalate. Catalog omission is a deliberately conservative pre-dispatch safety gate, not definitive entitlement proof; a listed Preview model isn't a guaranteed successful inference.
 
 ## Corrective safety implementation
 
