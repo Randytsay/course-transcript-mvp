@@ -289,6 +289,8 @@ jobs:
       - name: Ensure V2 paid recognition and Drive publication require explicit opt-in
         env:
           V2_CHAT_RELEASE_SHA: ci-v2-release
+          V2_CHAT_ENV_FILE: /tmp/live.env
+          V2_CHAT_GRANT_ENV_FILE: /tmp/live.env
         run: |
           python - <<'PY'
           import json
