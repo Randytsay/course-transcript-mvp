@@ -12,10 +12,11 @@ import json
 from pathlib import Path
 import signal
 import sys
-from threading import Event
+from threading import Event, Thread
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.pipeline.golden_v2_paid_executor import run_paid_executor_pass
+from app.operations.runtime_heartbeat import write_service_heartbeat
 
 
 def main() -> int:
@@ -39,13 +40,23 @@ def main() -> int:
     stop = Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    while not stop.is_set():
+    def heartbeat():
+        while not stop.is_set():
+            write_service_heartbeat(args.artifact_root.parent,'golden-v2-paid-executor',
+                                    state='running' if args.enable_paid else 'disabled')
+            stop.wait(15)
+    thread = Thread(target=heartbeat,daemon=True); thread.start()
+    try:
+      while not stop.is_set():
         result = run_paid_executor_pass(database=args.database, artifact_root=args.artifact_root,
                                        enabled=args.enable_paid, aggregate_cap_cents=args.aggregate_cap_cents,
                                        paid_services=services.paid_services if services else None,
                                        recovery_services=services.recovery_services if services else None)
         print(json.dumps(result, ensure_ascii=False), flush=True)
         if args.once or stop.wait(args.poll_seconds): break
+    finally:
+        stop.set(); thread.join(timeout=5)
+        write_service_heartbeat(args.artifact_root.parent,'golden-v2-paid-executor',state='stopped')
     return 0
 
 

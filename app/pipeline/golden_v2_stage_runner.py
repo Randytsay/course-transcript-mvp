@@ -182,6 +182,7 @@ def complete_adjudication_or_hold(
     replacements: list[dict[str, Any]] | None = None,
     punctuation_after: dict[int, str] | None = None,
     reviewer: str = "", review_reference: str = "",
+    validate_only: bool = False,
 ) -> dict[str, Any]:
     """Persist human audio review or an immutable hold without spending.
 
@@ -189,7 +190,8 @@ def complete_adjudication_or_hold(
     calling this function. A reviewer's assertion is not automatic ASR truth.
     Each revision has its own hold artifact, retained across resumes.
     """
-    ledger.assert_stage_claim(claim, stage="adjudication")
+    if not validate_only:
+        ledger.assert_stage_claim(claim, stage="adjudication")
     if file_sha256(job_dir / "normalized.flac") != claim["source_sha"]:
         raise V2Conflict("review audio SHA differs from approved normalized source")
     _, merged, stages = _bound_inputs(ledger=ledger, claim=claim, job_dir=job_dir)
@@ -273,6 +275,9 @@ def complete_adjudication_or_hold(
         entry.get("status") == "RESOLVED" for entry in decisions)
     if not candidates and not comparison.get("exact_normalized_match"):
         raise V2Conflict("unmatched comparison cannot bypass audio review")
+    if validate_only:
+        return {'review_input_validated': True, 'provider_calls_started': False,
+                'drive_mutation_started': False}
     revision = ledger.status(claim["job_id"])["revision"]
     report = {
         "schema": "golden-v2-adjudication-v1", "job_id": claim["job_id"],

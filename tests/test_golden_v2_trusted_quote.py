@@ -64,7 +64,12 @@ class TrustedQuoteTests(unittest.TestCase):
         register.assert_not_called()
         result = read_quote(self.db,row['quote_id'])
         self.assertEqual(result['state'],'FAILED')
-        self.assertEqual(result['error_code'],'QUOTE_PREFLIGHT_FAILED')
+        self.assertEqual(result['error_code'],'QUOTE_DOWNLOAD_FAILED')
+        retry=enqueue_quote(database=self.db,preview=self.preview,file_id=self.source['file_id'],actor='owner',retry_failed=True)
+        self.assertEqual(retry['state'],'PENDING')
+        import sqlite3
+        with sqlite3.connect(self.db) as db:
+            self.assertEqual(db.execute('SELECT outcome FROM v2_quote_attempts').fetchone()[0],'QUOTE_DOWNLOAD_FAILED')
 
     def test_over_cap_is_a_real_quote_without_job_registration(self):
         row = self.enqueue()

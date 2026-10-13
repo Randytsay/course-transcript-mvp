@@ -43,6 +43,11 @@ def main() -> int:
     paid = sub.add_parser('authorize-paid'); paid.add_argument('job_id')
     pi = paid.add_mutually_exclusive_group(required=True)
     pi.add_argument('--request-file',type=Path); pi.add_argument('--request-stdin',action='store_true')
+    review=sub.add_parser('review'); review.add_argument('job_id')
+    for action in ['review-overlaps','review-adjudication','authorize-publication']:
+        entry=sub.add_parser(action); entry.add_argument('job_id')
+        ri=entry.add_mutually_exclusive_group(required=True)
+        ri.add_argument('--request-file',type=Path); ri.add_argument('--request-stdin',action='store_true')
     args = parser.parse_args()
     base = os.environ.get("COURSE_TRANSCRIPT_V2_OWNER_API_URL", "http://127.0.0.1:8000").rstrip("/")
     try:
@@ -53,7 +58,7 @@ def main() -> int:
             raise ValueError
     except ValueError:
         parser.error("Owner API requires an HTTPS origin or private loopback/container origin")
-    write = args.action in {"create-batch", "approve-job", 'quote', 'authorize-paid'}
+    write = args.action in {"create-batch", "approve-job", 'quote', 'authorize-paid','review-overlaps','review-adjudication','authorize-publication'}
     token = os.environ.get("COURSE_TRANSCRIPT_V2_WRITE_TOKEN" if write else "COURSE_TRANSCRIPT_V2_STATUS_TOKEN", "")
     if len(token) < 32:
         parser.error("Required scoped owner token is not configured")
@@ -73,7 +78,7 @@ def main() -> int:
     elif args.action == "drive-health": route = "drive-health"
     else:
         if not re.fullmatch(r"v2p?_[0-9a-f]{32}", args.job_id): parser.error("Invalid job ID")
-        suffix = '/authorize-paid' if args.action == 'authorize-paid' else '/approval' if write else ''
+        suffix = '/'+args.action if args.action in {'authorize-paid','review','review-overlaps','review-adjudication','authorize-publication'} else '/approval' if write else ''
         route = "jobs/" + args.job_id + suffix
     if write:
         try:

@@ -14,7 +14,7 @@ from app.jobs.drive_api import download_drive_media, DriveApiError
 from app.pipeline.golden_v2_drive_intake import SourceIntakeBusyError
 from app.pipeline.golden_v2_source_preflight import register_source_preflight
 from app.pipeline.golden_v2_pricing import PRICE_VERSION, quote_duration
-from app.providers.golden_v2_audio_staging import duration_seconds
+from app.providers.golden_v2_audio_staging import duration_seconds, file_sha256
 from app.providers.golden_v2_immutable import store_immutable_bytes
 
 
@@ -26,10 +26,11 @@ def initialize(database):
     initialize_batch_queue(database)
     with closing(sqlite3.connect(database)) as db:
         db.execute('CREATE TABLE IF NOT EXISTS v2_quotes (id TEXT PRIMARY KEY, source TEXT NOT NULL, actor TEXT NOT NULL, state TEXT NOT NULL, result TEXT, error_code TEXT)')
+        db.execute('CREATE TABLE IF NOT EXISTS v2_quote_attempts (quote_id TEXT NOT NULL, attempt INTEGER NOT NULL, outcome TEXT NOT NULL, PRIMARY KEY(quote_id,attempt))')
         db.commit()
 
 
-def enqueue_quote(*, database, preview, file_id, actor):
+def enqueue_quote(*, database, preview, file_id, actor, retry_failed=False):
     files = [item for item in preview['files'] if item['file_id'] == file_id]
     if len(files) != 1 or not actor.strip():
         raise ValueError('one exact preview source and owner required')
@@ -39,9 +40,15 @@ def enqueue_quote(*, database, preview, file_id, actor):
     with closing(sqlite3.connect(database, timeout=15, isolation_level=None)) as db:
         db.execute('BEGIN IMMEDIATE')
         try:
-            previous = db.execute('SELECT source FROM v2_quotes WHERE id=?', (quote_id,)).fetchone()
+            previous = db.execute('SELECT source,state,error_code FROM v2_quotes WHERE id=?', (quote_id,)).fetchone()
             if previous and previous[0] != wire(source):
                 raise V2Conflict('quote source conflict')
+            if previous and previous[1]=='FAILED' and retry_failed is True:
+                if db.execute("SELECT COUNT(*) FROM v2_quotes WHERE state IN ('PENDING','PROCESSING')").fetchone()[0]>=20:
+                    raise V2Conflict('quote queue capacity reached')
+                number=db.execute('SELECT COALESCE(MAX(attempt),0)+1 FROM v2_quote_attempts WHERE quote_id=?',(quote_id,)).fetchone()[0]
+                db.execute('INSERT INTO v2_quote_attempts VALUES (?,?,?)',(quote_id,number,previous[2] or 'FAILED'))
+                db.execute("UPDATE v2_quotes SET state='PENDING',error_code=NULL WHERE id=?",(quote_id,))
             if not previous:
                 if db.execute("SELECT COUNT(*) FROM v2_quotes WHERE state IN ('PENDING','PROCESSING')").fetchone()[0] >= 20:
                     raise V2Conflict('quote queue capacity reached')
@@ -85,6 +92,7 @@ def run_quote_intake_pass(*, database, artifact_root, ceiling_cents,
                 return {'action':'QUOTE_INTAKE_IDLE'}
             db.execute("UPDATE v2_quotes SET state='PROCESSING' WHERE id=?", (row['id'],)); db.commit()
             source = json.loads(row['source'])
+            phase='DOWNLOAD'
             try:
                 with tempfile.TemporaryDirectory(prefix='quote-', dir=root) as temporary:
                     media = Path(temporary)/'source.original'
@@ -94,17 +102,19 @@ def run_quote_intake_pass(*, database, artifact_root, ceiling_cents,
                                 'source_path':source['source_path']}
                     if any(observed.get(key) != value for key,value in expected.items()):
                         raise DriveApiError('source changed since preview')
+                    phase='DURATION_PRICING'
                     quote = price(probe(media))
                     if quote['estimated_cents'] > ceiling_cents:
                         result = quote; state = 'OVER_CAP'
                     else:
+                        phase='REGISTER_SOURCE'
                         registered = register(source_media=media, drive_observation=observed,
                                               artifact_root=root, database=database, mode='FLASH_CHIRP',
                                               estimated_stage_cents=quote['estimated_stage_cents'],
                                               estimate_ceiling_cents=ceiling_cents)
                         job_dir = root/'jobs'/registered['job_id']
                         quote.update(job_id=registered['job_id'], source_sha256=registered['source_sha256'],
-                                     original_sha256=registered.get('original_sha256'), drive_source=source)
+                                     original_sha256=file_sha256(media), drive_source=source)
                         digest = store_immutable_bytes(job_dir/'trusted-quote.json', wire(quote).encode())
                         result = {**quote,'quote_sha256':digest,'approval_required':True}
                         state = 'COMPLETE'
@@ -112,7 +122,7 @@ def run_quote_intake_pass(*, database, artifact_root, ceiling_cents,
             except SourceIntakeBusyError:
                 db.execute("UPDATE v2_quotes SET state='PENDING' WHERE id=?", (row['id'],))
             except (OSError, ValueError, RuntimeError):
-                db.execute("UPDATE v2_quotes SET state='FAILED',error_code='QUOTE_PREFLIGHT_FAILED' WHERE id=?", (row['id'],))
+                db.execute("UPDATE v2_quotes SET state='FAILED',error_code=? WHERE id=?", ('QUOTE_'+phase+'_FAILED',row['id']))
             db.commit()
     return {'action':'QUOTE_INTAKE_PROCESSED', 'quote_id':row['id'],
             'provider_calls_started':False,'drive_mutation_started':False}

@@ -4,7 +4,7 @@ Standard global Gemini 3.8 introductory prices and Speech V2 dynamic batch
 list prices were independently checked on 2026-10-14. No free-tier or savings
 discounts assumed. Unknown usage and expired pricing fail closed.
 """
-from datetime import date
+from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal, ROUND_CEILING
 import math
 
@@ -20,7 +20,10 @@ PRICE_SOURCES = [
 
 
 def assert_current(today=None):
-    if not date(2026, 10, 14) <= (today or date.today()) <= date(2026, 12, 31):
+    # Release verification date is recorded in the owner's Asia/Taipei date.
+    # VPS containers use UTC; their date can lag eight hours at deployment.
+    current = today or datetime.now(timezone(timedelta(hours=8))).date()
+    if not date(2026, 10, 14) <= current <= date(2026, 12, 31):
         raise ValueError('pricing requires independent renewal')
 
 
@@ -66,8 +69,9 @@ def gemini_usage_cents(records):
                   usage.get('thoughts_token_count', 0)]
         if any(type(n) is not int or n < 0 for n in values) or values[0] == 0:
             raise ValueError('complete provider token usage required')
-        if usage.get('cached_content_token_count', 0):
-            raise ValueError('unexpected cache pricing requires reconciliation')
-        total += (Decimal(values[0])*Decimal('0.75') +
+        cached = usage.get('cached_content_token_count',0)
+        if type(cached) is not int or not 0 <= cached <= values[0]:
+            raise ValueError('invalid provider cached token usage')
+        total += (Decimal(values[0]-cached)*Decimal('0.75') + Decimal(cached)*Decimal('0.075') +
                   Decimal(values[1]+values[2])*Decimal('3.75')) / 1000000
     return cents(total)

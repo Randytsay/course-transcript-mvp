@@ -15,6 +15,7 @@ import sqlite3
 
 from fastapi import APIRouter, FastAPI, Header, HTTPException
 from pydantic import Field
+from pydantic import StrictBool
 from app.jobs.drive_api import DriveApiError, drive_health
 from app.golden_v2_routes import (_authorized_database, _authorized_write_database,
                                  LinkPreviewRequest, router, _mutation_error)
@@ -38,12 +39,15 @@ limited = APIRouter()
 limited.routes.extend(route for route in router.routes
                       if route.path in allowed and not (route.path.endswith('/jobs') and 'POST' in route.methods))
 app.include_router(limited)
+from app.golden_v2_review_routes import router as review_router
+app.include_router(review_router)
 
 
 class QuoteRequest(LinkPreviewRequest):
     preview_sha256: str = Field(pattern=r'^[0-9a-f]{64}$')
     file_id: str = Field(min_length=10, max_length=256, pattern=r'^[A-Za-z0-9_-]+$')
     confirm: Literal[True]
+    retry_failed: StrictBool = False
 
 
 @app.post('/api/v1/golden-v2/quotes', status_code=202)
@@ -53,7 +57,7 @@ def request_quote(body: QuoteRequest, authorization: str | None = Header(default
         preview = preview_drive_link(body.link, recursive=body.recursive)
         if preview['preview_sha256'] != body.preview_sha256:
             raise V2Conflict('Drive preview changed; refresh before quoting')
-        return enqueue_quote(database=database, preview=preview, file_id=body.file_id, actor=actor)
+        return enqueue_quote(database=database, preview=preview, file_id=body.file_id, actor=actor,retry_failed=body.retry_failed)
     except DriveApiError as exc:
         raise HTTPException(status_code=422, detail='Drive source unavailable') from exc
     except (V2Conflict, ValueError, sqlite3.Error) as exc:
@@ -148,13 +152,39 @@ def service_status(authorization: str | None = Header(default=None)) -> dict:
             worker = {"state": "STALE_OR_STOPPED", "updated_at": payload['updated_at']}
     except (OSError, ValueError, KeyError, TypeError):
         pass
+    paid = {'state':'UNVERIFIED','updated_at':None}
+    try:
+        value=json.loads((database.parent.parent/'runtime/golden-v2-paid-executor.heartbeat.json').read_text())
+        stamp=datetime.fromisoformat(value['updated_at'])
+        age=(datetime.now(timezone.utc)-stamp).total_seconds()
+        if value.get('service')=='golden-v2-paid-executor' and stamp.tzinfo is not None and 0<=age<=90:
+            paid={'state':value['state'],'updated_at':value['updated_at']}
+        else:
+            paid={'state':'STALE_OR_STOPPED','updated_at':value.get('updated_at')}
+    except (OSError,ValueError,KeyError,TypeError):
+        pass
+    paid_enabled=(os.environ.get('COURSE_TRANSCRIPT_V2_PAID_API_ENABLED','').lower()=='true' and paid['state']=='running')
+    delivery={'state':'UNVERIFIED','updated_at':None}
+    try:
+        value=json.loads((database.parent.parent/'runtime/golden-v2-delivery.heartbeat.json').read_text())
+        stamp=datetime.fromisoformat(value['updated_at'])
+        age=(datetime.now(timezone.utc)-stamp).total_seconds()
+        if value.get('service')=='golden-v2-delivery' and stamp.tzinfo is not None and 0<=age<=90:
+            delivery={'state':value['state'],'updated_at':value['updated_at']}
+        else: delivery={'state':'STALE_OR_STOPPED','updated_at':value.get('updated_at')}
+    except (OSError,ValueError,KeyError,TypeError):
+        pass
+    publish_enabled=(os.environ.get('COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED','').lower()=='true' and delivery['state']=='running')
     return {
         "schema": "golden-v2-chat-service-v1", "release_sha": _revision(),
         "capabilities": {"drive_link_preview": True, "batch_source_intake": True,
-                         "job_and_batch_status": True, "paid_execution": False,
+                         "job_and_batch_status": True, "paid_execution": paid_enabled,
                          "trusted_duration_quote": True,
-                         "drive_publication": False},
+                         "drive_publication": publish_enabled},
         "intake_worker": worker, "cost_estimates": "SERVER_DURATION_PROVIDER_RESERVATION",
+        "paid_worker":paid,
+        "delivery_worker":delivery,
+        "publication_policy":"CREATE_NEW_SRT_TXT_ONLY_EXISTING_FILES_REQUIRE_SEPARATE_REVISION_POLICY",
         "golden_acceptance": "REQUIRED_SEPARATELY",
     }
 

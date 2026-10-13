@@ -85,9 +85,10 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
                 else:
                     outcomes.append({'job_id': job_id, 'stage': stage,
                                      'action': 'REVIEW_OR_RECONCILIATION_REQUIRED', 'stage_state': pending['state']})
-            except Exception:
+            except Exception as exc:
                 # A failure AFTER dispatch can still be billable. The original
                 # claim/raw barrier remains; the next cycle cannot re-claim it.
-                outcomes.append({'job_id': job_id, 'action': 'JOB_REQUIRES_RECONCILIATION'})
+                outcomes.append({'job_id': job_id, 'action': 'JOB_REQUIRES_RECONCILIATION',
+                                 'error_type':type(exc).__name__})
         return {'action': 'PAID_EXECUTOR_CYCLE_COMPLETE', 'outcomes': outcomes,
                 'provider_calls_started': 'CHECK_IMMUTABLE_STAGE_AUDITS', 'drive_mutation_started': False}
