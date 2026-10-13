@@ -6,9 +6,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 
 import google.auth
 from google.auth.transport.requests import AuthorizedSession
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger
 from app.pipeline.golden_v2_no_dispatch_recovery import reconcile_primary_no_dispatch
