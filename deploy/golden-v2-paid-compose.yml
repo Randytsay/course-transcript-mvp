@@ -1,12 +1,14 @@
-# Apply ONLY with the verified isolated SDK image and private signed-grant env.
+# Opt-in runtime overlay. Merely adding this file must not dispatch paid work
+# or publish Drive files; both require a selected profile and owner grant.
 services:
   api:
     env_file:
       - /opt/course-transcript-v2-chat/secrets/grant.env
     environment:
-      COURSE_TRANSCRIPT_V2_PAID_API_ENABLED: 'true'
-      COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED: 'true'
+      COURSE_TRANSCRIPT_V2_PAID_API_ENABLED: ${V2_CHAT_PAID_API_ENABLED:-false}
+      COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED: ${V2_CHAT_PUBLISH_API_ENABLED:-false}
   paid:
+    profiles: [v2-paid]
     image: course-transcript-v2-runtime:${V2_CHAT_RELEASE_SHA:?exact release required}
     restart: unless-stopped
     stop_grace_period: 45s
@@ -24,6 +26,7 @@ services:
       - ${V2_CHAT_DRIVE_CONFIG:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
     command: [python, scripts/golden_v2_paid_executor_daemon.py, --database, /app/data/golden-v2/ledger.sqlite, --artifact-root, /app/data/golden-v2, --services-module, app.pipeline.golden_v2_runtime_services, --aggregate-cap-cents, '1000', --enable-paid]
   delivery:
+    profiles: [v2-publish]
     image: course-transcript-v2-chat:${V2_CHAT_RELEASE_SHA:?exact release required}
     restart: unless-stopped
     env_file:

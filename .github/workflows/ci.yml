@@ -286,3 +286,57 @@ jobs:
           assert data.get('source') == '/tmp/pr10-smoke-data'
           assert all('gcp-sa.json' not in str(item) for item in volumes)
           PY
+      - name: Ensure V2 paid recognition and Drive publication require explicit opt-in
+        env:
+          V2_CHAT_RELEASE_SHA: ci-v2-release
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          base = [
+              'docker', 'compose', '-p', 'course-transcript-v2-ci',
+              '-f', 'deploy/golden-v2-chat-compose.yml',
+              '-f', 'deploy/golden-v2-paid-compose.yml',
+          ]
+
+          def render(profiles=(), **overrides):
+              command = [*base]
+              for profile in profiles:
+                  command.extend(['--profile', profile])
+              command.extend(['config', '--no-env-resolution', '--format', 'json'])
+              env = os.environ.copy()
+              env.update(overrides)
+              return json.loads(subprocess.check_output(command, env=env, text=True))
+
+          default = render()
+          assert set(default['services']) == {'api', 'intake'}
+          api = default['services']['api']
+          assert api['environment']['COURSE_TRANSCRIPT_V2_PAID_API_ENABLED'] == 'false'
+          assert api['environment']['COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED'] == 'false'
+          assert api['ports'][0]['host_ip'] == '127.0.0.1'
+
+          opted_in = render(
+              ('v2-paid', 'v2-publish'),
+              V2_CHAT_PAID_API_ENABLED='true',
+              V2_CHAT_PUBLISH_API_ENABLED='true',
+          )
+          services = opted_in['services']
+          assert set(services) == {'api', 'intake', 'paid', 'delivery'}
+          assert services['api']['environment']['COURSE_TRANSCRIPT_V2_PAID_API_ENABLED'] == 'true'
+          assert services['api']['environment']['COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED'] == 'true'
+          assert services['paid']['profiles'] == ['v2-paid']
+          assert services['delivery']['profiles'] == ['v2-publish']
+          data_mounts = {
+              name: next(v for v in service['volumes'] if v['target'] == '/app/data')['source']
+              for name, service in services.items()
+          }
+          assert len(set(data_mounts.values())) == 1, data_mounts
+          for service in services.values():
+              drive_config = next(
+                  v for v in service['volumes']
+                  if v['target'] == '/run/secrets/rclone.conf'
+              )
+              assert drive_config['read_only'] is True
+          PY
