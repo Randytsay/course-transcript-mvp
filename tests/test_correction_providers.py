@@ -110,7 +110,7 @@ class TestSecureKeyManager(Base := unittest.TestCase):
         meta = self.store.create(profile_id="openrouter-main", name="OpenRouter Main",
                                  provider="openrouter",
                                  api_key="fake-openrouter-key",
-                                 default_model="google/gemini-3.7-flash")
+                                 default_model="google/gemini-3.8-flash")
         dumped = json.dumps(meta) + json.dumps(self.store.list_profiles())
         assert "fake-openrouter-key" not in dumped
         assert meta["key_configured"] is True
@@ -155,8 +155,8 @@ class TestOpenRouterBatch(unittest.TestCase):
                 if headers.get("Authorization") != "Bearer fake-openrouter-key":
                     return 401, {}
                 return 200, {"data": [
-                    {"id": "google/gemini-3.7-flash"},
-                    {"id": "google/gemini-3.7-flash:batch", "batch_supported": True},
+                    {"id": "google/gemini-3.8-flash"},
+                    {"id": "google/gemini-3.8-flash:batch", "batch_supported": True},
                 ]}
             if url == BATCH_URL and method == "POST":
                 return 201, {"id": "or-batch-123", "status": "submitted"}
@@ -191,7 +191,7 @@ class TestOpenRouterBatch(unittest.TestCase):
         body = posts[0][2]
         # Official contract: endpoint + model + requests (not input_requests)
         assert body["endpoint"] == "/v1/chat/completions"
-        assert body["model"] == "google/gemini-3.7-flash"
+        assert body["model"] == "google/gemini-3.8-flash"
         assert body["requests"][0]["custom_id"] == "w-1"
         assert "input_requests" not in body
 
@@ -353,6 +353,17 @@ class TestLegacyCorrectionModelBlocked(unittest.TestCase):
         with mock.patch.object(VertexCorrectionProvider, "_headers", lambda self: {}):
             result = provider.get_batch("projects/p/locations/global/batchPredictionJobs/123")
         self.assertEqual(result["status"], "completed")
+
+    def test_direct_openrouter_legacy_submission_blocked_without_network(self):
+        calls = []
+        provider = OpenRouterCorrectionProvider(
+            api_key="fake-key", model="google/gemini-3.7-flash",
+            http=lambda *args: calls.append(args))
+        with self.assertRaises(ProviderError):
+            provider.realtime_generate("text only")
+        with self.assertRaises(ProviderError):
+            provider.submit_batch([], glossary=[])
+        self.assertEqual(calls, [])
 
     def test_persisted_per_job_legacy_override_fails_before_provider_call(self):
         from app.providers.correction_runtime_bridge import run_module

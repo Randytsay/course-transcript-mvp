@@ -23,7 +23,7 @@ BATCH_URL = "https://openrouter.ai/api/beta/batches"
 class OpenRouterCorrectionProvider:
     id = ProviderId.OPENROUTER
     display_name = "OpenRouter"
-    default_model = "google/gemini-3.7-flash"
+    default_model = "google/gemini-3.8-flash"
 
     def __init__(self, *, api_key: str, model: str | None = None, http=None):
         if not api_key:
@@ -117,7 +117,12 @@ class OpenRouterCorrectionProvider:
 
     # -- realtime ---------------------------------------------------------------
 
+    def _assert_submission_model(self) -> None:
+        if "gemini" in self.model.lower() and self.model != self.default_model:
+            raise ProviderError("unknown", "Gemini 文字校正僅核准 3.8；歷史任務保留唯讀核對")
+
     def realtime_generate(self, prompt: str) -> str:
+        self._assert_submission_model()
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
@@ -168,6 +173,7 @@ class OpenRouterCorrectionProvider:
         { "endpoint": "/v1/chat/completions", "model": "<base model>",
           "requests": [ {"custom_id": ..., "body": {...}} ] }
         """
+        self._assert_submission_model()
         requests_payload = self.build_batch_requests(windows, glossary)
         payload = {
             "endpoint": "/v1/chat/completions",

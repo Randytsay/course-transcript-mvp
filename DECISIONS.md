@@ -88,6 +88,17 @@ This log records durable Project-local decisions. Cross-project lessons are refe
 
 **Implementation status:** Development-only on `codex/golden-v2-goal-completion` / Draft PR #144. Text-correction defaults, MiniMax fallback, proxy, costs, UI and model policy tests have been updated; actual Vertex capability/role, usage and production cutover are still unverified. Never rewrite existing in-flight jobs without explicit migration/approval.
 
+## 2026-10-13 — Explicit 3.8-only Gemini configuration
+
+The owner explicitly instructed: 「拿掉所有 3.7 的設定，只用 3.8」.
+New Gemini audio-primary and text-correction configuration targets 3.8;
+remaining owner intake/provider UI, API status, fake-provider and OpenRouter
+defaults are aligned. Direct new Vertex/OpenRouter submissions using a
+nonapproved Gemini model fail closed. Historical 3.7 raw, submitted operations
+and cost catalogs remain immutable and readable; missing model evidence must
+not be relabeled 3.8. No production setting or runtime was switched by this
+development change. Chirp timing remains independent and authoritative.
+
 ## Deployment invariant — exact SHA only
 
 Production deployment must use an immutable reviewed release SHA. A dirty live or development working tree is never a release source. Production status must be verified by runtime revision evidence, not directory names or conversational claims.

@@ -95,7 +95,7 @@ export default function NewJobPageDriveApi() {
   const [providerProfiles, setProviderProfiles] = useState<ProviderProfileLite[]>([]);
   const [providerProfileId, setProviderProfileId] = useState("");
   const [providerModels, setProviderModels] = useState<ProviderModelLite[]>([]);
-  const [providerModel, setProviderModel] = useState("gemini-3.7-flash");
+  const [providerModel, setProviderModel] = useState("gemini-3.8-flash");
   const [executionMode, setExecutionMode] = useState<"REALTIME" | "BATCH">("REALTIME");
   const [fallbackPolicy, setFallbackPolicy] = useState<"RAW_CHIRP_FALLBACK">("RAW_CHIRP_FALLBACK");
 
@@ -107,8 +107,8 @@ export default function NewJobPageDriveApi() {
     correctionMode === "M3_FALLBACK" ? "M3_FIRST" : "GEMINI_FIRST";
 
   const DEFAULT_MODELS: Record<AIProviderId, string> = {
-    vertex: "gemini-3.7-flash",
-    openrouter: "google/gemini-3.7-flash",
+    vertex: "gemini-3.8-flash",
+    openrouter: "google/gemini-3.8-flash",
     minimax: "MiniMax-M3",
   };
 
@@ -313,19 +313,19 @@ export default function NewJobPageDriveApi() {
 
   // Selection depends on the feature flag and mounted MiniMax credential only.
   // Quota is a runtime routing signal: when the live quota check is disabled,
-  // unknown, or unavailable, the backend already fails closed to Gemini 3.7.
+  // unknown, or unavailable, the backend already fails closed to Gemini 3.8.
   // Requiring quotaLiveCheck here made the M3 + Gemini fallback option
   // permanently unselectable even though the fallback contract was safe.
   const m3SelectionAvailable = m3StatusLoaded && m3Enabled && m3Configured;
 
   function describeM3Status() {
     if (!m3StatusLoaded) return "正在確認 M3 服務與 quota 狀態…";
-    if (!m3Enabled) return "伺服器尚未開放 M3；目前所有任務仍會使用 Gemini 3.7。";
+    if (!m3Enabled) return "伺服器尚未開放 M3；目前所有任務仍會使用 Gemini 3.8。";
     if (!m3Configured) return "MiniMax key 尚未掛載；開啟前請先完成服務設定。";
-    if (!m3QuotaLiveCheck) return "可選用 M3；目前未啟用即時 quota 檢查，執行時若 quota 無法確認會安全改用 Gemini 3.7。";
-    if (m3QuotaState === "available") return "可選用 M3；目前 quota 可用，異常時本課程會單向轉 Gemini 3.7。";
-    if (m3QuotaState === "unavailable") return "可選用 M3；目前 quota 不可用，執行時會安全從 Gemini 3.7 開始。";
-    return "可選用 M3；quota 尚未確認時會安全從 Gemini 3.7 開始。";
+    if (!m3QuotaLiveCheck) return "可選用 M3；目前未啟用即時 quota 檢查，執行時若 quota 無法確認會安全改用 Gemini 3.8。";
+    if (m3QuotaState === "available") return "可選用 M3；目前 quota 可用，異常時本課程會單向轉 Gemini 3.8。";
+    if (m3QuotaState === "unavailable") return "可選用 M3；目前 quota 不可用，執行時會安全從 Gemini 3.8 開始。";
+    return "可選用 M3；quota 尚未確認時會安全從 Gemini 3.8 開始。";
   }
 
   async function prepareAndCreateBatch() {
@@ -513,7 +513,7 @@ export default function NewJobPageDriveApi() {
                       className={`correction-mode-card ${correctionMode === "GEMINI" ? "correction-mode-card--active" : ""}`}
                       onClick={() => setCorrectionMode("GEMINI")}>
                 <ShieldCheck size={22} />
-                <span><strong>Gemini 3.7（推薦）</strong><small>Google Vertex AI 單模型校正，穩定、容易稽核。</small></span>
+                <span><strong>Gemini 3.8（推薦）</strong><small>Google Vertex AI 單模型校正，穩定、容易稽核。</small></span>
                 {correctionMode === "GEMINI" && <Check size={17} />}
               </button>
               <button type="button" role="radio" aria-checked={correctionMode === "M3_FALLBACK"}
@@ -522,7 +522,7 @@ export default function NewJobPageDriveApi() {
                       title={!m3StatusLoaded ? "正在確認 MiniMax M3 狀態" : !m3SelectionAvailable ? describeM3Status() : undefined}
                       onClick={() => m3SelectionAvailable && setCorrectionMode("M3_FALLBACK")}>
                 <Sparkles size={22} />
-                <span><strong>{m3Model} + Gemini 備援</strong><small>M3 優先；quota 或服務異常時安全改用 Gemini 3.7。</small></span>
+                <span><strong>{m3Model} + Gemini 備援</strong><small>M3 優先；quota 或服務異常時安全改用 Gemini 3.8。</small></span>
                 {correctionMode === "M3_FALLBACK" && <Check size={17} />}
               </button>
               <button type="button" role="radio" aria-checked={correctionMode === "CUSTOM"}
@@ -579,7 +579,7 @@ export default function NewJobPageDriveApi() {
                       </select>
                     ) : (
                       <input value={providerModel} onChange={(e) => setProviderModel(e.target.value)}
-                             placeholder={providerId === "minimax" ? "MiniMax-M3" : providerId === "vertex" ? "gemini-3.7-flash" : "openrouter model slug"} />
+                             placeholder={providerId === "minimax" ? "MiniMax-M3" : providerId === "vertex" ? "gemini-3.8-flash" : "openrouter model slug"} />
                     )}
                   </label>
                   <div style={{ display: "grid", gap: 4 }}>
@@ -660,7 +660,7 @@ export default function NewJobPageDriveApi() {
             <h2>目前設定</h2>
             <div><span>已選檔案</span><strong>{selectionMode === "files" ? selectedEntries.length : folderReady ? "整個資料夾" : "尚未選擇"}</strong></div>
             <div><span>辨識模式</span><strong>{processingStrategy === "DYNAMIC_BATCHING" ? "經濟模式" : "快速模式"}</strong></div>
-            <div><span>後續處理</span><strong>{workflowMode === "CHATGPT_HANDOFF" ? "Chirp 3 + ChatGPT 校稿" : workflowMode === "CHIRP_ONLY" ? "只做 Chirp 3" : correctionMode === "M3_FALLBACK" ? `${m3Model} + Gemini 備援` : correctionMode === "CUSTOM" ? `自訂：${providerModel}` : "完整自動：Gemini 3.7"}</strong></div>
+            <div><span>後續處理</span><strong>{workflowMode === "CHATGPT_HANDOFF" ? "Chirp 3 + ChatGPT 校稿" : workflowMode === "CHIRP_ONLY" ? "只做 Chirp 3" : correctionMode === "M3_FALLBACK" ? `${m3Model} + Gemini 備援` : correctionMode === "CUSTOM" ? `自訂：${providerModel}` : "完整自動：Gemini 3.8"}</strong></div>
             <div><span>輸出</span><strong>{outputFormats.map((item) => `.${item}`).join("、")}</strong></div>
             <small>一般任務不再需要第二次費用確認。</small>
           </div>

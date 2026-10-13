@@ -42,6 +42,17 @@ worker paths are not automatically upgraded by this development-only change.
 Never connect this route to provider requests or deploy to production without
 the distinct user-authorized live paid smoke and release gates.
 
+The development-only `execute_trusted_paid_stage` in
+`app/pipeline/golden_v2_trusted_dispatch.py` now implements that single-stage
+handoff: read-only aggregate preview → independent owner/capability/pricing
+verifiers → fresh authenticated Drive revision check → exact source/stage/
+revision/aggregate-cap SQLite claim → existing primary/Chirp/third adapter.
+It accepts injected trusted clients/services only, does not construct cloud
+credentials, and has no automatic daemon, HTTP paid endpoint or live CLI.
+Chirp returns durable submissions for the existing recovery worker; paid
+errors preserve request/claim barriers and must never be blindly repeated.
+The isolated four-minute smoke approval does not authorize a full-source job.
+
 ## Production entry points
 
 - API: `app.api_hardened:app`
@@ -147,7 +158,7 @@ GEMINI_CORRECTION_WINDOW_MS=60000
 GEMINI_MAX_PARALLEL_WINDOWS=2
 ```
 
-The model is `gemini-3.7-flash`. Every paid response is stored under a prompt-version, source-digest, and attempt-unique audit filename. If a structured response is malformed, the parent response must be persisted before the window is split.
+The development target is `gemini-3.8-flash` only. Historical 3.7 receipts and submitted operations remain readable; new 3.7 requests are blocked. Verify the exact deployed release before asserting a production migration. Every paid response is stored under a prompt-version, source-digest, and attempt-unique audit filename. If a structured response is malformed, the parent response must be persisted before the window is split.
 
 ### Dacheng Golden Corpus / Error Memory
 
@@ -316,7 +327,7 @@ heartbeat、Dynamic Batch 逾時與 Drive delivery retry。
 
 建立任務時，先選擇每份文件的內容模式：`一般文件` 是預設值，不會帶入佛經
 或咒語偏置；`大成佛經` 才會使用固定咒語拼寫。選填的「補充說明」會與該工作
-一併保存為不可變背景，用於 Gemini 3.7 Flash 的純文字校正，不會更動原始 Chirp
+一併保存為不可變背景，用於 Gemini 3.8 Flash 的純文字校正，不會更動原始 Chirp
 結果、時間碼或分段。
 
 咒語的講師／大眾重複只會在輸出層做去重，且必須偵測到兩輪完整、連續、順序正確

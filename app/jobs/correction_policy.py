@@ -2,7 +2,7 @@
 
 This module intentionally does not call any model provider. It stores the user's
 requested routing policy separately from the core jobs table so production can
-keep Gemini 3.7 Flash as the safe default until MiniMax M3 credentials, quota
+keep Gemini 3.8 Flash as the safe default until MiniMax M3 credentials, quota
 behaviour, and quality are validated in the target runtime.
 """
 from __future__ import annotations

@@ -8,15 +8,20 @@ ROOT = Path(__file__).resolve().parents[1]
 # separate audio-primary model, and therefore may appear in the env example.
 TEXT_CORRECTION_FILES = (
     "app/api.py",
+    "app/api_ext.py",
     "app/jobs/performance.py",
     "app/pipeline/dynamic_worker_hardened.py",
     "app/pipeline/dynamic_worker_observed.py",
     "app/pipeline/worker.py",
     "app/providers/correct_text.py",
     "app/providers/correct_text_cascade.py",
+    "app/providers/fake_correction.py",
+    "app/providers/correction/openrouter.py",
     "deploy/vertex-openai-proxy/litellm-config.yaml",
     "frontend/components/job-detail-page.tsx",
     "frontend/components/new-job-page.tsx",
+    "frontend/components/new-job-page-drive-api.tsx",
+    "frontend/app/review-admin/ai-providers/page.tsx",
 )
 
 AUDIO_PRIMARY_FILES = (

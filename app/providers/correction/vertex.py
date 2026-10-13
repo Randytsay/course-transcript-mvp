@@ -61,7 +61,7 @@ class VertexCorrectionProvider:
     def _assert_submission_model(self) -> None:
         # Historical 3.7 batch IDs must remain pollable/ingestable; prohibit
         # only NEW paid submissions. Never silently reinterpret old raw evidence.
-        if self.model == "gemini-3.7-flash":
+        if self.model != DEFAULT_MODEL:
             raise ProviderError(
                 "unknown",
                 "舊 Gemini 3.7 校正型號禁止新付費呼叫；請審核並選用 Gemini 3.8",
