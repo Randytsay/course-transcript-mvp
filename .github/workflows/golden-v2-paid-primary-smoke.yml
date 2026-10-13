@@ -1,0 +1,42 @@
+# User-approved one-clip Golden V2 primary. FALSE by default; no side effects.
+name: Golden V2 Paid Primary 4min
+on:
+  push:
+    branches: [codex/golden-v2-goal-completion]
+    paths:
+      - .github/workflows/golden-v2-paid-primary-smoke.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: golden-v2-paid-primary-20261013
+  cancel-in-progress: false
+
+jobs:
+  immutable-four-minute-primary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GOLDEN_V2_PAID_ENABLED: "false"
+    steps:
+      - name: Checkout exact approved development commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Authenticate dedicated Google Cloud service account without keys
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/608343797618/locations/global/workloadIdentityPools/golden-v2-gh/providers/github-restricted
+          service_account: golden-v2-smoke@xenon-chain-506409-c3.iam.gserviceaccount.com
+          create_credentials_file: true
+          export_environment_variables: true
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install isolated SDK dependencies
+        run: python -m pip install --disable-pip-version-check google-genai==2.29.0 google-cloud-storage>=3.0.0,<4.0.0
+      - name: One-shot verified source and optionally paid primary
+        run: python scripts/golden_v2_one_shot_github.py
