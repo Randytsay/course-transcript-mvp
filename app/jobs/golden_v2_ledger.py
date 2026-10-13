@@ -791,6 +791,61 @@ class GoldenV2Ledger:
                 (job_id,),
             )
 
+    def reconcile_unsubmitted_provider_call(
+        self, job_id: str, *, stage: str, actor: str, evidence_sha: str,
+        evidence_verifier: Any, attempt_archiver: Any,
+    ) -> None:
+        """Return a proven-never-submitted primary call to PENDING.
+
+        This is narrower than normal provider reconciliation: only the Gemini
+        primary stage with zero observed usage may be reopened, and trusted
+        code must independently verify a complete, source-bound control-plane
+        request-count window. The original raw attempt remains separately
+        archived by the recovery command before this ledger transition.
+        """
+        if (stage != "gemini_primary" or not actor.strip()
+                or len(evidence_sha) != 64
+                or any(ch not in "0123456789abcdef" for ch in evidence_sha)):
+            raise ValueError("invalid no-dispatch reconciliation proof")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            row = db.execute(
+                "SELECT * FROM v2_stages WHERE job_id=? AND name=?", (job_id, stage),
+            ).fetchone()
+            if (job["status"] != "NEEDS_RECONCILIATION" or row is None
+                    or row["state"] != "OUTCOME_UNKNOWN"
+                    or int(row["actual_cents"] or 0) != 0):
+                raise V2Conflict("no zero-usage unknown primary call to reopen")
+            prior_reconciliations = db.execute(
+                "SELECT COUNT(*) FROM v2_reconciliations WHERE job_id=? AND stage_name=?",
+                (job_id, stage),
+            ).fetchone()[0]
+            if prior_reconciliations:
+                raise V2Conflict("the one authorized no-dispatch retry was already consumed")
+            if not callable(evidence_verifier) or not evidence_verifier(
+                job_id=job_id, stage=stage, source_sha=job["source_sha"],
+                created_at=job["created_at"], stage_updated_at=row["updated_at"],
+                evidence_sha=evidence_sha,
+            ):
+                raise V2Conflict("complete no-dispatch evidence not independently verified")
+            if not callable(attempt_archiver):
+                raise V2Conflict("raw unknown attempt archiver is required")
+            attempt_archiver()
+            db.execute(
+                "UPDATE v2_stages SET state='PENDING',actual_cents=0,claim_hash=NULL,"
+                "updated_at=? WHERE job_id=? AND name=?",
+                (_now(), job_id, stage),
+            )
+            db.execute(
+                "INSERT INTO v2_reconciliations(job_id,stage_name,actor,"
+                "evidence_sha,actual_cents,verified_at) VALUES(?,?,?,?,?,?)",
+                (job_id, stage, actor, evidence_sha, 0, _now()),
+            )
+            db.execute(
+                "UPDATE v2_jobs SET status='PROCESSING',revision=revision+1 WHERE id=?",
+                (job_id,),
+            )
+
     def assert_stage_claim(self, claim: dict[str, Any], *, stage: str) -> None:
         with self._tx() as db:
             self._verify_claim(db, claim)

@@ -434,5 +434,20 @@ ChatGPT connector and production runtime are still required.
 The new paid executor daemon defaults OFF and requires trusted service factories
 when explicitly enabled. Never replace independent owner/provider/pricing
 verification with callbacks that always return true. See the checkpoint for
-SDK isolation and acceptance prerequisites; no paid execution or publication
-was authorized or performed by this development iteration.
+SDK isolation and acceptance prerequisites. The linked checkpoint records an
+earlier development iteration; it is not a current deployment or authorization
+statement. The separately managed ChatGPT V2 service is documented in
+`docs/GOLDEN_V2_CHAT_ENTRY.md`.
+
+## Proven-unsent V2 primary request recovery
+
+For the narrowly scoped, once-per-stage recovery of a V2 Gemini request proven
+not to have been submitted, follow
+`docs/GOLDEN_V2_NO_DISPATCH_RECOVERY.md`. The verifier requires complete,
+aged Cloud Monitoring request-count evidence and preserves the raw unknown
+attempt. A zero-cost ledger entry alone is insufficient. Resetting the stage
+can cause the already-running paid worker to submit the approved request
+immediately; use only within the exact source/model/cost authorization. Drive
+publication remains disabled until separate review and Golden acceptance.
+This recovery command does not enable the default-off general executor daemon
+described in the earlier development checkpoint.

@@ -248,6 +248,56 @@ class GoldenV2LedgerTests(unittest.TestCase):
                 evidence_verifier=lambda **e: True,
             )
 
+    def test_unsubmitted_zero_usage_primary_reopens_only_with_verified_proof(self):
+        job = self.create()
+        self.approve(job)
+        claim = self.store.claim_next(job, worker_id="A")
+        self.store.mark_outcome_unknown(claim, evidence_sha="f"*64)
+        recovered = GoldenV2Ledger.open_existing(self.db)
+        with self.assertRaises(V2Conflict):
+            recovered.reconcile_unsubmitted_provider_call(
+                job, stage="gemini_primary", actor="reviewer",
+                evidence_sha="d"*64, evidence_verifier=lambda **proof: False,
+                attempt_archiver=lambda: self.fail("must not archive without verified proof"),
+            )
+        self.assertEqual(recovered.status(job)["stages"][0]["state"], "OUTCOME_UNKNOWN")
+        verified = []
+        recovered.reconcile_unsubmitted_provider_call(
+            job, stage="gemini_primary", actor="reviewer",
+            evidence_sha="d"*64,
+            evidence_verifier=lambda **proof: verified.append(proof) or (
+                proof["stage"] == "gemini_primary" and proof["source_sha"] == "a"*64
+                and proof["created_at"] and proof["stage_updated_at"]
+            ),
+            attempt_archiver=lambda: None,
+        )
+        status = recovered.status(job)
+        self.assertEqual(len(verified), 1)
+        self.assertEqual(status["status"], "PROCESSING")
+        self.assertEqual(status["stages"][0]["state"], "PENDING")
+        self.assertEqual(status["stages"][0]["actual_cents"], 0)
+        retry_claim = recovered.claim_next(job, worker_id="B")
+        self.assertEqual(retry_claim["stage"], "gemini_primary")
+        recovered.mark_outcome_unknown(retry_claim, evidence_sha="e"*64)
+        with self.assertRaises(V2Conflict):
+            recovered.reconcile_unsubmitted_provider_call(
+                job, stage="gemini_primary", actor="reviewer",
+                evidence_sha="c"*64, evidence_verifier=lambda **proof: True,
+                attempt_archiver=lambda: self.fail("one-shot retry must remain consumed"),
+            )
+
+    def test_unsubmitted_reconciliation_cannot_erase_observed_cost(self):
+        job = self.create()
+        self.approve(job)
+        claim = self.store.claim_next(job, worker_id="A")
+        self.store.mark_outcome_unknown(claim, known_cents=4, evidence_sha="b"*64)
+        with self.assertRaises(V2Conflict):
+            self.store.reconcile_unsubmitted_provider_call(
+                job, stage="gemini_primary", actor="reviewer",
+                evidence_sha="d"*64, evidence_verifier=lambda **proof: True,
+                attempt_archiver=lambda: self.fail("must not archive an observed charge"),
+            )
+
     def test_cost_ledger_preserves_actual_above_reserved_and_blocks_replay(self):
         job = self.create()
         self.approve(job)
