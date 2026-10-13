@@ -116,6 +116,10 @@ def run():
     if old_claim.get("status")!="REQUEST_STARTED_NO_RETRY" or old_claim.get("source_sha256")!=SOURCE_SHA:
         raise RuntimeError("Previous claim not frozen as required")
     print("THIRD_INPUT_AND_TWO_PRIOR_CLOUD_RECEIPTS=VERIFIED")
+    if paid:
+        from golden_v2_model_catalog_gate import assert_model_available
+        assert_model_available(PROJECT,MODEL)
+        print('THIRD_GEMINI35_MODEL_CATALOG_GATE=PASS')
     if not paid:
         print("THIRD_GEMINI35_SDK_VERBATIM_REQUEST=READY")
         print("THIRD_GEMINI35_PAID_CALLS=0")

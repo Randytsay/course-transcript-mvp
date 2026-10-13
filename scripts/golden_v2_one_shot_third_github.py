@@ -111,6 +111,10 @@ def run():
     bucket=client.bucket(BUCKET)
     proofs,prior_cents=read_previous_and_audio(bucket)
     print("THIRD_INPUT_AND_TWO_PRIOR_CLOUD_RECEIPTS=VERIFIED")
+    if paid:
+        from golden_v2_model_catalog_gate import assert_model_available
+        assert_model_available(PROJECT,MODEL)
+        print('THIRD_GEMINI35_MODEL_CATALOG_GATE=PASS')
     if not paid:
         print("THIRD_GEMINI35_SDK_VERBATIM_REQUEST=READY")
         print("THIRD_GEMINI35_PAID_CALLS=0")

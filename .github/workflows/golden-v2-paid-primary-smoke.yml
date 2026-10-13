@@ -50,5 +50,7 @@ jobs:
         run: python scripts/golden_v2_one_shot_third_github.py
       - name: Gemini 3.5 WAV lossless preparation validation (no charges)
         run: python scripts/golden_v2_third_wav_preflight.py
+      - name: Gemini 3.5 paid model availability catalog guard (read-only)
+        run: python scripts/golden_v2_model_catalog_gate.py --project xenon-chain-506409-c3 --model gemini-3.5-transcribe --report-only
       - name: Gemini 3.5 new independent paid one-shot (default disabled)
         run: python scripts/golden_v2_new35_owner_approved.py
