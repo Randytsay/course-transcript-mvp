@@ -58,7 +58,11 @@ def verify_job_grant(*, root, snapshot):
 
 
 class BudgetedModels:
-    def __init__(self, models): self.models = models
+    def __init__(self, client):
+        # google-genai Client.__del__ closes the HTTP transport. Retaining only
+        # client.models lets the factory's local client die before dispatch.
+        self._client = client
+        self.models = client.models
 
     def generate_content(self, *, model, contents, config):
         if model != 'gemini-3.8-flash': raise V2Conflict('unexpected model')
@@ -121,7 +125,7 @@ def paid_services(snapshot):
         return model.status_code == 200 and permissions.status_code == 200 and expected <= set(permissions.json().get('permissions',[]))
 
     if snapshot['stage'] == 'gemini_primary':
-        options = {**common,'vertex_client':SimpleNamespace(models=BudgetedModels(vertex.models)),
+        options = {**common,'vertex_client':SimpleNamespace(models=BudgetedModels(vertex)),
                    'max_window_seconds':2700,'cost_accountant':gemini_usage_cents,
                    'cost_estimator':lambda manifest: quote['estimated_stage_cents']['gemini_primary']}
     else:

@@ -37,3 +37,21 @@ python scripts/golden_v2_reconcile_no_dispatch.py \
 Afterward, inspect the exact job status and evidence artifacts. Keep Drive
 publication disabled until independent audio review and Golden acceptance are
 complete.
+
+## SDK client lifetime defect (2026-10-14)
+
+The isolated google-genai 2.29.0 runtime closes its owned HTTP transport in
+`Client.__del__`. The former runtime factory retained only `vertex.models`,
+so returning from `paid_services` destroyed the owning client. The next
+`count_tokens` call raised `RuntimeError: Cannot send a request, as the client
+has been closed.` before HTTP dispatch. `BudgetedModels` now retains the
+owning client for the lifetime of the stage services.
+
+`test_golden_v2_sdk_lifecycle.py` uses the real pinned SDK and an SDK-owned
+HTTP client with MockTransport. On the original deployment the factory test
+reproduces the closed-client error; with the fix it completes countTokens and
+generateContent. Both tests ran in a network-disabled container with no live
+credentials. The general V1 suite skips this isolated-SDK test; a dedicated CI
+job installs 2.29.0 and runs it. This does not prove a historical request was
+unbilled and does not authorize reopening an unknown attempt or publishing
+subtitles. The existing one-retry ledger restriction remains intact.

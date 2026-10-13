@@ -13,7 +13,7 @@ from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 
 class RuntimeServicesTests(unittest.TestCase):
     def test_actual_token_count_prevents_paid_request_and_wrong_model(self):
-        models=MagicMock(); wrapper=BudgetedModels(models)
+        models=MagicMock(); wrapper=BudgetedModels(SimpleNamespace(models=models))
         models.count_tokens.return_value=SimpleNamespace(total_tokens=200001)
         with self.assertRaises(V2Conflict): wrapper.generate_content(model='gemini-3.8-flash',contents=[],config={})
         models.generate_content.assert_not_called()
