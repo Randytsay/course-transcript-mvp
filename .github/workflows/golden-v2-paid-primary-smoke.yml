@@ -24,8 +24,8 @@ jobs:
       GOLDEN_V2_CHIRP_PAID_ENABLED: "false"
       GOLDEN_V2_THIRD_PAID_ENABLED: "false"
       GOLDEN_V2_NEW35_PAID_ENABLED: "false"
-      GOLDEN_V2_PREVIEW35_PAID_ENABLED: "false"
-      GOLDEN_V2_PREVIEW35_OWNER_APPROVAL: ""
+      GOLDEN_V2_PREVIEW35_PAID_ENABLED: "true"
+      GOLDEN_V2_PREVIEW35_OWNER_APPROVAL: "new-explicit-preview-audio-once-approved"
     steps:
       - name: Checkout exact approved development commit
         uses: actions/checkout@v4
