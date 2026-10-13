@@ -1,0 +1,60 @@
+# Keyless authentication readiness only. Does NOT upload media or call paid AI.
+name: Golden V2 Keyless Identity Smoke
+on:
+  push:
+    branches:
+      - codex/golden-v2-goal-completion
+    paths:
+      - .github/workflows/golden-v2-keyless-auth-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  keyless-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: GitHub OIDC to Golden V2 dedicated service account
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/608343797618/locations/global/workloadIdentityPools/golden-v2-gh/providers/github-restricted
+          service_account: golden-v2-smoke@xenon-chain-506409-c3.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_lifetime: 600s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Read-only dedicated GCS bucket probe
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --retry 0 --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 20 \
+            --header "Authorization: Bearer ${GCP_ACCESS_TOKEN}" \
+            "https://storage.googleapis.com/storage/v1/b/xenon-chain-506409-c3-golden-v2-smoke/o?maxResults=1")"
+          echo "GCS_OBJECT_LIST_HTTP=${status}"
+          test "${status}" = "200"
+
+      - name: Read-only Speech V2 regional API probe
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --retry 0 --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 20 \
+            --header "Authorization: Bearer ${GCP_ACCESS_TOKEN}" \
+            "https://us-speech.googleapis.com/v2/projects/xenon-chain-506409-c3/locations/us/recognizers?pageSize=1")"
+          echo "SPEECH_V2_READ_HTTP=${status}"
+          test "${status}" = "200"
+
+      - name: Mark keyless authentication smoke accepted
+        run: |
+          echo 'KEYLESS_GOOGLE_AUTH=PASS'
+          echo 'MODEL_INFERENCE_CALLS=0'
+          echo 'GCS_UPLOADS=0'
+          echo 'GOLDEN_V2_PAID_TRIAL_UNCHANGED=true'
