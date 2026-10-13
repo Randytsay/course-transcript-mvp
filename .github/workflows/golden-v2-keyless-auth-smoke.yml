@@ -52,6 +52,33 @@ jobs:
           echo "SPEECH_V2_READ_HTTP=${status}"
           test "${status}" = "200"
 
+      - name: Inspect transcribe model catalog via dedicated OIDC identity (read-only)
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --retry 0 --silent --show-error --max-time 25 \
+            --output /tmp/golden-v2-model-catalog.json --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${GCP_ACCESS_TOKEN}" \
+            --header "x-goog-user-project: xenon-chain-506409-c3" \
+            "https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=100&listAllVersions=true")"
+          echo "MODEL_GARDEN_LIST_HTTP=${status}"
+          if [[ "${status}" != "200" ]]; then
+            echo 'MODEL_CATALOG_INCONCLUSIVE=YES'
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          obj=json.load(open('/tmp/golden-v2-model-catalog.json'))
+          names={x.get('name') for x in obj.get('publisherModels',[])}
+          if obj.get('nextPageToken'): raise RuntimeError('Catalog paginated; cannot infer absence')
+          print('CATALOG_VISIBLE_MODEL_COUNT='+str(len(names)))
+          for label,model in [('KNOWN_GOOD','gemini-3.8-flash'),('TRANSCRIBE_GA','gemini-3.5-transcribe'),('TRANSCRIBE_PREVIEW','gemini-3.5-transcribe-preview')]:
+              print('CATALOG_'+label+'_LISTED='+str('publishers/google/models/'+model in names).lower())
+          if 'publishers/google/models/gemini-3.8-flash' not in names: raise RuntimeError('Known-good model absent; inconclusive')
+          print('PAID_MODEL_REQUESTS=0')
+          PY
       - name: Mark keyless authentication smoke accepted
         run: |
           echo 'KEYLESS_GOOGLE_AUTH=PASS'
