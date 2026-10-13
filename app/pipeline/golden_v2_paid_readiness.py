@@ -205,7 +205,7 @@ def inspect_paid_readiness(
                                     reconciliation_rows = db.execute(
                                         "SELECT actor,evidence_sha,actual_cents,verified_at "
                                         "FROM v2_reconciliations "
-                                        "WHERE job_id=? AND stage_name=?",
+                                        "WHERE job_id=? AND stage_name=? ORDER BY rowid",
                                         (job_id, stage),
                                     ).fetchall()
                                     unsubmitted_primary_reconciled = (
