@@ -313,9 +313,198 @@ def _load_bound_attempt(job_dir: Path, evidence: dict[str, Any],
     return candidates[0], record, expected_sha
 
 
+def _evidence_file(job_dir: Path, evidence_sha: str) -> Path:
+    """Resolve a proof's immutable initial evidence, including the legacy first file."""
+    golden_dir = job_dir / "golden-v2"
+    legacy = golden_dir / "no-dispatch-reconciliation.json"
+    if legacy.is_file() and not legacy.is_symlink():
+        if hashlib.sha256(legacy.read_bytes()).hexdigest() == evidence_sha:
+            return legacy
+    directory = golden_dir / "no-dispatch-evidence"
+    candidate = directory / f"{evidence_sha}.json"
+    if (directory.is_symlink() or not directory.is_dir() or candidate.is_symlink()
+            or not candidate.is_file() or candidate.resolve().parent != directory.resolve()
+            or hashlib.sha256(candidate.read_bytes()).hexdigest() != evidence_sha):
+        raise V2Conflict("content-addressed no-dispatch evidence is unavailable")
+    return candidate
+
+
+def _verify_reconciled_attempt(job_dir: Path, evidence: dict[str, Any],
+                               evidence_sha: str, source_sha: str) -> str:
+    """Verify the exact archived raw request bound by one no-dispatch proof."""
+    prior = evidence.get("prior_attempt")
+    relative = prior.get("relative_path") if isinstance(prior, dict) else None
+    raw_sha = prior.get("sha256") if isinstance(prior, dict) else None
+    identity_sha = prior.get("identity_sha256") if isinstance(prior, dict) else None
+    if (not isinstance(relative, str) or not relative.startswith("gemini-primary/")
+            or not isinstance(raw_sha, str) or len(raw_sha) != 64
+            or not isinstance(identity_sha, str) or len(identity_sha) != 64):
+        raise V2Conflict("no-dispatch proof lacks a valid raw-attempt binding")
+    active_name = Path(relative).name
+    if Path(relative).parent.as_posix() != "gemini-primary":
+        raise V2Conflict("no-dispatch proof has an invalid raw-attempt path")
+    archive_dir = job_dir / "gemini-primary" / "reconciled"
+    archive = archive_dir / f"{Path(active_name).stem}.not-submitted.{evidence_sha}.json"
+    if (archive_dir.is_symlink() or not archive_dir.is_dir() or archive.is_symlink()
+            or not archive.is_file() or archive.resolve().parent != archive_dir.resolve()
+            or hashlib.sha256(archive.read_bytes()).hexdigest() != raw_sha):
+        raise V2Conflict("no-dispatch raw attempt archive is missing or changed")
+    try:
+        record = json.loads(archive.read_text(encoding="utf-8"))
+        identity = record.get("identity")
+        actual_identity_sha = hashlib.sha256(json.dumps(
+            identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        slot = _paid_window_slot_digest(identity) + ".json"
+    except (UnicodeError, ValueError, TypeError, KeyError) as exc:
+        raise V2Conflict("no-dispatch raw attempt archive is malformed") from exc
+    if (not isinstance(identity, dict) or record.get("status") != "OUTCOME_UNKNOWN"
+            or identity.get("model") != "gemini-3.8-flash"
+            or identity.get("source_sha256") != source_sha
+            or identity.get("window", {}).get("index") != 0
+            or identity.get("window", {}).get("start_seconds") != 0
+            or active_name != slot or actual_identity_sha != identity_sha):
+        raise V2Conflict("no-dispatch raw attempt archive identity mismatch")
+    return archive.name
+
+
+def verify_unsubmitted_primary_reconciliation_history(
+    *, job_dir: Path, job_id: str, source_sha: str, stage_evidence_sha: str | None,
+    created_at: str, reconciliations: list[Any],
+    allow_current_unknown_attempt: bool = False,
+) -> bool:
+    """Fail-closed validation of the one normal and one owner-approved recovery."""
+    try:
+        if not 1 <= len(reconciliations) <= 2 or not isinstance(stage_evidence_sha, str):
+            return False
+        golden_dir = job_dir / "golden-v2"
+        if (golden_dir.is_symlink() or not golden_dir.is_dir()
+                or golden_dir.resolve().parent != job_dir.resolve()):
+            return False
+        ambiguity_path = golden_dir / "primary-ambiguous.json"
+        if (ambiguity_path.is_symlink() or not ambiguity_path.is_file()
+                or hashlib.sha256(ambiguity_path.read_bytes()).hexdigest() != stage_evidence_sha):
+            return False
+        ambiguity = json.loads(ambiguity_path.read_text(encoding="utf-8"))
+        if (not isinstance(ambiguity, dict)
+                or ambiguity.get("schema") != "golden-v2-ambiguous-primary-v1"
+                or ambiguity.get("job_id") != job_id
+                or ambiguity.get("source_sha256") != source_sha
+                or ambiguity.get("completed_records") != []
+                or ambiguity.get("unresolved_window_index") != 0):
+            return False
+
+        expected_archives: set[str] = set()
+        proof_dir = golden_dir / "no-dispatch-commit-proofs"
+        if proof_dir.is_symlink() or not proof_dir.is_dir():
+            return False
+        for index, reconciliation in enumerate(reconciliations):
+            proof_sha = reconciliation["evidence_sha"]
+            actor = reconciliation["actor"]
+            if (reconciliation["actual_cents"] != 0
+                    or not isinstance(proof_sha, str) or len(proof_sha) != 64
+                    or not isinstance(reconciliation["verified_at"], str)
+                    or not reconciliation["verified_at"]):
+                return False
+            proof_path = proof_dir / f"{proof_sha}.json"
+            if (proof_path.is_symlink() or not proof_path.is_file()
+                    or proof_path.resolve().parent != proof_dir.resolve()
+                    or hashlib.sha256(proof_path.read_bytes()).hexdigest() != proof_sha):
+                return False
+            proof = json.loads(proof_path.read_text(encoding="utf-8"))
+            base_keys = {"schema", "job_id", "stage", "source_sha256",
+                         "initial_evidence_sha256", "revalidation_evidence_sha256"}
+            allowed_keys = base_keys | {"owner_authorization_reference"}
+            if (not isinstance(proof, dict) or set(proof) not in (base_keys, allowed_keys)
+                    or proof.get("schema") != "golden-v2-no-dispatch-commit-proof-v1"
+                    or proof.get("job_id") != job_id or proof.get("stage") != "gemini_primary"
+                    or proof.get("source_sha256") != source_sha):
+                return False
+            authorization = proof.get("owner_authorization_reference")
+            if index == 0:
+                if actor != "vps-control-plane-no-dispatch" or authorization is not None:
+                    return False
+            else:
+                if (not isinstance(authorization, str) or not authorization.strip()
+                        or len(authorization) > 240 or any(ord(ch) < 32 for ch in authorization)
+                        or actor != f"vps-control-plane-no-dispatch; owner_authorization={authorization}"):
+                    return False
+
+            initial_sha = proof.get("initial_evidence_sha256")
+            revalidation_sha = proof.get("revalidation_evidence_sha256")
+            if (not isinstance(initial_sha, str) or len(initial_sha) != 64
+                    or not isinstance(revalidation_sha, str) or len(revalidation_sha) != 64):
+                return False
+            initial_path = _evidence_file(job_dir, initial_sha)
+            initial_evidence = json.loads(initial_path.read_text(encoding="utf-8"))
+            stage_unknown_at = initial_evidence.get("stage_unknown_at")
+            project = initial_evidence.get("api_project")
+            if not isinstance(stage_unknown_at, str) or not isinstance(project, str) or not project:
+                return False
+            evidence = _load_and_verify_evidence(
+                initial_path, expected_sha=initial_sha, job_id=job_id,
+                stage="gemini_primary", source_sha=source_sha,
+                created_at=created_at, stage_updated_at=stage_unknown_at, project=project,
+            )
+            prior_ambiguity = evidence.get("prior_ambiguity")
+            if (not isinstance(prior_ambiguity, dict)
+                    or prior_ambiguity.get("relative_path") != "golden-v2/primary-ambiguous.json"
+                    or prior_ambiguity.get("sha256") != stage_evidence_sha):
+                return False
+            if revalidation_sha == initial_sha:
+                revalidation_path = initial_path
+            else:
+                revalidation_dir = golden_dir / "no-dispatch-revalidations"
+                revalidation_path = revalidation_dir / f"{revalidation_sha}.json"
+                if (revalidation_dir.is_symlink() or not revalidation_dir.is_dir()
+                        or revalidation_path.is_symlink() or not revalidation_path.is_file()
+                        or revalidation_path.resolve().parent != revalidation_dir.resolve()):
+                    return False
+            revalidated = _load_and_verify_evidence(
+                revalidation_path, expected_sha=revalidation_sha, job_id=job_id,
+                stage="gemini_primary", source_sha=source_sha,
+                created_at=created_at, stage_updated_at=stage_unknown_at, project=project,
+            )
+            if (revalidation_sha != initial_sha
+                    and revalidated.get("revalidates_evidence_sha256") != initial_sha):
+                return False
+            archive_name = _verify_reconciled_attempt(
+                job_dir, evidence, initial_sha, source_sha,
+            )
+            expected_archives.add(archive_name)
+
+        primary_dir = job_dir / "gemini-primary"
+        archive_dir = primary_dir / "reconciled"
+        if (primary_dir.is_symlink() or archive_dir.is_symlink()
+                or not primary_dir.is_dir() or not archive_dir.is_dir()
+                or {path.name for path in archive_dir.iterdir()} != expected_archives
+                or any(path.is_symlink() or not path.is_file() for path in archive_dir.iterdir())):
+            return False
+        active_paths = [path for path in primary_dir.iterdir() if path != archive_dir]
+        if allow_current_unknown_attempt:
+            if (len(active_paths) != 1 or active_paths[0].is_symlink()
+                    or not active_paths[0].is_file()):
+                return False
+            active_record = json.loads(active_paths[0].read_text(encoding="utf-8"))
+            active_identity = active_record.get("identity")
+            if (not isinstance(active_identity, dict)
+                    or active_record.get("status") != "OUTCOME_UNKNOWN"
+                    or active_identity.get("source_sha256") != source_sha
+                    or active_identity.get("model") != "gemini-3.8-flash"
+                    or active_identity.get("window", {}).get("index") != 0
+                    or active_paths[0].name != _paid_window_slot_digest(active_identity) + ".json"):
+                return False
+        elif active_paths:
+            return False
+        return True
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError,
+            json.JSONDecodeError, V2Conflict, OverflowError):
+        return False
+
+
 def reconcile_primary_no_dispatch(*, ledger: GoldenV2Ledger, job_id: str,
                                   artifact_root: Path, project: str,
-                                  session: Any, actor: str = "vps-control-plane-no-dispatch") -> dict[str, Any]:
+                                  session: Any, actor: str = "vps-control-plane-no-dispatch",
+                                  owner_authorization_reference: str | None = None) -> dict[str, Any]:
     """Capture control-plane evidence, archive the raw barrier, then reopen one stage."""
     root = Path(artifact_root).resolve()
     job_dir = root / "jobs" / job_id
@@ -349,7 +538,86 @@ def reconcile_primary_no_dispatch(*, ledger: GoldenV2Ledger, job_id: str,
     evidence_path = job_dir / "golden-v2" / "no-dispatch-reconciliation.json"
     revalidation_path = None
     revalidation_sha = None
-    if evidence_path.exists() or evidence_path.is_symlink():
+    if owner_authorization_reference is not None:
+        # The legacy evidence file belongs to the first recovery. Preserve it
+        # and build a separately addressable proof for this later attempt.
+        with ledger._tx() as db:
+            prior_rows = db.execute(
+                "SELECT actor,evidence_sha,actual_cents,verified_at FROM v2_reconciliations "
+                "WHERE job_id=? AND stage_name=? ORDER BY rowid",
+                (job_id, "gemini_primary"),
+            ).fetchall()
+        if not verify_unsubmitted_primary_reconciliation_history(
+            job_dir=job_dir, job_id=job_id, source_sha=job["source_sha"],
+            stage_evidence_sha=stage["evidence_sha"], created_at=job["created_at"],
+            reconciliations=prior_rows, allow_current_unknown_attempt=True,
+        ) or len(prior_rows) != 1:
+            raise V2Conflict("prior no-dispatch recovery history is not intact")
+
+        candidates = []
+        for path in primary_dir.glob("*.json"):
+            if path.is_symlink() or not path.is_file():
+                raise V2Conflict("unexpected symlink or non-file in primary audit directory")
+            try:
+                record = json.loads(path.read_text(encoding="utf-8"))
+            except (UnicodeError, ValueError) as exc:
+                raise V2Conflict("malformed primary audit prevents safe retry") from exc
+            if (record.get("status") == "OUTCOME_UNKNOWN"
+                    and record.get("identity", {}).get("source_sha256") == job["source_sha"]):
+                candidates.append((path, record))
+        if len(candidates) != 1:
+            raise V2Conflict("expected exactly one source-bound unknown primary audit")
+        audit_path, prior_record = candidates[0]
+        identity = prior_record.get("identity")
+        if (not isinstance(identity, dict)
+                or identity.get("model") != "gemini-3.8-flash"
+                or identity.get("window", {}).get("index") != ambiguous["unresolved_window_index"]
+                or identity.get("window", {}).get("start_seconds") != 0):
+            raise V2Conflict("unknown primary audit model identity mismatch")
+        expected_slot = _paid_window_slot_digest(identity) + ".json"
+        if audit_path.name != expected_slot:
+            raise V2Conflict("unknown primary audit filename does not match immutable identity")
+        prior_sha = hashlib.sha256(audit_path.read_bytes()).hexdigest()
+        evidence = {
+            "schema": SCHEMA, "job_id": job_id, "stage": "gemini_primary",
+            "source_sha256": job["source_sha"], "job_created_at": job["created_at"],
+            "stage_unknown_at": stage["updated_at"], "api_project": project,
+            "metric_type": METRIC_TYPE, "window_start": start, "window_end": end,
+            "visibility_delay_seconds": VISIBILITY_DELAY_SECONDS,
+            "captured_at": _time_string(datetime.now(timezone.utc)),
+            "prior_attempt": {
+                "relative_path": audit_path.relative_to(job_dir).as_posix(),
+                "sha256": prior_sha,
+                "identity_sha256": hashlib.sha256(json.dumps(
+                    identity, sort_keys=True, separators=(",", ":")).encode()).hexdigest(),
+            },
+            "prior_ambiguity": {
+                "relative_path": ambiguous_path.relative_to(job_dir).as_posix(),
+                "sha256": stage["evidence_sha"],
+            },
+            "request_count_queries": _fetch_request_metrics(
+                project=project, start=start, end=end, session=session,
+            ),
+        }
+        _verify_metric_window(evidence, project=project, start=start, end=end,
+                              captured_at=evidence["captured_at"])
+        evidence_path, evidence_sha = _write_content_addressed(
+            job_dir / "golden-v2" / "no-dispatch-evidence", evidence,
+        )
+        revalidation = dict(evidence)
+        revalidation["captured_at"] = _time_string(datetime.now(timezone.utc))
+        revalidation["request_count_queries"] = _fetch_request_metrics(
+            project=project, start=start, end=end, session=session,
+        )
+        revalidation["revalidates_evidence_sha256"] = evidence_sha
+        _verify_metric_window(
+            revalidation, project=project, start=start, end=end,
+            captured_at=revalidation["captured_at"],
+        )
+        revalidation_path, revalidation_sha = _write_content_addressed(
+            job_dir / "golden-v2" / "no-dispatch-revalidations", revalidation,
+        )
+    elif evidence_path.exists() or evidence_path.is_symlink():
         if evidence_path.is_symlink():
             raise V2Conflict("symlinked no-dispatch evidence path")
         evidence_bytes = evidence_path.read_bytes()
@@ -450,6 +718,8 @@ def reconcile_primary_no_dispatch(*, ledger: GoldenV2Ledger, job_id: str,
         "initial_evidence_sha256": evidence_sha,
         "revalidation_evidence_sha256": revalidation_sha,
     }
+    if owner_authorization_reference is not None:
+        commit_proof["owner_authorization_reference"] = owner_authorization_reference
     commit_proof_path, commit_proof_sha = _write_content_addressed(
         job_dir / "golden-v2" / "no-dispatch-commit-proofs", commit_proof,
     )
@@ -461,6 +731,7 @@ def reconcile_primary_no_dispatch(*, ledger: GoldenV2Ledger, job_id: str,
     ledger.reconcile_unsubmitted_provider_call(
         job_id, stage="gemini_primary", actor=actor, evidence_sha=commit_proof_sha,
         attempt_archiver=archive_attempt,
+        owner_authorization_reference=owner_authorization_reference,
         evidence_verifier=lambda **proof: (
             proof["job_id"] == job_id
             and proof["stage"] == "gemini_primary"
@@ -480,6 +751,7 @@ def reconcile_primary_no_dispatch(*, ledger: GoldenV2Ledger, job_id: str,
             "evidence_sha256": commit_proof_sha,
             "initial_evidence_sha256": evidence_sha,
             "revalidation_evidence_sha256": revalidation_sha,
+            "owner_authorization_reference": owner_authorization_reference,
             "revalidation_artifact": revalidation_path.relative_to(job_dir).as_posix(),
             "archived_attempt": archive_path.relative_to(job_dir).as_posix(),
             "provider_calls_started": False, "drive_mutation_started": False}

@@ -794,6 +794,7 @@ class GoldenV2Ledger:
     def reconcile_unsubmitted_provider_call(
         self, job_id: str, *, stage: str, actor: str, evidence_sha: str,
         evidence_verifier: Any, attempt_archiver: Any,
+        owner_authorization_reference: str | None = None,
     ) -> None:
         """Return a proven-never-submitted primary call to PENDING.
 
@@ -804,6 +805,11 @@ class GoldenV2Ledger:
         archived by the recovery command before this ledger transition.
         """
         if (stage != "gemini_primary" or not actor.strip()
+                or (owner_authorization_reference is not None
+                    and (not isinstance(owner_authorization_reference, str)
+                         or not owner_authorization_reference.strip()
+                         or len(owner_authorization_reference) > 240
+                         or any(ord(ch) < 32 for ch in owner_authorization_reference)))
                 or len(evidence_sha) != 64
                 or any(ch not in "0123456789abcdef" for ch in evidence_sha)):
             raise ValueError("invalid no-dispatch reconciliation proof")
@@ -820,8 +826,12 @@ class GoldenV2Ledger:
                 "SELECT COUNT(*) FROM v2_reconciliations WHERE job_id=? AND stage_name=?",
                 (job_id, stage),
             ).fetchone()[0]
-            if prior_reconciliations:
-                raise V2Conflict("the one authorized no-dispatch retry was already consumed")
+            if prior_reconciliations >= 2:
+                raise V2Conflict("the bounded no-dispatch retry limit is exhausted")
+            if prior_reconciliations == 1 and owner_authorization_reference is None:
+                raise V2Conflict("explicit owner authorization is required for an additional retry")
+            if prior_reconciliations == 0 and owner_authorization_reference is not None:
+                raise V2Conflict("owner repeat authorization is only valid for an additional retry")
             if not callable(evidence_verifier) or not evidence_verifier(
                 job_id=job_id, stage=stage, source_sha=job["source_sha"],
                 created_at=job["created_at"], stage_updated_at=row["updated_at"],
@@ -836,6 +846,8 @@ class GoldenV2Ledger:
                 "updated_at=? WHERE job_id=? AND name=?",
                 (_now(), job_id, stage),
             )
+            if owner_authorization_reference is not None:
+                actor = f"{actor}; owner_authorization={owner_authorization_reference}"
             db.execute(
                 "INSERT INTO v2_reconciliations(job_id,stage_name,actor,"
                 "evidence_sha,actual_cents,verified_at) VALUES(?,?,?,?,?,?)",

@@ -1,7 +1,9 @@
 """Provider-free Golden V2 SQLite restart, cost and stage-order tests."""
 from __future__ import annotations
 
+from contextlib import closing
 from pathlib import Path
+import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 
@@ -248,7 +250,7 @@ class GoldenV2LedgerTests(unittest.TestCase):
                 evidence_verifier=lambda **e: True,
             )
 
-    def test_unsubmitted_zero_usage_primary_reopens_only_with_verified_proof(self):
+    def test_unsubmitted_zero_usage_primary_allows_only_one_owner_authorized_extra_recovery(self):
         job = self.create()
         self.approve(job)
         claim = self.store.claim_next(job, worker_id="A")
@@ -279,11 +281,33 @@ class GoldenV2LedgerTests(unittest.TestCase):
         retry_claim = recovered.claim_next(job, worker_id="B")
         self.assertEqual(retry_claim["stage"], "gemini_primary")
         recovered.mark_outcome_unknown(retry_claim, evidence_sha="e"*64)
-        with self.assertRaises(V2Conflict):
+        with self.assertRaisesRegex(V2Conflict, "explicit owner authorization"):
             recovered.reconcile_unsubmitted_provider_call(
                 job, stage="gemini_primary", actor="reviewer",
                 evidence_sha="c"*64, evidence_verifier=lambda **proof: True,
-                attempt_archiver=lambda: self.fail("one-shot retry must remain consumed"),
+                attempt_archiver=lambda: self.fail("must not archive without owner authorization"),
+            )
+        authorization = "chatgpt-user-approval-v2p-test-2026-10-14"
+        recovered.reconcile_unsubmitted_provider_call(
+            job, stage="gemini_primary", actor="reviewer",
+            evidence_sha="c"*64, evidence_verifier=lambda **proof: True,
+            attempt_archiver=lambda: None,
+            owner_authorization_reference=authorization,
+        )
+        with closing(sqlite3.connect(self.db)) as db:
+            reconciliation = db.execute(
+                "SELECT actor FROM v2_reconciliations WHERE job_id=? "
+                "ORDER BY rowid DESC LIMIT 1", (job,),
+            ).fetchone()
+        self.assertIn(authorization, reconciliation[0])
+        third_claim = recovered.claim_next(job, worker_id="C")
+        recovered.mark_outcome_unknown(third_claim, evidence_sha="b"*64)
+        with self.assertRaisesRegex(V2Conflict, "retry limit is exhausted"):
+            recovered.reconcile_unsubmitted_provider_call(
+                job, stage="gemini_primary", actor="reviewer",
+                evidence_sha="c"*64, evidence_verifier=lambda **proof: True,
+                attempt_archiver=lambda: self.fail("bounded recovery limit must remain enforced"),
+                owner_authorization_reference=authorization,
             )
 
     def test_unsubmitted_reconciliation_cannot_erase_observed_cost(self):

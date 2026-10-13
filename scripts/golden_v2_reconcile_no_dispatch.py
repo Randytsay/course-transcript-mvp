@@ -23,6 +23,10 @@ def main() -> int:
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--project", default=os.environ.get("GOOGLE_CLOUD_PROJECT", ""))
+    parser.add_argument(
+        "--owner-authorization-reference",
+        help="auditable user authorization for one additional no-dispatch retry",
+    )
     args = parser.parse_args()
     if not args.project:
         parser.error("--project or GOOGLE_CLOUD_PROJECT is required")
@@ -35,6 +39,7 @@ def main() -> int:
         ledger=GoldenV2Ledger.open_existing(database), job_id=args.job_id,
         artifact_root=root, project=args.project,
         session=AuthorizedSession(credentials),
+        owner_authorization_reference=args.owner_authorization_reference,
     )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0

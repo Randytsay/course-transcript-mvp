@@ -20,8 +20,12 @@ content-addressed proof in the ledger, and returns only the Gemini primary
 stage to `PENDING`. It makes no model request and does not write to Drive. The
 running paid worker can claim the stage immediately afterward, so use this
 only when the exact source, model, and maximum task cost have already been
-explicitly approved. The ledger allows this no-dispatch retry once per job and
-stage; any later unknown outcome remains blocked for manual reconciliation.
+explicitly approved. The ledger allows one standard no-dispatch recovery per
+job and stage. One additional recovery requires a non-empty owner
+authorization reference and is recorded in both the commit proof and ledger
+actor. Each recovery keeps its own content-addressed Monitoring evidence and
+raw-attempt archive. The total is capped at two recoveries; any later unknown
+outcome remains blocked.
 
 Run from the V2 release repository with the isolated V2 ledger and artifact
 mounts. Do not point it at the V1 database or artifact directory:
@@ -32,6 +36,18 @@ python scripts/golden_v2_reconcile_no_dispatch.py \
   --artifact-root /app/data/golden-v2 \
   --job-id JOB_ID \
   --project GOOGLE_CLOUD_PROJECT
+```
+
+For the single additional recovery only, include the exact owner authorization
+reference supplied for that task:
+
+```sh
+python scripts/golden_v2_reconcile_no_dispatch.py \
+  --database /app/data/golden-v2/ledger.sqlite \
+  --artifact-root /app/data/golden-v2 \
+  --job-id JOB_ID \
+  --project GOOGLE_CLOUD_PROJECT \
+  --owner-authorization-reference 'OWNER_APPROVAL_REFERENCE'
 ```
 
 Afterward, inspect the exact job status and evidence artifacts. Keep Drive
@@ -54,4 +70,5 @@ generateContent. Both tests ran in a network-disabled container with no live
 credentials. The general V1 suite skips this isolated-SDK test; a dedicated CI
 job installs 2.29.0 and runs it. This does not prove a historical request was
 unbilled and does not authorize reopening an unknown attempt or publishing
-subtitles. The existing one-retry ledger restriction remains intact.
+subtitles. The bounded recovery ledger permits one standard recovery and at
+most one additional recovery with explicit owner authorization.

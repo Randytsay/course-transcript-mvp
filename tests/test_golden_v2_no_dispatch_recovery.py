@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import sqlite3
 from tempfile import TemporaryDirectory
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -228,7 +229,7 @@ class NoDispatchRecoveryTests(unittest.TestCase):
             self.assertEqual(archived.read_bytes(), audit_raw)
             self.assertEqual(ledger.claim_next(job, worker_id="retry")["stage"], "gemini_primary")
 
-    def test_verified_no_dispatch_archive_allows_only_the_single_paid_retry(self):
+    def test_owner_authorized_second_no_dispatch_recovery_preserves_full_history(self):
         class Response:
             status_code = 200
 
@@ -349,7 +350,6 @@ class NoDispatchRecoveryTests(unittest.TestCase):
                     project="test-project", session=Session(),
                 )
 
-            before = database.read_bytes()
             report = inspect_paid_readiness(
                 database=database, artifact_root=root, job_id=job,
                 expected_source_sha=source_sha,
@@ -359,9 +359,59 @@ class NoDispatchRecoveryTests(unittest.TestCase):
             self.assertTrue(report["unsubmitted_primary_reconciled"])
             self.assertFalse(report["provider_calls_allowed"])
             self.assertEqual(report["next_stage"], "gemini_primary")
-            self.assertEqual(database.read_bytes(), before)
 
-            archived_dir = job_dir / result["archived_attempt"]
+            retry_claim = ledger.claim_next(job, worker_id="owner-authorized-repeat")
+            ledger.mark_outcome_unknown(
+                retry_claim, evidence_sha=hashlib.sha256(ambiguity_raw).hexdigest(),
+            )
+            retry_state = ledger.status(job)
+            retry_unknown_at = retry_state["stages"][0]["updated_at"]
+            retry_start, retry_end = _monitoring_window(
+                retry_state["created_at"], retry_unknown_at,
+            )
+            fake_now = datetime.fromisoformat(
+                retry_end.replace("Z", "+00:00"),
+            ) + timedelta(seconds=1801)
+            (primary / f"{_paid_window_slot_digest(identity)}.json").write_bytes(
+                json.dumps({
+                    "identity": identity, "status": "OUTCOME_UNKNOWN",
+                    "error_type": "TimeoutError",
+                }, sort_keys=True).encode(),
+            )
+            authorization = "chatgpt-user-approval-v2p-test-2026-10-14"
+            with patch("app.pipeline.golden_v2_no_dispatch_recovery.datetime", FrozenDateTime):
+                second_result = reconcile_primary_no_dispatch(
+                    ledger=ledger, job_id=job, artifact_root=root,
+                    project="test-project", session=Session(),
+                    owner_authorization_reference=authorization,
+                )
+            saved_revalidation = json.loads(
+                (job_dir / second_result["revalidation_artifact"]).read_text(),
+            )
+            self.assertEqual(saved_revalidation["window_start"], retry_start)
+            self.assertEqual(
+                second_result["owner_authorization_reference"], authorization,
+            )
+            self.assertEqual(ledger.status(job)["stages"][0]["state"], "PENDING")
+            with sqlite3.connect(database) as db:
+                history = db.execute(
+                    "SELECT actor,actual_cents FROM v2_reconciliations "
+                    "WHERE job_id=? ORDER BY rowid", (job,),
+                ).fetchall()
+            self.assertEqual(len(history), 2)
+            self.assertIn(authorization, history[1][0])
+            self.assertEqual([row[1] for row in history], [0, 0])
+
+            second_report = inspect_paid_readiness(
+                database=database, artifact_root=root, job_id=job,
+                expected_source_sha=source_sha,
+            )
+            self.assertEqual(second_report["blockers"], [])
+            self.assertTrue(second_report["unsubmitted_primary_reconciled"])
+            self.assertEqual(second_report["next_stage"], "gemini_primary")
+            self.assertFalse(second_report["provider_calls_allowed"])
+
+            archived_dir = job_dir / second_result["archived_attempt"]
             (archived_dir.parent / "unexpected.json").write_text("{}")
             blocked = inspect_paid_readiness(
                 database=database, artifact_root=root, job_id=job,
