@@ -11,6 +11,7 @@ from threading import Event
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.pipeline.golden_v2_batch_intake import run_batch_intake_pass
+from app.operations.runtime_heartbeat import write_service_heartbeat
 
 
 def main() -> int:
@@ -28,14 +29,18 @@ def main() -> int:
     stop = Event()
     signal.signal(signal.SIGINT, lambda *_: stop.set())
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
-    while not stop.is_set():
-        result = run_batch_intake_pass(database=args.database, artifact_root=args.artifact_root,
-                                      ceiling_cents=ceiling)
-        print(json.dumps(result, ensure_ascii=False), flush=True)
-        if args.once:
-            return 0
-        if result["action"] != "SOURCE_PREFLIGHT_COMPLETE" and stop.wait(args.poll_seconds):
-            break
+    try:
+        while not stop.is_set():
+            write_service_heartbeat(args.artifact_root.parent, "golden-v2-intake")
+            result = run_batch_intake_pass(database=args.database, artifact_root=args.artifact_root,
+                                          ceiling_cents=ceiling)
+            print(json.dumps(result, ensure_ascii=False), flush=True)
+            if args.once:
+                return 0
+            if result["action"] != "SOURCE_PREFLIGHT_COMPLETE" and stop.wait(args.poll_seconds):
+                break
+    finally:
+        write_service_heartbeat(args.artifact_root.parent, "golden-v2-intake", state="stopped")
     return 0
 
 

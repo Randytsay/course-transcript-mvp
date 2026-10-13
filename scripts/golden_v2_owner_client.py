@@ -25,9 +25,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     preview = sub.add_parser("preview"); preview.add_argument("link"); preview.add_argument("--recursive", action="store_true")
-    create = sub.add_parser("create-batch"); create.add_argument("--request-file", type=Path, required=True)
+    create = sub.add_parser("create-batch")
+    create_input = create.add_mutually_exclusive_group(required=True)
+    create_input.add_argument("--request-file", type=Path)
+    create_input.add_argument("--request-stdin", action="store_true")
     status = sub.add_parser("batch-status"); status.add_argument("batch_id")
     sub.add_parser("jobs")
+    sub.add_parser("service-status")
+    sub.add_parser("drive-health")
     job = sub.add_parser("job-status"); job.add_argument("job_id")
     approve = sub.add_parser("approve-job"); approve.add_argument("job_id"); approve.add_argument("--request-file", type=Path, required=True)
     args = parser.parse_args()
@@ -52,13 +57,20 @@ def main() -> int:
         if not re.fullmatch(r"v2b_[0-9a-f]{32}", args.batch_id): parser.error("Invalid batch ID")
         route = "link-batches/" + args.batch_id
     elif args.action == "jobs": route = "jobs"
+    elif args.action == "service-status": route = "service"
+    elif args.action == "drive-health": route = "drive-health"
     else:
         if not re.fullmatch(r"v2p?_[0-9a-f]{32}", args.job_id): parser.error("Invalid job ID")
         route = "jobs/" + args.job_id + ("/approval" if write else "")
     if write:
         try:
-            if args.request_file.stat().st_size > 65536: raise ValueError
-            body = json.loads(args.request_file.read_text())
+            if getattr(args, "request_stdin", False):
+                raw = sys.stdin.buffer.read(65537)
+                if len(raw) > 65536: raise ValueError
+                body = json.loads(raw)
+            else:
+                if args.request_file.stat().st_size > 65536: raise ValueError
+                body = json.loads(args.request_file.read_text())
             if not isinstance(body, dict) or body.get("confirm") is not True: raise ValueError
         except (OSError, ValueError): parser.error("Confirmed bounded JSON request file required")
     request = Request(base + "/api/v1/golden-v2/" + route,
