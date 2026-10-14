@@ -1281,6 +1281,109 @@ class GoldenV2Ledger:
                     actual_cents=other + actual_cents, evidence_sha=evidence_sha,
                 )
 
+    def record_chirp_review_required(
+        self, job_id: str, window_id: str, *, operation_name: str,
+        evidence_sha: str, actual_cents: int, verifier: Any,
+    ) -> None:
+        """Account a completed provider result whose timing cannot be trusted.
+
+        The immutable response and independently reconciled usage are retained,
+        but the window is deliberately not marked DONE or usable for merge.
+        """
+        if (not isinstance(evidence_sha, str) or len(evidence_sha) != 64
+                or any(c not in "0123456789abcdef" for c in evidence_sha)
+                or type(actual_cents) is not int or actual_cents < 0):
+            raise V2Conflict("review result needs immutable evidence and known usage")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stage = db.execute(
+                "SELECT * FROM v2_stages WHERE job_id=? AND name='chirp_independent'",
+                (job_id,),
+            ).fetchone()
+            row = db.execute(
+                "SELECT * FROM v2_chirp_operations WHERE job_id=? AND window_id=?",
+                (job_id, window_id),
+            ).fetchone()
+            running = (job["status"] == "PROCESSING" and stage is not None
+                       and stage["state"] == "RUNNING")
+            frozen = (job["status"] == "NEEDS_RECONCILIATION" and stage is not None
+                      and stage["state"] == "OVER_BUDGET")
+            if (not (running or frozen) or row is None
+                    or row["status"] not in {"SUBMITTED", "REVIEW_REQUIRED"}
+                    or row["operation_name"] != operation_name):
+                raise V2Conflict("no matching completed Chirp result to quarantine")
+            if row["status"] == "REVIEW_REQUIRED":
+                if row["result_sha"] == evidence_sha and row["actual_cents"] == actual_cents:
+                    return
+                raise V2Conflict("conflicting quarantined Chirp evidence")
+            if not callable(verifier) or not verifier(
+                job_id=job_id, window_id=window_id, operation_name=operation_name,
+                source_sha=row["source_sha"], clip_sha=row["clip_sha"],
+                gcs_uri=row["gcs_uri"], start_ms=row["start_ms"],
+                end_ms=row["end_ms"], evidence_sha=evidence_sha,
+            ):
+                raise V2Conflict("independent quarantined Chirp evidence verification failed")
+            prior = db.execute(
+                "SELECT COALESCE(SUM(actual_cents),0) FROM v2_chirp_operations "
+                "WHERE job_id=?", (job_id,),
+            ).fetchone()[0]
+            committed = sum(int(item["actual_cents"] or 0)
+                            for item in self._stages(db, job_id)
+                            if item["name"] != "chirp_independent")
+            total = int(prior) + actual_cents
+            over_budget = (total > stage["estimate_cents"]
+                or (row["estimated_cents"] and actual_cents > row["estimated_cents"])
+                or committed + total > int(job["approved_cents"] or 0))
+            db.execute(
+                "UPDATE v2_chirp_operations SET status='REVIEW_REQUIRED',result_sha=?,"
+                "actual_cents=?,updated_at=? WHERE job_id=? AND window_id=?",
+                (evidence_sha, actual_cents, _now(), job_id, window_id),
+            )
+            if over_budget or frozen:
+                self._record_budget_overrun(
+                    db, job_id=job_id, stage="chirp_independent",
+                    actual_cents=total, evidence_sha=evidence_sha,
+                )
+
+    def resolve_chirp_window_review(
+        self, job_id: str, window_id: str, *, operation_name: str,
+        evidence_sha: str, actual_cents: int, verifier: Any,
+    ) -> None:
+        """Resolve only a quarantined result with verified derived timing evidence."""
+        if (not isinstance(evidence_sha, str) or len(evidence_sha) != 64
+                or any(c not in "0123456789abcdef" for c in evidence_sha)
+                or type(actual_cents) is not int or actual_cents < 0):
+            raise V2Conflict("review resolution needs bound raw evidence and usage")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stage = db.execute(
+                "SELECT * FROM v2_stages WHERE job_id=? AND name='chirp_independent'",
+                (job_id,),
+            ).fetchone()
+            row = db.execute(
+                "SELECT * FROM v2_chirp_operations WHERE job_id=? AND window_id=?",
+                (job_id, window_id),
+            ).fetchone()
+            if (job["status"] != "PROCESSING" or stage is None
+                    or stage["state"] != "RUNNING" or row is None
+                    or row["status"] != "REVIEW_REQUIRED"
+                    or row["operation_name"] != operation_name
+                    or row["result_sha"] != evidence_sha
+                    or row["actual_cents"] != actual_cents):
+                raise V2Conflict("Chirp review resolution identity or state changed")
+            if not callable(verifier) or not verifier(
+                job_id=job_id, window_id=window_id, operation_name=operation_name,
+                source_sha=row["source_sha"], clip_sha=row["clip_sha"],
+                gcs_uri=row["gcs_uri"], start_ms=row["start_ms"],
+                end_ms=row["end_ms"], evidence_sha=evidence_sha,
+            ):
+                raise V2Conflict("derived Chirp timing evidence failed verification")
+            db.execute(
+                "UPDATE v2_chirp_operations SET status='DONE',updated_at=? "
+                "WHERE job_id=? AND window_id=?",
+                (_now(), job_id, window_id),
+            )
+
     def finish_recovered_chirp(self, job_id: str, *, evidence_sha: str,
                                verifier: Any) -> None:
         """Close a restarted stage only after independently checking the merge."""

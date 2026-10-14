@@ -204,6 +204,41 @@ class ChirpStageIntegrationTests(unittest.TestCase):
         with self.assertRaises(V2Conflict):
             _parse_words(json.dumps(payload).encode(), window)
 
+    def test_missing_default_end_is_coalesced_only_with_same_start_successor(self):
+        from app.pipeline.golden_v2_chirp_stage import _parse_words
+        payload = {"results": [{"alternatives": [{"words": [
+            {"word": "越", "startOffset": "1.000s", "endOffset": "1.080s"},
+            {"word": "遠", "startOffset": "1.080s"},
+            {"word": "。", "startOffset": "1.080s", "endOffset": "1.160s"},
+        ]}]}]}
+        words = _parse_words(json.dumps(payload, ensure_ascii=False).encode(),
+                             {"start_ms": 0, "end_ms": 3000})
+        self.assertEqual(words, [
+            {"word": "越", "start_ms": 1000, "end_ms": 1080},
+            {"word": "遠。", "start_ms": 1080, "end_ms": 1160,
+             "timing_resolution": "COALESCED_ZERO_DURATION_SEQUENCE"},
+        ])
+
+        payload["results"][0]["alternatives"][0]["words"][2]["startOffset"] = "1.120s"
+        with self.assertRaisesRegex(V2Conflict, "same-time successor"):
+            _parse_words(json.dumps(payload, ensure_ascii=False).encode(),
+                         {"start_ms": 0, "end_ms": 3000})
+
+    def test_out_of_order_provider_words_are_sorted_but_overlaps_still_fail(self):
+        from app.pipeline.golden_v2_chirp_stage import _parse_words
+        payload = {"results": [{"alternatives": [{"words": [
+            {"word": "後", "startOffset": "2s", "endOffset": "2.2s"},
+            {"word": "先", "startOffset": "1s", "endOffset": "1.1s"},
+        ]}]}]}
+        parsed = _parse_words(json.dumps(payload, ensure_ascii=False).encode(),
+                              {"start_ms": 0, "end_ms": 3000})
+        self.assertEqual([item["word"] for item in parsed], ["先", "後"])
+        payload["results"][0]["alternatives"][0]["words"][1]["startOffset"] = "2.1s"
+        payload["results"][0]["alternatives"][0]["words"][1]["endOffset"] = "2.3s"
+        with self.assertRaisesRegex(V2Conflict, "overlap"):
+            _parse_words(json.dumps(payload, ensure_ascii=False).encode(),
+                         {"start_ms": 0, "end_ms": 3000})
+
     def _complete_outputs(self, rows):
         for i, row in enumerate(rows):
             self.speech.operations[row["operation_name"]].done = True
@@ -549,12 +584,19 @@ class ChirpStageIntegrationTests(unittest.TestCase):
         prefix = row["output_uri"].split("private-test-bucket/", 1)[1]
         self.cloud.results[prefix + "out.json"] = FakeResult(
             prefix + "out.json", speech_words(("越界", 10, 11)))
-        with self.assertRaisesRegex(V2Conflict, "offsets out of source"):
-            recover_chirp_window(
-                ledger=self.ledger, job_id=self.job_id, window_id=row["window_id"],
-                job_dir=self.job_dir, gateway=self.gateway,
-                cost_accountant=lambda _: 2)
-        self.assertEqual(self.ledger.chirp_windows(self.job_id)[0]["status"], "SUBMITTED")
+        self.assertEqual(recover_chirp_window(
+            ledger=self.ledger, job_id=self.job_id, window_id=row["window_id"],
+            job_dir=self.job_dir, gateway=self.gateway,
+            cost_accountant=lambda _: 2), "REVIEW_REQUIRED")
+        recovered = self.ledger.chirp_windows(self.job_id)[0]
+        self.assertEqual(recovered["status"], "REVIEW_REQUIRED")
+        self.assertEqual(recovered["actual_cents"], 2)
+        evidence = (self.job_dir / "golden-v2" / "chirp-evidence"
+                    / row["window_id"] / "provider-raw.json")
+        self.assertTrue(evidence.is_file())
+        with self.assertRaisesRegex(V2Conflict, "all Chirp operations"):
+            finish_approved_chirp(ledger=self.ledger, job_id=self.job_id,
+                                  job_dir=self.job_dir)
 
     def test_completed_speech_lro_per_file_failure_never_recovers(self):
         self.plan(max_window_seconds=10)

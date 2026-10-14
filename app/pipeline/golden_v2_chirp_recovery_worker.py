@@ -12,6 +12,7 @@ from typing import Any, Callable
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.pipeline.golden_v2_chirp_stage import (
     finish_approved_chirp, recover_chirp_window,
+    reconcile_reviewed_chirp_window,
 )
 from app.providers.golden_v2_audio_staging import file_sha256
 
@@ -57,35 +58,82 @@ def run_chirp_recovery_pass(
         raise V2Conflict("no immutable Chirp plan exists")
 
     recovered = 0
+    quarantined = 0
+    reconciled = 0
     inspected = 0
+    recovery_errors: list[dict[str, str]] = []
     for row in rows:
         if row["status"] != "SUBMITTED" or inspected >= max_operations:
             continue
         inspected += 1
-        status = recover_chirp_window(
-            ledger=ledger, job_id=job_id, window_id=row["window_id"],
-            job_dir=job_dir, gateway=gateway, cost_accountant=cost_accountant,
-        )
+        try:
+            status = recover_chirp_window(
+                ledger=ledger, job_id=job_id, window_id=row["window_id"],
+                job_dir=job_dir, gateway=gateway, cost_accountant=cost_accountant,
+            )
+        except V2Conflict as exc:
+            # Isolate a bad/temporarily unavailable operation. Continue through
+            # the bounded batch so one response cannot strand other saved LROs.
+            recovery_errors.append({"window_id": row["window_id"], "reason": str(exc)})
+            continue
         if status == "DONE":
             recovered += 1
+        elif status == "REVIEW_REQUIRED":
+            quarantined += 1
+
+    # A newer parser may safely resolve prior raw-only quarantines. This is a
+    # local evidence operation: it performs no provider request and preserves
+    # the already reconciled billed amount.
+    for row in rows:
+        if row["status"] != "REVIEW_REQUIRED" or inspected >= max_operations:
+            continue
+        inspected += 1
+        try:
+            status = reconcile_reviewed_chirp_window(
+                ledger=ledger, job_id=job_id, window_id=row["window_id"],
+                job_dir=job_dir,
+            )
+        except V2Conflict as exc:
+            recovery_errors.append({"window_id": row["window_id"], "reason": str(exc)})
+            continue
+        if status == "DONE":
+            reconciled += 1
 
     current = ledger.chirp_windows(job_id)
     pending = [r["window_id"] for r in current if r["status"] == "SUBMITTED"]
     unknown = [r["window_id"] for r in current if r["status"] == "SUBMITTING"]
     unsubmitted = [r["window_id"] for r in current if r["status"] == "PLANNED"]
+    review_required = [r["window_id"] for r in current
+                       if r["status"] == "REVIEW_REQUIRED"]
+    error_ids = {item["window_id"] for item in recovery_errors}
+    retryable_pending = [window_id for window_id in pending if window_id not in error_ids]
     result: dict[str, Any] = {
-        "job_id": job_id, "recovered": recovered, "inspected": inspected,
+        "job_id": job_id, "recovered": recovered, "quarantined": quarantined,
+        "reconciled": reconciled,
+        "inspected": inspected,
         "pending": pending, "unknown": unknown, "unsubmitted": unsubmitted,
+        "review_required": review_required, "recovery_errors": recovery_errors,
         "provider_submissions": 0, "drive_mutations": 0,
     }
 
     current_job = ledger.status(job_id)
+    stage_actual = next((int(s["actual_cents"] or 0) for s in current_job["stages"]
+                         if s["name"] == "chirp_independent"), 0)
+    other_actual = sum(int(s["actual_cents"] or 0) for s in current_job["stages"]
+                       if s["name"] != "chirp_independent")
+    chirp_actual = sum(int(row["actual_cents"] or 0) for row in current)
+    result["chirp_known_actual_cents"] = max(stage_actual, chirp_actual)
+    result["known_actual_cents"] = other_actual + result["chirp_known_actual_cents"]
     if current_job["status"] == "NEEDS_RECONCILIATION":
         result["action"] = "COST_RECONCILIATION_REQUIRED"
     elif unknown:
         result["action"] = "UNKNOWN_OPERATION_REQUIRES_REVIEW"
-    elif pending:
+    elif retryable_pending:
         result["action"] = "WAITING_FOR_EXISTING_OPERATIONS"
+    elif recovery_errors:
+        result["action"] = "RECOVERY_BLOCKED_RETRY_OR_REVIEW"
+    elif review_required:
+        result["action"] = "WINDOW_REVIEW_REQUIRED"
     elif unsubmitted:
         result["action"] = "APPROVED_SUBMISSION_WORKER_REQUIRED"
     elif all(r["status"] == "DONE" for r in current):

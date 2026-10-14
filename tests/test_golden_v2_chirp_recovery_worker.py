@@ -70,6 +70,38 @@ class ChirpRecoveryWorkerTests(unittest.TestCase):
         self.assertEqual(seen, [rows[0]["operation_name"]])
         self.assertEqual(len(self.h.speech.calls), 2)
 
+    def test_bad_completed_window_is_quarantined_and_other_lro_recovers(self):
+        self.h.plan()
+        rows = submit_planned_chirp(
+            ledger=self.h.ledger, claim=self.h.claim, gateway=self.h.gateway)
+        self.h._complete_outputs(rows)
+        bad_row = rows[0]
+        prefix = bad_row["output_uri"].split("private-test-bucket/", 1)[1]
+        bad_raw = chirp_fixtures.speech_words(("越界詞", 0.2, 5.0))
+        self.h.cloud.results[prefix + "output.json"] = chirp_fixtures.FakeResult(
+            prefix + "output.json", bad_raw)
+
+        outcome = self.recover()
+
+        self.assertEqual(outcome["action"], "WINDOW_REVIEW_REQUIRED")
+        self.assertEqual(outcome["recovered"], 1)
+        self.assertEqual(outcome["quarantined"], 1)
+        self.assertEqual(outcome["chirp_known_actual_cents"], 4)
+        self.assertEqual(outcome["known_actual_cents"], 5)
+        self.assertEqual(outcome["pending"], [])
+        self.assertEqual(outcome["review_required"], [bad_row["window_id"]])
+        self.assertEqual(outcome["provider_submissions"], 0)
+        current = {r["window_id"]: r for r in self.h.ledger.chirp_windows(self.h.job_id)}
+        self.assertEqual(current[bad_row["window_id"]]["status"], "REVIEW_REQUIRED")
+        self.assertEqual(current[rows[1]["window_id"]]["status"], "DONE")
+        self.assertEqual(current[bad_row["window_id"]]["actual_cents"], 2)
+        raw_path = (self.h.job_dir / "golden-v2" / "chirp-evidence"
+                    / bad_row["window_id"] / "provider-raw.json")
+        review_path = (raw_path.parent / "review-required.json")
+        self.assertEqual(raw_path.read_bytes(), bad_raw)
+        self.assertTrue(review_path.is_file())
+        self.assertEqual(len(self.h.speech.calls), 2)
+
     def test_uncertain_submission_never_retried_by_recovery(self):
         self.h.plan(max_window_seconds=10)
         self.h.speech.fail = True

@@ -41,31 +41,49 @@ def main():
                     revision=args.revision, stage='chirp_independent',
                     aggregate_cap_cents=args.cap_cents)
     if args.submit or args.resume_planned:
-        services = paid_services(snapshot)
-        pre = json.loads((job_dir/'source-preflight.json').read_text())
-        def verified():
-            preview = dict(source_sha256=args.source_sha)
-            if services['verify_owner'](preview) is not True or services['verify_capability_and_pricing'](preview) is not True:
-                return False
-            return verify_same_audio_revision(job_dir=job_dir,
-                read_metadata=read_drive_media_metadata, download_media=download_drive_media)
-        if args.resume_planned:
-            if verified() is not True:
-                raise V2Conflict('fresh owner/source verification failed')
-            claim = ledger.resume_chirp_submissions(args.job_id,
-                worker_id='trusted-independent-rescue', expected_revision=args.revision)
+        rows = ledger.chirp_windows(args.job_id)
+        recovery_only = (
+            args.resume_planned and bool(rows)
+            and all(row['status'] in {'SUBMITTED', 'DONE', 'REVIEW_REQUIRED'} for row in rows)
+            and not any(row['status'] == 'PLANNED' for row in rows)
+        )
+        if recovery_only:
+            # A restarted container may still carry the old --resume-planned
+            # argv. If every planned request already has a saved operation ID,
+            # continue with GET-only recovery and never touch paid services.
+            print(json.dumps(dict(action='RECOVER_SAVED_OPERATIONS_ONLY',
+                                  operations=len(rows))), flush=True)
         else:
-            claim = claim_independent_rescue(ledger=ledger, job_id=args.job_id,
-                job_dir=job_dir, revision=args.revision, source_sha=args.source_sha,
-                cap_cents=args.cap_cents, reference=args.reference,
-                verify_authorization_and_live_source=verified)
-        options = dict(services['stage_options'])
-        gateway = options.pop('gateway')
-        if args.submit:
-            plan_approved_chirp(ledger=ledger, claim=claim, normalized_audio=job_dir/'normalized.flac',
-                               job_dir=job_dir, **options)
-        rows = submit_planned_chirp(ledger=ledger, claim=claim, gateway=gateway)
-        print(json.dumps(dict(action='SUBMITTED_ONCE', operations=len(rows))), flush=True)
+            if args.resume_planned and any(row['status'] == 'PLANNED' for row in rows):
+                raise V2Conflict('resume worker refuses new provider submissions')
+            if args.resume_planned and any(row['status'] not in {'SUBMITTED', 'DONE'}
+                                           for row in rows):
+                raise V2Conflict('unresolved Chirp operation requires reconciliation')
+            services = paid_services(snapshot)
+            pre = json.loads((job_dir/'source-preflight.json').read_text())
+            def verified():
+                preview = dict(source_sha256=args.source_sha)
+                if services['verify_owner'](preview) is not True or services['verify_capability_and_pricing'](preview) is not True:
+                    return False
+                return verify_same_audio_revision(job_dir=job_dir,
+                    read_metadata=read_drive_media_metadata, download_media=download_drive_media)
+            if args.resume_planned:
+                if verified() is not True:
+                    raise V2Conflict('fresh owner/source verification failed')
+                claim = ledger.resume_chirp_submissions(args.job_id,
+                    worker_id='trusted-independent-rescue', expected_revision=args.revision)
+            else:
+                claim = claim_independent_rescue(ledger=ledger, job_id=args.job_id,
+                    job_dir=job_dir, revision=args.revision, source_sha=args.source_sha,
+                    cap_cents=args.cap_cents, reference=args.reference,
+                    verify_authorization_and_live_source=verified)
+            options = dict(services['stage_options'])
+            gateway = options.pop('gateway')
+            if args.submit:
+                plan_approved_chirp(ledger=ledger, claim=claim, normalized_audio=job_dir/'normalized.flac',
+                                   job_dir=job_dir, **options)
+            submit_planned_chirp(ledger=ledger, claim=claim, gateway=gateway)
+            print(json.dumps(dict(action='SUBMITTED_ONCE', operations=len(rows))), flush=True)
     stop = Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())

@@ -139,19 +139,58 @@ def _parse_words(raw_bytes: bytes, window: dict[str, Any]) -> list[dict[str, Any
         entries = alts[0].get("words") if isinstance(alts[0], dict) else None
         if not isinstance(entries, list):
             raise V2Conflict("Speech word timing evidence missing")
-        for entry in entries:
+        entry_index = 0
+        while entry_index < len(entries):
+            entry = entries[entry_index]
             if not isinstance(entry, dict) or not isinstance(entry.get("word"), str) or not entry["word"]:
                 raise V2Conflict("Speech word is invalid")
             # Speech protobuf JSON omits the zero-valued starting Duration.
             # Permit that default only for the first timed word in a chunk;
             # missing subsequent offsets remain invalid evidence.
             start = _offset_ms(entry.get("startOffset", "0s" if not words else "")) + window["start_ms"]
-            end = _offset_ms(entry.get("endOffset", "")) + window["start_ms"]
+            word_text = entry["word"]
+            resolution = None
+            if "endOffset" not in entry:
+                # Speech V2 JSON can omit default-zero word ends. Preserve the
+                # text and use a same-start successor's real end as one grouped
+                # timing span; never invent a boundary for an individual word.
+                successor = entry_index + 1
+                while successor < len(entries):
+                    candidate = entries[successor]
+                    if (not isinstance(candidate, dict)
+                            or not isinstance(candidate.get("word"), str)
+                            or not candidate["word"]):
+                        raise V2Conflict("Speech word is invalid")
+                    candidate_start = _offset_ms(
+                        candidate.get("startOffset", "0s" if not words else "")
+                    ) + window["start_ms"]
+                    if candidate_start != start:
+                        raise V2Conflict("missing word end has no same-time successor")
+                    word_text += candidate["word"]
+                    if "endOffset" in candidate:
+                        end = _offset_ms(candidate["endOffset"]) + window["start_ms"]
+                        resolution = "COALESCED_ZERO_DURATION_SEQUENCE"
+                        entry_index = successor
+                        break
+                    successor += 1
+                else:
+                    raise V2Conflict("missing word end has no same-time successor")
+            else:
+                end = _offset_ms(entry["endOffset"]) + window["start_ms"]
             if (end <= start or start < window["start_ms"]
-                    or end > window["end_ms"] + 250
-                    or (words and start < words[-1]["start_ms"])):
+                    or end > window["end_ms"] + 250):
                 raise V2Conflict("Speech word offsets out of source window")
-            words.append({"word": entry["word"], "start_ms": start, "end_ms": end})
+            word = {"word": word_text, "start_ms": start, "end_ms": end}
+            if resolution:
+                word["timing_resolution"] = resolution
+            words.append(word)
+            entry_index += 1
+    # Provider arrays may contain one late-arriving word after later words.
+    # Absolute offsets remain authoritative; sort, then fail closed on overlap.
+    words.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
+    for earlier, later in zip(words, words[1:]):
+        if later["start_ms"] < earlier["end_ms"]:
+            raise V2Conflict("Speech word offsets overlap in source window")
     return words
 
 
@@ -177,13 +216,47 @@ def recover_chirp_window(
     content = raw.encode("utf-8") if isinstance(raw, str) else raw
     root = job_dir / "golden-v2" / "chirp-evidence" / window_id
     evidence_sha = _immutable(root / "provider-raw.json", content)
-    words = _parse_words(content, row)
-    if not words:
-        # Silence can be valid, but only an independent VAD may approve it.
-        raise V2Conflict("empty Chirp result requires independent acoustic/VAD review")
     actual_cents = cost_accountant(row)
     if type(actual_cents) is not int or actual_cents < 0:
         raise V2Conflict("verified Chirp cost reconciliation is required")
+    try:
+        words = _parse_words(content, row)
+        if not words:
+            # Silence can be valid, but only an independent VAD may approve it.
+            raise V2Conflict("empty Chirp result requires independent acoustic/VAD review")
+    except V2Conflict as exc:
+        # A provider-complete response with unusable timing is a durable review
+        # result, not a worker crash and never a successful transcript window.
+        review = {
+            "schema": "golden-v2-chirp-window-review-v1", "job_id": job_id,
+            "operation_name": row["operation_name"], "request_id": row["request_id"],
+            "window_id": window_id, "source_sha": row["source_sha"],
+            "clip_sha": row["clip_sha"], "raw_sha": evidence_sha,
+            "actual_cents": actual_cents, "reason": str(exc),
+            "status": "REVIEW_REQUIRED",
+        }
+        review_path = root / "review-required.json"
+        _immutable(review_path, _wire(review))
+
+        def verify_review(**expected: Any) -> bool:
+            try:
+                saved = json.loads(review_path.read_bytes())
+                return (file_sha256(root / "provider-raw.json") == expected["evidence_sha"]
+                        and saved == review
+                        and all(saved[key] == expected[value] for key, value in (
+                            ("operation_name", "operation_name"),
+                            ("source_sha", "source_sha"),
+                            ("clip_sha", "clip_sha"),
+                        )))
+            except (OSError, ValueError, KeyError):
+                return False
+
+        ledger.record_chirp_review_required(
+            job_id, window_id, operation_name=row["operation_name"],
+            evidence_sha=evidence_sha, actual_cents=actual_cents,
+            verifier=verify_review,
+        )
+        return "REVIEW_REQUIRED"
     manifest = {
         "schema": "golden-v2-chirp-window-v1", "job_id": job_id,
         "operation_name": row["operation_name"], "request_id": row["request_id"],
@@ -212,6 +285,83 @@ def recover_chirp_window(
     ledger.recover_submitted_chirp(
         job_id, window_id, operation_name=row["operation_name"],
         evidence_sha=evidence_sha, actual_cents=actual_cents, verifier=verify,
+    )
+    return "DONE"
+
+
+def reconcile_reviewed_chirp_window(
+    *, ledger: GoldenV2Ledger, job_id: str, window_id: str, job_dir: Path,
+) -> str:
+    """Re-parse quarantined immutable raw output after a bounded parser fix.
+
+    This path performs no provider request and never changes the accounted
+    charge. Results with unresolved overlaps or missing timing stay held.
+    """
+    rows = {row["window_id"]: row for row in ledger.chirp_windows(job_id)}
+    row = rows.get(window_id)
+    if row is None or row["status"] != "REVIEW_REQUIRED" or not row["operation_name"]:
+        raise V2Conflict("no quarantined Chirp operation to reconcile")
+    if type(row["actual_cents"]) is not int or row["actual_cents"] < 0:
+        raise V2Conflict("quarantined Chirp charge is unresolved")
+    root = job_dir / "golden-v2" / "chirp-evidence" / window_id
+    raw_path = root / "provider-raw.json"
+    review_path = root / "review-required.json"
+    try:
+        raw_bytes = raw_path.read_bytes()
+        review = json.loads(review_path.read_bytes())
+    except (OSError, ValueError) as exc:
+        raise V2Conflict("quarantined raw or review evidence is missing") from exc
+    evidence_sha = file_sha256(raw_path)
+    if (evidence_sha != row["result_sha"]
+            or review.get("schema") != "golden-v2-chirp-window-review-v1"
+            or review.get("job_id") != job_id or review.get("window_id") != window_id
+            or review.get("operation_name") != row["operation_name"]
+            or review.get("raw_sha") != evidence_sha
+            or review.get("actual_cents") != row["actual_cents"]):
+        raise V2Conflict("quarantined raw identity or cost evidence changed")
+    try:
+        words = _parse_words(raw_bytes, row)
+    except V2Conflict:
+        return "REVIEW_REQUIRED"
+    if not words:
+        return "REVIEW_REQUIRED"
+    normalizations = [
+        {"word": item["word"], "start_ms": item["start_ms"],
+         "end_ms": item["end_ms"], "method": item["timing_resolution"]}
+        for item in words if item.get("timing_resolution")
+    ]
+    manifest = {
+        "schema": "golden-v2-chirp-window-v1", "job_id": job_id,
+        "operation_name": row["operation_name"], "request_id": row["request_id"],
+        "window_id": window_id, "source_sha": row["source_sha"],
+        "clip_sha": row["clip_sha"], "input_uri": row["gcs_uri"],
+        "output_uri": row["output_uri"], "start_ms": row["start_ms"],
+        "end_ms": row["end_ms"], "raw_sha": evidence_sha,
+        "words": words, "timing_normalizations": normalizations,
+        "actual_cents": row["actual_cents"], "acoustic_gate": "NOT_RUN",
+    }
+    window_path = root / "window.json"
+    _immutable(window_path, _wire(manifest))
+
+    def verify(**expected: Any) -> bool:
+        try:
+            saved = json.loads(window_path.read_bytes())
+            saved_review = json.loads(review_path.read_bytes())
+            return (file_sha256(raw_path) == expected["evidence_sha"]
+                    and saved == manifest
+                    and saved_review == review
+                    and all(saved[key] == expected[value] for key, value in (
+                        ("operation_name", "operation_name"), ("source_sha", "source_sha"),
+                        ("clip_sha", "clip_sha"), ("input_uri", "gcs_uri"),
+                        ("start_ms", "start_ms"), ("end_ms", "end_ms"),
+                    )))
+        except (OSError, ValueError, KeyError):
+            return False
+
+    ledger.resolve_chirp_window_review(
+        job_id, window_id, operation_name=row["operation_name"],
+        evidence_sha=evidence_sha, actual_cents=row["actual_cents"],
+        verifier=verify,
     )
     return "DONE"
 
