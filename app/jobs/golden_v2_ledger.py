@@ -1419,8 +1419,28 @@ class GoldenV2Ledger:
             job = dict(self._job(db, job_id))
             rows = [dict(s) for s in self._stages(db, job_id)]
             job.pop("approval_reference", None)
+            chirp_row = db.execute(
+                "SELECT COALESCE(SUM(actual_cents),0) AS cents "
+                "FROM v2_chirp_operations WHERE job_id=?", (job_id,),
+            ).fetchone()
+            chirp_window_actual = int(chirp_row["cents"] or 0)
+            chirp_stage_actual = 0
             for row in rows:
                 row.pop("claim_hash", None)
+                if row["name"] == "chirp_independent":
+                    chirp_stage_actual = int(row["actual_cents"] or 0)
+                    row["known_actual_cents"] = max(chirp_stage_actual, chirp_window_actual)
+                else:
+                    row["known_actual_cents"] = int(row["actual_cents"] or 0)
             job["stages"] = rows
-            job["spent_cents"] = sum(row["actual_cents"] or 0 for row in rows)
+            job["chirp_known_actual_cents"] = max(chirp_stage_actual, chirp_window_actual)
+            job["known_actual_cents"] = (
+                sum(int(row["actual_cents"] or 0) for row in rows
+                    if row["name"] != "chirp_independent")
+                + job["chirp_known_actual_cents"]
+            )
+            # Window-level charges are real even while their stage is open.
+            # This is a usage-derived amount, not a final provider invoice.
+            job["spent_cents"] = job["known_actual_cents"]
+            job["spent_basis"] = "RECONCILED_PROVIDER_USAGE_NOT_FINAL_INVOICE"
             return job

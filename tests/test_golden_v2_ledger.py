@@ -338,6 +338,39 @@ class GoldenV2LedgerTests(unittest.TestCase):
         with self.assertRaises(V2Conflict):
             reopened.complete(claim, evidence_sha="b"*64, actual_cents=31)
 
+    def test_status_includes_recovered_chirp_window_usage_before_stage_closes(self):
+        job = self.create()
+        self.approve(job)
+        primary = self.store.claim_next(job, worker_id="A")
+        self.store.complete(primary, evidence_sha="a"*64, actual_cents=4)
+        chirp = self.store.claim_next(job, worker_id="A")
+        window = {
+            "window_id": "chunk-0000", "source_sha": "a"*64,
+            "clip_sha": "b"*64, "gcs_uri": "gs://test-private/input.flac",
+            "start_ms": 0, "end_ms": 1000,
+            "output_uri": "gs://test-private/output/", "estimated_cents": 10,
+        }
+        self.store.plan_chirp_window(chirp, window)
+        intent = self.store.begin_chirp_submit(chirp, "chunk-0000")
+        operation = "projects/test/locations/us/operations/existing"
+        self.store.record_chirp_submission(chirp, "chunk-0000", operation)
+        self.store.recover_submitted_chirp(
+            job, "chunk-0000", operation_name=operation,
+            evidence_sha="c"*64, actual_cents=5,
+            verifier=lambda **_: True,
+        )
+
+        status = self.store.status(job)
+        self.assertIsNotNone(intent)
+        self.assertEqual(status["chirp_known_actual_cents"], 5)
+        self.assertEqual(status["known_actual_cents"], 9)
+        self.assertEqual(status["spent_cents"], 9)
+        self.assertEqual(status["spent_basis"], "RECONCILED_PROVIDER_USAGE_NOT_FINAL_INVOICE")
+        chirp_status = next(row for row in status["stages"]
+                            if row["name"] == "chirp_independent")
+        self.assertIsNone(chirp_status["actual_cents"])
+        self.assertEqual(chirp_status["known_actual_cents"], 5)
+
     def test_verified_unknown_overrun_is_recorded_instead_of_lost(self):
         job = self.create()
         self.approve(job)
