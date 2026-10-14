@@ -32,6 +32,8 @@ class ChirpV2Gateway:
         self, *, speech_client: Any, storage_client: Any, project: str,
         location: str = "us", language: str = "cmn-Hant-TW",
         dynamic_batching: bool = True,
+        project_number: str | None = None,
+        operation_recorder: Callable[[dict[str, Any], Any], None] | None = None,
         request_factory: Callable[[dict[str, Any]], Any] | None = None,
         max_result_wait_hours: int = 48,
         now: Callable[[], datetime] | None = None,
@@ -49,9 +51,15 @@ class ChirpV2Gateway:
         self.language = language
         self.dynamic_batching = dynamic_batching
         self.request_factory = request_factory
+        self.operation_recorder = operation_recorder
         self.max_result_wait = timedelta(hours=max_result_wait_hours)
         self.now = now or (lambda: datetime.now(timezone.utc))
         self.operation_prefix = f"projects/{project}/locations/{location}/operations/"
+        if project_number is not None and (not isinstance(project_number, str) or not project_number.isdigit()):
+            raise ValueError('verified numeric project identity required')
+        self.operation_prefixes = (self.operation_prefix,) + (
+            (f'projects/{project_number}/locations/{location}/operations/',)
+            if project_number is not None else ())
 
     def _request(self, row: dict[str, Any]) -> Any:
         if self.request_factory is not None:
@@ -96,8 +104,10 @@ class ChirpV2Gateway:
         operation = self.speech.batch_recognize(
             request=self._request(row), retry=None, timeout=60,
         )
+        if self.operation_recorder is not None:
+            self.operation_recorder(row, getattr(operation, 'operation', None))
         name = getattr(getattr(operation, "operation", None), "name", None)
-        if not isinstance(name, str) or not name.startswith(self.operation_prefix):
+        if not isinstance(name, str) or not name.startswith(self.operation_prefixes):
             raise V2Conflict("Speech returned unexpected operation identity")
         return name
 
@@ -146,7 +156,7 @@ class ChirpV2Gateway:
         bucket_name, prefix = self._verify_row(row)
         name = row.get("operation_name")
         if (row.get("status") != "SUBMITTED" or not isinstance(name, str)
-                or not name.startswith(self.operation_prefix)):
+                or not name.startswith(self.operation_prefixes)):
             raise V2Conflict("Chirp recovery must have saved Speech operation ID")
         op = self.speech.transport.operations_client.get_operation(name)
         error = getattr(op, "error", None)
@@ -186,7 +196,7 @@ class ChirpV2Gateway:
         """
         self._verify_row(row)
         name = row.get('operation_name')
-        if not isinstance(name, str) or not name.startswith(self.operation_prefix):
+        if not isinstance(name, str) or not name.startswith(self.operation_prefixes):
             raise V2Conflict('saved Speech operation required for billing')
         operation = self.speech.transport.operations_client.get_operation(name)
         if not operation.done:

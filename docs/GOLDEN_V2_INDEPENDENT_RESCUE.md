@@ -35,3 +35,18 @@ Local validation: five focused recovery tests and 25 Chirp/dispatch/recovery
 tests passed. Full unittest discovery passed 1083 tests, with two skipped
 (the new raw-refusal test was added after that run and passed separately).
 These tests do not establish live transcription completion.
+
+Live attempt: the identical version-9 audio was downloaded and SHA verified.
+Ten Chirp windows were staged. The first Speech POST returned an operation,
+but the old gateway rejected its canonical numeric-project identity before
+recording its name. One window remains SUBMITTING and nine remain PLANNED;
+no repeat POST was issued. The project number was independently verified by
+Cloud Resource Manager GET. The gateway now supports an explicitly configured
+numeric alias and persists the raw operation receipt before identity checks.
+This fix does not recover the previously lost name by itself.
+
+Operation listing returned no matching operations. The runtime identity lacks
+Cloud Logging read access (403), local gcloud requires reauthentication and
+the VPS CLI has no active account. No IAM change was made. Recovery of this
+accepted request remains unresolved; its charge is not yet accounted, and
+all further paid submissions remain held pending independent reconciliation.

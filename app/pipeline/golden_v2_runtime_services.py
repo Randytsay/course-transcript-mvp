@@ -92,7 +92,16 @@ def _clients():
                              retry_options=types.HttpRetryOptions(attempts=1)))
     gcs = storage.Client(project=project)
     speech = speech_v2.SpeechClient(client_options={'api_endpoint':'us-speech.googleapis.com'})
-    return vertex, gcs, ChirpV2Gateway(speech_client=speech,storage_client=gcs,project=project)
+    def record_operation(row, operation):
+        if operation is None or not callable(getattr(operation, 'SerializeToString', None)):
+            raise V2Conflict('raw Speech operation receipt unavailable')
+        path = _root()/'jobs'/row['job_id']/'golden-v2'/'chirp-submission-receipts'
+        store_immutable_bytes(path/(row['request_id']+'.operation.pb'), operation.SerializeToString())
+        store_immutable_bytes(path/(row['request_id']+'.json'), wire(dict(
+            operation_name=operation.name, request_id=row['request_id'],
+            source_sha=row['source_sha'], input_uri=row['gcs_uri'], output_uri=row['output_uri'])).encode())
+    return vertex, gcs, ChirpV2Gateway(speech_client=speech,storage_client=gcs,project=project,
+        project_number=os.environ.get('GOOGLE_CLOUD_PROJECT_NUMBER'), operation_recorder=record_operation)
 
 
 def paid_services(snapshot):

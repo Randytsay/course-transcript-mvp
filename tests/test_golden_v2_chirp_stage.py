@@ -137,6 +137,38 @@ class ChirpStageIntegrationTests(unittest.TestCase):
         arguments.update(options)
         return plan_approved_chirp(**arguments)
 
+    def test_verified_numeric_project_operation_alias(self):
+        self.plan()
+        row = self.ledger.begin_chirp_submit(self.claim, 'chunk-0000')
+        numeric = 'projects/608343797618/locations/us/operations/real-shaped-test'
+        self.speech.batch_recognize = lambda **_: SimpleNamespace(operation=SimpleNamespace(name=numeric))
+        gateway = ChirpV2Gateway(speech_client=self.speech, storage_client=self.cloud,
+            project='fake-project', project_number='608343797618', request_factory=lambda r:dict(r))
+        self.assertEqual(gateway.submit(row), numeric)
+        self.speech.operations[numeric] = SimpleNamespace(done=False, error=None)
+        self.ledger.record_chirp_submission(self.claim, 'chunk-0000', numeric)
+        saved = self.ledger.chirp_windows(self.job_id)[0]
+        self.assertEqual(gateway.read_result(saved), {'status':'PENDING'})
+        with self.assertRaises(V2Conflict):
+            self.gateway.read_result(saved)
+        with self.assertRaises(ValueError):
+            ChirpV2Gateway(speech_client=self.speech, storage_client=self.cloud,
+                          project='fake-project', project_number='unverified-other-project')
+
+    def test_raw_operation_is_recorded_before_identity_rejection(self):
+        self.plan()
+        row = self.ledger.begin_chirp_submit(self.claim, 'chunk-0000')
+        operation = SimpleNamespace(name='projects/unexpected/locations/us/operations/test')
+        self.speech.batch_recognize = lambda **_: SimpleNamespace(operation=operation)
+        receipts = []
+        gateway = ChirpV2Gateway(speech_client=self.speech, storage_client=self.cloud,
+            project='fake-project', request_factory=lambda r:dict(r),
+            operation_recorder=lambda r,op:receipts.append((r['request_id'],op)))
+        with self.assertRaises(V2Conflict):
+            gateway.submit(row)
+        self.assertEqual(receipts, [(row['request_id'], operation)])
+        self.assertEqual(self.ledger.chirp_windows(self.job_id)[0]['status'], 'SUBMITTING')
+
     def _complete_outputs(self, rows):
         for i, row in enumerate(rows):
             self.speech.operations[row["operation_name"]].done = True

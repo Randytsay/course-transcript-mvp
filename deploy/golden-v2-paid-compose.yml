@@ -18,6 +18,7 @@ services:
       COURSE_TRANSCRIPT_V2_ARTIFACT_ROOT: /app/data/golden-v2
       GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
       GOOGLE_CLOUD_PROJECT: xenon-chain-506409-c3
+      GOOGLE_CLOUD_PROJECT_NUMBER: '608343797618'
       GCS_BUCKET: xenon-chain-506409-c3-golden-v2-smoke
       RCLONE_CONFIG: /run/secrets/rclone.conf
     volumes:
