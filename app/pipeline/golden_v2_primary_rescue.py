@@ -15,6 +15,36 @@ from app.pipeline.golden_v2_pricing import gemini_usage_cents
 from app.providers.golden_v2_immutable import store_immutable_bytes
 
 
+def reconcile_exact_chirp_operation(*, ledger, job_id, revision, window_id,
+                                    operation, project_number, reference):
+    """Bind a recovered provider LRO to an existing ambiguous intent; no POST."""
+    from google.cloud.speech_v2.types import cloud_speech
+    metadata = cloud_speech.OperationMetadata.pb(cloud_speech.OperationMetadata())
+    if (not reference.strip() or not project_number.isdigit()
+            or not operation.name.startswith(f'projects/{project_number}/locations/us/operations/')
+            or not operation.metadata.Unpack(metadata)):
+        raise V2Conflict('verified provider operation identity/metadata required')
+    request = metadata.batch_recognize_request
+    with ledger._tx() as db:
+        job = ledger._job(db, job_id)
+        row = db.execute('SELECT * FROM v2_chirp_operations WHERE job_id=? AND window_id=?',
+                         (job_id, window_id)).fetchone()
+        if (job['revision'] != revision or job['status'] != 'PROCESSING'
+                or row is None or row['status'] != 'SUBMITTING' or row['operation_name']
+                or row['source_sha'] != job['source_sha']
+                or [f.uri for f in request.files] != [row['gcs_uri']]
+                or request.config.model != 'chirp_3'
+                or request.recognition_output_config.gcs_output_config.uri != row['output_uri']):
+            raise V2Conflict('recovered LRO differs from persisted exact request')
+        evidence_sha = hashlib.sha256(operation.SerializeToString()).hexdigest()
+        db.execute('INSERT INTO v2_review_resumptions VALUES(?,?,?,?,?,?,?)',
+            (job_id, 'chirp_independent', evidence_sha, 'trusted-operation-reconciliation',
+             reference, revision, _now()))
+        db.execute("UPDATE v2_chirp_operations SET status='SUBMITTED',operation_name=?,updated_at=? WHERE job_id=? AND window_id=?",
+                   (operation.name, _now(), job_id, window_id))
+        db.execute('UPDATE v2_jobs SET revision=revision+1 WHERE id=?', (job_id,))
+
+
 def verify_same_audio_revision(*, job_dir, read_metadata, download_media):
     """Accept metadata-only version drift only after a fresh full SHA check.
 

@@ -24,7 +24,9 @@ def main():
     parser.add_argument('--revision', type=int, required=True)
     parser.add_argument('--cap-cents', type=int, required=True)
     parser.add_argument('--reference', required=True)
-    parser.add_argument('--submit', action='store_true')
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--submit', action='store_true')
+    mode.add_argument('--resume-planned', action='store_true')
     args = parser.parse_args()
     root = args.root.resolve()
     ledger = GoldenV2Ledger.open_existing(root/'ledger.sqlite')
@@ -37,7 +39,7 @@ def main():
     snapshot = dict(job_id=args.job_id, source_sha256=args.source_sha,
                     revision=args.revision, stage='chirp_independent',
                     aggregate_cap_cents=args.cap_cents)
-    if args.submit:
+    if args.submit or args.resume_planned:
         services = paid_services(snapshot)
         pre = json.loads((job_dir/'source-preflight.json').read_text())
         def verified():
@@ -46,14 +48,21 @@ def main():
                 return False
             return verify_same_audio_revision(job_dir=job_dir,
                 read_metadata=read_drive_media_metadata, download_media=download_drive_media)
-        claim = claim_independent_rescue(ledger=ledger, job_id=args.job_id,
-            job_dir=job_dir, revision=args.revision, source_sha=args.source_sha,
-            cap_cents=args.cap_cents, reference=args.reference,
-            verify_authorization_and_live_source=verified)
+        if args.resume_planned:
+            if verified() is not True:
+                raise V2Conflict('fresh owner/source verification failed')
+            claim = ledger.resume_chirp_submissions(args.job_id,
+                worker_id='trusted-independent-rescue', expected_revision=args.revision)
+        else:
+            claim = claim_independent_rescue(ledger=ledger, job_id=args.job_id,
+                job_dir=job_dir, revision=args.revision, source_sha=args.source_sha,
+                cap_cents=args.cap_cents, reference=args.reference,
+                verify_authorization_and_live_source=verified)
         options = dict(services['stage_options'])
         gateway = options.pop('gateway')
-        plan_approved_chirp(ledger=ledger, claim=claim, normalized_audio=job_dir/'normalized.flac',
-                           job_dir=job_dir, **options)
+        if args.submit:
+            plan_approved_chirp(ledger=ledger, claim=claim, normalized_audio=job_dir/'normalized.flac',
+                               job_dir=job_dir, **options)
         rows = submit_planned_chirp(ledger=ledger, claim=claim, gateway=gateway)
         print(json.dumps(dict(action='SUBMITTED_ONCE', operations=len(rows))), flush=True)
     stop = Event()

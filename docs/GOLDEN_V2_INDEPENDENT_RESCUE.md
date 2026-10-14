@@ -50,3 +50,13 @@ Cloud Logging read access (403), local gcloud requires reauthentication and
 the VPS CLI has no active account. No IAM change was made. Recovery of this
 accepted request remains unresolved; its charge is not yet accounted, and
 all further paid submissions remain held pending independent reconciliation.
+
+Follow-up: Google Speech V2 ListOperations requires the literal filter
+`is_v2(name)`; an empty filter returns the wrong operation collection.
+See https://docs.cloud.google.com/speech-to-text/docs/operations.
+Bounded pagination of that collection uniquely matched the existing input,
+output prefix and Chirp model. The original operation is DONE and its raw
+protobuf/identity proof is saved separately. The operator reconciliation path
+can bind only that exact request to SUBMITTED, without submitting another
+request, changing source/approval or asserting a zero cost. Restart then uses
+the existing planned-only claim rotation and saved-operation recovery.

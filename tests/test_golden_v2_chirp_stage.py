@@ -169,6 +169,29 @@ class ChirpStageIntegrationTests(unittest.TestCase):
         self.assertEqual(receipts, [(row['request_id'], operation)])
         self.assertEqual(self.ledger.chirp_windows(self.job_id)[0]['status'], 'SUBMITTING')
 
+    def test_reconcile_exact_saved_request_without_second_submission(self):
+        from google.longrunning import operations_pb2
+        from google.cloud.speech_v2.types import cloud_speech
+        from app.pipeline.golden_v2_primary_rescue import reconcile_exact_chirp_operation
+        self.plan()
+        row = self.ledger.begin_chirp_submit(self.claim, 'chunk-0000')
+        metadata = cloud_speech.OperationMetadata.pb(cloud_speech.OperationMetadata(
+            batch_recognize_request=cloud_speech.BatchRecognizeRequest(
+                config=cloud_speech.RecognitionConfig(model='chirp_3'),
+                files=[cloud_speech.BatchRecognizeFileMetadata(uri=row['gcs_uri'])],
+                recognition_output_config=cloud_speech.RecognitionOutputConfig(
+                    gcs_output_config=cloud_speech.GcsOutputConfig(uri=row['output_uri'])))))
+        operation = operations_pb2.Operation(name='projects/123/locations/us/operations/v2-test')
+        operation.metadata.Pack(metadata)
+        args = dict(ledger=self.ledger, job_id=self.job_id,
+            revision=self.ledger.status(self.job_id)['revision'], window_id='chunk-0000',
+            operation=operation, project_number='123', reference='exact request GET')
+        reconcile_exact_chirp_operation(**args)
+        self.assertEqual(self.ledger.chirp_windows(self.job_id)[0]['operation_name'], operation.name)
+        self.assertEqual(self.speech.calls, [])
+        with self.assertRaises(V2Conflict):
+            reconcile_exact_chirp_operation(**args)
+
     def _complete_outputs(self, rows):
         for i, row in enumerate(rows):
             self.speech.operations[row["operation_name"]].done = True
