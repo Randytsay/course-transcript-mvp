@@ -18,8 +18,90 @@ from app.providers.golden_v2_immutable import store_immutable_bytes
 from app.pipeline.golden_v2_quote_intake import wire
 import os
 from scripts.golden_v2_review_overlaps import inspect_pending_overlaps
+from app.pipeline.golden_v2_primary_stage import _primary_audit_path
+from app.providers.gemini_primary_audio import PROMPT_VERSION
 
 router=APIRouter(prefix='/api/v1/golden-v2')
+
+
+def _primary_hold_diagnostic(job: Path, job_id: str, source_sha: str,
+                             evidence_sha: str) -> dict[str, Any]:
+    """Explain a known provider hold without returning raw audio or provider text.
+
+    This read-only path reports specific response issues only when the ledger,
+    immutable stage report and per-window raw audit all agree. Unverifiable
+    records remain an integrity hold, never an invitation to retry a model.
+    """
+    path = job/'golden-v2'/'primary-stage.json'
+    try:
+        if not path.is_file() or path.is_symlink():
+            return {'diagnostic_code': 'PRIMARY_REPORT_MISSING_OR_CHANGED'}
+        if path.stat().st_size > 16 * 1024 * 1024:
+            return {'diagnostic_code': 'PRIMARY_REPORT_UNREADABLE'}
+        if file_sha256(path) != evidence_sha:
+            return {'diagnostic_code': 'PRIMARY_REPORT_MISSING_OR_CHANGED'}
+        report = json.loads(path.read_text(encoding='utf-8'))
+        if (not isinstance(report, dict) or
+                report.get('schema') != 'golden-v2-primary-stage-v1' or
+                report.get('job_id') != job_id or
+                report.get('source_sha256') != source_sha or
+                report.get('mode') != 'gemini_3_8_audio_first' or
+                report.get('golden_approved') is not False or
+                report.get('ready_for_chirp') is not False):
+            return {'diagnostic_code': 'PRIMARY_REPORT_BINDING_CONFLICT'}
+        windows = report.get('windows')
+        evidence = report.get('window_evidence')
+        if (not isinstance(windows, list) or not windows or
+                not isinstance(evidence, list) or not evidence or
+                len(evidence) > len(windows)):
+            return {'diagnostic_code': 'PRIMARY_WINDOW_EVIDENCE_UNAVAILABLE'}
+        for index, item in enumerate(evidence):
+            if not isinstance(item, dict) or index >= len(windows):
+                return {'diagnostic_code': 'PRIMARY_WINDOW_EVIDENCE_UNAVAILABLE'}
+            identity = item.get('identity')
+            audit_sha = item.get('raw_audit_sha256')
+            window = windows[index]
+            if not isinstance(window, dict):
+                return {'diagnostic_code': 'PRIMARY_WINDOW_EVIDENCE_UNAVAILABLE'}
+            bound_window = {key: window.get(key) for key in (
+                'index', 'start_seconds', 'end_seconds', 'gcs_uri', 'mime_type')}
+            if (not isinstance(identity, dict) or
+                    identity.get('model') != 'gemini-3.8-flash' or
+                    identity.get('prompt_version') != PROMPT_VERSION or
+                    identity.get('source_sha256') != source_sha or
+                    not isinstance(identity.get('context_sha256'), str) or
+                    not re.fullmatch(r'[0-9a-f]{64}', identity['context_sha256']) or
+                    identity.get('window') != bound_window or
+                    not isinstance(audit_sha, str) or
+                    not re.fullmatch(r'[0-9a-f]{64}', audit_sha)):
+                return {'diagnostic_code': 'PRIMARY_WINDOW_BINDING_CONFLICT'}
+            audit_path = _primary_audit_path(job, identity)
+            if audit_path.is_symlink() or not audit_path.is_file():
+                return {'diagnostic_code': 'PRIMARY_RAW_AUDIT_MISSING_OR_CHANGED'}
+            if audit_path.stat().st_size > 16 * 1024 * 1024:
+                return {'diagnostic_code': 'PRIMARY_RAW_AUDIT_UNREADABLE'}
+            if file_sha256(audit_path) != audit_sha:
+                return {'diagnostic_code': 'PRIMARY_RAW_AUDIT_MISSING_OR_CHANGED'}
+            raw = json.loads(audit_path.read_text(encoding='utf-8'))
+            if (not isinstance(raw, dict) or raw.get('identity') != identity or
+                    raw.get('finish_reason') != item.get('finish_reason') or
+                    raw.get('usage_metadata') != item.get('usage_metadata')):
+                return {'diagnostic_code': 'PRIMARY_RAW_AUDIT_BINDING_CONFLICT'}
+            if raw.get('status') == 'REQUIRES_REVIEW':
+                if raw.get('human_review_required') is not True:
+                    return {'diagnostic_code': 'PRIMARY_RAW_AUDIT_STATE_CONFLICT'}
+                if not str(raw.get('text') or '').strip():
+                    code = 'GEMINI_EMPTY_RESPONSE'
+                elif raw.get('finish_reason') not in {'STOP', 'FINISH_REASON_STOP'}:
+                    code = 'GEMINI_NON_STOP_FINISH'
+                else:
+                    code = 'GEMINI_RESPONSE_REVIEW_REQUIRED'
+                return {'diagnostic_code': code, 'window_index': index}
+            if raw.get('status') != 'COMPLETE':
+                return {'diagnostic_code': 'PRIMARY_RAW_AUDIT_STATE_CONFLICT'}
+        return {'diagnostic_code': 'PRIMARY_OVERLAP_EVIDENCE_CONFLICT'}
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError):
+        return {'diagnostic_code': 'PRIMARY_REVIEW_EVIDENCE_UNREADABLE'}
 
 
 def job_directory(database, job_id):
@@ -44,7 +126,8 @@ def review_packet(job_id: str, authorization: str | None = Header(default=None))
                     'reviewer_identity':os.environ.get('COURSE_TRANSCRIPT_V2_OWNER_ACTOR','')}
         except (ValueError,RuntimeError,OSError,KeyError):
             return {'kind':'PROVIDER_RESPONSE_REVIEW','job_id':job_id,'revision':state['revision'],
-                    'evidence_sha256':first['evidence_sha'],'human_listening_required':True}
+                    'evidence_sha256':first['evidence_sha'],'human_listening_required':True,
+                    **_primary_hold_diagnostic(job,job_id,state['source_sha'],first['evidence_sha'])}
     directory=job/'golden-v2'
     reports={}
     for name in ['engine-comparison.json','acoustic-qa.json','golden-qa.json']:

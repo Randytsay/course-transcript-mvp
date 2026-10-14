@@ -15,6 +15,28 @@
 
 ## Golden V2 paid-dispatch review (development branch only)
 
+### Gemini primary-stage review diagnostics (2026-10-14)
+
+The authenticated V2 chat review endpoint `GET /api/v1/golden-v2/jobs/{job_id}/review`
+now includes a bounded `diagnostic_code` when the Gemini stage is held and a
+primary-overlap review packet cannot be verified. Codes disclose neither raw
+Gemini text nor provider payloads, credentials, or GCS URIs.
+
+- `GEMINI_EMPTY_RESPONSE`: an immutable, stage-bound Gemini response contains
+  no usable text.
+- `GEMINI_NON_STOP_FINISH`: an immutable, stage-bound response has text but did
+  not report a successful STOP finish reason; output may be truncated.
+- `GEMINI_RESPONSE_REVIEW_REQUIRED`: the preserved response is marked for
+  review without either of the preceding conditions.
+- `PRIMARY_*`: a missing, unreadable, inconsistent, or insufficient source,
+  window, raw-audit, or overlap artifact prevents reliable classification.
+
+These codes are **diagnostic only**. They do not release a held ledger stage,
+authorize another Gemini POST, assert human listening, pass Golden QA, or
+enable Drive publishing. Inspect the exact immutable raw evidence and job
+revision using an approved operator workflow before any recovery decision.
+The API returns a window index for verified provider-response issues only.
+
 Before any proposed paid-runner integration, run the **read-only** preview:
 
 ```bash
