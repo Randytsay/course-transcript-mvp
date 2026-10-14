@@ -39,6 +39,7 @@ def main() -> int:
     sub.add_parser("service-status")
     sub.add_parser("drive-health")
     job = sub.add_parser("job-status"); job.add_argument("job_id")
+    readiness = sub.add_parser("paid-readiness"); readiness.add_argument("job_id")
     approve = sub.add_parser("approve-job"); approve.add_argument("job_id"); approve.add_argument("--request-file", type=Path, required=True)
     paid = sub.add_parser('authorize-paid'); paid.add_argument('job_id')
     pi = paid.add_mutually_exclusive_group(required=True)
@@ -78,7 +79,7 @@ def main() -> int:
     elif args.action == "drive-health": route = "drive-health"
     else:
         if not re.fullmatch(r"v2p?_[0-9a-f]{32}", args.job_id): parser.error("Invalid job ID")
-        suffix = '/'+args.action if args.action in {'authorize-paid','review','review-overlaps','review-adjudication','authorize-publication'} else '/approval' if write else ''
+        suffix = '/'+args.action if args.action in {'authorize-paid','review','review-overlaps','review-adjudication','authorize-publication','paid-readiness'} else '/approval' if write else ''
         route = "jobs/" + args.job_id + suffix
     if write:
         try:
