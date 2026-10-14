@@ -60,3 +60,29 @@ protobuf/identity proof is saved separately. The operator reconciliation path
 can bind only that exact request to SUBMITTED, without submitting another
 request, changing source/approval or asserting a zero cost. Restart then uses
 the existing planned-only claim rotation and saved-operation recovery.
+
+## Verified continuation
+
+- Runtime code SHA: `b63d4e15149b38ba5a6d887f203488c9e2265ed4`.
+- Independent container: `golden-v2-independent-rescue-b63d4e1`, running.
+- First operation was recovered without another POST: 2551 words, provider
+  billed-duration derived cost 5 cents, DONE in SQLite. Gemini remains at
+  24 cents and REVIEW_REQUIRED; combined known usage is 29 cents, not an invoice.
+- Nine remaining PLANNED windows were submitted once and are now SUBMITTED
+  with durable operation names and raw operation receipts. No SUBMITTING
+  ambiguity remains. Approved job ceiling stays 210 cents.
+- Source revision 9 was byte-identical to approved revision 7 by full SHA-256;
+  separate proof retained, original approval/quote/preflight unchanged.
+- Recovery polls existing operations only, bounded to 24 hours. After all
+  windows are DONE it runs acoustic QA and renders checksum-bound raw review
+  candidates (`candidate.srt`, `candidate.txt`, manifest). Candidate export
+  requires complete raw evidence and strict deterministic Chirp rendering;
+  it does not approve semantics, mark Golden PASS or write Drive.
+- Local full unittest discovery: 1090 tests, two skipped. ARM64 image-contained
+  focused suite: 27 passed. GitHub exact-head checks should be queried anew.
+
+Resume diagnosis by reading this container's bounded logs and the shared
+ledger. Do not start `--submit` again. `--resume-planned` applies only when
+known operations coexist with never-submitted PLANNED windows; ordinary
+recovery omits both flags. The chat API's old generic paid-worker heartbeat
+does not describe this separate exact-source recovery process.
