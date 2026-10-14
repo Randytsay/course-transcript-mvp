@@ -64,6 +64,20 @@ def request_quote(body: QuoteRequest, authorization: str | None = Header(default
         raise _mutation_error(exc) from exc
 
 
+@app.get('/api/v1/golden-v2/jobs/{job_id}/paid-readiness')
+def paid_readiness(job_id: str, authorization: str | None = Header(default=None)):
+    """Read-only paid-stage readiness; never approves, submits, or repairs jobs."""
+    database = _authorized_database(authorization)
+    if not re.fullmatch(r'v2p?_[0-9a-f]{32}', job_id):
+        raise HTTPException(status_code=422, detail='Invalid job ID')
+    from app.pipeline.golden_v2_paid_readiness import inspect_paid_readiness
+    try:
+        return inspect_paid_readiness(
+            database=database, artifact_root=database.parent, job_id=job_id)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        raise HTTPException(status_code=503, detail='Readiness evidence unavailable') from exc
+
+
 @app.get('/api/v1/golden-v2/quotes/{quote_id}')
 def quote_status(quote_id: str, authorization: str | None = Header(default=None)):
     database = _authorized_database(authorization)
