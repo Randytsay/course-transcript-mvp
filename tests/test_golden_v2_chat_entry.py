@@ -106,6 +106,7 @@ class ChatEntryTests(unittest.TestCase):
         self.assertFalse(status['ledger_modified'])
         checker.assert_called_once()
 
+    def test_nonpaid_entry_does_not_expose_approval_or_attested_job_creation(self):
         headers = {'Authorization': 'Bearer ' + self.write}
         for path in ['/jobs', '/source-preflight', '/jobs/v2_' + 'a'*32 + '/approval', '/jobs/v2_' + 'a'*32 + '/repair-approval']:
             self.assertIn(self.client.post('/api/v1/golden-v2' + path, json={}, headers=headers).status_code, {404, 405})
