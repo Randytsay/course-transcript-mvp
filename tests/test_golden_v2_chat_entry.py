@@ -50,6 +50,35 @@ class ChatEntryTests(unittest.TestCase):
         with patch.dict(os.environ, {'COURSE_TRANSCRIPT_V2_STATUS_API_ENABLED': 'false'}):
             self.assertEqual(self.client.get('/api/v1/golden-v2/service', headers=self.headers).status_code, 404)
 
+    def test_capability_blockers_explain_worker_and_feature_gate(self):
+        with patch.dict(os.environ, {
+            'COURSE_TRANSCRIPT_V2_PAID_API_ENABLED': 'true',
+            'COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED': 'false',
+        }):
+            response = self.client.get('/api/v1/golden-v2/service', headers=self.headers)
+            self.assertEqual(response.status_code, 200)
+            body = response.json()
+            self.assertEqual(body['capability_blockers']['paid_execution'],
+                             ['PAID_WORKER_NOT_RUNNING'])
+            self.assertEqual(body['capability_blockers']['drive_publication'],
+                             ['PUBLISH_API_DISABLED', 'DELIVERY_WORKER_NOT_RUNNING'])
+            self.assertFalse(body['capabilities']['paid_execution'])
+            self.assertFalse(body['capabilities']['drive_publication'])
+            write_service_heartbeat(self.data, 'golden-v2-paid-executor', state='running')
+            live = self.client.get('/api/v1/golden-v2/service', headers=self.headers).json()
+            self.assertEqual(live['capability_blockers']['paid_execution'], [])
+            self.assertTrue(live['capabilities']['paid_execution'])
+        with patch.dict(os.environ, {
+            'COURSE_TRANSCRIPT_V2_PAID_API_ENABLED': 'false',
+            'COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED': 'true',
+        }):
+            live = self.client.get('/api/v1/golden-v2/service', headers=self.headers).json()
+            self.assertIn('PAID_API_DISABLED', live['capability_blockers']['paid_execution'])
+            write_service_heartbeat(self.data, 'golden-v2-delivery', state='running')
+            enabled = self.client.get('/api/v1/golden-v2/service', headers=self.headers).json()
+            self.assertEqual(enabled['capability_blockers']['drive_publication'], [])
+            self.assertTrue(enabled['capabilities']['drive_publication'])
+
     def test_worker_heartbeat_is_observed_not_assumed(self):
         self.assertEqual(self.client.get('/api/v1/golden-v2/service', headers=self.headers).json()['intake_worker']['state'], 'UNVERIFIED')
         write_service_heartbeat(self.data, 'golden-v2-intake')
