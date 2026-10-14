@@ -87,7 +87,25 @@ class ChatEntryTests(unittest.TestCase):
         payload = json.loads(path.read_text()); payload['updated_at'] = '2000-01-01T00:00:00+00:00'; path.write_text(json.dumps(payload))
         self.assertEqual(self.client.get('/api/v1/golden-v2/service', headers=self.headers).json()['intake_worker']['state'], 'STALE_OR_STOPPED')
 
-    def test_nonpaid_entry_does_not_expose_approval_or_attested_job_creation(self):
+    def test_paid_readiness_reports_missing_job_without_dispatch(self):
+        job_id = 'v2p_' + 'c' * 32
+        path = '/api/v1/golden-v2/jobs/' + job_id + '/paid-readiness'
+        self.assertEqual(self.client.get(path).status_code, 401)
+        self.assertEqual(self.client.get(
+            '/api/v1/golden-v2/jobs/invalid/paid-readiness',
+            headers=self.headers).status_code, 422)
+        with patch('app.pipeline.golden_v2_paid_readiness.inspect_paid_readiness',
+                   wraps=__import__('app.pipeline.golden_v2_paid_readiness',
+                                    fromlist=['inspect_paid_readiness']).inspect_paid_readiness) as checker:
+            response = self.client.get(path, headers=self.headers)
+        self.assertEqual(response.status_code, 200)
+        status = response.json()
+        self.assertIn('JOB_NOT_FOUND', status['blockers'])
+        self.assertTrue(status['read_only'])
+        self.assertFalse(status['provider_calls_allowed'])
+        self.assertFalse(status['ledger_modified'])
+        checker.assert_called_once()
+
         headers = {'Authorization': 'Bearer ' + self.write}
         for path in ['/jobs', '/source-preflight', '/jobs/v2_' + 'a'*32 + '/approval', '/jobs/v2_' + 'a'*32 + '/repair-approval']:
             self.assertIn(self.client.post('/api/v1/golden-v2' + path, json={}, headers=headers).status_code, {404, 405})
