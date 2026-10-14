@@ -192,6 +192,18 @@ class ChirpStageIntegrationTests(unittest.TestCase):
         with self.assertRaises(V2Conflict):
             reconcile_exact_chirp_operation(**args)
 
+    def test_provider_omitted_zero_start_is_only_valid_for_first_word(self):
+        from app.pipeline.golden_v2_chirp_stage import _parse_words
+        payload = {'results':[{'alternatives':[{'words':[
+            {'word':'我', 'endOffset':'0.920s'},
+            {'word':'常', 'startOffset':'1.120s', 'endOffset':'1.360s'}]}]}]}
+        window = dict(start_ms=900000, end_ms=1800000)
+        words = _parse_words(json.dumps(payload).encode(), window)
+        self.assertEqual(words[0]['start_ms'], 900000)
+        del payload['results'][0]['alternatives'][0]['words'][1]['startOffset']
+        with self.assertRaises(V2Conflict):
+            _parse_words(json.dumps(payload).encode(), window)
+
     def _complete_outputs(self, rows):
         for i, row in enumerate(rows):
             self.speech.operations[row["operation_name"]].done = True

@@ -14,6 +14,7 @@ from app.pipeline.golden_v2_primary_rescue import claim_independent_rescue, veri
 from app.pipeline.golden_v2_runtime_services import paid_services, recovery_services
 from app.pipeline.golden_v2_chirp_stage import plan_approved_chirp, submit_planned_chirp
 from app.pipeline.golden_v2_chirp_recovery_worker import run_chirp_recovery_pass
+from app.subtitles.golden_v2_raw_candidates import export_raw_candidates
 
 
 def main():
@@ -74,6 +75,10 @@ def main():
                                         **recovery_services(snapshot))
         print(json.dumps(result, ensure_ascii=False), flush=True)
         if result['action'] != 'WAITING_FOR_EXISTING_OPERATIONS':
+            rows = ledger.chirp_windows(args.job_id)
+            if rows and all(row['status'] == 'DONE' for row in rows):
+                print(json.dumps(export_raw_candidates(ledger=ledger,
+                    job_id=args.job_id, job_dir=job_dir), ensure_ascii=False), flush=True)
             break
         stop.wait(120)
     return 0

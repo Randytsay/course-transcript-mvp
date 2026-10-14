@@ -142,7 +142,10 @@ def _parse_words(raw_bytes: bytes, window: dict[str, Any]) -> list[dict[str, Any
         for entry in entries:
             if not isinstance(entry, dict) or not isinstance(entry.get("word"), str) or not entry["word"]:
                 raise V2Conflict("Speech word is invalid")
-            start = _offset_ms(entry.get("startOffset", "")) + window["start_ms"]
+            # Speech protobuf JSON omits the zero-valued starting Duration.
+            # Permit that default only for the first timed word in a chunk;
+            # missing subsequent offsets remain invalid evidence.
+            start = _offset_ms(entry.get("startOffset", "0s" if not words else "")) + window["start_ms"]
             end = _offset_ms(entry.get("endOffset", "")) + window["start_ms"]
             if (end <= start or start < window["start_ms"]
                     or end > window["end_ms"] + 250
@@ -172,6 +175,8 @@ def recover_chirp_window(
     if not isinstance(raw, (str, bytes)):
         raise V2Conflict("no provider raw JSON to recover")
     content = raw.encode("utf-8") if isinstance(raw, str) else raw
+    root = job_dir / "golden-v2" / "chirp-evidence" / window_id
+    evidence_sha = _immutable(root / "provider-raw.json", content)
     words = _parse_words(content, row)
     if not words:
         # Silence can be valid, but only an independent VAD may approve it.
@@ -179,8 +184,6 @@ def recover_chirp_window(
     actual_cents = cost_accountant(row)
     if type(actual_cents) is not int or actual_cents < 0:
         raise V2Conflict("verified Chirp cost reconciliation is required")
-    root = job_dir / "golden-v2" / "chirp-evidence" / window_id
-    evidence_sha = _immutable(root / "provider-raw.json", content)
     manifest = {
         "schema": "golden-v2-chirp-window-v1", "job_id": job_id,
         "operation_name": row["operation_name"], "request_id": row["request_id"],
