@@ -1,4 +1,4 @@
-"""Gemini 3.7 correction with auditable splitting and content-safety guards."""
+"""Gemini 3.8 correction with auditable splitting and content-safety guards."""
 from __future__ import annotations
 
 import hashlib
@@ -14,7 +14,7 @@ from google.genai import types
 from app.providers import correct_text as base
 from app.providers.correction_guard import content_guard
 
-PROMPT_VERSION = "fixed-segments-v5-production-hardening-golden-context"
+PROMPT_VERSION = "fixed-segments-v6-gemini-3.8-production-hardening-golden-context"
 SAFE_PROMPT_VERSION = re.sub(r"[^A-Za-z0-9._-]+", "-", PROMPT_VERSION).strip("-")
 
 

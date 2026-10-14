@@ -1,13 +1,53 @@
 # Current State
 
-Last reviewed: 2026-10-11 (V2 specification note; production SHA remains unverified)
+## 2026-10-13 — Operational private ChatGPT Skill entry (non-paid)
 
-## Newly approved V2 work — design only (2026-10-11)
+The owner requested first enabling direct ChatGPT invocation of 黃金字幕 V2.
+A private `golden-subtitles-v2` plugin/skill v0.1.0 is saved in the owner's
+ChatGPT account and uses the existing connected WebCodex VPS App. ChatGPT UI
+shows one skill and the connected App; the plugin is selected in an unsent
+status-check composer. Real WebCodex calls verified the deployed private V2
+API, intake heartbeat, Drive GET connectivity and shared ledger query.
 
-- [V2 architecture specification](docs/GOLDEN_V2_ARCHITECTURE_PLAN.md) defines Gemini `gemini-3.8-flash` **full-audio first**, then independent Chirp 3, optional Gemini 3.5 Transcribe, then ChatGPT/WebCodex QA.
+The independent `golden-v2-chat` API/intake deployment runs exact source
+`d80d0fd9d4f13a43a22d9891dc491e5d4d1384fa` on Oracle ARM64 and binds only
+`127.0.0.1:8816`. Local 1040 tests, image-contained 25 focused ARM64 tests,
+exact-SHA CI, auth rejection and V2 restart/volume checks passed. V1 remained at
+`adafd952b9b89db111730ab28e8e8baff9551021` and was not restarted. The new entry
+supports source preview/intake/status only; paid execution, Golden delivery and
+Drive publication remain disabled/unintegrated. No owner media was downloaded
+or live batch submitted in this installation. See
+[chat contract](docs/GOLDEN_V2_CHAT_ENTRY.md) and
+[deployment evidence](docs/evidence/golden-v2-chat-entry-deployment-20261013.json).
+
+## 2026-10-13 — Drive link intake and persistent controller integration (development)
+
+New local source integration on PR #144's `7f6da90` baseline: bounded Drive
+link discovery, shared-ledger durable intake batches, Next.js entry/proxies,
+restartable non-paid importer, scoped operator CLI and disabled paid controller
+using existing guarded dispatch/Chirp recovery. See
+[checkpoint](docs/GOLDEN_V2_LINK_TO_RUN_2026-10-13.md) for implemented contracts,
+verification and remaining runtime/QA/publication gates. Production remains V1
+`adafd952b9b89db111730ab28e8e8baff9551021` at this turn's read-only check.
+No provider call, Drive write or production activation is implied.
+
+## 2026-10-13 — Latest P5 ChatGPT/WebCodex QA implementation checkpoint (development only)
+
+- Draft PR #144 branch `codex/golden-v2-goal-completion`: new owner decision is 3.8 semantic primary + Chirp acoustic timing + optional Gemini 3.5 Preview for serious differences, under ChatGPT/WebCodex-supervised QA and a separately operated VPS durable worker. **No production default has changed.**
+- Three actual independently run **four-minute** model receipts exist in immutable private GCS. The owner made 12/12 segment model-preference choices and confirmed 「所以比如有長行」. Previous GA 3.5 attempts remain `OUTCOME_UNKNOWN`; the successful Preview receipt is separate, not a relabelled old attempt.
+- Newly tested **offline P5 review-only bridge**: `app/pipeline/golden_v2_p5_evidence_trial.py`, 10 focused unit tests PASS, live source/receipt/owner/cue check PASS. Five artifacts (candidate SRT/TXT, comparison, adjudication, QA report), 60 candidate cues, 710 Chirp acoustic words, 12 candidate pauses flagged as unchecked. `GOLDEN_PASS=false`, `REVIEW_REQUIRED`: VAD/full-audio audio check, word-level alignment and verified final Golden editing not yet done.
+- All paid actions default OFF. Main/V1 runtime not changed; long-duration paid jobs, G0–G8 final acceptance and Drive publication remain pending. Evidence and continuation plan: [P5 checkpoint](docs/GOLDEN_V2_P5_CHATGPT_WEBCODEX_QA_2026-10-13.md).
+
+
+Last reviewed: 2026-10-13 (P5 four-minute offline QA prototype; production SHA remains unverified)
+
+## V2 work in an isolated Draft PR — not deployed
+
+- [V2 architecture specification](docs/GOLDEN_V2_ARCHITECTURE_PLAN.md) separates Gemini `gemini-3.8-flash` **full-audio recognition** from Vertex Gemini `gemini-3.8-flash` **text-only correction** (independent adapter); Chirp 3 remains the independent recognizer/time authority, with optional Gemini 3.5 Transcribe and ChatGPT/WebCodex QA.
+- Isolated Draft PR #144 has provider-free source and fake-provider integration for durable stages, bounded repair, acoustic QA, and immutable evidence. Its last verified CI SHA is recorded in `docs/GOLDEN_V2_GATE_STATUS.md`; G0–G8 remain incomplete and no production state is inferred from CI.
 - [V2 development and acceptance gates](docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md) define P0–P8/G0–G8 milestones.
-- This is an **intent/acceptance contract only**, not proof that source code, existing job state, credentials, billing or production release have migrated from 3.7 to 3.8. Do not rewrite historic model provenance.
-- Next authorized safe work: non-paid P0 review and isolated development preparation; no paid provider calls, IAM/billing mutations, Drive publish or production cutover without separate scope approval.
+- This is an **implementation in a draft branch only**, not proof of production deployment, active job state, credentials, billing, or live model availability. Do not rewrite historic model provenance.
+- Continue provider-free implementation and verification in the isolated branch. Paid provider calls, IAM/billing mutations, Drive publication, and production cutover remain outside scope without separate explicit authorization.
 
 
 This file is the entry point for the **current repository state**. It intentionally separates merged main, reviewed-but-unmerged work, and uncommitted runtime work. Do not infer production state from a development worktree.

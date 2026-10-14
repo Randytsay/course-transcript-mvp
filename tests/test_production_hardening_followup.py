@@ -93,7 +93,7 @@ class ProductionHardeningFollowupTests(unittest.TestCase):
             self.assertEqual(legacy.read_text(encoding="utf-8"), '{"legacy":true}\n')
             records = list(
                 work.glob(
-                    "a.fixed-segments-v5-production-hardening-golden-context.*.json"
+                    f"a.{hardened.SAFE_PROMPT_VERSION}.*.json"
                 )
             )
             self.assertEqual(len(records), 1)

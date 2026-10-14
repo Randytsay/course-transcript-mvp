@@ -72,12 +72,46 @@ This log records durable Project-local decisions. Cross-project lessons are refe
 
 ## 2026-10-11 — Golden V2 uses Gemini 3.8 primary transcript before independent Chirp
 
-**Decision:** All new V2 Gemini Flash development targets `gemini-3.8-flash`, replacing planned use of `gemini-3.7-flash`. V2 must obtain a complete Gemini 3.8 full-audio transcript first; Chirp 3 then independently transcribes original audio and retains authoritative word timing. Gemini 3.5 Transcribe is an optional third independent recognizer. ChatGPT/WebCodex resolves disagreements against original audio, assembles SRT and corrected TXT, then runs Golden QA.
+**Original decision:** Gemini 3.8 Flash is the full-audio primary transcript model before independent Chirp 3. The earlier wording was overly broad about text-only correction and is clarified below. V2 must obtain a complete Gemini 3.8 full-audio transcript first; Chirp 3 then independently transcribes original audio and retains authoritative word timing. Gemini 3.5 Transcribe is an optional third independent recognizer. ChatGPT/WebCodex resolves disagreements against original audio, assembles SRT and corrected TXT, then runs Golden QA.
 
 **Status:** approved design and acceptance baseline, **not implemented/deployed evidence**. Keep V1 3.7 raw/model history intact until proven migration. See `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md` and `docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md`. Initial measurement uses quality-first three-way comparison; first live testing stays behind explicit per-source cost approval and a proposed USD 10 aggregate test cap. Final production switch needs owner approval.
 
 **Reason:** user-validated Gemini audio semantics for Taiwanese + scripture combined with Chirp word-timing and independent acoustic completeness checks.
 
+## 2026-10-12 — Keep Gemini audio recognition and text correction on separate models
+
+**Decision:** Use Vertex AI `gemini-3.8-flash` only for full-audio primary recognition. Use Vertex AI `gemini-3.7-flash` only for text-only correction after ASR. Keep adapters, prompts, schemas, and model identities separate; never send audio to text correction or use Gemini 2.5. Preserve each raw provider response and its actual model ID. This clarification supersedes any broader wording in the 2026-10-11 decision; it does not change the 3.8 full-audio → Chirp 3 recognition order.
+
+## 2026-10-12 — Superseding correction-model migration decision (3.8)
+
+**Decision (latest):** Use Vertex AI `gemini-3.8-flash` for **both** complete original-audio recognition and subsequent **text-only ASR segment correction**, each through a separate adapter/prompt/schema/input contract. Do not use 3.7 for new text-correction calls. Preserve historical 3.7 model IDs/raw data for audit. This supersedes the earlier 2026-10-12 separate-model-ID decision, **not** the separate-role architecture.
+
+**Implementation status:** Development-only on `codex/golden-v2-goal-completion` / Draft PR #144. Text-correction defaults, MiniMax fallback, proxy, costs, UI and model policy tests have been updated; actual Vertex capability/role, usage and production cutover are still unverified. Never rewrite existing in-flight jobs without explicit migration/approval.
+
+## 2026-10-13 — Explicit 3.8-only Gemini configuration
+
+The owner explicitly instructed: 「拿掉所有 3.7 的設定，只用 3.8」.
+New Gemini audio-primary and text-correction configuration targets 3.8;
+remaining owner intake/provider UI, API status, fake-provider and OpenRouter
+defaults are aligned. Direct new Vertex/OpenRouter submissions using a
+nonapproved Gemini model fail closed. Historical 3.7 raw, submitted operations
+and cost catalogs remain immutable and readable; missing model evidence must
+not be relabeled 3.8. No production setting or runtime was switched by this
+development change. Chirp timing remains independent and authoritative.
+
 ## Deployment invariant — exact SHA only
 
 Production deployment must use an immutable reviewed release SHA. A dirty live or development working tree is never a release source. Production status must be verified by runtime revision evidence, not directory names or conversational claims.
+
+
+## 2026-10-13 — Owner decision: ChatGPT/WebCodex leads Golden QA; default two engines
+
+**Decision:** In Golden V2 P5, ChatGPT is the evidence-grounded semantic QA supervisor; WebCodex executes deterministic matching, bounded audio-window inspection, code/tests and audited artifact generation; an independently running VPS durable worker persists jobs, progress and crash recovery. Owner reviews materially ambiguous audio and authorizes final release. No LLM can claim acoustic certainty based solely on prose.
+
+**Three model roles:** Gemini 3.8 Flash is the semantic verbatim primary (plus a separate later text-only correction adapter), Chirp 3 supplies independent acoustics and authoritative word timestamps, and successful `gemini-3.5-transcribe-preview` is an **optional** ambiguity/benchmark model, not the default full-audio third call. The two previous `gemini-3.5-transcribe` GA failure/404 claims remain immutable and billed cost unknown.
+
+**Modes:** Recommend future `STANDARD_2WAY` (3.8+Chirp with mandatory QA), optional separately approved `SMART_2PLUS` (bounded third-model windows after capability/benchmark), and approved `QUALITY_3WAY`. Neither runtime default nor production deployment has been switched by this decision. Never spend money automatically under the guise of QA.
+
+**Quality policy:** distinguish `AUTO_PASS`, `AI_REVIEWED`, `HUMAN_REQUIRED`; true Golden PASS demands confirmed audio coverage, no pending QA blockers, Chirp-grounded SRT timing, same-source SRT/TXT text, immutable adjudication and owner/reviewer authorization. Model votes or plausible scriptures cannot override actual recording. An unattended ChatGPT conversation is NOT a persistent worker.
+
+**First P5 offline implementation:** `app/pipeline/golden_v2_p5_evidence_trial.py` and ten unit tests; real 4-minute source/3 receipts/12 model-preference decisions/explicit `所以比如有長行` correction validated, 60 SRT cues and 710 Chirp timing words verified, five QA blocker categories unresolved, `GOLDEN_PASS=false`. No provider call, Drive mutation, V1 cutover or model retrial. [Full handoff](docs/GOLDEN_V2_P5_CHATGPT_WEBCODEX_QA_2026-10-13.md).

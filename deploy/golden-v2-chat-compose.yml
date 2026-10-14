@@ -1,0 +1,37 @@
+# Private, non-paid V2 chat entry. Independent of the production V1 project.
+services:
+  api:
+    image: course-transcript-v2-chat:${V2_CHAT_RELEASE_SHA:?exact release SHA required}
+    restart: unless-stopped
+    env_file:
+      - ${V2_CHAT_ENV_FILE:-/opt/course-transcript-v2-chat/secrets/api.env}
+    environment:
+      COURSE_TRANSCRIPT_V2_LEDGER_PATH: /app/data/golden-v2/ledger.sqlite
+      COURSE_TRANSCRIPT_V2_ARTIFACT_ROOT: /app/data/golden-v2
+      COURSE_TRANSCRIPT_V2_RELEASE_SHA: ${V2_CHAT_RELEASE_SHA}
+      RCLONE_CONFIG: /run/secrets/rclone.conf
+    volumes:
+      - ${V2_CHAT_DATA_DIR:-/opt/course-transcript-v2-chat/data}:/app/data
+      - ${V2_CHAT_DRIVE_CONFIG:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
+    ports:
+      - "127.0.0.1:8816:8000"
+    command: ["python", "-m", "uvicorn", "app.golden_v2_chat_api:app", "--host", "0.0.0.0", "--port", "8000"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; assert urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).status == 200"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+  intake:
+    image: course-transcript-v2-chat:${V2_CHAT_RELEASE_SHA:?exact release SHA required}
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      COURSE_TRANSCRIPT_V2_LEDGER_PATH: /app/data/golden-v2/ledger.sqlite
+      COURSE_TRANSCRIPT_V2_ARTIFACT_ROOT: /app/data/golden-v2
+      RCLONE_CONFIG: /run/secrets/rclone.conf
+      COURSE_TRANSCRIPT_V2_MAX_APPROVAL_CENTS: ${V2_CHAT_MAX_ESTIMATE_CENTS:-1000}
+    volumes:
+      - ${V2_CHAT_DATA_DIR:-/opt/course-transcript-v2-chat/data}:/app/data
+      - ${V2_CHAT_DRIVE_CONFIG:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
+    command: ["python", "scripts/golden_v2_batch_intake_daemon.py"]

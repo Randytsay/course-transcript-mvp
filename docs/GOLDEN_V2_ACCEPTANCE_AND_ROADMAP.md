@@ -7,8 +7,8 @@
 
 ## A. 已核定的產品決策
 
-1. V2 目標改為 `gemini-3.8-flash`，不要再新增 `gemini-3.7-flash` 依賴；僅在程式與 deployment 經正式驗證後宣告切換，歷史回應繼續記錄真實模型版本。
-2. 順序：**Gemini 3.8 Flash 完整逐字稿先行 → Chirp 3 獨立辨識時間軸 → 可選 Gemini 3.5 Transcribe → ChatGPT/WebCodex 交叉裁決 → Golden SRT/TXT/QA → 安全 Drive 發布**。
+1. 模型角色固定分開：Vertex `gemini-3.8-flash` 負責 full-audio primary recognition；Vertex `gemini-3.8-flash` 也負責 ASR 後的 text-only correction，但使用獨立的文字 Adapter。保留每筆 raw response 的真實模型 ID，不得以文字校正 adapter 接收音訊。舊 3.7 預計 2027-01-28 退役，新版校正目標已改為 3.8；正式上線前仍須驗證真實 Vertex 相容性與部署切換。
+2. 新任務的雙引擎策略（2026-10-14 owner direction supersedes the original serial plan）：完成同一來源、價格、總預算、核准與音訊完整性預檢後，**Gemini 3.8 Flash 音訊主稿與 Chirp 3 原音辨識／時碼並行啟動**。兩者都只聽原始音訊；Gemini 不得作為 Chirp 的辨識提示。比較與裁決須等兩邊各自完成並保存原始證據後才開始。Gemini 是語意主稿，Chirp 是時間碼權威。既有已啟動任務不得為了改成並行而重送或重跑。
 3. 第一輪驗證採 **`QUALITY_3WAY`**（三引擎完整比較），不以「多數決」代替真實錄音；有聲學爭議須音檔重聽或 REVIEW。
 4. Skill + VPS 任務引擎為主要操作流程；現有網站補輕量管理與差異審核，不另建一套邏輯。
 5. 首輪真實測試建議（且上限）US$10，**這是成本框架不是立即執行扣款授權**。逐批必須確認具體來源、預估費用與剩餘核准額度。
@@ -16,19 +16,20 @@
 7. 佛經參考文字／既有人工逐字稿用於拼寫與上下文，不能把未朗讀內容補入；Chirp 是 SRT 的原始時間碼權威。
 8. 不變更正在執行的 V1 jobs、不更動既有已成功 provider evidence，不覆蓋其他 WebCodex dirty worktree。
 
+> Parallel-dispatch status: this is the owner-approved target behavior, not a claim about current capability. The current ledger `claim_next()` and paid executor still dispatch one paid stage at a time; the production service currently reports `paid_execution=false`. Do not report parallel recognition as implemented until an atomic two-stage budget/source claim, independently recoverable provider dispatches, and overlapping dispatch evidence all pass CI and staging verification.
+
 ## B. 建議開發順序：P0 → P8
 
 | 階段 | 具體內容 | 核心交付 | Gate／可否由 Agent 自行完成 |
 |---|---|---|---|
 | **P0 安全盤點與隔離** | 找出 main、`feat/media-inventory-dedup`、dirty runtime worktree、實際生產 SHA、active jobs、V1 Skill 與 DB migration 狀態；備份計畫，獨立 V2 branch/worktree | inventory、branch divergence/dirty report、風險與 rollback 清單 | **G0**；唯讀探測與文件可自動做，備份要驗證 |
-| **P1 3.7→3.8 相容遷移** | 將 V2 使用的 text-only adapter/default 換 3.8、處理 `thinking_level` 與不支援參數；不改 V1 歷史 evidence，feature flag 保持舊路徑可回退 | 3.8 provider adapter、mock tests、model/version usage 記錄 | **G1**；非付費自動，真 API smoke 需同意 |
-| **P2 Gemini 3.8 音訊主稿** | 新增 audio-primary adapter、整檔上下文、必要時分段重疊與全文重組、截斷與完整性 Gate、繁中／台語／經文 prompt、不可變原稿 | `gemini-primary.txt`、raw、coverage manifest | **G2**；mock 自動，真音檔需核准 |
-| **P3 Chirp 獨立比對** | 在 P2 主稿驗證後才啟動 Chirp，同音檔獨立 ASR，沿用 Dynamic first pass / Standard repair；文本-聲學對齊、差異標記 | Chirp raw/timing、coverage、`engine-comparison.json`（雙引擎） | **G3**；mock 自動，已授權的真實聲學測試才付費 |
+| **P1 模型角色分流** | full-audio primary 使用 3.8；text-only correction 固定 Vertex 3.8；隔離 prompt/schema/config，保留 V1 歷史 evidence 與原始 model ID | 雙 adapter、mock tests、model/version usage 記錄 | **G1**；非付費自動，真 API smoke 需同意 |
+| **P2/P3 雙引擎辨識** | 一次共同預檢及原子預算保留後，並行啟動 Gemini 3.8 audio-primary 與 Chirp 3 原音 ASR；分別保存不可變 raw、coverage、用量、費用及心跳。任一引擎錯誤不得取消或重送另一引擎已開始的呼叫 | `gemini-primary.txt`、Gemini raw、Chirp raw/timing、雙引擎 coverage 與用量證據 | **G2/G3**；mock 自動，真音檔需該來源的有效付費核准 |
 | **P4 第三引擎** | 加 `gemini-3.5-transcribe` Vertex adapter，分段能力與 words/diarization/custom vocabulary 限制探測、可跳過與模型組合切換 | 第三稿與 usage、模式路由、三引擎比較 | **G4**；mock 自動，實際模型可用性需 API 核實 |
 | **P5 WebCodex 校對與 Golden QA** | 片段比對、經文與台語裁決、爭議區間重聽、word boundary 重建 SRT、TXT 同源渲染；衝突轉 review，不憑空補內容 | `adjudication.json`、`.srt`、校正版 `.txt`、Golden QA | **G5**；程式／規則可自動，模糊語音需人工裁決 |
 | **P6 比較與最佳化** | 至少用國語、國台語混用、密集經文、錄音品質較差各一組（可同一檔兼多特徵）；建立人工確認 Gold reference；評估 CER/WER、漏句、經文、時間碼、成本、速度 | 基準集、模型 benchmark、推薦模式與告警閾值 | **G6**；Agent 統計，自然語言判錯 Gold 需適量人工抽驗 |
-| **P7 對話 Skill + 任務 API** | 升級 Skill、VPS Durable Worker、恢復/重試/進度/成本/審核指令；與 UI 共用 API，避免 ChatGPT 對話中斷中止 jobs | V2 Skill、task endpoint、handoff contract、重啟測試 | **G7**；非付費自動 |
-| **P8 介面、試營運、正式切換** | 既有 UI 模式切換、並排逐字稿、疑點播放、進度、QA、費用、發布，CI/security/ARM64/exact-SHA staging→canary→rollback 演練 | 使用說明、deploy/rollback 證據、Drive sha 驗證 | **G8**；正式切換/Drive 突變需擁有人同意 |
+| **P7 對話 Skill + 任務 API** | 升級 Skill、VPS Durable Worker、恢復/重試/進度/成本/審核指令；與 UI 共用 API，避免 ChatGPT 對話中斷中止 jobs | V2 Skill、task endpoint、handoff contract、重啟測試；隔離分支已有 default-off owner status/approval console | **G7**；非付費自動 |
+| **P8 介面、試營運、正式切換** | 已有本機 responsive 六階段任務狀態頁與單筆預算核准入口；仍需音訊差異/裁決/發布功能、staging 真人驗收、CI/security/ARM64/exact-SHA staging→canary→rollback 演練 | 使用說明、部署/rollback 證據、真帳本 browser UAT、Drive SHA 驗證 | **G8**；正式切換/Drive 突變需擁有人同意 |
 
 可平行但不能偷跑：P1 的 API mock 與 P0 非破壞盤點可平行；P3 的 mock 開發可先做，但 paid Chirp **不得在 P2 主稿通過前依 V2 流程觸發**；P4 SDK probe 與 P2/P3 mock 可平行；P7 UI 設計可先構思但不能假造後端已可用。
 
@@ -41,15 +42,15 @@
 - [ ] G0-04 SQLite DB + data/jobs snapshot 保存與 SHA／基本還原可用性記錄；備份前不得動 production。
 - [ ] G0-05 現行 Golden v1.6/v1.7 分支與 main 合併方案已整理，未把 branch-only 規格稱為 production。
 
-### G1 — Flash 3.8
-- [ ] G1-01 V2 呼叫路徑模型字串全部為 `gemini-3.8-flash`；歷史 3.7 evidence 保留。
-- [ ] G1-02 `thinking_budget` / 不相容 generate config 已依官方規範更新，錯參數會被測試攔下。
+### G1 — 模型角色與 Vertex 設定
+- [ ] G1-01 full-audio primary 使用 `gemini-3.8-flash`；text-only correction 使用 Vertex `gemini-3.8-flash`；不得使用 Gemini 2.5 或混用 audio/text adapter。舊 3.7 已從新校正路徑移除；歷史 raw model ID 不可竄改。
+- [ ] G1-02 3.8 audio 與 3.8 text correction 各自使用相容的 generate config；錯參數會被測試攔下。
 - [ ] G1-03 可在未設定真實金鑰時用 fake provider 測試（不暗中使用實際 API）。
 - [ ] G1-04 使用 Vertex 同專案的權限/region/model probe 結果被記錄；真實 smoke 若未核准則 `NOT_RUN`。
 - [ ] G1-05 有 feature flag / rollback，且既有 V1 job resume 不受破壞。
 
 ### G2 — 主稿完整性
-- [ ] G2-01 Gemini 3.8 **先於 Chirp**執行，新 job stage 排序與 durable event log 可證。
+- [ ] G2-01 Gemini 3.8 與 Chirp 3 在相同來源／預算預檢及核准後並行啟動；durable event log 證明兩個 provider dispatch 時間重疊，且沒有互相傳入辨識文字。
 - [ ] G2-02 短音檔可完整產生繁中主稿，保留原回應、token 使用量與停止原因。
 - [ ] G2-03 長音檔超輸出／截斷可分段、重疊、去重並恢復重組；**未覆蓋的語音不會宣告 completed**。
 - [ ] G2-04 網路錯誤重啟後已完成 segment 不重送；保留每段 attempt、source SHA、音檔 offset。
@@ -58,9 +59,11 @@
 ### G3 — Chirp 和雙引擎比較
 - [ ] G3-01 初次 Chirp 是獨立辨識，沒有提前使用 Gemini 主稿直接作其答案。
 - [ ] G3-02 Chirp word timestamps monotonic、midpoint ownership、overlap merge 正確；舊成功 chunk 不重送。
-- [ ] G3-03 Coverage/VAD 對真空白區與 audible gap 可區分；bounded Standard repair 而非 full rerun。
+- [ ] G3-03 Coverage/VAD 對真空白區與 audible gap 可區分；bounded Standard repair 而非 full rerun。離線 V2 路徑已可區分確認語音／確認非語音／不確定缺口，並以精確範圍、clip SHA、費用上限、Standard-only 與 target-only merge 執行 fake-provider 修復；仍待真實 Speech/VAD 長音訊驗收與真人複核。
 - [ ] G3-04 差異報告至少有 `source_time_start/end`、Gemini/Chirp 候選、差異類別、風險、引用的 evidence IDs。
 - [ ] G3-05 無法對齊的 Gemini 段落會被列 review，不產生模型虛構時間碼。
+- [ ] G3-06 兩個獨立 worker 各自持有來源／stage claim，心跳及重啟互不阻塞；比較只在兩邊皆有終態證據後執行。
+- [ ] G3-07 任一引擎逾時、格式異常或進入 REVIEW_REQUIRED 時，隔離該引擎的問題並讓另一個已核准工作續跑；不得重複 POST、超出共同預算或把停滯狀態顯示為持續進度。
 
 ### G4 — Gemini 3.5 Transcribe
 - [ ] G4-01 能獨立選擇開關；`QUALITY_3WAY` 全文、`SMART_2PLUS` 按需觸發；OFF 時沒有 API 花費。
@@ -85,13 +88,13 @@
 - [ ] G6-05 `SMART_2PLUS` 的模型加呼叫比例與節費效果先由真實數據證實，才宣稱最佳化。
 
 ### G7 — Skill / 長工流程
-- [ ] G7-01 自然語言 Drive URL + 模式 → durable job_id；能查最新進度、失敗原因、review 區間。
+- [ ] G7-01 自然語言 Drive URL + 模式 → durable job_id；**source-level partial**：owner UI/API now accept an explicitly selected exact Drive path, verify metadata/checksum around a read-only download, and create/reuse only an `AWAITING_APPROVAL` job. Natural-language URL resolution and live Drive/Cloudflare verification remain outstanding; status, failure and review-interval retrieval are only partially integrated.
 - [ ] G7-02 客戶端／ChatGPT 對話斷線後，VPS worker 可續跑；重連能以 job_id 查狀態。
 - [ ] G7-03 重啟、短暫 provider timeout、Drive 暫時中斷均不重送完成的付費步驟。
 - [ ] G7-04 Budget、Auth、Drive safe-publish 的審核與非授權拒絕都有自動測試。
 
 ### G8 — UI / 部署 / 發布
-- [ ] G8-01 桌機／平板／手機都能查看模型選擇、進度、三稿差異、疑點音檔、QA/費用。
+- [ ] G8-01 桌機／平板／手機查看模型選擇、進度、三稿差異、疑點音檔、QA/費用；**source-level partial**：responsive status/intake/approval UI exists, but real ledger browser UAT, transcript comparison/audio review and staging verification remain outstanding.
 - [ ] G8-02 所有 `pytest/unittest`、前後端 build、型別檢查、dependency audit、Compose 驗證和 smoke 全通過（若例外須逐項記錄）。
 - [ ] G8-03 staging/canary 確認舊 V1 job resume、資料庫遷移與 rollback；使用 exact commit SHA 而非 dirty runtime。
 - [ ] G8-04 真實付費測試有特定來源、單次預算與累計 US$10 核准，不因自動 cost threshold 而略過。
@@ -142,4 +145,4 @@ Rollback path:
 3. 低可信台語／佛經語句需要人類裁決時，僅呈現特定音訊區段與三稿差異。
 4. 最終 production 部署、替換正式 SRT/TXT／回寫 Drive 前，由擁有人確認變更、驗收與回滾方案。
 
-**現階段執行範圍：**僅將規格與驗收寫入 GitHub；**沒有改 production、沒觸發付費模型、沒寫入 Drive**。下一個安全行動是 P0 唯讀盤點／開發分支隔離；不可把本設計文件當作 P1 以後 PASS 證據。
+**截至 2026-10-12 的執行範圍：**隔離 Draft PR #144 已交付 V2 provider-free pipeline、SQLite/恢復、聲學 review、有界 Chirp repair、本機 source-preflight CLI、opt-in/network-disabled 本機 worker，以及 default-off `/golden-v2` owner status/intake/approval console source。頁面可讀既有 job、手動指定精確 Drive 路徑並執行唯讀 metadata/checksum 驗證；成功後只建立未核准 job，另可提交 revision-bound 預算核准。尚無付費 executor、reviewer handoff、音訊差異播放或 Drive 發布；UI/API 未配置與部署，VPS continuity、Cloudflare 和 live Drive/provider 也未驗證。G0–G7 仍 PARTIAL、G8 NOT_RUN、0/9 PASS。**沒有呼叫付費模型、沒有改 IAM/firewall、沒有寫入 Drive、沒有變更 production。** 真實付費 smoke、帳戶/IAM 變更、Drive 發布與 production cutover 仍依 G0–G8 的明確授權邊界處理。

@@ -27,7 +27,7 @@ def _model_name() -> str:
     return (
         os.environ.get("LEARNING_ARTIFACT_MODEL")
         or os.environ.get("VERTEX_MODEL")
-        or "gemini-3.7-flash"
+        or "gemini-3.8-flash"
     ).strip()
 
 

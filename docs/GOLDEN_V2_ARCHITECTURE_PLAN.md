@@ -1,4 +1,4 @@
-# Golden Transcript V2 — 三引擎、Gemini 3.8 遷移與系統架構總規格
+# Golden Transcript V2 — 三引擎、Gemini 3.8 音訊與 3.8 文字校正架構
 
 > 文件狀態：**已核定的 V2 目標設計／尚非已部署事實**  
 > 決策日期：2026-10-11；規格版號：V2.0-design-1  
@@ -21,12 +21,15 @@
 
 | 引擎 | 模型 ID／服務 | V2 用途 | 主要證據 |
 |---|---|---|---|
-| 主稿 | `gemini-3.8-flash`，Vertex AI | 首先聆聽原音檔，形成**完整逐字稿主稿**；國台語、經文上下文校訂 | 原始回應、分段主稿、coverage、prompt/model/usage |
+| 主稿 | `gemini-3.8-flash`，Vertex AI | 首先聆聽原音檔，形成**完整逐字稿主稿**；國台語、經文上下文辨識 | 原始回應、分段主稿、coverage、prompt/model/usage |
 | 聲學 | Speech-to-Text V2 `chirp_3` | 在 Gemini 主稿完成**之後**，獨立辨識同一原音檔；字詞時間邊界及語音 coverage | GCS raw JSON、word timestamps、操作／chunk manifest |
 | 可選第三引擎 | `gemini-3.5-transcribe`，Vertex AI | 獨立轉錄；全文品質基準或差異片段複核；時間碼可作參考不可推翻 Chirp 權威 | 原始轉錄、參數、分段與 usage |
+| 文字校正 | `gemini-3.8-flash`，Vertex AI | 只校正 ASR 已產生的繁中字幕文字；不得接收音訊或改動 Chirp 字詞時碼 | 原始回應、文字修訂、prompt/model/usage |
 | 裁決 | ChatGPT + WebCodex | 差異比對、音檔回查／局部重聽、語意與標點修訂、SRT/TXT 一致性及 Golden QA | decision log、標準化文字修訂、驗收報告 |
 
-**模型遷移政策：V2 所有新 Gemini Flash 呼叫目標 ID 統一為 `gemini-3.8-flash`，不再新增 `gemini-3.7-flash` 依賴。** 既有歷史 `3.7` evidence、manifest、統計及 production 說明必須保持原貌，不能批次改寫成 `3.8`。在 V2 開發、測試、切換完成前，舊系統可能仍使用 3.7，**不可把更新文件誤認為正式 runtime 已切換**。
+**模型角色政策：full-audio primary recognition 與 text-only correction 都指定 Vertex `gemini-3.8-flash`，但各自保留不同的 adapter、prompt、schema、輸入型態與稽核紀錄。** 既有 raw evidence、manifest、統計及 production 說明必須保留實際 model ID，不能批次改寫。完成測試不代表正式 runtime 已切換。
+
+**歷史模型生命週期：** Google 官方模型頁目前標示 `gemini-3.7-flash` 退役日為 **2027-01-28**，替代型號為 `gemini-3.8-flash`。因此 2026-10-12 已停止將 3.7 作為新校正預設型號；正式上線前仍須完成 3.8 真實 API 相容性與品質驗收。歷史 3.7 raw evidence 保持原始 ID。參考：[Gemini 3.7 Flash 模型頁](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-7-flash)（查核 2026-10-12）。
 
 Google 官方 2026-10-08 Gemini API release notes 說明 3.7 → 3.8 的已棄用／自動轉送；Google Cloud Vertex 模型生命週期另列 3.7 預計 **2027-01-28** 退役。兩個產品端點的轉送／退役行為應分別驗證，不應假設 Vertex 也必然自動路由。
 - https://ai.google.dev/gemini-api/docs/changelog
@@ -35,7 +38,7 @@ Google 官方 2026-10-08 Gemini API release notes 說明 3.7 → 3.8 的已棄�
 - https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-8-flash
 - https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/gemini/3-5-transcribe
 
-3.8 SDK 相容性驗證：設定 `thinking_level`（LOW/MEDIUM/HIGH 按任務測試）；移除舊 `thinking_budget` 與官方已不支援參數（例如 `temperature`、`top_p`、`top_k`、`candidate_count`、`frequency_penalty`、`presence_penalty`；以實際 SDK/端點的驗證結果為準）。確保 text-only correction 及新 audio transcription 走**不同 prompt、schema 與 provider adapter**，不僅是把舊字串直接替換。
+3.8 SDK 相容性驗證須同時覆蓋 full-audio adapter 與 text-only correction adapter；兩者都使用 Vertex `gemini-3.8-flash`。兩條路徑使用**不同 prompt、schema 與 provider adapter**，不得只替換模型字串。
 
 注意 API 產品差異：Google AI Developer API 文檔列一般 1 小時、啟用字詞時間碼／diarization 為 30 分鐘；但本專案使用 **Vertex AI / Gemini Enterprise Agent Platform**，其目前官方模型頁面列單次最多 15 分鐘。因此 V2 的 Vertex adapter 一律以 **每次 ≤15 分鐘** 作為保守硬限制，並於 capability probe 核對實際端點／SDK 後才可變更。自訂詞彙與時間碼組合需依實際端點限制分離設定；標註／Smart 模式不應默默刪除口語而成為唯一逐字稿。將限制做成 capability probe，不把文件數值寫死在永遠不變的邏輯裡。
 

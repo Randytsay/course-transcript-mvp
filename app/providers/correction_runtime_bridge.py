@@ -19,8 +19,8 @@ from typing import Any
 
 
 DEFAULT_MODELS = {
-    "vertex": "gemini-3.7-flash",
-    "openrouter": "google/gemini-3.7-flash",
+    "vertex": "gemini-3.8-flash",
+    "openrouter": "google/gemini-3.8-flash",
     "minimax": "MiniMax-M3",
 }
 
@@ -131,6 +131,14 @@ def run_module(*, ctx: dict[str, Any]) -> dict[str, Any]:
     if mode not in {"REALTIME", "BATCH"}:
         raise ProviderError("unknown", f"不支援的 AI 校正模式：{mode}")
     model = str(ctx.get("correction_model") or DEFAULT_MODELS.get(provider, ""))
+    # Existing jobs may retain an explicit historical 3.7 model in SQLite.
+    # Do not start another paid correction under that retired target and do
+    # not silently rewrite the original job/model/approval evidence.
+    if model in {"gemini-3.7-flash", "google/gemini-3.7-flash"}:
+        raise ProviderError(
+            "unknown",
+            "此任務仍指定歷史 Gemini 3.7 校正型號，需先審核改用 3.8 才能提交新的付費請求",
+        )
     spec = JobCorrectionSpec(
         job_id=str(ctx["job_id"]),
         provider=provider,

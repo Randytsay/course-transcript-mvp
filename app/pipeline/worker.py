@@ -911,7 +911,7 @@ def run_paid_job(
                 worker_id,
                 stage="correction",
                 status="correcting",
-                detail="Gemini 3.8 Flash 固定 segment 純文字校正",
+                detail="Vertex Gemini 3.8 Flash 固定 segment 純文字校正",
                 progress_start=73,
                 progress_end=88,
                 module=(

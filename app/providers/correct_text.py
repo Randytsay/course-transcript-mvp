@@ -1,4 +1,4 @@
-"""Gemini 3.7 Flash text-only correction for immutable subtitle segments.
+"""Gemini 3.8 Flash text-only correction for immutable subtitle segments.
 
 The default correction window is deliberately larger than the original
 30-second setting to reduce API round trips. Every response is checked against
@@ -43,7 +43,7 @@ WORK = JOB / "correction-v2"
 MODEL = "gemini-3.8-flash"
 WINDOW_MS = max(15_000, int(os.environ.get("GEMINI_CORRECTION_WINDOW_MS", "60000")))
 MAX_WORKERS = max(1, int(os.environ.get("GEMINI_MAX_PARALLEL_WINDOWS", "2")))
-PROMPT_VERSION = "fixed-segments-v10-gemini-3.8-golden-corpus-error-memory"
+PROMPT_VERSION = "fixed-segments-v11-gemini-3.8-golden-corpus-error-memory"
 _CLIENTS = threading.local()
 
 TERMS_SCHEMA = {
@@ -137,7 +137,6 @@ def generate_json(prompt: str, schema: dict[str, Any]) -> tuple[object, dict[str
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=schema,
-                    temperature=0,
                 ),
             )
             response_completed_at = iso()

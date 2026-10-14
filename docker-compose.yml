@@ -208,6 +208,43 @@ services:
       - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
     command: ["python", "-m", "app.jobs.delivery_worker", "--poll-seconds", "60"]
 
+  golden-v2-intake:
+    profiles: ["golden-v2-intake"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-v2-intake:local
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      COURSE_TRANSCRIPT_V2_LEDGER_PATH: /app/data/golden-v2/ledger.sqlite
+      COURSE_TRANSCRIPT_V2_ARTIFACT_ROOT: /app/data/golden-v2
+      COURSE_TRANSCRIPT_V2_MAX_APPROVAL_CENTS: ${COURSE_TRANSCRIPT_V2_MAX_APPROVAL_CENTS:-1000}
+      RCLONE_CONFIG: /run/secrets/rclone.conf
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./data:/app/data
+      - ${RCLONE_CONFIG_HOST_PATH:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
+    command: ["python", "scripts/golden_v2_batch_intake_daemon.py"]
+
+  golden-v2-worker:
+    profiles: ["golden-v2"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: course-transcript-pipeline-worker:local
+    restart: unless-stopped
+    stop_grace_period: 30s
+    network_mode: none
+    environment:
+      COURSE_TRANSCRIPT_V2_LEDGER_PATH: /app/data/golden-v2/ledger.sqlite
+      COURSE_TRANSCRIPT_V2_ARTIFACT_ROOT: /app/data/golden-v2
+      COURSE_TRANSCRIPT_V2_WORKER_ID: golden-v2-worker-1
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ./data:/app/data
+    command: ["python", "scripts/golden_v2_worker_daemon.py"]
+
   health-monitor:
     profiles: ["web"]
     build:
@@ -273,6 +310,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    env_file:
+      - path: ${COURSE_TRANSCRIPT_V2_FRONTEND_ENV_FILE:-/dev/null}
+        required: false
     restart: unless-stopped
     stop_grace_period: 20s
     environment:

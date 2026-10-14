@@ -349,7 +349,7 @@ export default function NewJobPage() {
                 onClick={() => setCorrectionPolicy("GEMINI_FIRST")}
               >
                 <ShieldCheck size={21} />
-                <span><strong>Gemini 3.8 優先</strong><small>正式品質基準；全程優先使用 Gemini 3.8 Flash</small></span>
+                <span><strong>Vertex Gemini 3.8 優先</strong><small>固定字幕段純文字校正；保留 Chirp 3 原始字詞與時碼</small></span>
                 {correctionPolicy === "GEMINI_FIRST" && <Check size={17} />}
               </button>
               <button
@@ -362,7 +362,7 @@ export default function NewJobPage() {
                 <Sparkles size={21} />
                 <span>
                   <strong>M3 優先{!m3Enabled ? "（待啟用）" : ""}</strong>
-                  <small>額度可用時先用 M3；額度不足自動轉 Gemini 3.8</small>
+                  <small>額度可用時先用 M3；額度不足轉 Vertex Gemini 3.8</small>
                 </span>
                 {correctionPolicy === "M3_FIRST" && <Check size={17} />}
               </button>
@@ -432,7 +432,7 @@ export default function NewJobPage() {
           <div className="summary-list">
             <div><span>目前選取</span><strong>{selectionMode === "files" ? `${selected.size} 個檔案` : folderReady ? "目前整個資料夾" : "尚未選取"}</strong></div>
             <div><span>辨識速度</span><strong>{processingStrategy === "DYNAMIC_BATCHING" ? "經濟" : "快速"}</strong></div>
-            <div><span>文字校正</span><strong>{correctionPolicy === "M3_FIRST" ? "M3 → Gemini 3.8" : "Gemini 3.8"}</strong></div>
+            <div><span>文字校正</span><strong>{correctionPolicy === "M3_FIRST" ? "M3 → Vertex Gemini 3.8" : "Vertex Gemini 3.8"}</strong></div>
             <div><span>輸出</span><strong>{outputFormats.map((format) => `.${format}`).join("、")}</strong></div>
             <div><span>Chirp 併發</span><strong>自動 / {chirpMaxParallelChunks}</strong></div>
             <div><span>剩餘預估額度</span><strong>{formatTwd(costs?.remainingEstimatedBudgetTwd ?? "1200")}</strong></div>

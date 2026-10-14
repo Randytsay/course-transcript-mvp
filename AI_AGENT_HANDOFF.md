@@ -62,3 +62,8 @@ Always report:
 - QA / completeness verdict;
 - remaining review items;
 - production modified: YES/NO.
+
+
+## 2026-10-13 — P5 ChatGPT/WebCodex resume
+
+See `docs/GOLDEN_V2_P5_CHATGPT_WEBCODEX_QA_2026-10-13.md`, `DECISIONS.md`, `CURRENT_STATE.md`. Use real four-minute receipts and owner 12/12 preferences. The offline P5 script already checks exact transcript source, Chirp cue continuity and user-authorized corrections (10 tests PASS), but it outputs `REVIEW_REQUIRED` because true audio/VAD coverage, word-alignment and owner final approval remain pending. Next agents must integrate with existing stage runner/render instead of creating a separate production ledger. All model spending and Drive publishing remain OFF, V1 untouched.

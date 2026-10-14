@@ -27,8 +27,11 @@ class AIProvidersAPITests(unittest.TestCase):
         os.environ["AI_PROVIDER_PROFILES_DIR"] = str(self.tmp / "ai-providers")
         self.addCleanup(os.environ.pop, "AI_PROVIDER_PROFILES_DIR", None)
 
+        # Reload only the admin module to rebind its env-backed profile path.
+        # Purging the entire providers package replaces modules held by other
+        # test imports, breaking their mocks when the full suite runs together.
         for mod in list(sys.modules):
-            if mod.startswith("app.review.admin") or mod.startswith("app.providers"):
+            if mod.startswith("app.review.admin"):
                 del sys.modules[mod]
 
         import app.review.admin as admin_module

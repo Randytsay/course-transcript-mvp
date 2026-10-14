@@ -30,7 +30,9 @@ INSTRUCTION = (
 
 
 class PrimaryTranscriptError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, known_record: dict[str, Any] | None = None):
+        super().__init__(message)
+        self.known_record = known_record
 
 
 def plan_windows(duration_seconds: float, *, max_seconds: float = MAX_WINDOW_SECONDS, overlap_seconds: float = 10.0) -> list[dict[str, float | int]]:
@@ -73,6 +75,15 @@ def validate_staged_windows(windows: list[dict[str, Any]], duration_seconds: flo
         raise PrimaryTranscriptError("uncovered final audio interval")
 
 
+def _fsync_audit_directory(directory: Path) -> None:
+    """Durably persist audit namespace changes before any external paid call."""
+    fd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, name = tempfile.mkstemp(prefix=".primary-", suffix=".tmp", dir=path.parent)
@@ -83,9 +94,102 @@ def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(name, path)
+        _fsync_audit_directory(path.parent)
     finally:
         if os.path.exists(name):
             os.unlink(name)
+
+
+def _paid_window_slot_digest(identity: dict[str, Any]) -> str:
+    """Lock one physical audio/model slot, independent of mutable prompt/config.
+
+    Any changed transcript hints, prompt version or third-model settings must
+    not buy a second recognition of the same audio window under the old claim.
+    The existing identity is still compared in full before cached reuse.
+    """
+    slot = {key: identity[key] for key in ("model", "source_sha256", "window")}
+    return hashlib.sha256(
+        json.dumps(slot, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
+
+
+def _reserve_paid_window(path: Path, identity: dict[str, Any]) -> bool:
+    """Create the durable paid-request barrier using an exclusive filesystem op.
+
+    The reservation is never unlinked on failure: even a torn/empty barrier
+    means an external request *might* have been sent and needs reconciliation.
+    O_EXCL prevents two independent workers from passing an exists() race.
+    Requires a shared, POSIX-like filesystem with exclusive-create semantics.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # The audit directory might itself be newly created. Persist its entry.
+    _fsync_audit_directory(path.parent.parent)
+    try:
+        fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return False
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(
+                {"identity": identity, "status": "REQUEST_STARTED",
+                 "human_review_required": True},
+                handle, ensure_ascii=False, indent=2,
+            )
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        # Also sync an incomplete reservation. If fsync fails, the caller
+        # must NOT proceed to a paid provider call.
+        _fsync_audit_directory(path.parent)
+    return True
+
+
+def _reject_legacy_paid_slot(path: Path, identity: dict[str, Any]) -> None:
+    """Fail closed if older full-prompt-keyed receipts may represent this slot.
+
+    A pre-existing V2 job may use a different on-disk receipt filename.
+    Looking only for the new slot filename could otherwise cause duplicate
+    billing after a code upgrade. A human must reconcile and safely reindex
+    old immutable results; this function never modifies them.
+    """
+    for previous in path.parent.glob("*.json"):
+        if previous.name == path.name:
+            continue
+        if previous.is_symlink():
+            raise PrimaryTranscriptError(
+                "symlinked paid audit requires operator reconciliation"
+            )
+        try:
+            receipt = json.loads(previous.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise PrimaryTranscriptError(
+                "unreadable legacy paid audit; block further provider submissions"
+            ) from exc
+        if not isinstance(receipt, dict) or not isinstance(receipt.get("identity"), dict):
+            raise PrimaryTranscriptError(
+                "unbound legacy paid audit; operator reconciliation required"
+            )
+        old = receipt["identity"]
+        if all(old.get(key) == identity.get(key) for key in
+               ("model", "source_sha256", "window")):
+            raise PrimaryTranscriptError(
+                "prior paid audio window uses a legacy receipt; reconcile before resubmission"
+            )
+
+
+def _load_completed_window(path: Path, identity: dict[str, Any]) -> dict[str, Any]:
+    """Only reuse a validated COMPLETE record; all other states fail closed."""
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise PrimaryTranscriptError(
+            "unreadable previous paid-request barrier; operator reconciliation required"
+        ) from exc
+    if (not isinstance(cached, dict) or cached.get("identity") != identity
+            or cached.get("status") != "COMPLETE"):
+        raise PrimaryTranscriptError("previous attempt requires operator reconciliation")
+    return cached
 
 
 def _usage(response: Any) -> dict[str, Any]:
@@ -134,13 +238,11 @@ def run_window(
         "source_sha256": source_sha256, "window": {k: staged_window[k] for k in ("index", "start_seconds", "end_seconds", "gcs_uri", "mime_type")},
         "context_sha256": hashlib.sha256(reference_terms.encode("utf-8")).hexdigest(),
     }
-    digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    digest = _paid_window_slot_digest(identity)
     audit_path = job_dir / "gemini-primary" / f"{digest}.json"
     if audit_path.exists():
-        cached = json.loads(audit_path.read_text(encoding="utf-8"))
-        if cached.get("identity") != identity or cached.get("status") != "COMPLETE":
-            raise PrimaryTranscriptError("previous attempt requires operator reconciliation")
-        return cached
+        return _load_completed_window(audit_path, identity)
+    _reject_legacy_paid_slot(audit_path, identity)
     if part_factory is None:
         from google.genai import types
         part_factory = lambda uri, mime: types.Part.from_uri(file_uri=uri, mime_type=mime)
@@ -152,8 +254,10 @@ def run_window(
     # Persist a durable barrier BEFORE the external call. On timeout, the
     # provider may have charged/finished even if its response was lost. Never
     # automatically submit a second call with the same identity.
-    _atomic_json(audit_path, {"identity": identity, "status": "REQUEST_STARTED",
-                              "human_review_required": True})
+    if not _reserve_paid_window(audit_path, identity):
+        # Another process won the reservation. It may already have a
+        # verified COMPLETE response, but must never trigger another POST.
+        return _load_completed_window(audit_path, identity)
     try:
         response = client.models.generate_content(
             model=MODEL,
@@ -178,7 +282,7 @@ def run_window(
     }
     _atomic_json(audit_path, record)
     if not valid:
-        raise PrimaryTranscriptError("empty, blocked or truncated model response preserved for review")
+        raise PrimaryTranscriptError("empty, blocked or truncated model response preserved for review", known_record=record)
     return record
 
 
@@ -205,4 +309,67 @@ def assemble_windows(windows: list[dict[str, Any]], records: list[dict[str, Any]
         "structural_coverage": "PASS", "acoustic_coverage": "UNVERIFIED",
         "review_items": review, "ready_for_chirp_comparison": not bool(review),
         "golden_approved": False,
+    }
+
+
+def assemble_reviewed_overlaps(
+    windows: list[dict[str, Any]], records: list[dict[str, Any]],
+    duration_seconds: float, *, seam_decisions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Apply an authenticated operator's *audio-reviewed* text seam decisions.
+
+    Character offsets refer only to the original immutable model responses;
+    they are not synthetic timestamps. The exact audio overlap must be
+    inspected and cited for every seam. Any missing/invalid decision blocks
+    progress. This does NOT attest to whole-file acoustic completeness.
+    """
+    baseline = assemble_windows(windows, records, duration_seconds)
+    required = {tuple(item["between_windows"]) for item in baseline["review_items"]}
+    decisions: dict[tuple[int, int], dict[str, Any]] = {}
+    if not required:
+        raise PrimaryTranscriptError("no Gemini overlap review to resolve")
+    for decision in seam_decisions:
+        pair = decision.get("between_windows")
+        if (not isinstance(pair, list) or len(pair) != 2 or
+                any(type(i) is not int for i in pair)):
+            raise PrimaryTranscriptError("invalid overlap decision identity")
+        key = tuple(pair)
+        if key not in required or key in decisions:
+            raise PrimaryTranscriptError("duplicate or unknown overlap decision")
+        previous, following = windows[key[0]], windows[key[1]]
+        expected_start = round(float(following["start_seconds"]) * 1000)
+        expected_end = round(float(previous["end_seconds"]) * 1000)
+        if (type(decision.get("reviewed_audio_start_ms")) is not int or
+                type(decision.get("reviewed_audio_end_ms")) is not int or
+                decision["reviewed_audio_start_ms"] != expected_start or
+                decision["reviewed_audio_end_ms"] != expected_end or
+                decision.get("audio_review_confirmed") is not True or
+                not isinstance(decision.get("notes"), str) or
+                not decision["notes"].strip()):
+            raise PrimaryTranscriptError("full overlap audio review evidence required")
+        left = str(records[key[0]]["text"]).strip()
+        right = str(records[key[1]]["text"]).strip()
+        a, b = decision.get("left_keep_chars"), decision.get("right_drop_chars")
+        if (type(a) is not int or type(b) is not int or
+                not 0 < a <= len(left) or not 0 <= b < len(right)):
+            raise PrimaryTranscriptError("overlap text cuts out of bounds")
+        decisions[key] = decision
+    if set(decisions) != required:
+        raise PrimaryTranscriptError("every audio overlap needs an explicit decision")
+    texts = [str(record["text"]).strip() for record in records]
+    contributed = []
+    removed = []
+    for index, text in enumerate(texts):
+        start = decisions[(index - 1, index)]["right_drop_chars"] if (index - 1, index) in decisions else 0
+        end = decisions[(index, index + 1)]["left_keep_chars"] if (index, index + 1) in decisions else len(text)
+        if end <= start or not text[start:end].strip():
+            raise PrimaryTranscriptError("overlap cuts remove a complete window contribution")
+        contributed.append(text[start:end])
+        removed.append({"window": index, "prefix": text[:start], "suffix": text[end:]})
+    return {
+        "text": "\n\n".join(contributed), "window_count": len(windows),
+        "structural_coverage": "PASS", "acoustic_coverage": "SEAMS_REVIEWED_WHOLE_FILE_UNVERIFIED",
+        "review_items": [], "reviewed_seams": seam_decisions,
+        "discarded_window_text": removed,
+        "ready_for_chirp_comparison": True, "golden_approved": False,
     }

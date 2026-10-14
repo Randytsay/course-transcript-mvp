@@ -1,0 +1,60 @@
+# User-approved one-clip Golden V2 primary. FALSE by default; no side effects.
+# Validate new Gemini 3.5 WAV SHA correction without model usage.
+name: Golden V2 Paid Primary 4min
+on:
+  push:
+    branches: [codex/golden-v2-goal-completion]
+    paths:
+      - .github/workflows/golden-v2-paid-primary-smoke.yml
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: golden-v2-paid-primary-20261013
+  cancel-in-progress: false
+
+jobs:
+  immutable-four-minute-primary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      GOLDEN_V2_PAID_ENABLED: "false"
+      GOLDEN_V2_CHIRP_PAID_ENABLED: "false"
+      GOLDEN_V2_THIRD_PAID_ENABLED: "false"
+      GOLDEN_V2_NEW35_PAID_ENABLED: "false"
+      GOLDEN_V2_PREVIEW35_PAID_ENABLED: "false"
+      GOLDEN_V2_PREVIEW35_OWNER_APPROVAL: ""
+    steps:
+      - name: Checkout exact approved development commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Authenticate dedicated Google Cloud service account without keys
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/608343797618/locations/global/workloadIdentityPools/golden-v2-gh/providers/github-restricted
+          service_account: golden-v2-smoke@xenon-chain-506409-c3.iam.gserviceaccount.com
+          create_credentials_file: true
+          export_environment_variables: true
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install isolated SDK dependencies
+        run: python -m pip install --disable-pip-version-check google-genai==2.29.0 'google-cloud-storage>=3.0.0,<4.0.0' 'google-cloud-speech>=2.30.0,<3.0.0'
+      - name: Verify first model without resubmission
+        run: python scripts/golden_v2_one_shot_github.py
+      - name: Chirp 3 verify without submitting again
+        run: python scripts/golden_v2_one_shot_chirp_github.py
+      - name: Gemini 3.5 Verbatim preflight and optional one-shot
+        run: python scripts/golden_v2_one_shot_third_github.py
+      - name: Gemini 3.5 WAV lossless preparation validation (no charges)
+        run: python scripts/golden_v2_third_wav_preflight.py
+      - name: Gemini 3.5 paid model availability catalog guard (read-only)
+        run: python scripts/golden_v2_model_catalog_gate.py --project xenon-chain-506409-c3 --model gemini-3.5-transcribe --report-only
+      - name: Gemini 3.5 new independent paid one-shot (default disabled)
+        run: python scripts/golden_v2_new35_owner_approved.py
+      - name: Gemini 3.5 Preview candidate SDK and source dry-run (never paid by default)
+        run: python scripts/golden_v2_preview35_future_consent.py

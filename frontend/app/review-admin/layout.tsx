@@ -10,6 +10,7 @@ export default function ReviewAdminLayout({ children }: { children: ReactNode })
         <a href="/review-admin/ai-accounts" style={{color:"#fff",textDecoration:"none",padding:"6px 10px",borderRadius:999,background:"rgba(255,255,255,.12)"}}>AI 帳戶管理</a>
         <a href="/review-admin/ai-providers" style={{color:"#fff",textDecoration:"none",padding:"6px 10px",borderRadius:999,background:"rgba(255,255,255,.12)"}}>AI 模型供應商</a>
         <a href="/review-admin/canonical-texts" style={{color:"#fff",textDecoration:"none",padding:"6px 10px",borderRadius:999,background:"rgba(255,255,255,.12)"}}>佛典正式文字</a>
+        <a href="/golden-v2" style={{color:"#d2f17a",textDecoration:"none",padding:"6px 10px",borderRadius:999,background:"rgba(210,241,122,.1)"}}>Golden V2 任務</a>
         <a href="/review-admin/help" style={{color:"#fff",textDecoration:"none",padding:"6px 10px",borderRadius:999,background:"rgba(255,255,255,.12)"}}>管理員說明</a>
         <a href="/review/videos" style={{color:"#d9e9e1",textDecoration:"none",padding:"6px 10px"}}>進入校訂入口 ↗</a>
       </div>

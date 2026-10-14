@@ -2,13 +2,19 @@
 import json
 from pathlib import Path
 from typing import Any
-GEMINI="gemini-3.7-flash"
+GEMINI="gemini-3.8-flash"
 
 def summarize_routing(job_dir: Path) -> dict[str, Any]:
     path=job_dir/"correction-routing.json"
     try: payload=json.loads(path.read_text())
     except (FileNotFoundError,OSError,json.JSONDecodeError):
-        return {"correction_policy":"GEMINI_FIRST","correction_initial_provider":GEMINI,"correction_route":GEMINI,"correction_models_used":[GEMINI],"correction_segment_counts":{},"correction_routing_manifest":None}
+        # Configuration does not prove which model produced historical text.
+        try:
+            actual=json.loads((job_dir/"subtitles-corrected.json").read_text()).get("model")
+        except (OSError,ValueError,AttributeError):
+            actual=None
+        actual=actual if isinstance(actual,str) and actual.strip() else "UNKNOWN"
+        return {"correction_policy":"GEMINI_FIRST","correction_initial_provider":actual,"correction_route":actual,"correction_models_used":[] if actual=="UNKNOWN" else [actual],"correction_segment_counts":{},"correction_routing_manifest":None}
     initial=str(payload.get("initial_provider") or GEMINI); route=[initial]
     switches=payload.get("provider_switches",[])
     if isinstance(switches,list):

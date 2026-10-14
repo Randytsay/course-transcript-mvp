@@ -9,6 +9,7 @@ import unittest
 
 from app.providers.golden_v2_audio_staging import (
     AudioStagingError, duration_seconds, file_sha256, prepare_local_clips,
+    prepare_local_repair_clips,
 )
 
 
@@ -86,3 +87,45 @@ class LocalV2AudioStagingTests(unittest.TestCase):
             manifest.write_text(json.dumps(record))
             with self.assertRaises(AudioStagingError):
                 prepare_local_clips(**args)
+
+    def test_standard_repair_clips_are_short_source_bound_and_reusable(self):
+        with TemporaryDirectory() as root:
+            folder = Path(root)
+            source = folder / "normalized.flac"
+            make_flac(source, 4)
+            sha = file_sha256(source)
+            args = dict(
+                source=source, expected_source_sha256=sha,
+                output_dir=folder / "repair-clips",
+                intervals=[{"start_ms": 500, "end_ms": 2500,
+                            "target_intervals": [{"start_ms": 1000, "end_ms": 1800}]}],
+            )
+            first = prepare_local_repair_clips(**args)
+            item = first["windows"][0]
+            clip = folder / "repair-clips" / item["clip_filename"]
+            self.assertEqual(first["schema"], "golden-v2-local-repair-windows-v1")
+            self.assertEqual(first["total_clip_duration_ms"], 2000)
+            self.assertEqual(item["target_intervals"], [{"start_ms": 1000, "end_ms": 1800}])
+            self.assertEqual(file_sha256(clip), item["clip_sha256"])
+            self.assertAlmostEqual(duration_seconds(clip), 2.0, delta=0.05)
+            self.assertFalse(first["gcs_uploaded"])
+            self.assertFalse(first["paid_model_called"])
+            self.assertEqual(prepare_local_repair_clips(**args), first)
+
+    def test_standard_repair_rejects_target_outside_clip_and_total_cap(self):
+        with TemporaryDirectory() as root:
+            folder = Path(root)
+            source = folder / "normalized.flac"
+            make_flac(source, 4)
+            base = dict(source=source, expected_source_sha256=file_sha256(source),
+                        output_dir=folder / "repair-clips")
+            with self.assertRaises(AudioStagingError):
+                prepare_local_repair_clips(**base, intervals=[{
+                    "start_ms": 500, "end_ms": 2000,
+                    "target_intervals": [{"start_ms": 1500, "end_ms": 2500}],
+                }])
+            with self.assertRaises(AudioStagingError):
+                prepare_local_repair_clips(**base, max_total_ms=1000, intervals=[{
+                    "start_ms": 500, "end_ms": 2500,
+                    "target_intervals": [{"start_ms": 1000, "end_ms": 1800}],
+                }])

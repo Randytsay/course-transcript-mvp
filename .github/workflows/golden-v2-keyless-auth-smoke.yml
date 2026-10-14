@@ -1,0 +1,103 @@
+# Recheck restricted GitHub workflow_ref OIDC: no keys, media writes or paid AI.
+name: Golden V2 Keyless Identity Smoke
+on:
+  push:
+    branches:
+      - codex/golden-v2-goal-completion
+    paths:
+      - .github/workflows/golden-v2-keyless-auth-smoke.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  keyless-readonly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: GitHub OIDC to Golden V2 dedicated service account
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/608343797618/locations/global/workloadIdentityPools/golden-v2-gh/providers/github-restricted
+          service_account: golden-v2-smoke@xenon-chain-506409-c3.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_lifetime: 600s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Read-only dedicated GCS bucket probe
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --retry 0 --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 20 \
+            --header "Authorization: Bearer ${GCP_ACCESS_TOKEN}" \
+            "https://storage.googleapis.com/storage/v1/b/xenon-chain-506409-c3-golden-v2-smoke/o?maxResults=1")"
+          echo "GCS_OBJECT_LIST_HTTP=${status}"
+          test "${status}" = "200"
+
+      - name: Read-only Speech V2 regional API probe
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --retry 0 --silent --show-error --output /dev/null --write-out '%{http_code}' --max-time 20 \
+            --header "Authorization: Bearer ${GCP_ACCESS_TOKEN}" \
+            "https://us-speech.googleapis.com/v2/projects/xenon-chain-506409-c3/locations/us/recognizers?pageSize=1")"
+          echo "SPEECH_V2_READ_HTTP=${status}"
+          test "${status}" = "200"
+
+      - name: Inspect transcribe model catalog via dedicated OIDC identity (read-only)
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          status="$(curl --retry 0 --silent --show-error --max-time 25 \
+            --output /tmp/golden-v2-model-catalog.json --write-out '%{http_code}' \
+            --header "Authorization: Bearer ${GCP_ACCESS_TOKEN}" \
+            --header "x-goog-user-project: xenon-chain-506409-c3" \
+            "https://aiplatform.googleapis.com/v1beta1/publishers/google/models?pageSize=100&listAllVersions=true")"
+          echo "MODEL_GARDEN_LIST_HTTP=${status}"
+          if [[ "${status}" != "200" ]]; then
+            echo 'MODEL_CATALOG_INCONCLUSIVE=YES'
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          obj=json.load(open('/tmp/golden-v2-model-catalog.json'))
+          names={x.get('name') for x in obj.get('publisherModels',[])}
+          if obj.get('nextPageToken'): raise RuntimeError('Catalog paginated; cannot infer absence')
+          print('CATALOG_VISIBLE_MODEL_COUNT='+str(len(names)))
+          for label,model in [('KNOWN_GOOD','gemini-3.8-flash'),('TRANSCRIBE_GA','gemini-3.5-transcribe'),('TRANSCRIBE_PREVIEW','gemini-3.5-transcribe-preview')]:
+              print('CATALOG_'+label+'_LISTED='+str('publishers/google/models/'+model in names).lower())
+          if 'publishers/google/models/gemini-3.8-flash' not in names: raise RuntimeError('Known-good model absent; inconclusive')
+          print('PAID_MODEL_REQUESTS=0')
+          PY
+      - name: Read-only individual Model Garden GET for GA Preview and known good
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          for spec in "CONTROL gemini-3.8-flash" "GA gemini-3.5-transcribe" "PREVIEW gemini-3.5-transcribe-preview"; do
+            read -r label model <<< "${spec}"
+            status="$(curl --retry 0 --silent --show-error --max-time 20 \
+              --output /dev/null --write-out '%{http_code}' \
+              --header "Authorization: Bearer ${GCP_ACCESS_TOKEN}" \
+              --header "x-goog-user-project: xenon-chain-506409-c3" \
+              "https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${model}")"
+            echo "MODEL_GARDEN_GET_${label}_HTTP=${status}"
+          done
+          echo 'PUBLISHER_METADATA_GET_IS_NOT_INFERENCE_PROOF=true'
+      - name: Mark keyless authentication smoke accepted
+        run: |
+          echo 'KEYLESS_GOOGLE_AUTH=PASS'
+          echo 'MODEL_INFERENCE_CALLS=0'
+          echo 'GCS_UPLOADS=0'
+          echo 'GOLDEN_V2_PAID_TRIAL_UNCHANGED=true'

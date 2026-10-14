@@ -129,7 +129,7 @@ def correction_provider_status() -> dict[str, object]:
     return {
         "default_policy": DEFAULT_CORRECTION_POLICY,
         "m3_enabled": _m3_enabled(),
-        "gemini_model": "gemini-3.7-flash",
+        "gemini_model": "gemini-3.8-flash",
         "m3_model": os.environ.get("MINIMAX_M3_MODEL", "MiniMax-M3"),
         "minimax_configured": minimax_configured,
         "quota_live_check": quota_live_check,
@@ -138,7 +138,7 @@ def correction_provider_status() -> dict[str, object]:
         "quota_source_pool": quota.source_pool if quota else None,
         "note": (
             "M3 policy may be persisted, but routing remains fail-closed: unknown "
-            "quota always selects Gemini 3.7."
+            "quota always selects Gemini 3.8."
         ),
     }
 

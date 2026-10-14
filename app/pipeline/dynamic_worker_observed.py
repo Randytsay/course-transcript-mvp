@@ -2,7 +2,7 @@
 
 The worker prepares and submits several source jobs, releases their leases while
 Google schedules the Speech operations, then performs short recovery passes.
-Completed Chirp jobs continue through Gemini 3.8 Flash, QA, safe Drive
+Completed Chirp jobs continue through Vertex Gemini 3.8 Flash text correction, QA, safe Drive
 publication, and terminal completion without a mandatory human-review gate.
 """
 from __future__ import annotations
@@ -252,7 +252,7 @@ def _finish_after_chirp(
             worker_id,
             stage="correction",
             status="correcting",
-            detail="Gemini 3.8 Flash 固定 segment 純文字校正",
+            detail="Vertex Gemini 3.8 Flash 固定 segment 純文字校正",
             progress_start=73,
             progress_end=88,
             module=(

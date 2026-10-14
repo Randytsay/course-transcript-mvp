@@ -11,6 +11,12 @@ def response(content:str)->bytes:
     return json.dumps({"base_resp":{"status_code":0},"choices":[{"message":{"content":content}}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}},ensure_ascii=False).encode()
 
 class PhaseATests(unittest.TestCase):
+    def test_no_routing_manifest_preserves_actual_historical_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            self.assertEqual(summarize_routing(root)["correction_models_used"], [])
+            (root/'subtitles-corrected.json').write_text(json.dumps({"model":"gemini-3.7-flash"}))
+            self.assertEqual(summarize_routing(root)["correction_models_used"], ["gemini-3.7-flash"])
     def client(self,payloads,root):
         key=root/'key'; key.write_text('test-key'); calls=iter(payloads)
         def post(_u,_h,_b,_t): return 200,{},next(calls)

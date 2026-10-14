@@ -13,6 +13,87 @@
 - Do not start a real Chirp, Gemini, or Drive mutation test without explicit approval for the exact source and estimated cost.
 - Do not delete provider manifests, raw responses, operation names, usage evidence, or Drive transaction state during recovery or rollback.
 
+## Golden V2 paid-dispatch review (development branch only)
+
+### Long board-writing pauses and acoustic verification (2026-10-14)
+
+The owner listened to `251025_.MP3` and identified **44:10–48:40** as an
+approximately 270-second board-writing interval without speech. This is an
+owner-provided observation, not a source-SHA-bound automated VAD result and
+not approval of the remainder of the Gemini window. This lecture format can
+contain extended board-writing pauses; an empty Chirp timestamp interval alone
+is never evidence of missing speech.
+
+Golden V2 acoustic QA now inspects long subtitle gaps in contiguous bounded
+slices (30 seconds each by default, at most 48 total across up to 16 gaps).
+Only complete local evidence of silence or robust VAD nonspeech for **every**
+slice permits `NONSPEECH_CONFIRMED`; suspected speech, inconclusive slices,
+missing tools or exhausted budgets retain `REVIEW`. Individual slice bounds
+and measurements are included in the acoustic report. No silence assumption
+may resolve a Gemini `REQUIRES_REVIEW` provider response, waive the independent
+Chirp timestamp check, assert human QA, trigger paid repairs, or authorize
+Drive publication. The immutable source/model audit remains unchanged.
+
+### Gemini primary-stage review diagnostics (2026-10-14)
+
+The authenticated V2 chat review endpoint `GET /api/v1/golden-v2/jobs/{job_id}/review`
+now includes a bounded `diagnostic_code` when the Gemini stage is held and a
+primary-overlap review packet cannot be verified. Codes disclose neither raw
+Gemini text nor provider payloads, credentials, or GCS URIs.
+
+- `GEMINI_EMPTY_RESPONSE`: an immutable, stage-bound Gemini response contains
+  no usable text.
+- `GEMINI_NON_STOP_FINISH`: an immutable, stage-bound response has text but did
+  not report a successful STOP finish reason; output may be truncated.
+- `GEMINI_RESPONSE_REVIEW_REQUIRED`: the preserved response is marked for
+  review without either of the preceding conditions.
+- `PRIMARY_*`: a missing, unreadable, inconsistent, or insufficient source,
+  window, raw-audit, or overlap artifact prevents reliable classification.
+
+These codes are **diagnostic only**. They do not release a held ledger stage,
+authorize another Gemini POST, assert human listening, pass Golden QA, or
+enable Drive publishing. Inspect the exact immutable raw evidence and job
+revision using an approved operator workflow before any recovery decision.
+The API returns a window index for verified provider-response issues only.
+
+Before any proposed paid-runner integration, run the **read-only** preview:
+
+```bash
+python scripts/golden_v2_paid_dispatch.py \
+  --database /app/data/golden-v2/ledger.sqlite \
+  --artifact-root /app/data/golden-v2 \
+  --job-id v2p_<exact-preflight-job-id> \
+  --trial-cap-cents 1000
+```
+
+The same report can be retrieved by an authenticated owner from the default-off
+`GET /api/v1/golden-v2/jobs/{job_id}/paid-preview`; it requires the read-only
+V2 owner token and is **not** a paid execution API. Exit 0 only means the
+local source/cost review found no blockers; it always returns
+`provider_calls_allowed=false`. Exit 2 is a blocker requiring reconciliation.
+The preview SHA is **not a cryptographic approval** and does not prove live
+Drive freshness, actual Vertex/Chirp availability, pricing, IAM or billing.
+
+An eventual separately authorized executor must independently recheck these
+live dependencies and call `GoldenV2Ledger.claim_next` with the approved
+exact `expected_stage`, `expected_revision`, `expected_source_sha` and
+`aggregate_cap_cents`, before using the audit-first paid provider adapters.
+The aggregate cap is only applied to callers explicitly providing it; older
+worker paths are not automatically upgraded by this development-only change.
+Never connect this route to provider requests or deploy to production without
+the distinct user-authorized live paid smoke and release gates.
+
+The development-only `execute_trusted_paid_stage` in
+`app/pipeline/golden_v2_trusted_dispatch.py` now implements that single-stage
+handoff: read-only aggregate preview → independent owner/capability/pricing
+verifiers → fresh authenticated Drive revision check → exact source/stage/
+revision/aggregate-cap SQLite claim → existing primary/Chirp/third adapter.
+It accepts injected trusted clients/services only, does not construct cloud
+credentials, and has no automatic daemon, HTTP paid endpoint or live CLI.
+Chirp returns durable submissions for the existing recovery worker; paid
+errors preserve request/claim barriers and must never be blindly repeated.
+The isolated four-minute smoke approval does not authorize a full-source job.
+
 ## Production entry points
 
 - API: `app.api_hardened:app`
@@ -118,7 +199,7 @@ GEMINI_CORRECTION_WINDOW_MS=60000
 GEMINI_MAX_PARALLEL_WINDOWS=2
 ```
 
-The model is `gemini-3.7-flash`. Every paid response is stored under a prompt-version, source-digest, and attempt-unique audit filename. If a structured response is malformed, the parent response must be persisted before the window is split.
+The development target is `gemini-3.8-flash` only. Historical 3.7 receipts and submitted operations remain readable; new 3.7 requests are blocked. Verify the exact deployed release before asserting a production migration. Every paid response is stored under a prompt-version, source-digest, and attempt-unique audit filename. If a structured response is malformed, the parent response must be persisted before the window is split.
 
 ### Dacheng Golden Corpus / Error Memory
 
@@ -287,7 +368,7 @@ heartbeat、Dynamic Batch 逾時與 Drive delivery retry。
 
 建立任務時，先選擇每份文件的內容模式：`一般文件` 是預設值，不會帶入佛經
 或咒語偏置；`大成佛經` 才會使用固定咒語拼寫。選填的「補充說明」會與該工作
-一併保存為不可變背景，用於 Gemini 3.7 Flash 的純文字校正，不會更動原始 Chirp
+一併保存為不可變背景，用於 Gemini 3.8 Flash 的純文字校正，不會更動原始 Chirp
 結果、時間碼或分段。
 
 咒語的講師／大眾重複只會在輸出層做去重，且必須偵測到兩輪完整、連續、順序正確
@@ -379,3 +460,35 @@ Fail-closed behavior:
 Evidence is written to reference-chirp-completeness.json; the original merged timeline
 is preserved as merged-words.pre-reference-completeness.json whenever an accepted
 replacement changes merged-words.json.
+
+
+## V2 Drive link batches (development only)
+
+See `docs/GOLDEN_V2_LINK_TO_RUN_2026-10-13.md`. The shared owner API now has
+`link-preview`, `link-batches` and `link-batches/{id}`. Creating a batch persists
+non-paid source intake; it is not cost approval. The separately default-off
+`golden-v2-intake` Compose profile runs the restartable Drive-read-only importer.
+Use `scripts/golden_v2_owner_client.py` from a trusted server with scoped owner
+tokens in its environment; do not pass tokens in CLI arguments. A configured
+ChatGPT connector and production runtime are still required.
+
+The new paid executor daemon defaults OFF and requires trusted service factories
+when explicitly enabled. Never replace independent owner/provider/pricing
+verification with callbacks that always return true. See the checkpoint for
+SDK isolation and acceptance prerequisites. The linked checkpoint records an
+earlier development iteration; it is not a current deployment or authorization
+statement. The separately managed ChatGPT V2 service is documented in
+`docs/GOLDEN_V2_CHAT_ENTRY.md`.
+
+## Proven-unsent V2 primary request recovery
+
+For the narrowly scoped, once-per-stage recovery of a V2 Gemini request proven
+not to have been submitted, follow
+`docs/GOLDEN_V2_NO_DISPATCH_RECOVERY.md`. The verifier requires complete,
+aged Cloud Monitoring request-count evidence and preserves the raw unknown
+attempt. A zero-cost ledger entry alone is insufficient. Resetting the stage
+can cause the already-running paid worker to submit the approved request
+immediately; use only within the exact source/model/cost authorization. Drive
+publication remains disabled until separate review and Golden acceptance.
+This recovery command does not enable the default-off general executor daemon
+described in the earlier development checkpoint.

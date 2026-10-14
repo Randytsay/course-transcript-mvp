@@ -1,0 +1,106 @@
+"""Exact-source operator rescue; one submission, then saved-operation recovery."""
+import argparse
+import json
+from pathlib import Path
+import sys
+from threading import Event
+import signal
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
+from app.jobs.drive_api import read_drive_media_metadata, download_drive_media
+from app.pipeline.golden_v2_primary_rescue import claim_independent_rescue, verify_same_audio_revision
+from app.pipeline.golden_v2_runtime_services import paid_services, recovery_services
+from app.pipeline.golden_v2_chirp_stage import plan_approved_chirp, submit_planned_chirp
+from app.pipeline.golden_v2_chirp_recovery_worker import run_chirp_recovery_pass
+from app.subtitles.golden_v2_raw_candidates import export_raw_candidates
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--job-id', required=True)
+    parser.add_argument('--source-sha', required=True)
+    parser.add_argument('--revision', type=int, required=True)
+    parser.add_argument('--cap-cents', type=int, required=True)
+    parser.add_argument('--reference', required=True)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument('--submit', action='store_true')
+    mode.add_argument('--resume-planned', action='store_true')
+    args = parser.parse_args()
+    root = args.root.resolve()
+    ledger = GoldenV2Ledger.open_existing(root/'ledger.sqlite')
+    job_dir = root/'jobs'/args.job_id
+    if job_dir.resolve().parent != root/'jobs' or job_dir.is_symlink():
+        raise V2Conflict('invalid job directory')
+    state = ledger.status(args.job_id)
+    if state['source_sha'] != args.source_sha:
+        raise V2Conflict('source changed')
+    snapshot = dict(job_id=args.job_id, source_sha256=args.source_sha,
+                    revision=args.revision, stage='chirp_independent',
+                    aggregate_cap_cents=args.cap_cents)
+    if args.submit or args.resume_planned:
+        rows = ledger.chirp_windows(args.job_id)
+        recovery_only = (
+            args.resume_planned and bool(rows)
+            and all(row['status'] in {'SUBMITTED', 'DONE', 'REVIEW_REQUIRED'} for row in rows)
+            and not any(row['status'] == 'PLANNED' for row in rows)
+        )
+        if recovery_only:
+            # A restarted container may still carry the old --resume-planned
+            # argv. If every planned request already has a saved operation ID,
+            # continue with GET-only recovery and never touch paid services.
+            print(json.dumps(dict(action='RECOVER_SAVED_OPERATIONS_ONLY',
+                                  operations=len(rows))), flush=True)
+        else:
+            if args.resume_planned and any(row['status'] == 'PLANNED' for row in rows):
+                raise V2Conflict('resume worker refuses new provider submissions')
+            if args.resume_planned and any(row['status'] not in {'SUBMITTED', 'DONE'}
+                                           for row in rows):
+                raise V2Conflict('unresolved Chirp operation requires reconciliation')
+            services = paid_services(snapshot)
+            pre = json.loads((job_dir/'source-preflight.json').read_text())
+            def verified():
+                preview = dict(source_sha256=args.source_sha)
+                if services['verify_owner'](preview) is not True or services['verify_capability_and_pricing'](preview) is not True:
+                    return False
+                return verify_same_audio_revision(job_dir=job_dir,
+                    read_metadata=read_drive_media_metadata, download_media=download_drive_media)
+            if args.resume_planned:
+                if verified() is not True:
+                    raise V2Conflict('fresh owner/source verification failed')
+                claim = ledger.resume_chirp_submissions(args.job_id,
+                    worker_id='trusted-independent-rescue', expected_revision=args.revision)
+            else:
+                claim = claim_independent_rescue(ledger=ledger, job_id=args.job_id,
+                    job_dir=job_dir, revision=args.revision, source_sha=args.source_sha,
+                    cap_cents=args.cap_cents, reference=args.reference,
+                    verify_authorization_and_live_source=verified)
+            options = dict(services['stage_options'])
+            gateway = options.pop('gateway')
+            if args.submit:
+                plan_approved_chirp(ledger=ledger, claim=claim, normalized_audio=job_dir/'normalized.flac',
+                                   job_dir=job_dir, **options)
+            submit_planned_chirp(ledger=ledger, claim=claim, gateway=gateway)
+            print(json.dumps(dict(action='SUBMITTED_ONCE', operations=len(rows))), flush=True)
+    stop = Event()
+    signal.signal(signal.SIGTERM, lambda *_: stop.set())
+    signal.signal(signal.SIGINT, lambda *_: stop.set())
+    deadline = time.monotonic()+24*3600
+    while not stop.is_set() and time.monotonic()<deadline:
+        result = run_chirp_recovery_pass(ledger=ledger, job_id=args.job_id, job_dir=job_dir,
+                                        **recovery_services(snapshot))
+        print(json.dumps(result, ensure_ascii=False), flush=True)
+        if result['action'] != 'WAITING_FOR_EXISTING_OPERATIONS':
+            rows = ledger.chirp_windows(args.job_id)
+            if rows and all(row['status'] == 'DONE' for row in rows):
+                print(json.dumps(export_raw_candidates(ledger=ledger,
+                    job_id=args.job_id, job_dir=job_dir), ensure_ascii=False), flush=True)
+            break
+        stop.wait(120)
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

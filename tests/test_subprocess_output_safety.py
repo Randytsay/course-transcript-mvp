@@ -69,7 +69,9 @@ def test_dynamic_pending_runner_does_not_deadlock_on_large_stderr() -> None:
     )
     assert returncode == 0
     assert stdout == "completed"
-    assert len(stderr) == 2_000_000
+    # A native dependency can emit its own inherited-FD diagnostics to the
+    # child's stderr. Verify the entire intended payload was captured intact.
+    assert "x" * 2_000_000 in stderr
     assert time.monotonic() - started < 5
 
 

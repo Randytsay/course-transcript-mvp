@@ -9,7 +9,7 @@ model_list:
       model: vertex_ai/gemini-3.8-flash
       rpm: 10
       timeout: 180
-  - model_name: gcp-flash-37
+  - model_name: gcp-flash-38
     litellm_params:
       model: vertex_ai/gemini-3.8-flash
       rpm: 30

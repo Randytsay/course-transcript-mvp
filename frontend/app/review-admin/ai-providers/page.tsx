@@ -146,7 +146,7 @@ export default function AIProvidersPage() {
                                              setDefaultModel(
                                                e.target.value === "minimax"
                                                  ? "MiniMax-M3"
-                                                 : "google/gemini-3.7-flash"); }}>
+                                                 : "google/gemini-3.8-flash"); }}>
                     {data.supported_providers.map((pv) => (
                       <option key={pv} value={pv}>{PROVIDER_LABELS[pv] ?? pv}</option>
                     ))}
@@ -158,7 +158,7 @@ export default function AIProvidersPage() {
                 <label><span>預設模型</span>
                   <input value={defaultModel} onChange={(e) => setDefaultModel(e.target.value)}
                          placeholder={provider === "minimax" ? "MiniMax-M3"
-                                      : "google/gemini-3.7-flash"} /></label>
+                                      : "google/gemini-3.8-flash"} /></label>
                 <button disabled={busy !== null} onClick={() => void create()} type="button">
                   {busy === "create" ? "儲存中…" : "儲存"}
                 </button>

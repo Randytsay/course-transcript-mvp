@@ -17,7 +17,7 @@ from .base import (
     ProviderId,
 )
 
-DEFAULT_MODEL = "gemini-3.7-flash"
+DEFAULT_MODEL = "gemini-3.8-flash"
 
 
 def _location() -> str:
@@ -40,7 +40,7 @@ class VertexCorrectionProvider:
     id = ProviderId.VERTEX
     display_name = "Google Vertex AI"
     default_model = DEFAULT_MODEL
-    # Gemini 3.7 Flash on Vertex supports native batch prediction.
+    # Gemini 3.8 Flash on Vertex supports native batch prediction.
     capabilities = ProviderCapabilities(
         supports_realtime=True,
         supports_batch=True,
@@ -58,7 +58,17 @@ class VertexCorrectionProvider:
 
     # -- realtime ----------------------------------------------------------
 
+    def _assert_submission_model(self) -> None:
+        # Historical 3.7 batch IDs must remain pollable/ingestable; prohibit
+        # only NEW paid submissions. Never silently reinterpret old raw evidence.
+        if self.model != DEFAULT_MODEL:
+            raise ProviderError(
+                "unknown",
+                "舊 Gemini 3.7 校正型號禁止新付費呼叫；請審核並選用 Gemini 3.8",
+            )
+
     def realtime_generate(self, prompt: str) -> str:
+        self._assert_submission_model()
         try:
             from google import genai
             from google.genai import types
@@ -68,7 +78,7 @@ class VertexCorrectionProvider:
             response = client.models.generate_content(
                 model=self.model, contents=prompt,
                 config=types.GenerateContentConfig(
-                    response_mime_type="application/json", temperature=0.2),
+                    response_mime_type="application/json"),
             )
             return response.text or ""
         except Exception as exc:
@@ -79,6 +89,7 @@ class VertexCorrectionProvider:
 
     def submit_batch(self, *, input_gcs_uri: str, display_name: str) -> str:
         """Create a real BatchPrediction job from a GCS JSONL input."""
+        self._assert_submission_model()
         location = _location()
         host = _endpoint_host(location)
         url = (f"https://{host}/v1/projects/{_project()}/locations/{location}"
