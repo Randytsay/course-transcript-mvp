@@ -53,6 +53,11 @@ def run_chirp_recovery_pass(
     if not allowed_state:
         raise V2Conflict("Chirp recovery requires an approved active or frozen stage")
 
+    # A stage can remain open for hours while a saved provider operation runs.
+    # Record each recovery pass and each operation poll so status consumers can
+    # distinguish a live worker from an abandoned PROCESSING row.
+    heartbeat_at = ledger.heartbeat_chirp_recovery(job_id)
+
     rows = ledger.chirp_windows(job_id)
     if not rows:
         raise V2Conflict("no immutable Chirp plan exists")
@@ -67,6 +72,7 @@ def run_chirp_recovery_pass(
             continue
         inspected += 1
         try:
+            heartbeat_at = ledger.heartbeat_chirp_recovery(job_id)
             status = recover_chirp_window(
                 ledger=ledger, job_id=job_id, window_id=row["window_id"],
                 job_dir=job_dir, gateway=gateway, cost_accountant=cost_accountant,
@@ -89,6 +95,7 @@ def run_chirp_recovery_pass(
             continue
         inspected += 1
         try:
+            heartbeat_at = ledger.heartbeat_chirp_recovery(job_id)
             status = reconcile_reviewed_chirp_window(
                 ledger=ledger, job_id=job_id, window_id=row["window_id"],
                 job_dir=job_dir,
@@ -111,6 +118,7 @@ def run_chirp_recovery_pass(
         "job_id": job_id, "recovered": recovered, "quarantined": quarantined,
         "reconciled": reconciled,
         "inspected": inspected,
+        "worker_heartbeat_at": heartbeat_at,
         "pending": pending, "unknown": unknown, "unsubmitted": unsubmitted,
         "review_required": review_required, "recovery_errors": recovery_errors,
         "provider_submissions": 0, "drive_mutations": 0,
@@ -155,6 +163,10 @@ def run_chirp_recovery_pass(
             result["manual_review_required"] = True
     else:
         raise V2Conflict("unexpected Chirp recovery state")
+    final_state = ledger.status(job_id)
+    final_stage = next(s for s in final_state["stages"]
+                       if s["name"] == "chirp_independent")
+    result["worker_heartbeat_at"] = final_stage["updated_at"]
     return result
 
 

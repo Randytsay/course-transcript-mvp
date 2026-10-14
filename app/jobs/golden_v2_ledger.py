@@ -1109,6 +1109,28 @@ class GoldenV2Ledger:
                 (job_id,),
             ).fetchall()]
 
+    def heartbeat_chirp_recovery(self, job_id: str) -> str:
+        """Record that the saved-operation recovery worker is actively polling."""
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stage = db.execute(
+                "SELECT state FROM v2_stages WHERE job_id=? AND name='chirp_independent'",
+                (job_id,),
+            ).fetchone()
+            running = (job["status"] == "PROCESSING" and stage is not None
+                       and stage["state"] == "RUNNING")
+            frozen = (job["status"] == "NEEDS_RECONCILIATION" and stage is not None
+                      and stage["state"] == "OVER_BUDGET")
+            if not (running or frozen):
+                raise V2Conflict("Chirp recovery heartbeat requires an active stage")
+            timestamp = _now()
+            db.execute(
+                "UPDATE v2_stages SET updated_at=? WHERE job_id=? "
+                "AND name='chirp_independent'",
+                (timestamp, job_id),
+            )
+            return timestamp
+
     def begin_chirp_submit(self, claim: dict[str, Any], window_id: str) -> dict[str, Any]:
         """Durably mark request intent before network IO; never auto-resubmit."""
         with self._tx() as db:
@@ -1275,6 +1297,8 @@ class GoldenV2Ledger:
             db.execute("UPDATE v2_chirp_operations SET status='DONE',result_sha=?,"
                        "actual_cents=?,updated_at=? WHERE job_id=? AND window_id=?",
                        (evidence_sha, actual_cents, _now(), job_id, window_id))
+            db.execute("UPDATE v2_stages SET updated_at=? WHERE job_id=? "
+                       "AND name='chirp_independent'", (_now(), job_id))
             if over_budget or frozen:
                 self._record_budget_overrun(
                     db, job_id=job_id, stage="chirp_independent",
@@ -1339,6 +1363,8 @@ class GoldenV2Ledger:
                 "actual_cents=?,updated_at=? WHERE job_id=? AND window_id=?",
                 (evidence_sha, actual_cents, _now(), job_id, window_id),
             )
+            db.execute("UPDATE v2_stages SET updated_at=? WHERE job_id=? "
+                       "AND name='chirp_independent'", (_now(), job_id))
             if over_budget or frozen:
                 self._record_budget_overrun(
                     db, job_id=job_id, stage="chirp_independent",
@@ -1383,6 +1409,8 @@ class GoldenV2Ledger:
                 "WHERE job_id=? AND window_id=?",
                 (_now(), job_id, window_id),
             )
+            db.execute("UPDATE v2_stages SET updated_at=? WHERE job_id=? "
+                       "AND name='chirp_independent'", (_now(), job_id))
 
     def finish_recovered_chirp(self, job_id: str, *, evidence_sha: str,
                                verifier: Any) -> None:

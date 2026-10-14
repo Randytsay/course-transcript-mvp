@@ -67,6 +67,10 @@ class ChirpRecoveryWorkerTests(unittest.TestCase):
         self.assertEqual(outcome["inspected"], 1)
         self.assertEqual(outcome["recovered"], 0)
         self.assertEqual(len(outcome["pending"]), 2)
+        self.assertTrue(outcome["worker_heartbeat_at"])
+        stage = next(s for s in self.h.ledger.status(self.h.job_id)["stages"]
+                     if s["name"] == "chirp_independent")
+        self.assertEqual(stage["updated_at"], outcome["worker_heartbeat_at"])
         self.assertEqual(seen, [rows[0]["operation_name"]])
         self.assertEqual(len(self.h.speech.calls), 2)
 
@@ -91,6 +95,9 @@ class ChirpRecoveryWorkerTests(unittest.TestCase):
         self.assertEqual(outcome["pending"], [])
         self.assertEqual(outcome["review_required"], [bad_row["window_id"]])
         self.assertEqual(outcome["provider_submissions"], 0)
+        stage = next(s for s in self.h.ledger.status(self.h.job_id)["stages"]
+                     if s["name"] == "chirp_independent")
+        self.assertEqual(stage["updated_at"], outcome["worker_heartbeat_at"])
         current = {r["window_id"]: r for r in self.h.ledger.chirp_windows(self.h.job_id)}
         self.assertEqual(current[bad_row["window_id"]]["status"], "REVIEW_REQUIRED")
         self.assertEqual(current[rows[1]["window_id"]]["status"], "DONE")
