@@ -155,13 +155,75 @@ class GoldenV2LocalQATests(unittest.TestCase):
         self.sha = file_sha256(self.audio)
         self.merged["source_sha"] = self.sha
         report = inspect_v2_acoustic(
-            job_dir=self.job_dir, merged=self.merged, max_gap_probe_ms=3000)
+            job_dir=self.job_dir, merged=self.merged,
+            max_gap_probe_ms=3000, max_total_probe_slices=1)
         tail = report["gaps_examined"][-1]
-        self.assertEqual(tail["reason"], "gap_exceeds_local_probe_cap")
+        self.assertEqual(tail["reason"], "acoustic_gap_probe_budget_exceeded")
         self.assertEqual(tail["disposition"], "REVIEW")
         self.assertIsNone(tail["vad"])
         self.assertEqual(report["repair_plan"]["intervals"], [])
         self.assertTrue(report["repair_plan"]["manual_review_required"])
+
+    def test_270_second_boardwriting_gap_requires_complete_local_nonspeech_coverage(self):
+        # Analogous to the owner's 44:10–48:40 interval, shifted to 00:01–04:31.
+        # Only the probe segmentation is simulated; no real audio is accepted
+        # as silent merely because a person reports a boardwriting interval.
+        merged = {**self.merged, "duration_ms": 272_000, "words": [
+            {"word": "前句", "start_ms": 0, "end_ms": 1000},
+            {"word": "後句", "start_ms": 271_000, "end_ms": 272_000},
+        ]}
+        inspected = []
+
+        def inspect_piece(job_dir, start, end):
+            inspected.append((start, end))
+            return {"start_ms": start, "end_ms": end,
+                    "audible_above_rms_threshold": False,
+                    "max_volume_dbfs": -80.0, "vad": None,
+                    "disposition": "NONSPEECH_CONFIRMED"}
+
+        with patch.object(golden_v2_acoustic_qa, "duration_seconds", return_value=272), \
+             patch.object(golden_v2_acoustic_qa, "_probe_nonspeech", side_effect=inspect_piece):
+            report = inspect_v2_acoustic(job_dir=self.job_dir, merged=merged)
+        self.assertEqual(report["status"], "PASS")
+        self.assertEqual(len(inspected), 9)
+        self.assertEqual(inspected[0][0], 1200)  # word-boundary grace
+        self.assertEqual(inspected[-1][1], 270800)
+        self.assertTrue(all(inspected[i][1] == inspected[i+1][0]
+                            for i in range(len(inspected)-1)))
+        self.assertEqual(report["gaps_examined"][0]["reason"], "segmented_non_speech_evidence")
+        self.assertEqual(report["acoustic_probe_slices_used"], 9)
+
+    def test_boardwriting_gap_with_late_speech_is_not_auto_cleared(self):
+        merged = {**self.merged, "duration_ms": 272_000, "words": [
+            {"word": "前句", "start_ms": 0, "end_ms": 1000},
+            {"word": "後句", "start_ms": 271_000, "end_ms": 272_000},
+        ]}
+        def inspect_piece(job_dir, start, end):
+            disposition = "SPEECH_CONFIRMED" if start >= 241200 else "NONSPEECH_CONFIRMED"
+            return {"start_ms": start, "end_ms": end,
+                    "audible_above_rms_threshold": disposition == "SPEECH_CONFIRMED",
+                    "max_volume_dbfs": -12.0 if disposition == "SPEECH_CONFIRMED" else -80.0,
+                    "vad": None, "disposition": disposition}
+        with patch.object(golden_v2_acoustic_qa, "duration_seconds", return_value=272), \
+             patch.object(golden_v2_acoustic_qa, "_probe_nonspeech", side_effect=inspect_piece):
+            report = inspect_v2_acoustic(job_dir=self.job_dir, merged=merged)
+        self.assertEqual(report["status"], "REVIEW")
+        self.assertEqual(report["speech_confirmed_count"], 1)
+        self.assertFalse(report["repair_plan"]["submit_authorized"])
+
+    def test_long_gap_exceeding_total_probe_budget_is_never_silently_approved(self):
+        merged = {**self.merged, "duration_ms": 272_000, "words": [
+            {"word": "前句", "start_ms": 0, "end_ms": 1000},
+            {"word": "後句", "start_ms": 271_000, "end_ms": 272_000},
+        ]}
+        with patch.object(golden_v2_acoustic_qa, "duration_seconds", return_value=272), \
+             patch.object(golden_v2_acoustic_qa, "_probe_nonspeech") as probe:
+            report = inspect_v2_acoustic(
+                job_dir=self.job_dir, merged=merged, max_total_probe_slices=8)
+        probe.assert_not_called()
+        self.assertEqual(report["status"], "REVIEW")
+        self.assertEqual(report["gaps_examined"][0]["reason"],
+                         "acoustic_gap_probe_budget_exceeded")
 
     def test_gap_probe_count_is_bounded_and_uninspected_gaps_remain_blockers(self):
         report = inspect_v2_acoustic(

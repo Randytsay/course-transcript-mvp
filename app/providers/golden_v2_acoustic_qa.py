@@ -34,10 +34,37 @@ def _peak_db(job_dir: Path, start: int, end: int) -> float | None:
             return None
         match = re.search(r"max_volume:\s*(-?(?:\d+(?:\.\d+)?|inf)) dB", result.stderr)
         if match:
-            return float(match.group(1))
+            peak = float(match.group(1))
+            # ffmpeg reports -inf for digital silence. Keep the QA JSON
+            # standards-compliant while preserving a strong silence signal.
+            return -120.0 if peak == float("-inf") else peak
     except (OSError, subprocess.TimeoutExpired, ValueError):
         pass
     return None
+
+
+def _probe_nonspeech(job_dir: Path, start: int, end: int) -> dict[str, Any]:
+    """Inspect one bounded, contiguous piece of an untranscribed interval."""
+    try:
+        audible = _audible(job_dir, start, end)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        audible = None
+    try:
+        vad = _vad_assessment(job_dir, start, end)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        vad = None
+    peak_db = _peak_db(job_dir, start, end)
+    strong_silence = peak_db is not None and peak_db <= -65
+    non_speech = strong_silence or bool(vad and vad.get("robust_non_speech"))
+    speech = (not non_speech and audible is True and bool(vad)
+              and vad.get("robust_speech") is True)
+    return {
+        "start_ms": start, "end_ms": end,
+        "audible_above_rms_threshold": audible, "max_volume_dbfs": peak_db,
+        "vad": vad,
+        "disposition": ("NONSPEECH_CONFIRMED" if non_speech else
+                        "SPEECH_CONFIRMED" if speech else "REVIEW"),
+    }
 
 
 def inspect_v2_acoustic(
@@ -45,7 +72,7 @@ def inspect_v2_acoustic(
     gap_min_ms: int = 3000, tail_min_ms: int = 2000,
     max_repair_intervals: int = 12, max_repair_total_ms: int = 600_000,
     word_boundary_grace_ms: int = 200, max_gaps_to_probe: int = 16,
-    max_gap_probe_ms: int = 30_000,
+    max_gap_probe_ms: int = 30_000, max_total_probe_slices: int = 48,
 ) -> dict[str, Any]:
     """Validate source and Chirp timebase and flag only audibly suspicious gaps.
 
@@ -57,7 +84,9 @@ def inspect_v2_acoustic(
             or not 0 < max_repair_total_ms <= 3_600_000
             or not 0 <= word_boundary_grace_ms <= 500
             or type(max_gaps_to_probe) is not int or not 1 <= max_gaps_to_probe <= 64
-            or type(max_gap_probe_ms) is not int or not 1000 <= max_gap_probe_ms <= 120_000):
+            or type(max_gap_probe_ms) is not int or not 1000 <= max_gap_probe_ms <= 120_000
+            or type(max_total_probe_slices) is not int
+            or not 1 <= max_total_probe_slices <= 256):
         raise V2Conflict("invalid bounded acoustic QA settings")
     audio = Path(job_dir) / "normalized.flac"
     if (not audio.is_file() or merged.get("timing_authority") != "chirp_3"
@@ -84,6 +113,7 @@ def inspect_v2_acoustic(
         gaps.append((previous_end, duration, "TAIL"))
 
     intervals: list[dict[str, Any]] = []
+    slices_used = 0
     probed = gaps[:max_gaps_to_probe]
     unprobed = gaps[max_gaps_to_probe:]
     for start, end, position in probed:
@@ -95,43 +125,46 @@ def inspect_v2_acoustic(
         probe_end = end - (word_boundary_grace_ms if position != "TAIL" else 0)
         if probe_end <= probe_start:
             raise V2Conflict("acoustic gap smaller than allowed probe window")
-        if probe_end - probe_start > max_gap_probe_ms:
+        required_slices = (probe_end - probe_start + max_gap_probe_ms - 1) // max_gap_probe_ms
+        if slices_used + required_slices > max_total_probe_slices:
             intervals.append({
                 "start_ms": start, "end_ms": end, "position": position,
                 "acoustic_probe_start_ms": probe_start,
                 "acoustic_probe_end_ms": probe_end,
                 "audible_above_rms_threshold": None, "max_volume_dbfs": None,
                 "vad": None, "disposition": "REVIEW",
-                "reason": "gap_exceeds_local_probe_cap",
+                "reason": "acoustic_gap_probe_budget_exceeded",
             })
             continue
-        try:
-            audible = _audible(Path(job_dir), probe_start, probe_end)
-        except (OSError, subprocess.TimeoutExpired, ValueError):
-            audible = None
-        try:
-            vad = _vad_assessment(Path(job_dir), probe_start, probe_end)
-        except (OSError, subprocess.TimeoutExpired, ValueError):
-            vad = None
-        peak_db = _peak_db(Path(job_dir), probe_start, probe_end)
-        # Near-digital silence is stronger evidence than an RMS threshold;
-        # audible nonspeech with VAD uncertainty remains in review.
-        strong_silence = peak_db is not None and peak_db <= -65
-        non_speech = strong_silence or bool(vad and vad.get("robust_non_speech"))
-        speech = (not non_speech and audible is True and bool(vad)
-                  and vad.get("robust_speech") is True)
+        probes = []
+        cursor = probe_start
+        while cursor < probe_end:
+            following = min(probe_end, cursor + max_gap_probe_ms)
+            probes.append(_probe_nonspeech(Path(job_dir), cursor, following))
+            cursor = following
+        slices_used += len(probes)
+        # Every contiguous slice must have independent nonspeech evidence.
+        # One speech or uncertain slice blocks the complete gap.
+        non_speech = all(p["disposition"] == "NONSPEECH_CONFIRMED" for p in probes)
+        speech = any(p["disposition"] == "SPEECH_CONFIRMED" for p in probes)
         disposition = (
             "NONSPEECH_CONFIRMED" if non_speech else
             "SPEECH_CONFIRMED" if speech else "REVIEW"
         )
+        peak_values = [p["max_volume_dbfs"] for p in probes if p["max_volume_dbfs"] is not None]
         interval = {
             "start_ms": start, "end_ms": end, "position": position,
             "acoustic_probe_start_ms": probe_start,
             "acoustic_probe_end_ms": probe_end,
-            "audible_above_rms_threshold": audible,
-            "max_volume_dbfs": peak_db,
-            "vad": vad, "disposition": disposition,
-            "reason": ("non_speech_evidence" if non_speech else
+            "audible_above_rms_threshold": (
+                True if any(p["audible_above_rms_threshold"] is True for p in probes)
+                else False if all(p["audible_above_rms_threshold"] is False for p in probes)
+                else None),
+            "max_volume_dbfs": max(peak_values) if peak_values else None,
+            "vad": probes[0]["vad"] if len(probes) == 1 else None,
+            "probe_slices": probes, "disposition": disposition,
+            "reason": ("segmented_non_speech_evidence" if non_speech and len(probes) > 1 else
+                       "non_speech_evidence" if non_speech else
                        "positive_speech_evidence" if speech else
                        "audio_character_uncertain"),
         }
@@ -186,6 +219,7 @@ def inspect_v2_acoustic(
         "speech_confirmed_count": len(speech_gaps),
         "uncertain_count": uncertain_count,
         "unexamined_gap_count": len(unprobed),
+        "acoustic_probe_slices_used": slices_used,
         "repair_plan": {"strategy": "STANDARD_BATCH", "submit_authorized": False,
                         "status": "PROPOSED_REQUIRES_APPROVAL" if repair_intervals else "NONE",
                         "intervals": repair_intervals, "total_duration_ms": total,

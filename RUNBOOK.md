@@ -15,6 +15,25 @@
 
 ## Golden V2 paid-dispatch review (development branch only)
 
+### Long board-writing pauses and acoustic verification (2026-10-14)
+
+The owner listened to `251025_.MP3` and identified **44:10–48:40** as an
+approximately 270-second board-writing interval without speech. This is an
+owner-provided observation, not a source-SHA-bound automated VAD result and
+not approval of the remainder of the Gemini window. This lecture format can
+contain extended board-writing pauses; an empty Chirp timestamp interval alone
+is never evidence of missing speech.
+
+Golden V2 acoustic QA now inspects long subtitle gaps in contiguous bounded
+slices (30 seconds each by default, at most 48 total across up to 16 gaps).
+Only complete local evidence of silence or robust VAD nonspeech for **every**
+slice permits `NONSPEECH_CONFIRMED`; suspected speech, inconclusive slices,
+missing tools or exhausted budgets retain `REVIEW`. Individual slice bounds
+and measurements are included in the acoustic report. No silence assumption
+may resolve a Gemini `REQUIRES_REVIEW` provider response, waive the independent
+Chirp timestamp check, assert human QA, trigger paid repairs, or authorize
+Drive publication. The immutable source/model audit remains unchanged.
+
 ### Gemini primary-stage review diagnostics (2026-10-14)
 
 The authenticated V2 chat review endpoint `GET /api/v1/golden-v2/jobs/{job_id}/review`
