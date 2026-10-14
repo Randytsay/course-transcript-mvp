@@ -20,6 +20,13 @@ existing private, immutable chunk staging, dynamic-batch submit-once barrier,
 saved operation recovery, billing evidence and acoustic completeness gate.
 This path does not alter safety settings or retry a refused Gemini request.
 
+Fresh Drive verification observed version 9 rather than approved version 7,
+with the same file ID, size and MD5. Version drift is accepted only after
+downloading the complete current media with stable before/after metadata and
+matching its SHA-256 to the immutable approved original. This creates separate
+revision evidence and retains the original preflight, quote and grant. Changed
+bytes, changed identity or an unstable revision block paid dispatch.
+
 Recovery-only invocation omits `--submit`; it never issues a new Speech POST.
 Polling ends after 24 hours or a review/terminal result. Restart recovery from
 saved operations; do not restart a submission command. No Drive writes occur.

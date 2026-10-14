@@ -9,8 +9,8 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
-from app.jobs.drive_api import read_drive_media_metadata
-from app.pipeline.golden_v2_primary_rescue import claim_independent_rescue
+from app.jobs.drive_api import read_drive_media_metadata, download_drive_media
+from app.pipeline.golden_v2_primary_rescue import claim_independent_rescue, verify_same_audio_revision
 from app.pipeline.golden_v2_runtime_services import paid_services, recovery_services
 from app.pipeline.golden_v2_chirp_stage import plan_approved_chirp, submit_planned_chirp
 from app.pipeline.golden_v2_chirp_recovery_worker import run_chirp_recovery_pass
@@ -44,12 +44,8 @@ def main():
             preview = dict(source_sha256=args.source_sha)
             if services['verify_owner'](preview) is not True or services['verify_capability_and_pricing'](preview) is not True:
                 return False
-            live = read_drive_media_metadata(pre['drive_source_path'])
-            observed = pre['drive_observation']
-            return (live['id'] == observed['file_id']
-                    and str(live['version']) == str(observed['version'])
-                    and live['size_bytes'] == observed['size_bytes']
-                    and live['md5_checksum'] == pre['original_md5_checksum'])
+            return verify_same_audio_revision(job_dir=job_dir,
+                read_metadata=read_drive_media_metadata, download_media=download_drive_media)
         claim = claim_independent_rescue(ledger=ledger, job_id=args.job_id,
             job_dir=job_dir, revision=args.revision, source_sha=args.source_sha,
             cap_cents=args.cap_cents, reference=args.reference,

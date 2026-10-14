@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
-from app.pipeline.golden_v2_primary_rescue import claim_independent_rescue, verify_primary_refusal
+from app.pipeline.golden_v2_primary_rescue import claim_independent_rescue, verify_primary_refusal, verify_same_audio_revision
 
 
 class IndependentRescueTests(unittest.TestCase):
@@ -81,3 +81,26 @@ class IndependentRescueTests(unittest.TestCase):
         (root/'gemini-primary'/'raw.json').write_bytes(b'{}')
         with self.assertRaises(V2Conflict):
             verify_primary_refusal(**options)
+
+    def test_metadata_revision_requires_identical_full_audio_and_preserves_preflight(self):
+        root = Path(self.temp.name)
+        content = b'approved audio'
+        sha = hashlib.sha256(content).hexdigest()
+        (root/'source.original').write_bytes(content)
+        pre = dict(drive_observation=dict(file_id='file', version='7', size_bytes=len(content)),
+            drive_source_path='gdrive:test/audio.mp3', original_md5_checksum='md5',
+            original_sha256=sha, source_sha256='a'*64)
+        encoded = json.dumps(pre).encode()
+        (root/'source-preflight.json').write_bytes(encoded)
+        live = dict(id='file', version='9', size_bytes=len(content), md5_checksum='md5')
+        def download(path, destination, max_bytes):
+            destination.write_bytes(content)
+            return dict(file_id='file', version='9', downloaded_sha256=sha)
+        self.assertTrue(verify_same_audio_revision(job_dir=root,
+            read_metadata=lambda _:live, download_media=download))
+        self.assertEqual((root/'source-preflight.json').read_bytes(), encoded)
+        self.assertTrue(verify_same_audio_revision(job_dir=root,
+            read_metadata=lambda _:live, download_media=lambda *a,**k:self.fail('must reuse proof')))
+        (root/'golden-v2'/'revision-revalidation'/'source-version-9.original').write_bytes(b'changed')
+        with self.assertRaises(V2Conflict):
+            verify_same_audio_revision(job_dir=root, read_metadata=lambda _:live, download_media=download)

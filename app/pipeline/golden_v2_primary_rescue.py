@@ -12,6 +12,57 @@ import secrets
 from app.jobs.golden_v2_ledger import V2Conflict, approved_trial_exposure, _now
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.pipeline.golden_v2_pricing import gemini_usage_cents
+from app.providers.golden_v2_immutable import store_immutable_bytes
+
+
+def verify_same_audio_revision(*, job_dir, read_metadata, download_media):
+    """Accept metadata-only version drift only after a fresh full SHA check.
+
+    Keep the original approval/lineage immutable. Changed audio fails closed.
+    Downloader must independently verify metadata before and after download.
+    """
+    root = Path(job_dir)
+    pre = json.loads((root/'source-preflight.json').read_text())
+    old = pre['drive_observation']
+    live = read_metadata(pre['drive_source_path'])
+    if (live['id'] != old['file_id'] or live['size_bytes'] != old['size_bytes']
+            or live['md5_checksum'] != pre['original_md5_checksum']):
+        raise V2Conflict('live audio identity changed')
+    if str(live['version']) == str(old['version']):
+        return True
+    version = str(live['version'])
+    if not version.isdigit():
+        raise V2Conflict('invalid Drive revision')
+    folder = root/'golden-v2'/'revision-revalidation'
+    folder.mkdir(parents=True, exist_ok=True)
+    audio = folder/f'source-version-{version}.original'
+    proof = folder/f'source-version-{version}.json'
+    if audio.is_symlink() or proof.is_symlink():
+        raise V2Conflict('unsafe revalidation evidence')
+    if proof.exists():
+        observation = json.loads(proof.read_text())['current_observation']
+    else:
+        if audio.exists():
+            raise V2Conflict('unfinished download must be reconciled')
+        observation = download_media(pre['drive_source_path'], audio,
+                                     max_bytes=old['size_bytes'])
+    expected = pre['original_sha256']
+    if (observation['file_id'] != old['file_id']
+            or str(observation['version']) != version
+            or observation['downloaded_sha256'] != expected
+            or file_sha256(audio) != expected
+            or file_sha256(root/'source.original') != expected):
+        raise V2Conflict('current Drive audio differs from approved original bytes')
+    if read_metadata(pre['drive_source_path']) != live:
+        raise V2Conflict('Drive revision changed during revalidation')
+    payload = dict(schema='golden-v2-identical-audio-revision-v1',
+                   original_observation=old, current_observation=observation,
+                   original_sha256=expected, normalized_sha256=pre['source_sha256'],
+                   audio_bytes_identical=True, approval_modified=False)
+    if not proof.exists():
+        store_immutable_bytes(proof, json.dumps(payload, sort_keys=True,
+                                               separators=(',', ':')).encode())
+    return True
 
 
 def verify_primary_refusal(*, job_dir, job_id, source_sha, evidence_sha, actual_cents):
