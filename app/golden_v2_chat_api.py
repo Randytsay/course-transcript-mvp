@@ -174,7 +174,19 @@ def service_status(authorization: str | None = Header(default=None)) -> dict:
         else: delivery={'state':'STALE_OR_STOPPED','updated_at':value.get('updated_at')}
     except (OSError,ValueError,KeyError,TypeError):
         pass
-    publish_enabled=(os.environ.get('COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED','').lower()=='true' and delivery['state']=='running')
+    publish_flag=(os.environ.get('COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED','').lower()=='true')
+    publish_enabled=(publish_flag and delivery['state']=='running')
+    paid_flag=(os.environ.get('COURSE_TRANSCRIPT_V2_PAID_API_ENABLED','').lower()=='true')
+    capability_blockers = {
+        'paid_execution': (
+            ([] if paid_flag else ['PAID_API_DISABLED'])
+            + ([] if paid['state'] == 'running' else ['PAID_WORKER_NOT_RUNNING'])
+        ),
+        'drive_publication': (
+            ([] if publish_flag else ['PUBLISH_API_DISABLED'])
+            + ([] if delivery['state'] == 'running' else ['DELIVERY_WORKER_NOT_RUNNING'])
+        ),
+    }
     return {
         "schema": "golden-v2-chat-service-v1", "release_sha": _revision(),
         "capabilities": {"drive_link_preview": True, "batch_source_intake": True,
@@ -184,6 +196,7 @@ def service_status(authorization: str | None = Header(default=None)) -> dict:
         "intake_worker": worker, "cost_estimates": "SERVER_DURATION_PROVIDER_RESERVATION",
         "paid_worker":paid,
         "delivery_worker":delivery,
+        "capability_blockers": capability_blockers,
         "publication_policy":"CREATE_NEW_SRT_TXT_ONLY_EXISTING_FILES_REQUIRE_SEPARATE_REVISION_POLICY",
         "golden_acceptance": "REQUIRED_SEPARATELY",
     }
