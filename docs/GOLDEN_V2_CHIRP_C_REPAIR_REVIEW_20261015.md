@@ -43,3 +43,11 @@ The authorized release operator must first stop the paid executor and confirm it
 - A precise live-read-only evaluation of each actual quarantined window with the final parser; Hermes' previous estimate of "98 safe" relied on a looser fill rule and is not evidence that 98 are automatically safe with strict same-start coalescing.
 - Actual old stage must only reach COMPLETE on independently verified full-audio evidence (not invented clocks); real human review may be necessary, even though the synthetic 10-window test is green.
 - Per-job authorization, global aggregate exposure and Golden QA remain separate gates; delivery worker RUNNING never substitutes for publication grant.
+
+## Real evidence preview without any model/GCS call
+
+Added `scripts/golden_v2_clock_fix_preview.py` to inspect the already-saved `provider-raw.json` for each `REVIEW_REQUIRED` window. It opens SQLite in read-only mode, confirms raw SHA equals the immutable recorded result, verifies the review packet's job/source/window/operation and billed-cents binding, then executes the exact production-intended strict parser in memory. It emits **counts only**, no recognized text. `safe_to_apply` is false if any word lacks provider-verified timing. This preview is not an approval and does not write a proposal or switch any ledger status.
+
+Recommended isolated VPS sequence after fetching the latest PR head (not from the stale Hermes worktree): run a new container from the existing V2 Python image with `--network none --read-only`, mount the PR code at `/app` read-only and the production V2 data path at `/app/data` read-only, and execute `python -m scripts.golden_v2_clock_fix_preview --database /app/data/golden-v2/ledger.sqlite --artifact-root /app/data/golden-v2 --job-id v2p_c8f1e1cb3ecf53ccb1eae33b5ab221be`. Redact private paths and do not export speech text. Compare real `safe_windows` and `requires_attention`; do not infer from Hermes' looser 98 repairable candidates that all four real windows satisfy the strict provider-boundary policy.
+
+The new full synthetic test proves stage COMPLETE and that global ledger paid hold may safely clear **only when all ten windows have verified results**. It cannot waive real-world human review or automatically terminate a paid stage whose evidence is incomplete.
