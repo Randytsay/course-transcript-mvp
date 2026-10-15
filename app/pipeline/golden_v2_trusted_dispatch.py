@@ -17,6 +17,7 @@ from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.pipeline.golden_v2_paid_dispatch import preview_paid_dispatch
 from app.pipeline.golden_v2_drive_revision import verify_live_drive_revision
 from app.pipeline.golden_v2_primary_stage import execute_approved_primary_stage
+from app.pipeline.golden_v2_primary_gate import require_complete_gemini_before_chirp
 from app.pipeline.golden_v2_third_stage import execute_approved_third_stage
 from app.pipeline.golden_v2_chirp_stage import plan_approved_chirp, submit_planned_chirp
 
@@ -88,6 +89,13 @@ def execute_trusted_paid_stage(
         raise V2Conflict("stage service configuration is incomplete") from exc
     if expected_stage == "chirp_independent" and not callable(getattr(gateway, "submit", None)):
         raise V2Conflict("Chirp submission gateway missing")
+    # Source-bound Gemini 3.8 Flash *whole-file* verification before any
+    # new billable Chirp submission. Already-saved paid Chirp LRO GET recovery
+    # uses a separate path and is intentionally not blocked here.
+    if expected_stage == "chirp_independent":
+        require_complete_gemini_before_chirp(
+            ledger=ledger, job_id=job_id, job_dir=job_dir,
+            source_sha=expected_source_sha)
     claim = ledger.claim_next(
         job_id, worker_id=worker_id, expected_stage=expected_stage,
         expected_revision=expected_revision, expected_source_sha=expected_source_sha,

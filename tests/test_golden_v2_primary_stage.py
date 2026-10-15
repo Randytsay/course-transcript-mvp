@@ -118,6 +118,85 @@ class GeminiStageIntegrationTests(unittest.TestCase):
         args.update(options)
         return execute_approved_primary_stage(**args)
 
+    def _prove_primary_before_chirp(self):
+        from app.pipeline.golden_v2_primary_gate import require_complete_gemini_before_chirp
+        # Original Gemini fixture keeps normalized FLAC outside its job directory;
+        # the production intake places the same immutable bytes inside the job.
+        from shutil import copy2
+        target=self.dir/"job"/"normalized.flac"
+        if self.source.is_file() and target.parent.is_dir() and not target.exists():
+            copy2(self.source,target)
+        return require_complete_gemini_before_chirp(
+            ledger=self.ledger,job_id=self.job,
+            job_dir=self.dir/"job",source_sha=self.sha)
+
+    def test_partial_primary_preview_identifies_exact_unfinished_windows(self):
+        from types import SimpleNamespace
+        from app.providers.golden_v2_audio_staging import file_sha256
+        from scripts.golden_v2_primary_context_preview import inspect_primary_context
+        success=SimpleNamespace(text="第一段確實聽到的內容",
+            candidates=[SimpleNamespace(finish_reason="STOP")],
+            usage_metadata={"prompt_token_count":1})
+        ambiguous=SimpleNamespace(text="",
+            candidates=[SimpleNamespace(finish_reason="")],
+            usage_metadata={"prompt_token_count":1})
+        self.vertex.models.generate_content.side_effect=[success,ambiguous]
+        report=self.execute(max_window_seconds=1.6,overlap_seconds=0.2)
+        info=inspect_primary_context(database=self.dir/"jobs.db",
+            job_dir=self.dir/"job",job_id=self.job)
+        self.assertEqual(info["planned_windows"],3)
+        self.assertEqual(info["saved_response_windows"],2)
+        self.assertEqual([x["status"] for x in info["windows"]],
+                         ["COMPLETE","REQUIRES_REVIEW","NO_PROVIDER_RESPONSE_SAVED"])
+        self.assertTrue(info["stage_report_sha_verified"])
+        self.assertFalse(info["ready_for_chirp"])
+        self.assertFalse(info["ledger_modified"])
+        self.assertEqual(self.vertex.models.generate_content.call_count,2)
+
+    def test_new_chirp_requires_complete_gemini_full_source_audits(self):
+        with self.assertRaisesRegex(V2Conflict,"complete Gemini"):
+            self._prove_primary_before_chirp()
+        self.execute()
+        proof=self._prove_primary_before_chirp()
+        self.assertEqual(proof["window_count"],1)
+        self.assertEqual(proof["structural_coverage"],"PASS")
+        self.assertFalse(proof["provider_calls_started"])
+        self.assertEqual(self.vertex.models.generate_content.call_count,1)
+
+    def test_new_chirp_refuses_incomplete_gemini_even_with_partial_text(self):
+        self.execute(max_window_seconds=2.5,overlap_seconds=0.5)
+        with self.assertRaisesRegex(V2Conflict,"complete Gemini"):
+            self._prove_primary_before_chirp()
+        self.assertEqual(self.vertex.models.generate_content.call_count,2)
+
+    def test_new_chirp_accepts_reviewed_seams_without_extra_model(self):
+        self.execute(max_window_seconds=2.5,overlap_seconds=0.5)
+        state=self.ledger.status(self.job)
+        seam=dict(between_windows=[0,1],
+            left_keep_chars=len("復次文殊師利男身具七寶"),
+            right_drop_chars=2,reviewed_audio_start_ms=2000,
+            reviewed_audio_end_ms=2500,audio_review_confirmed=True,
+            notes="Synthetic reviewer proof for unit testing only")
+        from app.pipeline.golden_v2_primary_stage import finalize_reviewed_primary_overlaps
+        finalize_reviewed_primary_overlaps(
+            ledger=self.ledger,job_id=self.job,revision=state["revision"],
+            previous_evidence_sha=state["stages"][0]["evidence_sha"],
+            job_dir=self.dir/"job",normalized_audio=self.source,
+            seam_decisions=[seam],reviewer="test-only",
+            review_reference="synthetic-audio-seam")
+        proof=self._prove_primary_before_chirp()
+        self.assertEqual(proof["window_count"],2)
+        self.assertEqual(proof["acoustic_coverage"],
+                         "SEAMS_REVIEWED_WHOLE_FILE_UNVERIFIED")
+        self.assertEqual(self.vertex.models.generate_content.call_count,2)
+
+    def test_new_chirp_blocks_tampered_gemini_raw_receipt(self):
+        self.execute()
+        raw=next((self.dir/"job/gemini-primary").glob("*.json"))
+        raw.write_text('{"forged":true}')
+        with self.assertRaisesRegex(V2Conflict,"raw audit"):
+            self._prove_primary_before_chirp()
+
     def test_single_file_produces_durable_gemini_primary_before_chirp(self):
         report = self.execute()
         self.assertTrue(report["ready_for_chirp"])
@@ -131,6 +210,15 @@ class GeminiStageIntegrationTests(unittest.TestCase):
             self.ledger.claim_next(self.job, worker_id="next")["stage"],
             "chirp_independent",
         )
+
+    def test_adjacent_gemini_window_receives_verified_previous_context(self):
+        self.execute(max_window_seconds=2.5,overlap_seconds=0.5)
+        self.assertEqual(self.vertex.models.generate_content.call_count,2)
+        first=self.vertex.models.generate_content.call_args_list[0].kwargs["contents"][0]
+        second=self.vertex.models.generate_content.call_args_list[1].kwargs["contents"][0]
+        self.assertNotIn("前段已辨識的語境參考",first)
+        self.assertIn("前段已辨識的語境參考",second)
+        self.assertIn("復次文殊師利男身具七寶",second)
 
     def test_overlap_is_recorded_for_review_and_billed_cost_not_hidden(self):
         report = self.execute(max_window_seconds=2.5, overlap_seconds=0.5)

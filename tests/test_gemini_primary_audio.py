@@ -80,6 +80,42 @@ class GoldenPrimaryAudioTests(unittest.TestCase):
             self.assertEqual(result["acoustic_coverage"], "UNVERIFIED")
             self.assertFalse(result["golden_approved"])
 
+    def test_context_change_never_rebills_existing_audio_window(self):
+        client = SimpleNamespace(models=SimpleNamespace(generate_content=Mock(
+            return_value=SimpleNamespace(text="佛經續講",
+                candidates=[SimpleNamespace(finish_reason="STOP")],usage_metadata={})
+        )))
+        with tempfile.TemporaryDirectory() as root:
+            args=dict(client=client,staged_window=win(0,0,60),
+                source_sha256="a"*64,job_dir=Path(root),
+                approval_token="approved-test",
+                approval_validator=lambda *unused: True,
+                part_factory=lambda uri,mime:(uri,mime))
+            first=primary.run_window(**args)
+            self.assertEqual(first["status"],"COMPLETE")
+            with self.assertRaisesRegex(primary.PrimaryTranscriptError,
+                                        "previous attempt requires operator reconciliation"):
+                primary.run_window(**args,prior_audio_context="前文不同語境")
+            client.models.generate_content.assert_called_once()
+
+    def test_prior_text_is_bounded_and_not_treated_as_audio(self):
+        client = SimpleNamespace(models=SimpleNamespace(generate_content=Mock(
+            return_value=SimpleNamespace(text="本段的新話",
+                candidates=[SimpleNamespace(finish_reason="STOP")],usage_metadata={})
+        )))
+        with tempfile.TemporaryDirectory() as root:
+            result=primary.run_window(
+                client=client,staged_window=win(1,10,70),source_sha256="a"*64,
+                job_dir=Path(root),approval_token="approved-test",
+                approval_validator=lambda *unused: True,
+                part_factory=lambda uri,mime:(uri,mime),
+                prior_audio_context=("前段話語"*200))
+            sent_prompt=client.models.generate_content.call_args.kwargs["contents"][0]
+            self.assertIn("前段已辨識的語境參考",sent_prompt)
+            self.assertIn("不可依前文推測補寫",sent_prompt)
+            self.assertLess(len(sent_prompt),1400)
+            self.assertEqual(result["status"],"COMPLETE")
+
     def test_truncated_response_is_audited_and_never_auto_resubmitted(self) -> None:
         client = SimpleNamespace(models=SimpleNamespace(generate_content=Mock(
             return_value=SimpleNamespace(
