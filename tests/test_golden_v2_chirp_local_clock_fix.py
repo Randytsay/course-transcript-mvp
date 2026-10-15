@@ -299,6 +299,80 @@ class ApplyLocalClockFixTests(ChirpStageIntegrationTests):
         self.assertEqual(self.ledger.chirp_windows(self.job_id)[0]["status"],
                          "DONE")
 
+    def test_ten_real_ledger_windows_clear_global_paid_hold_after_four_local_fixes(self):
+        """10 submitted fake LROs: 6 DONE + 4 reviewed; complete old stage to unblock new job."""
+        planned = self.plan(max_window_seconds=0.5, overlap_seconds=0.0,
+                            estimate_window_cents=lambda _: 1)
+        self.assertEqual(len(planned), 10)
+        rows = submit_planned_chirp(ledger=self.ledger, claim=self.claim, gateway=self.gateway)
+        self.assertEqual(len(rows), 10)
+        self.assertEqual(len(self.speech.calls), 10)
+        unresolved_indices = {5, 7, 8, 9}
+        repair_raw = json.dumps({"results": [{"alternatives": [{"words": [
+            {"word":"前","startOffset":"0.000s","endOffset":"0.040s"},
+            {"word":"你","startOffset":"0.040s","endOffset":"0.120s"},
+            {"word":"好","startOffset":"0.120s","endOffset":"0.070s"},
+            {"word":"嗎","startOffset":"0.120s","endOffset":"0.230s"},
+            {"word":"後","startOffset":"0.230s","endOffset":"0.350s"},
+        ]}]}]}, ensure_ascii=False).encode()
+        for idx, row in enumerate(rows):
+            self.speech.operations[row["operation_name"]].done = True
+            prefix = row["output_uri"].split("private-test-bucket/", 1)[1]
+            raw = repair_raw if idx in unresolved_indices else speech_words(
+                ("乾淨", 0.1, 0.35))
+            self.cloud.results[prefix + "out.json"] = FakeResult(prefix + "out.json", raw)
+            status = recover_chirp_window(
+                ledger=self.ledger, job_id=self.job_id, window_id=row["window_id"],
+                job_dir=self.job_dir, gateway=self.gateway,
+                cost_accountant=lambda _: 1)
+            self.assertEqual(status, "REVIEW_REQUIRED" if idx in unresolved_indices else "DONE")
+        ledger_rows = self.ledger.chirp_windows(self.job_id)
+        self.assertEqual(sum(r["status"] == "REVIEW_REQUIRED" for r in ledger_rows), 4)
+        self.assertEqual(sum(r["status"] == "DONE" for r in ledger_rows), 6)
+        old_good = {r["window_id"]: (r["result_sha"], r["actual_cents"])
+                    for r in ledger_rows if r["status"] == "DONE"}
+        new_id = self.ledger.create(
+            source_sha="e" * 64, mode="FLASH_CHIRP",
+            estimated_stage_cents=dict(gemini_primary=1, chirp_independent=1,
+                                       compare=0, third_optional=0, adjudication=0,
+                                       golden_qa=0))
+        self.ledger.approve(new_id, revision=0, approved_cents=2,
+                            reference="SECOND SOURCE TEST", actor="test")
+        with self.assertRaisesRegex(V2Conflict, "unreconciled global"):
+            self.ledger.claim_next(new_id, worker_id="new",
+                                   aggregate_cap_cents=1000)
+        for row in ledger_rows:
+            if row["status"] != "REVIEW_REQUIRED":
+                continue
+            proposal = propose_local_clock_fix(
+                ledger=self.ledger, job_id=self.job_id,
+                window_id=row["window_id"], job_dir=self.job_dir)
+            self.assertTrue(proposal["safe_to_apply"])
+            result = apply_local_clock_fix(
+                ledger=self.ledger, job_id=self.job_id,
+                window_id=row["window_id"], job_dir=self.job_dir,
+                proposal_sha=proposal["proposal_sha256"], owner_token="test-operator")
+            self.assertEqual(result["action"], "LOCAL_CLOCK_FIX_APPLIED")
+        self.assertEqual(sum(r["status"] == "DONE" for r in
+                             self.ledger.chirp_windows(self.job_id)), 10)
+        recovered = run_chirp_recovery_pass(
+            ledger=self.ledger, job_id=self.job_id, job_dir=self.job_dir,
+            gateway=self.gateway, cost_accountant=lambda _: 1,
+            acoustic_inspector=passing_acoustic_inspector)
+        self.assertEqual(recovered["action"], "CHIRP_COMPLETE")
+        old_state = self.ledger.status(self.job_id)
+        self.assertEqual(next(s["state"] for s in old_state["stages"]
+                              if s["name"] == "chirp_independent"), "COMPLETE")
+        for row in self.ledger.chirp_windows(self.job_id):
+            if row["window_id"] in old_good:
+                self.assertEqual((row["result_sha"], row["actual_cents"]),
+                                 old_good[row["window_id"]])
+        self.assertEqual(len(self.speech.calls), 10)
+        next_claim = self.ledger.claim_next(new_id, worker_id="new",
+                                            aggregate_cap_cents=1000)
+        self.assertEqual(next_claim["stage"], "gemini_primary")
+        self.assertEqual(self.ledger.status(new_id)["status"], "PROCESSING")
+
     def test_local_fix_followed_by_recovery_completes_stage(self):
         self.plan(max_window_seconds=10)
         rows = submit_planned_chirp(
