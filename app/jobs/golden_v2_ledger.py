@@ -171,7 +171,8 @@ class GoldenV2Ledger:
                                      ("estimated_cents", "INTEGER NOT NULL DEFAULT 0"),
                                      ("purpose", "TEXT NOT NULL DEFAULT 'BASE'"),
                                      ("assessment_sha", "TEXT"),
-                                     ("target_intervals_json", "TEXT NOT NULL DEFAULT '[]'")):
+                                     ("target_intervals_json", "TEXT NOT NULL DEFAULT '[]'"),
+                                     ("local_clock_fix_sha", "TEXT")):
                 if name not in cols:
                     db.execute(f"ALTER TABLE v2_chirp_operations ADD COLUMN {name} {definition}")
 
@@ -1408,6 +1409,60 @@ class GoldenV2Ledger:
                 "UPDATE v2_chirp_operations SET status='DONE',updated_at=? "
                 "WHERE job_id=? AND window_id=?",
                 (_now(), job_id, window_id),
+            )
+            db.execute("UPDATE v2_stages SET updated_at=? WHERE job_id=? "
+                       "AND name='chirp_independent'", (_now(), job_id))
+
+    def resolve_chirp_window_review_with_local_clock_fix(
+        self, job_id: str, window_id: str, *, operation_name: str,
+        evidence_sha: str, actual_cents: int, local_clock_fix_sha: str,
+        verifier: Any,
+    ) -> None:
+        """Resolve a quarantined result through a bounded local clock fix.
+
+        The original provider ``result_sha`` and ``actual_cents`` are preserved
+        exactly; the local-clock-fix SHA is recorded for audit and the merge
+        step treats the rewritten ``window.json`` like any other completed
+        window. No new provider call is permitted; no charge change is
+        permitted. The verifier is required to re-read the raw, review and
+        fix artifacts from disk, so a tampered proposal cannot promote a
+        window to ``DONE``.
+        """
+        if (not isinstance(evidence_sha, str) or len(evidence_sha) != 64
+                or any(c not in "0123456789abcdef" for c in evidence_sha)
+                or type(actual_cents) is not int or actual_cents < 0
+                or not isinstance(local_clock_fix_sha, str)
+                or len(local_clock_fix_sha) != 64
+                or any(c not in "0123456789abcdef" for c in local_clock_fix_sha)):
+            raise V2Conflict("local clock fix needs bound raw/fix SHAs and known usage")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stage = db.execute(
+                "SELECT * FROM v2_stages WHERE job_id=? AND name='chirp_independent'",
+                (job_id,),
+            ).fetchone()
+            row = db.execute(
+                "SELECT * FROM v2_chirp_operations WHERE job_id=? AND window_id=?",
+                (job_id, window_id),
+            ).fetchone()
+            if (job["status"] != "PROCESSING" or stage is None
+                    or stage["state"] != "RUNNING" or row is None
+                    or row["status"] != "REVIEW_REQUIRED"
+                    or row["operation_name"] != operation_name
+                    or row["result_sha"] != evidence_sha
+                    or row["actual_cents"] != actual_cents):
+                raise V2Conflict("Chirp review resolution identity or state changed")
+            if not callable(verifier) or not verifier(
+                job_id=job_id, window_id=window_id, operation_name=operation_name,
+                source_sha=row["source_sha"], clip_sha=row["clip_sha"],
+                gcs_uri=row["gcs_uri"], start_ms=row["start_ms"],
+                end_ms=row["end_ms"], evidence_sha=evidence_sha,
+            ):
+                raise V2Conflict("local clock fix evidence failed verification")
+            db.execute(
+                "UPDATE v2_chirp_operations SET status='DONE',"
+                "local_clock_fix_sha=?,updated_at=? WHERE job_id=? AND window_id=?",
+                (local_clock_fix_sha, _now(), job_id, window_id),
             )
             db.execute("UPDATE v2_stages SET updated_at=? WHERE job_id=? "
                        "AND name='chirp_independent'", (_now(), job_id))
