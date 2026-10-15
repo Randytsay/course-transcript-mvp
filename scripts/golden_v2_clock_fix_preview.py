@@ -6,6 +6,7 @@ Outputs only counts and reason codes, never recognized speech text.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import re
@@ -76,11 +77,14 @@ def inspect_quarantined(*, database: Path, artifact_root: Path,
                     info["reason"]="EVIDENCE_BINDING_MISMATCH"
                 else:
                     candidate = parse_local_clock_fix_candidate(raw_bytes, dict(row))
-                    info.update({"status":"SAFE_FOR_OPERATOR_REVIEW" if candidate["safe_to_apply"] else "HUMAN_AUDIO_REVIEW_REQUIRED",
+                    info.update({"status":"SAFE_FOR_OPERATOR_REVIEW" if candidate["safe_to_apply"] else "TARGETED_EVIDENCE_REVIEW_REQUIRED",
                                  "safe_to_apply":candidate["safe_to_apply"],
                                  "word_count":candidate["total_entry_count"],
                                  "normalized_token_count":candidate["fixable_word_count"],
                                  "unresolved_span_count":candidate["unresolvable_word_count"],
+                                 "unresolved_reason_counts":dict(sorted(Counter(
+                                     item.get("reason", "UNCLASSIFIED")
+                                     for item in candidate["unresolvable"]).items())),
                                  "reason":"VERIFIED_PROVIDER_BOUNDARIES" if candidate["safe_to_apply"] else "MISSING_VERIFIED_BOUNDARY"})
             except (ValueError, UnicodeError, V2Conflict, OSError):
                 info["reason"]="UNVERIFIABLE_PROVIDER_WORD_TIMES"

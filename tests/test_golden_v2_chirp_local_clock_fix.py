@@ -101,6 +101,21 @@ class ParseLocalClockFixCandidateTests(unittest.TestCase):
         self.assertEqual(fixed["end_ms"],500)
         self.assertEqual(fixed["timing_resolution"],"COALESCED_SAME_START_PROVIDER_END")
 
+    def test_single_out_of_order_provider_word_does_not_cascade(self):
+        raw = _forced_words(
+            ("一", 0.0, 0.1), ("三", 0.2, 0.3),
+            ("二", 0.1, 0.2), ("四", 0.3, 0.4))
+        candidate = parse_local_clock_fix_candidate(
+            raw, {"window_id":"w0","start_ms":0,"end_ms":5_000})
+        self.assertEqual(candidate["total_entry_count"], 4)
+        self.assertEqual(len(candidate["fixed_words"]), 4)
+        self.assertEqual([x["word"] for x in candidate["fixed_words"]],
+                         ["一","二","三","四"])
+        self.assertFalse(candidate["safe_to_apply"])
+        self.assertEqual(candidate["unresolvable_word_count"],1)
+        self.assertEqual(candidate["unresolvable"][0]["reason"],
+                         "out-of-order provider words require review")
+
     def test_out_of_window_word_requires_human_review(self):
         window = {"window_id":"w0","start_ms":0,"end_ms":1_000}
         candidate=parse_local_clock_fix_candidate(

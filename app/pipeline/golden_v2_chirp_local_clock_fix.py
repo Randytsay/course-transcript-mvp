@@ -94,6 +94,7 @@ def parse_local_clock_fix_candidate(
     if lo < 0 or hi <= lo:
         raise V2Conflict("invalid source window")
     fixed: list[dict[str, Any]] = []
+    timed: list[tuple[int, dict[str, Any]]] = []
     unresolved: list[dict[str, Any]] = []
     normalized = 0
     i = 0
@@ -143,18 +144,24 @@ def parse_local_clock_fix_candidate(
                                    "reason": "no verified provider end for token span"})
                 i = last_index + 1
                 continue
-        if fixed and start < fixed[-1]["end_ms"]:
-            unresolved.append({"index": i, "through_index": last_index,
-                               "reason": "overlapping provider word offsets"})
-            i = last_index + 1
-            continue
         word: dict[str, Any] = {"word": text, "start_ms": start, "end_ms": end}
         if resolution is not None:
             word["timing_resolution"] = resolution
             normalized += last_index - i + 1
-        fixed.append(word)
+        timed.append((i, word))
         i = last_index + 1
 
+    # The Speech API can deliver one token late in the array. Follow the
+    # official parser by sorting *provider-supplied* timestamps first, not
+    # treating every later word as a new mismatch behind that token.
+    timed.sort(key=lambda x: (x[1]["start_ms"], x[1]["end_ms"]))
+    if [i for i, _ in timed] != sorted(i for i, _ in timed):
+        unresolved.append({"reason": "out-of-order provider words require review"})
+    for (ai, earlier), (bi, later) in zip(timed, timed[1:]):
+        if later["start_ms"] < earlier["end_ms"]:
+            unresolved.append({"index": ai, "next_index": bi,
+                               "reason": "overlapping provider word offsets"})
+    fixed = [word for _, word in timed]
     untrusted = normalized + len(unresolved)
     if untrusted / len(entries) > _MAX_UNTRUSTED_FRACTION:
         raise V2Conflict("local clock fix has more than 50% of window words untrusted; manual review required")

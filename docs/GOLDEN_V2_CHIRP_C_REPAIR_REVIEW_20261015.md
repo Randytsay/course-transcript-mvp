@@ -51,3 +51,20 @@ Added `scripts/golden_v2_clock_fix_preview.py` to inspect the already-saved `pro
 Recommended isolated VPS sequence after fetching the latest PR head (not from the stale Hermes worktree): run a new container from the existing V2 Python image with `--network none --read-only`, mount the PR code at `/app` read-only and the production V2 data path at `/app/data` read-only, and execute `python -m scripts.golden_v2_clock_fix_preview --database /app/data/golden-v2/ledger.sqlite --artifact-root /app/data/golden-v2 --job-id v2p_c8f1e1cb3ecf53ccb1eae33b5ab221be`. Redact private paths and do not export speech text. Compare real `safe_windows` and `requires_attention`; do not infer from Hermes' looser 98 repairable candidates that all four real windows satisfy the strict provider-boundary policy.
 
 The new full synthetic test proves stage COMPLETE and that global ledger paid hold may safely clear **only when all ten windows have verified results**. It cannot waive real-world human review or automatically terminate a paid stage whose evidence is incomplete.
+
+## 2026-10-15 production receipt preview: fail-closed result
+
+The candidate read-only offline preview was actually executed with both PR code and the existing V2 data mounted **read-only**, networking disabled, and no credentials or provider calls. It verified each quarantined raw provider receipt against its ledger SHA and did not mutate SQLite/GCS/Drive. Latest strict sorted-by-provider-timestamp parser results:
+
+| Window | Provider word entries | Coalesced token count | Unresolved evidence items (not distinct words) | Reason |
+| --- | ---: | ---: | ---: | --- |
+| chunk-0005 | 3,052 | 2 | 1 | source-boundary overflow |
+| chunk-0007 | 2,818 | 0 | 6 | out-of-order provider tokens + five timing overlaps |
+| chunk-0008 | 2,922 | 187 | 2 | out-of-order provider token + one timing overlap |
+| chunk-0009 | 2,860 | 4 | 3 | missing verified end + order conflict + overlap |
+
+Result: **0/4 windows can be promoted automatically** under the evidence policy. These counts are not errors in the original spoken words or proof that an entire 900-second window needs re-recognition. The prior non-sorted parser had produced many cascading false overlap flags, which were fixed in the current PR by sorting only raw provider-supplied timestamps and flagging any lexical order conflict for review.
+
+The next actual VPS task is to produce a **redacted, exact source-relative time-range review packet** for these few boundary/ordering conflicts, without uploading, re-recognizing, inventing timestamps or mutating provider receipts. Determine whether a small authenticated listening review can establish a valid timing correction for each. **Do not run apply_local_clock_fix on these real four windows** until unresolved evidence has been adjudicated through a separate, auditable workflow. Synthetic stage-completion tests cannot replace this gate.
+
+The paid executor processes **all active jobs** in its ledger, not just the new 251018_.MP3 job; canary rollout must hold all paid dispatch safely, not assume it affects one job.
