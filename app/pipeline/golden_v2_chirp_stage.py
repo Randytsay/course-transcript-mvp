@@ -399,12 +399,43 @@ def finish_approved_chirp(
     for row in windows:
         root = job_dir / "golden-v2" / "chirp-evidence" / row["window_id"]
         saved = json.loads((root / "window.json").read_bytes())
-        if (saved["raw_sha"] != row["result_sha"]
-                or saved["actual_cents"] != row["actual_cents"]
-                or saved["request_id"] != row["request_id"]
+        if (saved.get("raw_sha") != row["result_sha"]
+                or saved.get("actual_cents") != row["actual_cents"]
+                or saved.get("request_id") != row["request_id"]
                 or file_sha256(root / "provider-raw.json") != row["result_sha"]):
             raise V2Conflict("Chirp raw evidence or cost changed after recovery")
-        records[row["window_id"]] = _parse_words((root / "provider-raw.json").read_bytes(), row)
+        raw_bytes = (root / "provider-raw.json").read_bytes()
+        local_sha = row.get("local_clock_fix_sha")
+        if local_sha:
+            # Reviewed clock fixes must stay evidence-bound across *both*
+            # recovery and merge; reparsing strict raw would reject them again.
+            from app.pipeline.golden_v2_chirp_local_clock_fix import (
+                parse_local_clock_fix_candidate, _wire as fix_wire,
+            )
+            proposal_file = job_dir / "golden-v2" / (
+                "chirp-local-clock-fix-" + local_sha[:20] + ".json"
+            )
+            if (proposal_file.is_symlink() or not proposal_file.is_file()
+                    or file_sha256(proposal_file) != local_sha
+                    or saved.get("local_clock_fix_sha") != local_sha):
+                raise V2Conflict("local Chirp timing proposal missing or changed")
+            proposal = json.loads(proposal_file.read_bytes())
+            candidate = parse_local_clock_fix_candidate(raw_bytes, row)
+            if (not candidate["safe_to_apply"]
+                    or proposal.get("unresolvable")
+                    or proposal.get("job_id") != job_id
+                    or proposal.get("window_id") != row["window_id"]
+                    or proposal.get("source_sha") != row["source_sha"]
+                    or proposal.get("clip_sha") != row["clip_sha"]
+                    or proposal.get("raw_sha") != row["result_sha"]
+                    or proposal.get("actual_cents") != row["actual_cents"]
+                    or proposal.get("fixed_words") != candidate["fixed_words"]
+                    or saved.get("words") != candidate["fixed_words"]
+                    or saved.get("actual_cents") != row["actual_cents"]):
+                raise V2Conflict("unverified local Chirp timing reconstruction")
+            records[row["window_id"]] = candidate["fixed_words"]
+        else:
+            records[row["window_id"]] = _parse_words(raw_bytes, row)
     boundaries = [(earlier["end_ms"] + later["start_ms"]) // 2
                   for earlier, later in zip(base, base[1:])]
     merged: list[dict[str, Any]] = []

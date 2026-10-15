@@ -186,6 +186,9 @@ def execute_approved_primary_stage(
                 approval_token=claim["claim"],
                 part_factory=part_factory,
                 approval_validator=ledger.provider_approval_validator(claim),
+                prior_audio_context=(records[-1]["text"][-500:]
+                                     if records and records[-1].get("status")=="COMPLETE"
+                                     else ""),
             ))
             # The next paid window cannot start until actual usage from all
             # completed windows is recorded and still inside the stage cap.

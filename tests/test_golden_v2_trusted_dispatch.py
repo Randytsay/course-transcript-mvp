@@ -61,6 +61,28 @@ class TrustedDispatchTests(unittest.TestCase):
         self.assertNotIn("claim", result)
         self.assertEqual(self.ledger.status(self.fixture.job)["stages"][0]["state"], "COMPLETE")
 
+    def test_chirp_requires_real_gemini_report_before_claim_and_provider(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        with mock.patch.object(dispatch, "execute_approved_primary_stage",
+                               autospec=True, side_effect=self.complete):
+            self.dispatch()
+        before=self.ledger.status(self.fixture.job)
+        self.assertEqual(before["stages"][0]["state"],"COMPLETE")
+        opts={
+            "storage_client":object(),"bucket_name":"private-test",
+            "object_prefix":"staging",
+            "estimate_window_cents":lambda _:1,
+            "gateway":SimpleNamespace(submit=mock.Mock()),
+        }
+        with self.assertRaisesRegex(V2Conflict,"completion SHA not backed"):
+            self.dispatch(expected_stage="chirp_independent",
+                          expected_revision=before["revision"],stage_options=opts)
+        after=self.ledger.status(self.fixture.job)
+        self.assertEqual(after["revision"],before["revision"])
+        self.assertEqual(after["stages"][1]["state"],"PENDING")
+        opts["gateway"].submit.assert_not_called()
+
     def test_owner_or_capability_rejection_never_claims(self):
         for override in ({"verify_owner": lambda _: False},
                          {"verify_capability_and_pricing": lambda _: False}):
