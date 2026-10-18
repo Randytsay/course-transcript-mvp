@@ -671,11 +671,11 @@ class GoldenV2Ledger:
             job = self._job(db, job_id)
             stages = self._stages(db, job_id)
             first = stages[0]
-            if (job["revision"] != revision or job["status"] != "NEEDS_REVIEW"
+            if (job["revision"] != revision or job["status"] not in ("NEEDS_REVIEW", "PROCESSING")
                     or first["name"] != "gemini_primary"
                     or first["state"] != "REVIEW_REQUIRED"
                     or first["evidence_sha"] != previous_evidence_sha
-                    or any(stage["state"] != "PENDING" for stage in stages[1:])):
+                    or any(stage["state"] not in ("PENDING", "RUNNING", "COMPLETE") for stage in stages[1:])):
                 raise V2Conflict("primary review revision/state/evidence mismatch")
             if not evidence_verifier(job_id=job_id, source_sha=job["source_sha"],
                                      old_sha=previous_evidence_sha,
@@ -1298,6 +1298,62 @@ class GoldenV2Ledger:
             db.execute("UPDATE v2_stages SET state='COMPLETE',actual_cents=?,"
                        "evidence_sha=?,claim_hash=NULL,updated_at=? WHERE job_id=? "
                        "AND name='chirp_independent'", (actual, evidence_sha, _now(), job_id))
+
+    def record_chirp_review_required(
+        self, job_id: str, window_id: str, *,
+        reason: str, evidence_sha: str, actual_cents: int,
+    ) -> None:
+        """Mark a Chirp window as REVIEW_REQUIRED with a recorded reason."""
+        if not reason.strip():
+            raise ValueError("reason is required")
+        if type(actual_cents) is not int or actual_cents < 0:
+            raise ValueError("invalid actual cents")
+        if len(evidence_sha) != 64 or any(c not in "0123456789abcdef" for c in evidence_sha):
+            raise ValueError("invalid evidence SHA")
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT * FROM v2_chirp_operations WHERE job_id=? AND window_id=?",
+                (job_id, window_id),
+            ).fetchone()
+            if row is None:
+                raise V2Conflict(f"window {window_id} not found")
+            db.execute(
+                "UPDATE v2_chirp_operations SET status='REVIEW_REQUIRED',result_sha=?,"
+                "actual_cents=?,updated_at=? WHERE job_id=? AND window_id=?",
+                (evidence_sha, actual_cents, _now(), job_id, window_id),
+            )
+
+    def resolve_chirp_window_review(
+        self, job_id: str, window_id: str, *,
+        proposal_sha: str, actual_cents: int, evidence_sha: str,
+    ) -> None:
+        """Promote REVIEW_REQUIRED -> DONE after the local clock-fix evidence
+        re-derives correctly. Preserves raw_sha on disk."""
+        if len(proposal_sha) != 64 or any(c not in "0123456789abcdef" for c in proposal_sha):
+            raise ValueError("invalid proposal SHA")
+        if len(evidence_sha) != 64 or any(c not in "0123456789abcdef" for c in evidence_sha):
+            raise ValueError("invalid evidence SHA")
+        if type(actual_cents) is not int or actual_cents < 0:
+            raise ValueError("invalid actual cents")
+        with self._tx() as db:
+            row = db.execute(
+                "SELECT * FROM v2_chirp_operations WHERE job_id=? AND window_id=?",
+                (job_id, window_id),
+            ).fetchone()
+            if row is None:
+                raise V2Conflict(f"window {window_id} not found")
+            if row["status"] != "REVIEW_REQUIRED":
+                raise V2Conflict(f"window {window_id} status is {row['status']}, not REVIEW_REQUIRED")
+            if row["result_sha"] != evidence_sha:
+                raise V2Conflict(f"window {window_id} result_sha mismatch")
+            if row["actual_cents"] != actual_cents:
+                raise V2Conflict(f"window {window_id} actual_cents mismatch")
+            db.execute(
+                "UPDATE v2_chirp_operations SET status='DONE',assessment_sha=?,"
+                "actual_cents=?,updated_at=? WHERE job_id=? AND window_id=?",
+                (proposal_sha, actual_cents, _now(), job_id, window_id),
+            )
+
 
     def status(self, job_id: str) -> dict[str, Any]:
         with self._tx() as db:

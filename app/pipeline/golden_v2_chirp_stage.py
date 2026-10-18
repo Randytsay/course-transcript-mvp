@@ -251,7 +251,7 @@ def finish_approved_chirp(
                 or saved["request_id"] != row["request_id"]
                 or file_sha256(root / "provider-raw.json") != row["result_sha"]):
             raise V2Conflict("Chirp raw evidence or cost changed after recovery")
-        records[row["window_id"]] = _parse_words((root / "provider-raw.json").read_bytes(), row)
+        records[row["window_id"]] = saved["words"]
     boundaries = [(earlier["end_ms"] + later["start_ms"]) // 2
                   for earlier, later in zip(base, base[1:])]
     merged: list[dict[str, Any]] = []
@@ -337,3 +337,17 @@ def finish_approved_chirp(
 
     ledger.finish_recovered_chirp(job_id, evidence_sha=digest, verifier=verify)
     return report
+
+
+def recover_review_required_chirp_window(
+    *, ledger: GoldenV2Ledger, job_id: str, window_id: str, job_dir: Path,
+) -> dict[str, Any]:
+    """Read REVIEW_REQUIRED window, apply local clock fix, write window.json
+    + evidence sidecar, then call ledger.resolve_chirp_window_review.
+    Returns the new window.json dict. No provider call."""
+    from app.pipeline.golden_v2_chirp_local_clock_fix import propose_local_clock_fix, apply_local_clock_fix
+    proposal = propose_local_clock_fix(ledger=ledger, job_id=job_id, window_id=window_id, job_dir=job_dir)
+    return apply_local_clock_fix(
+        ledger=ledger, job_id=job_id, window_id=window_id, job_dir=job_dir,
+        proposal_sha=proposal["proposal_sha256"],
+    )
