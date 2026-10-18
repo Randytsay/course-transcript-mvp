@@ -1317,9 +1317,11 @@ class GoldenV2Ledger:
             ).fetchone()
             if row is None:
                 raise V2Conflict(f"window {window_id} not found")
+            if row["status"] == "DONE":
+                raise V2Conflict(f"window {window_id} is already DONE; illegal backward transition to REVIEW_REQUIRED")
             db.execute(
                 "UPDATE v2_chirp_operations SET status='REVIEW_REQUIRED',result_sha=?,"
-                "actual_cents=?,updated_at=? WHERE job_id=? AND window_id=?",
+                "actual_cents=?,updated_at=? WHERE job_id=? AND window_id=? AND status != 'DONE'",
                 (evidence_sha, actual_cents, _now(), job_id, window_id),
             )
 
@@ -1350,7 +1352,7 @@ class GoldenV2Ledger:
                 raise V2Conflict(f"window {window_id} actual_cents mismatch")
             db.execute(
                 "UPDATE v2_chirp_operations SET status='DONE',assessment_sha=?,"
-                "actual_cents=?,updated_at=? WHERE job_id=? AND window_id=?",
+                "actual_cents=?,updated_at=? WHERE job_id=? AND window_id=? AND status='REVIEW_REQUIRED'",
                 (proposal_sha, actual_cents, _now(), job_id, window_id),
             )
 

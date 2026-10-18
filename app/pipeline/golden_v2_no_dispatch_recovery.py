@@ -40,8 +40,15 @@ def _time_string(value: datetime) -> str:
 
 
 def _monitoring_window(created_at: str, stage_updated_at: str) -> tuple[str, str]:
-    start = _parse_time(created_at).replace(second=0, microsecond=0) - timedelta(minutes=1)
-    end = _parse_time(stage_updated_at) + timedelta(seconds=120)
+    stage_end = _parse_time(stage_updated_at)
+    earliest_bound = _parse_time(created_at)
+    # The monitoring window covers the execution attempt leading up to stage_updated_at.
+    # While created_at provides the earliest possible bound (for jobs executed immediately),
+    # queued jobs may have been created days earlier. An attempt cannot exceed the maximum
+    # stage duration (e.g. 15 minutes before failure).
+    start_dt = max(earliest_bound, stage_end - timedelta(minutes=15))
+    start = start_dt.replace(second=0, microsecond=0) - timedelta(minutes=1)
+    end = stage_end + timedelta(seconds=120)
     end = end.replace(second=0, microsecond=0) + (timedelta(minutes=1) if end.second or end.microsecond else timedelta())
     return _time_string(start), _time_string(end)
 

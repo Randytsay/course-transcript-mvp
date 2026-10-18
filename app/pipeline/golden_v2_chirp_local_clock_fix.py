@@ -47,14 +47,14 @@ def _normalize_window(
 ) -> tuple[list[dict[str, Any]], list[FixDecision], list[dict[str, Any]]]:
     fixes: list[FixDecision] = []
     unresolvable: list[dict[str, Any]] = []
-    kept_words: list[dict[str, Any]] = []
-    skip_indexes: set[int] = set()
+    repaired_entries: list[dict[str, Any]] = []
+    current_slip_ms = 0
     n = len(entries)
     would_repair = 0
 
+    # Step 1: Detect and repair intra-window clock slips
+    # (e.g. Speech API clock wrapping backwards by ~100s as observed in chunk-0009)
     for i, entry in enumerate(entries):
-        if i in skip_indexes:
-            continue
         if not isinstance(entry, dict) or not isinstance(entry.get("word"), str) or not entry["word"]:
             unresolvable.append({"index": i, "reason": "invalid word record", "entry": entry})
             would_repair += 1
@@ -65,63 +65,119 @@ def _normalize_window(
         has_start = isinstance(start_off, str) and bool(_OFFSET_RE.fullmatch(start_off or ""))
         has_end = isinstance(end_off, str) and bool(_OFFSET_RE.fullmatch(end_off or ""))
 
-        if has_start and has_end:
-            s = _offset_ms(start_off) + win_start_ms
-            e = _offset_ms(end_off) + win_start_ms
+        s_ms = _offset_ms(start_off) if has_start else None
+        e_ms = _offset_ms(end_off) if has_end else None
+
+        # Check for slip onset: e.g. startOffset was 763s, but endOffset jumped back by >10s (e.g. 664s)
+        if s_ms is not None and e_ms is not None and e_ms < s_ms - 10000:
+            slip_amount = s_ms - e_ms
+            current_slip_ms += slip_amount
+            repaired_entries.append({
+                "entry": entry, "_s_ms": s_ms, "_e_ms": e_ms + current_slip_ms,
+                "_orig_index": i, "word": entry["word"], "start_off": start_off, "end_off": end_off,
+            })
+            continue
+
+        if current_slip_ms > 0:
+            s_ms_adj = s_ms + current_slip_ms if s_ms is not None else None
+            if e_ms is not None:
+                # Check if clock recovered forward (endOffset jumps forward by >50s relative to s_ms)
+                if s_ms is not None and e_ms - s_ms > 50000:
+                    current_slip_ms = 0
+                    e_ms_adj = e_ms
+                else:
+                    e_ms_adj = e_ms + current_slip_ms
+            else:
+                e_ms_adj = None
+            repaired_entries.append({
+                "entry": entry, "_s_ms": s_ms_adj, "_e_ms": e_ms_adj,
+                "_orig_index": i, "word": entry["word"], "start_off": start_off, "end_off": end_off,
+            })
+        else:
+            repaired_entries.append({
+                "entry": entry, "_s_ms": s_ms, "_e_ms": e_ms,
+                "_orig_index": i, "word": entry["word"], "start_off": start_off, "end_off": end_off,
+            })
+
+    # Step 2: Coalesce zero-duration and missing offset entries
+    kept_words: list[dict[str, Any]] = []
+    skip_indexes: set[int] = set()
+    num_repaired = len(repaired_entries)
+
+    for i, item in enumerate(repaired_entries):
+        orig_i = item["_orig_index"]
+        if orig_i in skip_indexes:
+            continue
+        w_text = item["word"]
+        s_ms = item["_s_ms"]
+        e_ms = item["_e_ms"]
+        start_off = item["start_off"]
+        end_off = item["end_off"]
+
+        if s_ms is not None and e_ms is not None:
+            s = s_ms + win_start_ms
+            e = e_ms + win_start_ms
             if e <= s or s < win_start_ms or e > win_end_ms + 250:
                 would_repair += 1
                 e = s + 80
-                fixes.append(FixDecision(i, "COALESCED_ZERO_DURATION_SEQUENCE", entry["word"], start_off, end_off, s, e))
-            w_text = entry["word"]
-        elif has_start and not has_end:
+                fixes.append(FixDecision(orig_i, "COALESCED_ZERO_DURATION_SEQUENCE", w_text, start_off, end_off, s, e))
+        elif s_ms is not None and e_ms is None:
             would_repair += 1
-            s = _offset_ms(start_off) + win_start_ms
+            s = s_ms + win_start_ms
             merged_end_ms = None
-            coalesced_words = [entry["word"]]
-            # Look ahead for all entries that share this same startOffset
-            last_matched_idx = i
-            for j in range(i + 1, min(i + 10, n)):
-                nx = entries[j]
-                if (isinstance(nx.get("startOffset"), str) and nx["startOffset"] == start_off):
-                    coalesced_words.append(nx.get("word", ""))
-                    last_matched_idx = j
-                    if isinstance(nx.get("endOffset"), str) and _OFFSET_RE.fullmatch(nx["endOffset"]):
-                        merged_end_ms = _offset_ms(nx["endOffset"]) + win_start_ms
+            coalesced_words = [w_text]
+            last_matched_orig_idx = orig_i
+            for j in range(i + 1, min(i + 10, num_repaired)):
+                nx = repaired_entries[j]
+                if nx["start_off"] == start_off and nx["start_off"] is not None:
+                    coalesced_words.append(nx["word"])
+                    last_matched_orig_idx = nx["_orig_index"]
+                    if nx["_e_ms"] is not None:
+                        merged_end_ms = nx["_e_ms"] + win_start_ms
                         break
-            if last_matched_idx > i:
-                skip_indexes.update(range(i + 1, last_matched_idx + 1))
+            if last_matched_orig_idx > orig_i:
+                skip_indexes.update(range(orig_i + 1, last_matched_orig_idx + 1))
             w_text = "".join(coalesced_words)
             if merged_end_ms is None or merged_end_ms <= s:
                 e = s + 80
             else:
                 e = merged_end_ms
-            fixes.append(FixDecision(i, "COALESCED_ZERO_DURATION_SEQUENCE", w_text, start_off, end_off, s, e))
-        elif not has_start and has_end and i == 0:
+            fixes.append(FixDecision(orig_i, "COALESCED_ZERO_DURATION_SEQUENCE", w_text, start_off, end_off, s, e))
+        elif s_ms is None and e_ms is not None and orig_i == 0:
             would_repair += 1
-            e = _offset_ms(end_off) + win_start_ms
+            e = e_ms + win_start_ms
             s = max(win_start_ms, e - 80)
-            w_text = entry["word"]
-            fixes.append(FixDecision(i, "DEFAULT_HEAD_END_FILL", w_text, start_off, end_off, s, e))
-        elif not has_start and has_end and i > 0:
-            unresolvable.append({"index": i, "reason": "middle word missing startOffset", "entry": entry})
+            fixes.append(FixDecision(orig_i, "DEFAULT_HEAD_END_FILL", w_text, start_off, end_off, s, e))
+        elif s_ms is None and e_ms is not None and orig_i > 0:
+            unresolvable.append({"index": orig_i, "reason": "middle word missing startOffset", "entry": item["entry"]})
             would_repair += 1
             continue
         else:
-            unresolvable.append({"index": i, "reason": "no usable start or end", "entry": entry})
+            unresolvable.append({"index": orig_i, "reason": "no usable start or end", "entry": item["entry"]})
             would_repair += 1
             continue
 
-        kept_words.append({"word": w_text, "start_ms": s, "end_ms": e, "_orig_index": i})
+        kept_words.append({"word": w_text, "start_ms": s, "end_ms": e, "_orig_index": orig_i})
 
-    # Strict monotonicity and non-overlapping check
+    # Strict fail-closed check: corrupted unresolvable entries require manual review
+    if unresolvable:
+        raise V2Conflict(f"{window_id}: {len(unresolvable)} unresolvable entries require manual review")
+
+    # Step 3: Stable sort by (start_ms, orig_index) to place out-of-order bursts in proper chronological sequence
+    kept_words.sort(key=lambda w: (w["start_ms"], w["_orig_index"]))
+
+    # Step 4: Strict monotonicity and non-overlapping boundary enforcement (zero token loss)
     clean_words: list[dict[str, Any]] = []
     prev_end = win_start_ms
     for w in kept_words:
-        if w["start_ms"] < prev_end:
-            unresolvable.append({"reason": "non-monotonic or overlapping", "word": w})
-            continue
-        clean_words.append(w)
-        prev_end = w["end_ms"]
+        s = w["start_ms"]
+        e = w["end_ms"]
+        if s < prev_end:
+            s = prev_end
+        if e <= s:
+            e = s + 80
+        clean_words.append({"word": w["word"], "start_ms": s, "end_ms": e, "_orig_index": w["_orig_index"]})
+        prev_end = e
 
     words = clean_words
     if n and (would_repair / n) > 0.5:
@@ -191,13 +247,18 @@ def parse_local_clock_fix_candidate(raw_bytes: bytes, window: dict[str, Any]) ->
             for f in fixes
         ]
 
+    window_sha = hashlib.sha256(_wire(manifest)).hexdigest()
+
     fix_proposal = {
         "schema": "golden-v2-chirp-local-clock-fix-v1",
         "job_id": window["job_id"],
         "window_id": window_id,
+        "source_sha": window["source_sha"],
+        "clip_sha": window["clip_sha"],
         "raw_sha": raw_sha,
         "raw_sha_unchanged": True,
         "actual_cents_unchanged": int(window["actual_cents"]),
+        "window_sha256": window_sha,
         "submit_authorized": False,
         "provider_calls_started": False,
         "fixable_count": len(fixes),
@@ -225,6 +286,7 @@ def parse_local_clock_fix_candidate(raw_bytes: bytes, window: dict[str, Any]) ->
         "manifest": manifest,
         "fix_proposal": fix_proposal,
         "proposal_sha256": proposal_sha,
+        "window_sha256": window_sha,
         "fixable_count": len(fixes),
         "unresolvable_count": len(unresolvable),
     }

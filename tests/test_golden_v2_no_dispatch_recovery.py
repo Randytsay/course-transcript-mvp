@@ -363,5 +363,14 @@ class NoDispatchRecoveryTests(unittest.TestCase):
             self.assertIn("EXISTING_PAID_RECEIPTS_RECONCILE", blocked["blockers"])
 
 
+
+    def test_monitoring_window_bounded_for_queued_jobs(self):
+        created_at = "2026-10-14T17:17:48.110420+00:00"
+        stage_updated_at = "2026-10-18T15:52:24.269033+00:00"
+        start, end = _monitoring_window(created_at, stage_updated_at)
+        # Should not start 4 days ago; should be bounded to 15 minutes before failure
+        self.assertEqual(start, "2026-10-18T15:36:00Z")
+        self.assertEqual(end, "2026-10-18T15:55:00Z")
+
 if __name__ == "__main__":
     unittest.main()

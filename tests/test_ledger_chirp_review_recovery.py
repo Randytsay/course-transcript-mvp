@@ -62,5 +62,28 @@ class TestLedgerChirpReviewRecovery(unittest.TestCase):
         self.assertEqual(rows_after[0]["assessment_sha"], "e" * 64)
         self.assertEqual(rows_after[0]["actual_cents"], 5)
 
+    def test_record_review_required_rejects_already_done(self):
+        # 1. Transition window to DONE
+        self.ledger.record_chirp_review_required(
+            self.job_id, "chunk-0000",
+            reason="initial test reason",
+            evidence_sha="d" * 64, actual_cents=5,
+        )
+        self.ledger.resolve_chirp_window_review(
+            self.job_id, "chunk-0000",
+            proposal_sha="e" * 64, actual_cents=5,
+            evidence_sha="d" * 64,
+        )
+        rows = self.ledger.chirp_windows(self.job_id)
+        self.assertEqual(rows[0]["status"], "DONE")
+
+        # 2. Assert that overwriting DONE with REVIEW_REQUIRED is strictly forbidden
+        with self.assertRaises(V2Conflict):
+            self.ledger.record_chirp_review_required(
+                self.job_id, "chunk-0000",
+                reason="illegal backward overwrite",
+                evidence_sha="d" * 64, actual_cents=5,
+            )
+
 if __name__ == "__main__":
     unittest.main()
