@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from typing import Any
 
 # Stable error codes (canonical names; not used for substring matching).
@@ -83,33 +84,84 @@ _SEARCH_TERMS = (
 # Fields that MUST NEVER appear in a diagnostic record. If a future V2Conflict
 # raise would carry any of these field names, the record is rejected.
 REDACTED_FIELDS = frozenset({
-    "password", "secret", "token", "api_key", "private_key",
-    "authorization", "client_secret", "refresh_token", "access_token",
+    # Field names that are NEVER allowed in a diagnostic record.
+    "password", "passwd", "pwd",
+    "secret", "client_secret", "shared_secret",
+    "token", "access_token", "refresh_token", "id_token", "bearer_token",
+    "api_key", "apikey", "api-key",
+    "private_key", "priv_key",
+    "authorization", "auth", "x-api-key", "x-auth-token",
+    "session_id", "cookie", "set-cookie",
+    "aws_secret_access_key", "aws_access_key_id",
+    "gcp_service_account_key", "google_application_credentials",
+    "openai_api_key", "anthropic_api_key", "gemini_api_key",
+    "bearer", "x-goog-api-key",
 })
+
+# Regex patterns for redacting secrets embedded INSIDE string values
+# (e.g. a reason that quotes a request header). The patterns match the
+# canonical ``key: value`` and ``key=value`` shapes used by HTTP headers
+# and env-var dumps.
+_INLINE_SECRET_PATTERNS = (
+    # Authorization: Bearer <token>
+    (re.compile(r"(authorization\s*[:=]\s*)(?:bearer\s+)?[A-Za-z0-9._\-+/=]{6,}"),
+     r'\1[REDACTED]'),
+    # password=<value> or password: <value>
+    (re.compile(r'(password\s*[:=]\s*)[^\s,"\'\}]+', re.IGNORECASE),
+     r'\1[REDACTED]'),
+    # token=<value> or api_key=<value>
+    (re.compile(r"((?:api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret|private[_-]?key)\s*[:=]\s*)[A-Za-z0-9._\-+/=]{6,}",
+     re.IGNORECASE),
+     r'\1[REDACTED]'),
+    # Bearer <token> standalone
+    (re.compile(r"\b[Bb]earer\s+[A-Za-z0-9._\-+/=]{6,}"),
+     r"Bearer [REDACTED]"),
+)
 
 
 def _redact(value):
-    """Recursively strip known sensitive fields. Truncates long strings."""
+    """Recursively strip known sensitive fields, then scrub embedded secrets.
+
+    Step 1: drop entire dict keys that are known to be sensitive
+            (REDACTED_FIELDS).
+    Step 2: on every string value, run a set of regex patterns to catch
+            secrets that appear as ``key: value`` or ``key=value``
+            inside a longer free-form text (e.g. a logged HTTP header,
+            an env-var dump, a request URL with embedded credentials).
+    Step 3: truncate strings longer than 256 chars.
+    """
     if isinstance(value, dict):
         return {k: _redact(v) for k, v in value.items() if k not in REDACTED_FIELDS}
     if isinstance(value, list):
         return [_redact(item) for item in value]
     if isinstance(value, str):
-        if len(value) > 256:
-            return value[:128] + "...<truncated>..." + value[-32:]
-        return value
+        scrubbed = value
+        for pattern, replacement in _INLINE_SECRET_PATTERNS:
+            scrubbed = pattern.sub(replacement, scrubbed)
+        if len(scrubbed) > 256:
+            return scrubbed[:128] + "...<truncated>..." + scrubbed[-32:]
+        return scrubbed
     return value
 
 
 def make_record(*, error_code, reason, stage, source, context=None):
-    """Build a stable, JSON-serialisable diagnostic record."""
+    """Build a stable, JSON-serialisable diagnostic record.
+
+    The reason and context are both passed through ``_redact`` to strip
+    any sensitive tokens (passwords, API keys, Bearer tokens, refresh
+    tokens, etc.) before the record is returned. Records are still safe
+    to log or persist.
+    """
     _known = {code for _, code in _SEARCH_TERMS} | {"GVR-ND-000", "GVR-EX-199"}
     if error_code not in _known:
         raise ValueError(f"unknown V2 error code: {error_code}")
     file, line = source
+    # Redact both the reason string and the context dict so that secrets
+    # embedded in the human-readable reason are also scrubbed.
+    redacted_reason = _redact(reason) if isinstance(reason, str) else reason
     record = {
         "error_code": error_code,
-        "reason": reason,
+        "reason": redacted_reason,
         "stage": stage,
         "file": file,
         "line": line,

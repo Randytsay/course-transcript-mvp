@@ -14,6 +14,7 @@ from typing import Callable
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.pipeline import golden_v2_diagnostics as _diag
+from app.pipeline.golden_v2_no_dispatch_recovery import _raise_diagnosed
 
 # Stage names known to this executor. Any other stage name is logged as
 # "unknown" so the operator can spot wiring mistakes in paid services.
@@ -58,7 +59,7 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
                 job_dir = jobs_root / job_id
                 if (jobs_root.is_symlink() or job_dir.is_symlink() or not job_dir.is_dir()
                         or job_dir.resolve().parent != jobs_root or job_dir.resolve() != job_dir):
-                    raise V2Conflict('source artifact directory unavailable')
+                    _raise_diagnosed("source artifact directory unavailable", stage="unknown", context={"job_id": job_id})
                 local = run_ready_local(ledger=ledger, job_id=job_id, job_dir=job_dir, worker_id=worker_id)
                 state = ledger.status(job_id)
                 pending = next((s for s in state['stages'] if s['state'] not in {'COMPLETE', 'SKIPPED'}), None)
@@ -72,13 +73,13 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
                 if stage == 'chirp_independent' and pending['state'] == 'RUNNING':
                     options = recovery_services(dict(snapshot))
                     if not isinstance(options, dict) or set(options) - {'gateway', 'cost_accountant', 'max_operations', 'acoustic_inspector'}:
-                        raise V2Conflict('invalid recovery service contract')
+                        _raise_diagnosed("invalid recovery service contract", stage="chirp_independent")
                     result = run_chirp_recovery_pass(ledger=ledger, job_id=job_id, job_dir=job_dir, **options)
                     outcomes.append(result)
                 elif stage in {'gemini_primary', 'chirp_independent', 'third_optional'} and pending['state'] == 'PENDING':
                     options = paid_services(dict(snapshot))
                     if (not isinstance(options, dict) or set(options) - {'verify_owner', 'verify_capability_and_pricing', 'stage_options', 'read_metadata'}):
-                        raise V2Conflict('invalid paid service contract')
+                        _raise_diagnosed("invalid paid service contract", stage=stage)
                     # This guard independently rereads approval, source, budget,
                     # live Drive version and prices before a SQLite CAS claim.
                     result = execute_trusted_paid_stage(
