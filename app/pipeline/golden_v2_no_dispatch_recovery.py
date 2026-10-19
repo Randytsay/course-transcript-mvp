@@ -336,10 +336,48 @@ def _load_bound_attempt(job_dir: Path, evidence: dict[str, Any],
     active = job_dir / relative
     if active.parent != primary_dir or not active.name.endswith(".json"):
         _raise_diagnosed("saved no-dispatch proof primary audit path is invalid")
-    archived = primary_dir / "reconciled" / f"{active.stem}.not-submitted.{evidence_sha}.json"
-    candidates = [path for path in (active, archived) if path.is_file() and not path.is_symlink()]
-    if len(candidates) != 1:
-        _raise_diagnosed("expected exactly one active or archived primary attempt")
+    # Path B fix: the previous version constructed the archive path
+    # with the *current* evidence_sha, which is wrong on re-reconcile
+    # because the on-disk archive was named with the *previous* cycle's
+    # evidence_sha. Look for ANY not-submitted.<sha>.json file matching
+    # the active file's stem, then validate by content hash.
+    archive_dir = primary_dir / "reconciled"
+    archive_pattern = f"{active.stem}.not-submitted.*.json"
+    if archive_dir.is_symlink() or not archive_dir.is_dir():
+        _raise_diagnosed("primary audit directory unavailable")
+    archived_matches = sorted(archive_dir.glob(archive_pattern))
+    # Reject any symlinks in the candidates
+    archived_matches = [p for p in archived_matches
+                        if not p.is_symlink() and p.is_file()]
+    # Active + archived are both candidates
+    candidates = []
+    if active.is_file() and not active.is_symlink():
+        candidates.append(active)
+    candidates.extend(archived_matches)
+    if len(candidates) == 0:
+        _raise_diagnosed("expected exactly one active or archived primary attempt",
+                         context={"stem": active.stem,
+                                  "expected_evidence_sha_prefix": evidence_sha[:16],
+                                  "archive_dir": str(archive_dir),
+                                  "archive_pattern": archive_pattern})
+    if len(candidates) > 1:
+        # Anti-double-billing guard: more than one candidate means the
+        # job has been reconcile-cycled through multiple cycles. Each
+        # extra archive is a separate prior_attempt, which would imply
+        # separate provider dispatches. We must NOT proceed unless the
+        # operator resolves the ambiguity explicitly.
+        _raise_diagnosed(
+            "expected exactly one active or archived primary attempt",
+            context={
+                "ambiguity_kind": "active + archive ambiguity",
+                "stem": active.stem,
+                "candidate_count": len(candidates),
+                "candidates": [str(p.relative_to(job_dir)) for p in candidates],
+                "expected_evidence_sha_prefix": evidence_sha[:16],
+                "note": "more than one candidate implies multiple prior "
+                        "Provider dispatches; operator must resolve before retry",
+            },
+        )
     raw = candidates[0].read_bytes()
     if hashlib.sha256(raw).hexdigest() != expected_sha:
         _raise_diagnosed("saved no-dispatch proof references changed raw primary evidence")
