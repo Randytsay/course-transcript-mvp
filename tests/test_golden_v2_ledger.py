@@ -285,6 +285,12 @@ class GoldenV2LedgerTests(unittest.TestCase):
                 evidence_sha="c"*64, evidence_verifier=lambda **proof: True,
                 attempt_archiver=lambda: self.fail("one-shot retry must remain consumed"),
             )
+        recovered.reconcile_unsubmitted_provider_call(
+            job, stage="gemini_primary", actor="reviewer; owner_authorization=owner-manual-extra-retry",
+            evidence_sha="c"*64, evidence_verifier=lambda **proof: True,
+            attempt_archiver=lambda: None,
+        )
+        self.assertEqual(recovered.status(job)["stages"][0]["state"], "PENDING")
 
     def test_unsubmitted_reconciliation_cannot_erase_observed_cost(self):
         job = self.create()

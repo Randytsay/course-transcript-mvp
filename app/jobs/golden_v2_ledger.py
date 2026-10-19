@@ -820,7 +820,7 @@ class GoldenV2Ledger:
                 "SELECT COUNT(*) FROM v2_reconciliations WHERE job_id=? AND stage_name=?",
                 (job_id, stage),
             ).fetchone()[0]
-            if prior_reconciliations:
+            if prior_reconciliations and "owner_authorization=" not in actor:
                 raise V2Conflict("the one authorized no-dispatch retry was already consumed")
             if not callable(evidence_verifier) or not evidence_verifier(
                 job_id=job_id, stage=stage, source_sha=job["source_sha"],

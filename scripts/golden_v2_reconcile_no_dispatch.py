@@ -23,6 +23,7 @@ def main() -> int:
     parser.add_argument("--artifact-root", required=True)
     parser.add_argument("--job-id", required=True)
     parser.add_argument("--project", default=os.environ.get("GOOGLE_CLOUD_PROJECT", ""))
+    parser.add_argument("--owner-authorization", default="")
     args = parser.parse_args()
     if not args.project:
         parser.error("--project or GOOGLE_CLOUD_PROJECT is required")
@@ -31,10 +32,14 @@ def main() -> int:
     if root.is_symlink() or database.is_symlink() or database.resolve().parent != root.resolve():
         parser.error("isolated V2 ledger and artifact root required")
     credentials, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+    actor = "vps-control-plane-no-dispatch"
+    if args.owner_authorization:
+        actor = f"vps-control-plane-no-dispatch; owner_authorization={args.owner_authorization}"
     result = reconcile_primary_no_dispatch(
         ledger=GoldenV2Ledger.open_existing(database), job_id=args.job_id,
         artifact_root=root, project=args.project,
         session=AuthorizedSession(credentials),
+        actor=actor,
     )
     print(json.dumps(result, ensure_ascii=False, sort_keys=True))
     return 0

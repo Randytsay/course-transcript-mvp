@@ -447,6 +447,8 @@ def reconcile_primary_no_dispatch(*, ledger: GoldenV2Ledger, job_id: str,
         "initial_evidence_sha256": evidence_sha,
         "revalidation_evidence_sha256": revalidation_sha,
     }
+    if "owner_authorization=" in actor:
+        commit_proof["owner_authorization_reference"] = actor.split("owner_authorization=")[1].strip()
     commit_proof_path, commit_proof_sha = _write_content_addressed(
         job_dir / "golden-v2" / "no-dispatch-commit-proofs", commit_proof,
     )

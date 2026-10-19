@@ -82,12 +82,14 @@ def _clients():
     from google import genai
     from google.genai import types
     from google.cloud import storage, speech_v2
+    import google.auth
     project = os.environ['GOOGLE_CLOUD_PROJECT']
-    vertex = genai.Client(enterprise=True,project=project,location='global',
-                         http_options=types.HttpOptions(api_version='v1',timeout=1800000,
+    creds, _ = google.auth.default(scopes=['https://www.googleapis.com/auth/cloud-platform'])
+    vertex = genai.Client(credentials=creds, enterprise=True, project=project, location='global',
+                         http_options=types.HttpOptions(api_version='v1', timeout=1800000,
                              retry_options=types.HttpRetryOptions(attempts=1)))
-    gcs = storage.Client(project=project)
-    speech = speech_v2.SpeechClient(client_options={'api_endpoint':'us-speech.googleapis.com'})
+    gcs = storage.Client(project=project, credentials=creds)
+    speech = speech_v2.SpeechClient(client_options={'api_endpoint': 'us-speech.googleapis.com'}, credentials=creds)
     return vertex, gcs, ChirpV2Gateway(speech_client=speech,storage_client=gcs,project=project)
 
 
