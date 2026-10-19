@@ -13,6 +13,12 @@ from pathlib import Path
 from typing import Callable
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
+from app.pipeline import golden_v2_diagnostics as _diag
+
+# Stage names known to this executor. Any other stage name is logged as
+# "unknown" so the operator can spot wiring mistakes in paid services.
+_KNOWN_STAGES = {"gemini_primary", "chirp_independent", "compare",
+                 "third_optional", "adjudication", "golden_qa"}
 from app.jobs.golden_v2_read import list_v2_active_jobs
 from app.pipeline.golden_v2_chirp_recovery_worker import run_chirp_recovery_pass
 from app.pipeline.golden_v2_coordinator import run_ready_local
@@ -88,7 +94,49 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
             except Exception as exc:
                 # A failure AFTER dispatch can still be billable. The original
                 # claim/raw barrier remains; the next cycle cannot re-claim it.
-                outcomes.append({'job_id': job_id, 'action': 'JOB_REQUIRES_RECONCILIATION',
-                                 'error_type':type(exc).__name__})
+                #
+                # Build a structured diagnostic record. We do NOT widen authority
+                # and we do NOT touch the Ledger here: the record is purely for
+                # observability. The existing V2Conflict is propagated unchanged
+                # to the caller; only the outcome dict grows richer fields.
+                stage_name = locals().get('stage') or locals().get('pending', {}).get('name')
+                if not isinstance(stage_name, str) or stage_name not in _KNOWN_STAGES:
+                    stage_name = "unknown"
+                diag = getattr(exc, 'diagnostic', None)
+                if not isinstance(diag, dict):
+                    # Exceptions without a structured diagnostic (e.g. RuntimeError
+                    # from a downstream library) get a synthetic record so the
+                    # operator always has a stable error_code, file and line.
+                    import sys
+                    tb = sys.exc_info()[2]
+                    while tb and tb.tb_next is not None:
+                        tb = tb.tb_next
+                    file_label, line_no = "<unknown>", 0
+                    if tb is not None:
+                        file_label = tb.tb_frame.f_code.co_filename.split('/')[-1]
+                        line_no = tb.tb_lineno
+                    reason_text = str(exc) or type(exc).__name__
+                    diag = _diag.make_record(
+                        error_code="GVR-EX-199", reason=reason_text,
+                        stage=stage_name, source=(file_label, line_no),
+                        context={"exception_type": type(exc).__name__},
+                    )
+                else:
+                    # Carry forward the stage label even when the helper didn't
+                    # have it (it defaults to "gemini_primary").
+                    if diag.get("stage") in (None, "gemini_primary") and stage_name != "gemini_primary":
+                        diag = dict(diag)
+                        diag["stage"] = stage_name
+                outcomes.append({
+                    'job_id': job_id,
+                    'action': 'JOB_REQUIRES_RECONCILIATION',
+                    'error_type': type(exc).__name__,
+                    'error_code': diag.get('error_code', 'GVR-EX-199'),
+                    'reason': diag.get('reason', str(exc)),
+                    'stage': diag.get('stage', stage_name),
+                    'trace_id': diag.get('trace_id', ''),
+                    'source': {'file': diag.get('file', ''), 'line': diag.get('line', 0)},
+                    'context': diag.get('context', {}),
+                })
         return {'action': 'PAID_EXECUTOR_CYCLE_COMPLETE', 'outcomes': outcomes,
                 'provider_calls_started': 'CHECK_IMMUTABLE_STAGE_AUDITS', 'drive_mutation_started': False}
