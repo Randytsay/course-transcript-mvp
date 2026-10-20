@@ -251,6 +251,9 @@ class PublicationReview(BaseModel):
     qa_sha256: str=Field(pattern=r'^[0-9a-f]{64}$')
     render_sha256: str=Field(pattern=r'^[0-9a-f]{64}$')
     filenames: list[str]=Field(min_length=2,max_length=2)
+    # Signed exact old file revisions to rename as (舊) before promotion.
+    # Empty by default; unapproved old targets block publication.
+    existing_files: dict[str, dict[str, str]]=Field(default_factory=dict,max_length=2)
     review_reference: str=Field(min_length=1,max_length=256)
     confirm_listened: Literal[True]
     confirm: Literal[True]

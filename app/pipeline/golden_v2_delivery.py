@@ -1,8 +1,9 @@
 """Private V2 delivery: exact QA/source/grant, saved Drive IDs, readback hashes.
 
-The first release creates new sidecars only. Existing editor/user files are
-never overwritten, renamed or backed up without a separately reviewed revision
-policy. Pending files retain their IDs across timeout/restart. No public links.
+New sidecars are staged and checksum-verified before publication. Existing
+editor/user files are renamed to '(舊)' only under a separately authenticated,
+SHA/version-attested owner revision grant. Pending IDs persist across retries;
+original bytes are never overwritten, and no public links are created.
 """
 import hashlib
 import hmac
@@ -18,6 +19,7 @@ from app.pipeline.golden_v2_runtime_services import signed_grant
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.providers.golden_v2_immutable import store_immutable_bytes
 from app.providers.golden_v2_versioned_artifacts import resolve_versioned
+from app.pipeline.golden_v2_revision_backup import (verified_backup_plan, verify_and_backup_old)
 
 
 def manifest_digest(manifest):
@@ -135,7 +137,18 @@ def publish_granted_outputs(*, root:Path, job_id:str, lock_root:Path, gateway=No
             raise V2Conflict('Drive source revision changed before delivery')
         return live['parents'][0]
     with drive_publish_lock(lock_root,source_path):
-        parent=check_source(); delivered=[]
+        parent=check_source(); delivered=[]; backups=[]; staged=[]
+        # Validate ALL old revisions before ANY Drive write.
+        saved_ids={}
+        for name in outputs:
+            suffix='srt' if name.endswith('.srt') else 'txt'
+            intent=job/'golden-v2'/(suffix+'-delivery-intent.json')
+            if intent.is_symlink(): raise V2Conflict('unsafe delivery intent')
+            if intent.exists():
+                saved_ids[name]=json.loads(intent.read_text())['file_id']
+        backup_plan=verified_backup_plan(
+            gateway=gateway,parent=parent,outputs=outputs,
+            approved=payload.get('existing_files',{}),saved_ids=saved_ids)
         for name,path in outputs.items():
             content=path.read_bytes(); sha=hashlib.sha256(content).hexdigest()
             intent=job/'golden-v2'/(('srt' if name.endswith('.srt') else 'txt')+'-delivery-intent.json')
@@ -145,13 +158,16 @@ def publish_granted_outputs(*, root:Path, job_id:str, lock_root:Path, gateway=No
                 if planned['sha256']!=sha or planned['name']!=name or planned['parent_id']!=parent:
                     raise V2Conflict('publication intent mismatch')
             else:
-                if gateway.named(parent,name): raise V2Conflict('destination exists; separate revision approval required')
+                if gateway.named(parent,name) and backup_plan[name] is None: raise V2Conflict('unapproved existing Drive destination')
                 file_id=gateway.generate_id()
                 planned={'file_id':file_id,'parent_id':parent,'name':name,'sha256':sha,
                          'pending_name':'.'+job_id+'.pending.'+('srt' if name.endswith('.srt') else 'txt')}
                 store_immutable_bytes(intent,wire(planned).encode())
             matches=gateway.named(parent,name)
-            if any(item['id']!=file_id for item in matches):
+            permitted={file_id}
+            if backup_plan[name] is not None:
+                permitted.add(backup_plan[name]['file_id'])
+            if any(item['id'] not in permitted for item in matches):
                 raise V2Conflict('new editor revision exists; publication held')
             remote=gateway.get(file_id)
             if remote is None:
@@ -171,17 +187,34 @@ def publish_granted_outputs(*, root:Path, job_id:str, lock_root:Path, gateway=No
                 check_source(); gateway.write_pending_content(file_id,content)
                 if hashlib.sha256(gateway.readback(file_id)).hexdigest()!=sha:
                     raise V2Conflict('pending readback checksum mismatch')
+            staged.append((name,planned,file_id,sha,len(content)))
+        # Both outputs are fully uploaded/verified before any old revision
+        # is renamed or any new output is promoted. This reduces partial
+        # visibility after a second-file upload failure.
+        for name,planned,file_id,sha,size_bytes in staged:
+            check_source()
+            old_receipt=verify_and_backup_old(
+                gateway=gateway,parent=parent,name=name,
+                selected=backup_plan[name],check_source=check_source)
+            if old_receipt is not None:
+                backups.append(old_receipt)
+            remote=gateway.get(file_id)
+            if not remote or remote.get('trashed') or remote.get('parents')!=[parent]:
+                raise V2Conflict('staged file identity changed before promote')
             if remote['name']!=name:
                 if remote['name']!=planned['pending_name']: raise V2Conflict('remote pending name edited')
                 check_source()
                 if gateway.named(parent,name): raise V2Conflict('destination changed before promote')
                 gateway.promote(file_id,name)
             verified=gateway.get(file_id)
-            if verified['name']!=name or hashlib.sha256(gateway.readback(file_id)).hexdigest()!=sha or any(item['id']!=file_id for item in gateway.named(parent,name)):
+            if (not verified or verified['name']!=name or
+                hashlib.sha256(gateway.readback(file_id)).hexdigest()!=sha or
+                any(item['id']!=file_id for item in gateway.named(parent,name))):
                 raise V2Conflict('final name/hash/conflict verification failed')
-            delivered.append({'name':name,'file_id':file_id,'sha256':sha,'bytes':len(content)})
+            delivered.append({'name':name,'file_id':file_id,'sha256':sha,'bytes':size_bytes})
         check_source()
         receipt={'schema':'golden-v2-drive-delivery-v1','job_id':job_id,'source_sha256':state['source_sha'],
-                 'qa_sha256':qa_sha,'files':delivered,'status':'DELIVERED','public_links_created':False}
+                 'qa_sha256':qa_sha,'files':delivered,'backups':backups,
+                 'status':'DELIVERED','public_links_created':False}
         store_immutable_bytes(job/'golden-v2/drive-delivery.json',wire(receipt).encode())
         return receipt
