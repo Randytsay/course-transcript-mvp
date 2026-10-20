@@ -16,6 +16,7 @@ from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.providers.golden_v2_audio_staging import file_sha256, prepare_local_clips
 from app.providers.golden_v2_gcs_staging import upload_approved_clips
 from app.providers.golden_v2_immutable import store_immutable_bytes
+from app.providers.golden_v2_versioned_artifacts import resolve_versioned, write_versioned
 
 
 def _wire(data: Any) -> bytes:
@@ -130,7 +131,7 @@ def _parse_words(raw_bytes: bytes, window: dict[str, Any]) -> list[dict[str, Any
     if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
         raise V2Conflict("Speech V2 result list missing")
     words: list[dict[str, Any]] = []
-    for result in payload["results"]:
+    for result_index, result in enumerate(payload["results"]):
         alts = result.get("alternatives") if isinstance(result, dict) else None
         if not isinstance(alts, list):
             raise V2Conflict("Speech recognition alternatives missing")
@@ -139,10 +140,17 @@ def _parse_words(raw_bytes: bytes, window: dict[str, Any]) -> list[dict[str, Any
         entries = alts[0].get("words") if isinstance(alts[0], dict) else None
         if not isinstance(entries, list):
             raise V2Conflict("Speech word timing evidence missing")
-        for entry in entries:
+        for word_index, entry in enumerate(entries):
             if not isinstance(entry, dict) or not isinstance(entry.get("word"), str) or not entry["word"]:
                 raise V2Conflict("Speech word is invalid")
-            start = _offset_ms(entry.get("startOffset", "")) + window["start_ms"]
+            # Protobuf JSON omits an exact zero default Duration. Only the
+            # first word of the first result can independently mean local 0.
+            # Later missing offsets and zero-length words remain hard errors.
+            if (entry.get("startOffset") is None and result_index == 0
+                    and word_index == 0 and not words):
+                start = window["start_ms"]
+            else:
+                start = _offset_ms(entry.get("startOffset", "")) + window["start_ms"]
             end = _offset_ms(entry.get("endOffset", "")) + window["start_ms"]
             if (end <= start or start < window["start_ms"]
                     or end > window["end_ms"] + 250
@@ -242,6 +250,38 @@ def finish_approved_chirp(
     for earlier, later in zip(base, base[1:]):
         if later["start_ms"] > earlier["end_ms"]:
             raise V2Conflict("missing Chirp window region")
+    # A post-review repair does not reparse an earlier *completed* base stage.
+    # Some historical raw provider responses omit word offsets. The old merge
+    # already has immutable, ledger-attested word boundaries; reuse it as-is.
+    prior_sha = ledger.prior_chirp_merge_for_active_repair(job_id)
+    prior_results: set[str] = set()
+    if prior_sha is not None:
+        prior_path = resolve_versioned(job_dir / "golden-v2" / "chirp-merged.json",
+                                       prior_sha)
+        prior = json.loads(prior_path.read_bytes())
+        previous = prior.get("window_result_shas")
+        known = [row["result_sha"] for row in windows]
+        if (prior.get("schema") != "golden-v2-chirp-merged-v1"
+                or prior.get("source_sha") != base[0]["source_sha"]
+                or prior.get("job_id") != job_id
+                or prior.get("duration_ms") != duration_ms
+                or prior.get("timing_authority") != "chirp_3"
+                or not isinstance(prior.get("words"), list)
+                or not isinstance(previous, list)
+                or not previous
+                or not isinstance(prior.get("actual_cents"), int)
+                or any(previous.count(item) > known.count(item) for item in set(previous))
+                or [w["result_sha"] for w in base] != previous[:len(base)]):
+            raise V2Conflict("previous completed Chirp merge is not bound to raw operations")
+        prior_results = set(previous)
+        if prior["actual_cents"] != sum(
+                int(row["actual_cents"]) for row in windows
+                if row["result_sha"] in prior_results):
+            raise V2Conflict("previous completed Chirp merge cost changed")
+        merged: list[dict[str, Any]] = [dict(word) for word in prior["words"]]
+    else:
+        merged = []
+
     records: dict[str, list[dict[str, Any]]] = {}
     for row in windows:
         root = job_dir / "golden-v2" / "chirp-evidence" / row["window_id"]
@@ -251,20 +291,24 @@ def finish_approved_chirp(
                 or saved["request_id"] != row["request_id"]
                 or file_sha256(root / "provider-raw.json") != row["result_sha"]):
             raise V2Conflict("Chirp raw evidence or cost changed after recovery")
-        records[row["window_id"]] = _parse_words((root / "provider-raw.json").read_bytes(), row)
-    boundaries = [(earlier["end_ms"] + later["start_ms"]) // 2
-                  for earlier, later in zip(base, base[1:])]
-    merged: list[dict[str, Any]] = []
-    for idx, row in enumerate(base):
-        lower = boundaries[idx - 1] if idx else 0
-        upper = boundaries[idx] if idx < len(boundaries) else duration_ms + 250
-        for word in records[row["window_id"]]:
-            mid = (word["start_ms"] + word["end_ms"]) / 2
-            if lower <= mid < upper:
-                if merged and word["start_ms"] < merged[-1]["start_ms"]:
-                    raise V2Conflict("merged Chirp timestamps are not monotonic")
-                merged.append(word)
+        if row["result_sha"] not in prior_results:
+            records[row["window_id"]] = _parse_words(
+                (root / "provider-raw.json").read_bytes(), row)
+    if prior_sha is None:
+        boundaries = [(earlier["end_ms"] + later["start_ms"]) // 2
+                      for earlier, later in zip(base, base[1:])]
+        for idx, row in enumerate(base):
+            lower = boundaries[idx - 1] if idx else 0
+            upper = boundaries[idx] if idx < len(boundaries) else duration_ms + 250
+            for word in records[row["window_id"]]:
+                mid = (word["start_ms"] + word["end_ms"]) / 2
+                if lower <= mid < upper:
+                    if merged and word["start_ms"] < merged[-1]["start_ms"]:
+                        raise V2Conflict("merged Chirp timestamps are not monotonic")
+                    merged.append(word)
     for row in repairs:
+        if row["result_sha"] in prior_results:
+            continue
         try:
             targets = json.loads(row["target_intervals_json"])
         except (TypeError, ValueError) as exc:
@@ -326,11 +370,11 @@ def finish_approved_chirp(
     report = dict(candidate)
     report.update({"acoustic_gate": "PASS", "acoustic_qa_sha256": acoustic_sha})
     dest = job_dir / "golden-v2" / "chirp-merged.json"
-    digest = _immutable(dest, _wire(report))
+    digest, selected = write_versioned(dest, _wire(report))
 
     def verify(**expected: Any) -> bool:
         return (expected["job_id"] == job_id and expected["source_sha"] == report["source_sha"]
-                and expected["evidence_sha"] == file_sha256(dest)
+                and expected["evidence_sha"] == file_sha256(selected)
                 and len(expected["windows"]) == len(windows)
                 and all(item["result_sha"] == saved_sha for item, saved_sha in
                         zip(expected["windows"], report["window_result_shas"])))

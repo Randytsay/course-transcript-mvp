@@ -14,6 +14,7 @@ from app.pipeline.golden_v2_chirp_stage import (
     finish_approved_chirp, recover_chirp_window,
 )
 from app.providers.golden_v2_audio_staging import file_sha256
+from app.providers.golden_v2_versioned_artifacts import resolve_versioned
 
 
 def run_chirp_recovery_pass(
@@ -37,9 +38,9 @@ def run_chirp_recovery_pass(
     if stage is None:
         raise V2Conflict("missing Chirp stage")
     if stage["state"] == "COMPLETE":
-        merged = job_dir / "golden-v2" / "chirp-merged.json"
-        if (not merged.is_file() or
-                file_sha256(merged) != stage["evidence_sha"]):
+        merged = resolve_versioned(job_dir / "golden-v2" / "chirp-merged.json",
+                                   stage["evidence_sha"])
+        if file_sha256(merged) != stage["evidence_sha"]:
             raise V2Conflict("completed Chirp evidence missing or changed")
         return {"job_id": job_id, "action": "ALREADY_COMPLETE",
                 "recovered": 0, "pending": [], "unknown": [],

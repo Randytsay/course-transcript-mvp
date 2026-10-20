@@ -13,6 +13,8 @@ from app.pipeline.golden_v2_primary_stage import finalize_reviewed_primary_overl
 from app.pipeline.golden_v2_stage_runner import complete_adjudication_or_hold
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.pipeline.golden_v2_delivery import checked_outputs
+from app.pipeline.golden_v2_delivery import manifest_digest
+from app.providers.golden_v2_versioned_artifacts import resolve_versioned
 from app.pipeline.golden_v2_runtime_services import signed_grant
 from app.providers.golden_v2_immutable import store_immutable_bytes
 from app.pipeline.golden_v2_quote_intake import wire
@@ -47,11 +49,41 @@ def review_packet(job_id: str, authorization: str | None = Header(default=None))
                     'evidence_sha256':first['evidence_sha'],'human_listening_required':True}
     directory=job/'golden-v2'
     reports={}
-    for name in ['engine-comparison.json','acoustic-qa.json','golden-qa.json']:
-        path=directory/name
+    for name,stage_name in [
+        ('engine-comparison.json','compare'),('golden-qa.json','golden_qa')
+    ]:
+        current=next((s for s in state['stages'] if s['name']==stage_name),None)
+        if current is None or current['state'] not in {'COMPLETE','REVIEW_REQUIRED'}:
+            continue
+        digest=current.get('evidence_sha')
+        if digest is None:
+            continue
+        try:
+            path=resolve_versioned(directory/name,digest)
+        except V2Conflict as exc:
+            raise HTTPException(status_code=409,detail='Ledger review evidence conflict') from exc
+        if path.stat().st_size>2*1024**2:
+            raise HTTPException(status_code=409,detail='Oversize review evidence')
+        reports[name]={'sha256':digest,'report':json.loads(path.read_text())}
+    current_qa=reports.get('golden-qa.json',{}).get('report',{})
+    acoustic_sha=current_qa.get('acoustic_sha256')
+    if acoustic_sha:
+        try:
+            path=resolve_versioned(directory/'acoustic-qa.json',acoustic_sha)
+        except V2Conflict as exc:
+            raise HTTPException(status_code=409,detail='Acoustic review evidence conflict') from exc
+        if path.stat().st_size>2*1024**2:
+            raise HTTPException(status_code=409,detail='Oversize acoustic evidence')
+        reports['acoustic-qa.json']={'sha256':acoustic_sha,
+                                    'report':json.loads(path.read_text())}
+    elif (directory/'acoustic-qa.json').is_file():
+        # Legacy QA did not persist its acoustic artifact SHA. Do not
+        # represent this historical report as bound to the current QA.
+        path=directory/'acoustic-qa.json'
         if path.is_symlink(): raise HTTPException(status_code=409,detail='Review evidence conflict')
-        if path.is_file() and path.stat().st_size<=2*1024**2:
-            reports[name]={'sha256':file_sha256(path),'report':json.loads(path.read_text())}
+        if path.stat().st_size<=2*1024**2:
+            reports['acoustic-qa.json']={'sha256':file_sha256(path),
+                'report':json.loads(path.read_text()),'legacy_unbound':True}
     delivery=directory/'drive-delivery.json'
     if delivery.is_file() and not delivery.is_symlink():
         reports['drive-delivery.json']={'sha256':file_sha256(delivery),'report':json.loads(delivery.read_text())}
@@ -147,9 +179,9 @@ def authorize_publication(job_id: str, body: PublicationReview, authorization: s
     if os.environ.get('COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED','').lower()!='true':
         raise HTTPException(status_code=404,detail='Publication not enabled')
     try:
-        state,_,_,qa_sha,_,outputs=checked_outputs(database.parent,job_id)
+        state,_,_,qa_sha,manifest,outputs=checked_outputs(database.parent,job_id)
         if (state['revision']!=body.revision or state['source_sha']!=body.source_sha256 or qa_sha!=body.qa_sha256 or
-            file_sha256(job/'golden-v2/render-manifest.json')!=body.render_sha256 or list(outputs)!=body.filenames):
+            manifest_digest(manifest)!=body.render_sha256 or list(outputs)!=body.filenames):
             raise V2Conflict('final publication/source/revision review changed')
         grant={**body.model_dump(exclude={'confirm'}),'job_id':job_id,'actor':actor}
         store_immutable_bytes(job/'owner-publish-grant.json',wire(signed_grant(grant)).encode())

@@ -17,6 +17,11 @@ from app.pipeline.golden_v2_quote_intake import wire
 from app.pipeline.golden_v2_runtime_services import signed_grant
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.providers.golden_v2_immutable import store_immutable_bytes
+from app.providers.golden_v2_versioned_artifacts import resolve_versioned
+
+
+def manifest_digest(manifest):
+    return hashlib.sha256(wire(manifest).encode('utf-8')).hexdigest()
 
 
 def checked_outputs(root, job_id):
@@ -26,11 +31,12 @@ def checked_outputs(root, job_id):
         or job.is_symlink() or folder.is_symlink()): raise V2Conflict('unsafe delivery source')
     state=GoldenV2Ledger.open_existing(root/'ledger.sqlite').status(job_id)
     qa_stage=next(s for s in state['stages'] if s['name']=='golden_qa')
-    qa_path=folder/'golden-qa.json'; manifest_path=folder/'render-manifest.json'
-    if (state['status']!='AWAITING_FINAL_REVIEW' or qa_stage['state']!='COMPLETE' or
-        qa_path.is_symlink() or manifest_path.is_symlink() or file_sha256(qa_path)!=qa_stage['evidence_sha']):
+    if state['status']!='AWAITING_FINAL_REVIEW' or qa_stage['state']!='COMPLETE':
         raise V2Conflict('ledger-attested Golden QA required')
-    qa=json.loads(qa_path.read_text()); manifest=json.loads(manifest_path.read_text())
+    qa_path=resolve_versioned(folder/'golden-qa.json',qa_stage['evidence_sha'])
+    qa=json.loads(qa_path.read_text())
+    manifest_path=resolve_versioned(folder/'render-manifest.json',qa.get('render_sha256'))
+    manifest=json.loads(manifest_path.read_text())
     if (qa.get('status')!='PASS' or qa.get('safe_publish_allowed') is not True or
         qa.get('render_sha256')!=file_sha256(manifest_path) or
         qa.get('job_id')!=job_id or qa.get('source_sha256')!=state['source_sha'] or
@@ -40,9 +46,12 @@ def checked_outputs(root, job_id):
     source=preflight['drive_observation']; source_path=preflight['drive_source_path']
     stem=Path(source_path).stem
     names=[stem+'.srt',stem+('' if stem.endswith('_') else '_')+'逐字稿.txt']
-    paths=[folder/'final.srt',folder/'final-corrected-transcript.txt']
+    paths=[
+        resolve_versioned(folder/'final.srt',manifest['srt_sha256']),
+        resolve_versioned(folder/'final-corrected-transcript.txt',manifest['transcript_sha256']),
+    ]
     for path,key in zip(paths,['srt_sha256','transcript_sha256']):
-        if path.is_symlink() or path.stat().st_size>10*1024**2 or file_sha256(path)!=manifest[key]:
+        if path.stat().st_size>10*1024**2 or file_sha256(path)!=manifest[key]:
             raise V2Conflict('immutable final artifact checksum changed')
     return state,source,source_path,qa_stage['evidence_sha'],manifest,dict(zip(names,paths))
 
@@ -113,7 +122,7 @@ def publish_granted_outputs(*, root:Path, job_id:str, lock_root:Path, gateway=No
     payload=grant['grant']; expected=signed_grant(payload)['signature']
     if (not hmac.compare_digest(expected,grant['signature']) or payload['job_id']!=job_id or
         payload['source_sha256']!=state['source_sha'] or payload['qa_sha256']!=qa_sha or
-        payload['render_sha256']!=file_sha256(job/'golden-v2/render-manifest.json') or
+        payload['render_sha256']!=manifest_digest(manifest) or
         payload['revision']!=state['revision'] or payload['filenames']!=list(outputs) or
         not payload['actor'] or payload['confirm_listened'] is not True):
         raise V2Conflict('authenticated final source/revision/publication grant required')

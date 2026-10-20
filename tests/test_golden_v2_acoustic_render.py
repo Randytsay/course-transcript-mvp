@@ -150,18 +150,28 @@ class GoldenV2LocalQATests(unittest.TestCase):
         self.assertEqual(report["repair_plan"]["intervals"], [])
         self.assertTrue(report["repair_plan"]["manual_review_required"])
 
-    def test_large_gap_over_probe_cap_stays_review_without_full_rerun_proposal(self):
+    def test_large_gap_is_completely_probed_and_positive_speech_blocks(self):
         self._make_audio(audible_tail=True)
         self.sha = file_sha256(self.audio)
         self.merged["source_sha"] = self.sha
-        report = inspect_v2_acoustic(
-            job_dir=self.job_dir, merged=self.merged, max_gap_probe_ms=3000)
+        with patch.object(golden_v2_acoustic_qa, "_vad_assessment",
+                          return_value={"robust_speech": True,
+                                        "robust_non_speech": False}), patch.object(
+                              golden_v2_acoustic_qa, "_audible",
+                              return_value=True), patch.object(
+                              golden_v2_acoustic_qa, "_peak_db",
+                              return_value=-10.0):
+            report = inspect_v2_acoustic(
+                job_dir=self.job_dir, merged=self.merged,
+                tail_min_ms=3000, max_gap_probe_ms=3000)
         tail = report["gaps_examined"][-1]
-        self.assertEqual(tail["reason"], "gap_exceeds_local_probe_cap")
-        self.assertEqual(tail["disposition"], "REVIEW")
-        self.assertIsNone(tail["vad"])
-        self.assertEqual(report["repair_plan"]["intervals"], [])
-        self.assertTrue(report["repair_plan"]["manual_review_required"])
+        self.assertEqual(tail["reason"], "positive_speech_evidence")
+        self.assertEqual(tail["disposition"], "SPEECH_CONFIRMED")
+        self.assertEqual(len(tail["probe_chunks"]), 2)
+        self.assertEqual(report["status"], "REVIEW")
+        self.assertEqual(report["unexamined_gap_count"], 0)
+        self.assertTrue(report["repair_plan"]["intervals"])
+        self.assertFalse(report["repair_plan"]["submit_authorized"])
 
     def test_gap_probe_count_is_bounded_and_uninspected_gaps_remain_blockers(self):
         report = inspect_v2_acoustic(
