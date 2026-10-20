@@ -33,6 +33,54 @@ def _safe_prefix(value: str) -> bool:
     ) and value == value.strip("/")
 
 
+def verified_prior_chirp_evidence(job_dir: Path) -> Callable[..., bool]:
+    """Fail-closed independent verifier for a completed stage's immutable bytes.
+
+    The caller selects a trusted job_dir; supplied ledger metadata cannot
+    redirect filesystem access. No provider, Drive or ledger writes occur.
+    """
+    root = Path(job_dir).resolve(strict=True)
+
+    def verify(*, job_id: str, source_sha: str, old_chirp_sha: str,
+               old_qa_sha: str, windows: list[dict[str, Any]]) -> bool:
+        if root.name != job_id or not windows:
+            return False
+        stage = root / "golden-v2"
+        try:
+            if (file_sha256(root / "normalized.flac") != source_sha
+                    or file_sha256(stage / "chirp-merged.json") != old_chirp_sha
+                    or file_sha256(stage / "golden-qa.json") != old_qa_sha):
+                return False
+            lineage = json.loads((stage / "source-lineage.json").read_bytes())
+            if lineage.get("normalized_sha256") != source_sha:
+                return False
+            for row in windows:
+                if (row["job_id"] != job_id or row["source_sha"] != source_sha
+                        or row["status"] != "DONE"
+                        or row["actual_cents"] is None
+                        or not row["operation_name"]
+                        or row["purpose"] not in {"BASE", "REPAIR"}):
+                    return False
+                folder = stage / "chirp-evidence" / row["window_id"]
+                raw = folder / "provider-raw.json"
+                meta = json.loads((folder / "window.json").read_bytes())
+                if (file_sha256(raw) != row["result_sha"]
+                        or meta["raw_sha"] != row["result_sha"]
+                        or meta["source_sha"] != source_sha
+                        or meta["clip_sha"] != row["clip_sha"]
+                        or meta["operation_name"] != row["operation_name"]
+                        or meta["request_id"] != row["request_id"]
+                        or meta["start_ms"] != row["start_ms"]
+                        or meta["end_ms"] != row["end_ms"]
+                        or meta["actual_cents"] != row["actual_cents"]):
+                    return False
+            return True
+        except (OSError, KeyError, ValueError, TypeError):
+            return False
+
+    return verify
+
+
 def _candidate_for_assessment(job_dir: Path, expected_sha: str) -> Path:
     for path in sorted((Path(job_dir) / "golden-v2").glob("chirp-merged-candidate-*.json")):
         try:
