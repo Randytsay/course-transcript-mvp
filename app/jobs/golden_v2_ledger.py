@@ -770,6 +770,45 @@ class GoldenV2Ledger:
                     "estimate_cents": int(chirp["estimate_cents"]) + transfer_cents,
                     "repair_transfer_cents": transfer_cents}
 
+    def prior_chirp_merge_for_active_repair(self, job_id: str) -> str | None:
+        """Return the ledger-attested prior merge SHA, never a loose file path.
+
+        A reopened stage can merge new source-bound repairs against an already
+        verified completed Chirp base without reparsing historically malformed
+        provider JSON. Every old raw SHA stays immutable and auditable.
+        """
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stage = db.execute(
+                "SELECT state FROM v2_stages "
+                "WHERE job_id=? AND name='chirp_independent'", (job_id,),
+            ).fetchone()
+            if (job["status"] != "PROCESSING" or stage is None
+                    or stage["state"] != "RUNNING"):
+                raise V2Conflict("prior merge can only be read for active repair")
+            row = db.execute(
+                "SELECT source_sha,prior_stage_snapshot_json,"
+                "prior_stage_snapshot_sha FROM v2_chirp_repair_rounds "
+                "WHERE job_id=? ORDER BY from_revision DESC LIMIT 1", (job_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                snapshot = json.loads(row["prior_stage_snapshot_json"])
+            except (ValueError, TypeError) as exc:
+                raise V2Conflict("prior Chirp stage snapshot is corrupt") from exc
+            if (not isinstance(snapshot, list)
+                    or _digest(snapshot) != row["prior_stage_snapshot_sha"]
+                    or row["source_sha"] != job["source_sha"]):
+                raise V2Conflict("prior Chirp repair audit/source digest mismatch")
+            chirp = next((item for item in snapshot
+                          if item.get("name") == "chirp_independent"), None)
+            if (chirp is None or chirp.get("state") != "COMPLETE"
+                    or not isinstance(chirp.get("evidence_sha"), str)
+                    or len(chirp["evidence_sha"]) != 64):
+                raise V2Conflict("previous paid stage was not completed")
+            return chirp["evidence_sha"]
+
     def complete_reviewed_primary(
         self, job_id: str, *, revision: int, reviewer: str,
         review_reference: str, previous_evidence_sha: str,

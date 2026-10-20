@@ -150,7 +150,7 @@ class GoldenV2LocalQATests(unittest.TestCase):
         self.assertEqual(report["repair_plan"]["intervals"], [])
         self.assertTrue(report["repair_plan"]["manual_review_required"])
 
-    def test_large_gap_over_probe_cap_stays_review_without_full_rerun_proposal(self):
+    def test_large_gap_is_completely_probed_and_positive_speech_blocks(self):
         self._make_audio(audible_tail=True)
         self.sha = file_sha256(self.audio)
         self.merged["source_sha"] = self.sha

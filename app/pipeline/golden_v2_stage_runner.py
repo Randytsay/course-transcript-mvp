@@ -19,38 +19,14 @@ from app.providers.golden_v2_audio_staging import file_sha256
 from app.providers.golden_v2_compare import compare_gemini_chirp
 from app.providers.golden_v2_final_gate import validate_golden_v2
 from app.subtitles.golden_v2_render import render_golden_v2
+from app.providers.golden_v2_versioned_artifacts import resolve_versioned, write_versioned
 
 
 def _write_evidence(path: Path, data: dict[str, Any]) -> str:
-    wire = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    digest = hashlib.sha256(wire).hexdigest()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_name = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.",
-                                         delete=False) as stream:
-            tmp_name = stream.name
-            stream.write(wire)
-            stream.flush()
-            os.fsync(stream.fileno())
-        try:
-            os.link(tmp_name, path)
-        except FileExistsError:
-            try:
-                existing = json.loads(path.read_text(encoding="utf-8"))
-                previous = _canonical_sha(existing)
-            except (OSError, ValueError, TypeError) as exc:
-                raise V2Conflict("invalid prior immutable V2 evidence") from exc
-            if previous != digest:
-                raise V2Conflict("immutable V2 stage artifact content mismatch")
-        fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    finally:
-        if tmp_name is not None:
-            Path(tmp_name).unlink(missing_ok=True)
+    """Keep historical evidence immutable across repaired rounds."""
+    wire = json.dumps(data, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":")).encode()
+    digest, _ = write_versioned(path, wire)
     return digest
 
 
@@ -63,7 +39,8 @@ def _checked_stage_artifact(
     *, job_dir: Path, filename: str, stage: dict[str, Any],
     claim: dict[str, Any], raw_digest: bool = False,
 ) -> dict[str, Any]:
-    path = job_dir / "golden-v2" / filename
+    path = resolve_versioned(job_dir / "golden-v2" / filename,
+                             stage["evidence_sha"])
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -78,34 +55,7 @@ def _checked_stage_artifact(
 
 
 def _write_immutable_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = content.encode("utf-8")
-    # An exclusive open of the *final* path can leave a truncated but
-    # apparently immutable artifact after ENOSPC or a process crash. Stage
-    # complete bytes privately, then atomically link into the final name.
-    tmp_name = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.",
-                                         delete=False) as stream:
-            tmp_name = stream.name
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        try:
-            os.link(tmp_name, path)
-        except FileExistsError:
-            if path.read_bytes() != data:
-                raise V2Conflict(f"immutable final artifact conflict: {path.name}")
-        # The ledger is committed only after every immutable artifact exists;
-        # fsync the directory to make the new name survive a host crash.
-        fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    finally:
-        if tmp_name is not None:
-            Path(tmp_name).unlink(missing_ok=True)
+    write_versioned(path, content.encode("utf-8"))
 
 
 def _bound_inputs(*, ledger: GoldenV2Ledger, claim: dict[str, Any],
@@ -430,6 +380,7 @@ def complete_evidence_bound_qa(
     # Bind the exact final manifest into the ledger-attested QA bytes. A later
     # publisher must verify this chain rather than accepting a loose PASS file.
     result['render_sha256'] = render_digest
+    result['acoustic_sha256'] = acoustic_digest
     qa_digest = _write_evidence(job_dir / "golden-v2" / "golden-qa.json", result)
     if result["safe_publish_allowed"]:
         ledger.complete(claim, evidence_sha=qa_digest, actual_cents=0)
