@@ -17,6 +17,7 @@ from app.pipeline.golden_v2_stage_runner import (
     complete_adjudication_or_hold,
 )
 from app.providers.golden_v2_audio_staging import file_sha256
+from app.providers.golden_v2_versioned_artifacts import resolve_versioned
 from app.subtitles.golden_v2_render import render_golden_v2
 
 REVIEW_SCHEMA = "golden-v2-audio-review-bundle-v1"
@@ -67,7 +68,10 @@ def inspect_review_bundle(
     duration_ms = merged.get("duration_ms")
     if type(duration_ms) is not int or duration_ms <= 0:
         raise V2Conflict("verified Chirp evidence has no valid source duration")
-    comparison_path = job_dir / "golden-v2" / "engine-comparison.json"
+    comparison_path = resolve_versioned(
+        job_dir / "golden-v2" / "engine-comparison.json",
+        bound["compare"]["evidence_sha"],
+    )
     try:
         comparison = json.loads(comparison_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:

@@ -486,7 +486,7 @@ def _clamp_stretched_words(
         clamped_end = min(limit, word["start_ms"] + 500)
         notes.append(RepairNote(
             method="STRETCHED_WORD_CLAMP",
-            reason="single word spanned >6s; clamped to expose true pause boundary",
+            reason="single word spanned >6s; inferred 500ms bound exposes interval for review, not acoustic alignment",
             orig_index=word["_orig_index"],
             word=word["word"],
             original_start=word.get("_start_offset"),
@@ -503,6 +503,7 @@ def _enforce_monotonic(
 ) -> list[RepairNote]:
     """Final guard: strictly monotonic, non-overlapping, within window+250ms."""
     notes: list[RepairNote] = []
+    original_bounds = [(word["start_ms"], word["end_ms"]) for word in words]
     max_end = window_end_ms + 250
     previous_end = window_start_ms
     for word in words:
@@ -521,6 +522,15 @@ def _enforce_monotonic(
             words[idx]["end_ms"] = words[idx + 1]["start_ms"]
             if words[idx]["start_ms"] >= words[idx]["end_ms"]:
                 words[idx]["start_ms"] = max(window_start_ms, words[idx]["end_ms"] - 20)
+    for position, (word, (start, end)) in enumerate(zip(words, original_bounds)):
+        if (word["start_ms"], word["end_ms"]) != (start, end):
+            notes.append(RepairNote(
+                method="MONOTONIC_BOUNDARY_NORMALIZATION",
+                reason="local ordering correction; not acoustically verified",
+                orig_index=word.get("_orig_index", position), word=word["word"],
+                original_start=start, original_end=end,
+                start_ms=word["start_ms"], end_ms=word["end_ms"],
+            ))
     return notes
 
 
@@ -607,17 +617,24 @@ def merge_base_windows(
     # text at the very same moment. Two identical words inside one window are
     # two real words (repetition in speech) and must both survive.
     kept: list[tuple[int, int, int, dict[str, Any]]] = []
+    # Each retained token may consume at most ONE token from each source
+    # window. Otherwise a single neighbour could erase a repeated syllable.
+    matched_windows: list[set[int]] = []
     for start, end, index, word in candidates:
         duplicate = False
-        for kept_start, _kept_end, kept_index, kept_word in reversed(kept[-8:]):
-            if kept_start - start > DUPLICATE_WORD_TOLERANCE_MS:
+        for position in range(len(kept) - 1, -1, -1):
+            kept_start, _kept_end, kept_index, kept_word = kept[position]
+            if start - kept_start > DUPLICATE_WORD_TOLERANCE_MS:
                 break
-            if (kept_index != index and kept_word["word"] == word["word"]
+            if (index not in matched_windows[position]
+                    and kept_index != index and kept_word["word"] == word["word"]
                     and abs(kept_start - start) <= DUPLICATE_WORD_TOLERANCE_MS):
+                matched_windows[position].add(index)
                 duplicate = True
                 break
         if not duplicate:
             kept.append((start, end, index, word))
+            matched_windows.append({index})
 
     merged: list[dict[str, Any]] = [
         {"word": word["word"], "start_ms": start, "end_ms": end}
