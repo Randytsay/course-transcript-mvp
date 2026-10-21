@@ -174,6 +174,27 @@ class V2DeliveryTests(unittest.TestCase):
         self.assertEqual(self.gateway.generated,0)
         self.assertEqual(self.gateway.writes,[])
 
+    def test_timestamped_backup_allowed_only_if_plain_old_name_exists(self):
+        target='251025_逐字稿.txt'
+        old=self.grant_revisions([target])
+        selection=old[target]
+        selection['backup_name']='251025_逐字稿(舊-20261021T153300Z).txt'
+        grant_path=self.job/'owner-publish-grant.json'
+        packet=json.loads(grant_path.read_text())['grant']
+        packet['existing_files'][target]=selection
+        grant_path.write_text(wire(signed_grant(packet)))
+        with self.assertRaises(V2Conflict):
+            self.publish()
+        self.assertEqual(self.gateway.generated,0)
+        self.gateway.files['prior-backup']=dict(
+            id='prior-backup',name='251025_逐字稿(舊).txt',parents=['parent'],version='3')
+        self.gateway.contents['prior-backup']=b'unchanged previous backup'
+        result=self.publish()
+        self.assertEqual(result['status'],'DELIVERED')
+        self.assertEqual(self.gateway.files['editor-0']['name'],
+                         selection['backup_name'])
+        self.assertEqual(self.gateway.contents['prior-backup'],b'unchanged previous backup')
+
     def test_crash_between_old_backup_and_new_promotion_is_resumable(self):
         self.grant_revisions(['251025_逐字稿.txt'])
         original_promote=self.gateway.promote

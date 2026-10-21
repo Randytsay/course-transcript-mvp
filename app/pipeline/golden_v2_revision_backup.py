@@ -7,6 +7,7 @@ shared Drive lock and verify the signed owner publication grant first.
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import PurePosixPath
 from typing import Any
 
@@ -55,12 +56,19 @@ def verified_backup_plan(*, gateway: Any, parent: str, outputs: dict,
         old_sha = approved_old["sha256"]
         backup_name = approved_old["backup_name"]
         suffix = PurePosixPath(name).suffix
-        required_backup = name[:-len(suffix)] + "(舊)" + suffix if suffix else name + "(舊)"
+        stem = name[:-len(suffix)] if suffix else name
+        required_backup = stem + "(舊)" + suffix
+        dated_backup = bool(re.fullmatch(
+            re.escape(stem) + r"\(舊-[0-9]{8}T[0-9]{6}Z\)" + re.escape(suffix),
+            backup_name)) if isinstance(backup_name, str) else False
+        if (dated_backup and not gateway.named(parent, required_backup)):
+            raise V2Conflict("timestamped backup requires an existing (舊) collision")
         if (not all(isinstance(x, str) and x for x in
                     (old_id, old_version, old_sha, backup_name))
                 or len(old_sha) != 64
                 or any(c not in "0123456789abcdef" for c in old_sha)
-                or backup_name != required_backup or "/" in backup_name
+                or (backup_name != required_backup and not dated_backup)
+                or "/" in backup_name
                 or backup_name in backups or old_id in ids or old_id == own_id):
             raise V2Conflict("unsafe or duplicated owner backup selection")
         ids.add(old_id)
