@@ -189,6 +189,26 @@ def _load_completed_window(path: Path, identity: dict[str, Any]) -> dict[str, An
     if (not isinstance(cached, dict) or cached.get("identity") != identity
             or cached.get("status") != "COMPLETE"):
         raise PrimaryTranscriptError("previous attempt requires operator reconciliation")
+    if (cached.get("finish_reason") not in {"STOP", "FINISH_REASON_STOP"}
+            or not isinstance(cached.get("text"), str) or not cached["text"].strip()):
+        # A COMPLETE stamp cannot override an actual truncated/held reply.
+        # Preserve the known response and its usage; never issue a replacement call.
+        raise PrimaryTranscriptError("cached primary is blocked or truncated; reconcile before repair",
+                                     known_record=cached)
+    return cached
+
+
+def _load_completed_primary_window(path: Path, identity: dict[str, Any]) -> dict[str, Any]:
+    """Primary-specific cache reuse: a COMPLETE stamp must not hide a held reply.
+
+    The primary adapter records ``human_review_required`` explicitly, so a
+    cached COMPLETE record that still claims review is required is a legacy
+    contradiction and must not be replayed as a finished window.
+    """
+    cached = _load_completed_window(path, identity)
+    if cached.get("human_review_required") is not False:
+        raise PrimaryTranscriptError("cached primary still requires review; reconcile before repair",
+                                     known_record=cached)
     return cached
 
 
@@ -213,6 +233,7 @@ def run_window(
     *, client: Any, staged_window: dict[str, Any], source_sha256: str,
     job_dir: Path, approval_token: str, reference_terms: str = "",
     part_factory: Any = None, approval_validator: Any = None,
+    max_output_tokens: int | None = None, thinking_level: str | None = None,
 ) -> dict[str, Any]:
     """Run at most one paid call, only after explicit worker-side authorization.
 
@@ -233,31 +254,36 @@ def run_window(
     end = float(staged_window["end_seconds"])
     validate_staged_windows([{**staged_window, "index": 0, "start_seconds": 0, "end_seconds": end-start}], end-start)
     prompt = INSTRUCTION + ("\n\n專有詞彙僅供核對拼寫，不得作為額外錄音內容：\n" + reference_terms[:8000] if reference_terms else "")
+    output_limit = 16384 if max_output_tokens is None else max_output_tokens
+    effort = "LOW" if thinking_level is None else thinking_level
+    if type(output_limit) is not int or not 1 <= output_limit <= 16384 or effort != "LOW":
+        raise PrimaryTranscriptError("bounded output tokens and LOW thinking required")
+    generation_config = {"temperature": 0, "max_output_tokens": output_limit,
+                         "thinking_config": {"thinking_level": effort}}
     identity = {
         "model": MODEL, "prompt_version": PROMPT_VERSION,
+        "generation_config": generation_config,
         "source_sha256": source_sha256, "window": {k: staged_window[k] for k in ("index", "start_seconds", "end_seconds", "gcs_uri", "mime_type")},
         "context_sha256": hashlib.sha256(reference_terms.encode("utf-8")).hexdigest(),
     }
     digest = _paid_window_slot_digest(identity)
     audit_path = job_dir / "gemini-primary" / f"{digest}.json"
     if audit_path.exists():
-        return _load_completed_window(audit_path, identity)
+        return _load_completed_primary_window(audit_path, identity)
     _reject_legacy_paid_slot(audit_path, identity)
     if part_factory is None:
         from google.genai import types
         part_factory = lambda uri, mime: types.Part.from_uri(file_uri=uri, mime_type=mime)
-        config = types.GenerateContentConfig(
-            thinking_config=types.ThinkingConfig(thinking_level="MEDIUM"),
-        )
+        config = types.GenerateContentConfig(**generation_config)
     else:
-        config = {"thinking_config": {"thinking_level": "MEDIUM"}}
+        config = generation_config
     # Persist a durable barrier BEFORE the external call. On timeout, the
     # provider may have charged/finished even if its response was lost. Never
     # automatically submit a second call with the same identity.
     if not _reserve_paid_window(audit_path, identity):
         # Another process won the reservation. It may already have a
         # verified COMPLETE response, but must never trigger another POST.
-        return _load_completed_window(audit_path, identity)
+        return _load_completed_primary_window(audit_path, identity)
     try:
         response = client.models.generate_content(
             model=MODEL,
@@ -297,8 +323,11 @@ def assemble_windows(windows: list[dict[str, Any]], records: list[dict[str, Any]
     texts = []
     review = []
     for index, (window, record) in enumerate(zip(windows, records)):
-        if record.get("status") != "COMPLETE" or not str(record.get("text", "")).strip():
-            raise PrimaryTranscriptError("incomplete Gemini transcription window")
+        finish = record.get("finish_reason")
+        if (record.get("status") != "COMPLETE"
+                or (finish is not None and finish not in {"STOP", "FINISH_REASON_STOP"})
+                or not str(record.get("text", "")).strip()):
+            raise PrimaryTranscriptError("incomplete, blocked or truncated Gemini transcription window")
         if record.get("identity", {}).get("window") != {k: window[k] for k in ("index", "start_seconds", "end_seconds", "gcs_uri", "mime_type")}:
             raise PrimaryTranscriptError("source/window identity mismatch")
         if index and float(window["start_seconds"]) < float(windows[index-1]["end_seconds"]):

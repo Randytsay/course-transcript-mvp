@@ -80,6 +80,31 @@ class GoldenPrimaryAudioTests(unittest.TestCase):
             self.assertEqual(result["acoustic_coverage"], "UNVERIFIED")
             self.assertFalse(result["golden_approved"])
 
+    def test_legacy_complete_stamp_cannot_reuse_max_tokens_response(self) -> None:
+        import json
+        client = SimpleNamespace(models=SimpleNamespace(generate_content=Mock(
+            return_value=SimpleNamespace(text="離線測試逐字稿",
+                candidates=[SimpleNamespace(finish_reason="STOP")],
+                usage_metadata={"prompt_token_count": 10, "candidates_token_count": 20})
+        )))
+        with tempfile.TemporaryDirectory() as root:
+            opts = dict(client=client, staged_window=win(0, 0, 10),
+                        source_sha256="f"*64, job_dir=Path(root),
+                        approval_token="authorized-offline-test",
+                        approval_validator=lambda t, h, model, w: t == "authorized-offline-test",
+                        part_factory=lambda u, m: (u, m))
+            primary.run_window(**opts)
+            path = next((Path(root)/"gemini-primary").glob("*.json"))
+            bad = json.loads(path.read_text())
+            bad["finish_reason"] = "MAX_TOKENS"
+            # Reproduce the production contradiction without touching raw evidence.
+            self.assertEqual(bad["status"], "COMPLETE")
+            path.write_text(json.dumps(bad))
+            with self.assertRaises(primary.PrimaryTranscriptError):
+                primary.run_window(**opts)
+            client.models.generate_content.assert_called_once()
+            self.assertEqual(json.loads(path.read_text()), bad)
+
     def test_truncated_response_is_audited_and_never_auto_resubmitted(self) -> None:
         client = SimpleNamespace(models=SimpleNamespace(generate_content=Mock(
             return_value=SimpleNamespace(
@@ -99,10 +124,38 @@ class GoldenPrimaryAudioTests(unittest.TestCase):
             client.models.generate_content.assert_called_once()
             self.assertEqual(len(list(Path(root).rglob("*.json"))), 1)
 
+    def test_new_paid_request_binds_low_thinking_and_output_cap(self) -> None:
+        import inspect
+        self.assertIn("max_output_tokens", inspect.signature(primary.run_window).parameters)
+        client = SimpleNamespace(models=SimpleNamespace(generate_content=Mock(
+            return_value=SimpleNamespace(text="離線測試",
+                candidates=[SimpleNamespace(finish_reason="STOP")],
+                usage_metadata={"prompt_token_count": 10, "candidates_token_count": 20})
+        )))
+        with tempfile.TemporaryDirectory() as root:
+            record = primary.run_window(client=client, staged_window=win(0, 0, 60),
+                source_sha256="c"*64, job_dir=Path(root),
+                approval_token="offline-approved",
+                approval_validator=lambda t, h, model, w: t == "offline-approved",
+                part_factory=lambda u, m: (u, m),
+                max_output_tokens=8192, thinking_level="LOW")
+        config = client.models.generate_content.call_args.kwargs["config"]
+        self.assertEqual(config, {"max_output_tokens": 8192, "temperature": 0,
+                                 "thinking_config": {"thinking_level": "LOW"}})
+        self.assertEqual(record["identity"]["generation_config"], config)
+
+    def test_assembly_rejects_truncated_window_despite_complete_stamp(self) -> None:
+        window = win(0, 0, 60)
+        record = {"status": "COMPLETE", "text": "只有前半段",
+                  "finish_reason": "MAX_TOKENS", "human_review_required": False,
+                  "identity": {"window": dict(window)}}
+        with self.assertRaises(primary.PrimaryTranscriptError):
+            primary.assemble_windows([window], [record], 60)
+
     def test_overlap_requires_review_not_silent_text_deletion(self) -> None:
         windows = [win(0, 0, 60), win(1, 50, 90, "gs://private-bucket/window2.wav")]
         records = [
-            {"status": "COMPLETE", "text": "重複的佛經與內容", "identity": {"window": {k: w[k] for k in ("index","start_seconds","end_seconds","gcs_uri","mime_type")}}}
+            {"status": "COMPLETE", "finish_reason": "STOP", "text": "重複的佛經與內容", "identity": {"window": {k: w[k] for k in ("index","start_seconds","end_seconds","gcs_uri","mime_type")}}}
             for w in windows
         ]
         result = primary.assemble_windows(windows, records, 90)
@@ -114,7 +167,7 @@ class GoldenPrimaryAudioTests(unittest.TestCase):
         windows = [win(0, 0, 60), win(1, 50, 110, "gs://private-bucket/w1.wav"),
                    win(2, 100, 160, "gs://private-bucket/w2.wav")]
         texts = ["甲乙甲", "甲丙乙", "乙丁戊"]
-        records = [{"status": "COMPLETE", "text": text,
+        records = [{"status": "COMPLETE", "finish_reason": "STOP", "text": text,
                     "identity": {"window": {k: w[k] for k in (
                         "index", "start_seconds", "end_seconds", "gcs_uri", "mime_type")}}}
                    for w, text in zip(windows, texts)]
