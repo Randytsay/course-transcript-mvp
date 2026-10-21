@@ -13,6 +13,17 @@ class CrossWindowMultiplicityTests(unittest.TestCase):
         self.assertEqual(notes[0].original_start,1050)
         self.assertEqual(notes[0].start_ms,1100)
 
+    def test_merge_audit_records_inferred_overlap_boundary(self):
+        windows=[{'start_ms':0,'end_ms':2000,'words':[
+            {'word':'甲','start_ms':1000,'end_ms':1100},
+            {'word':'乙','start_ms':1050,'end_ms':1200}]}]
+        audit=[]
+        merged=merge_base_windows(windows,2000,audit=audit)
+        self.assertEqual(merged[1]['start_ms'],1100)
+        self.assertEqual(audit[-1]['original_start_ms'],1050)
+        self.assertEqual(audit[-1]['start_ms'],1100)
+        self.assertFalse(audit[-1]['acoustic_timing_verified'])
+
     def test_cross_window_duplicate_matching_is_one_to_one(self):
         windows=[
             {'start_ms':0,'end_ms':2000,'words':[{'word':'那','start_ms':1000,'end_ms':1040}]},

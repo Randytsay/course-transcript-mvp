@@ -593,6 +593,7 @@ DUPLICATE_WORD_TOLERANCE_MS = 400
 def merge_base_windows(
     windows: list[dict[str, Any]],
     duration_ms: int,
+    *, audit: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Merge overlapping base windows without dropping any recognized word.
 
@@ -649,6 +650,15 @@ def merge_base_windows(
             item["start_ms"] = previous_end
         if item["end_ms"] <= item["start_ms"]:
             item["end_ms"] = item["start_ms"] + 40
+        if audit is not None and item != word:
+            audit.append({
+                "method": "MERGE_MONOTONIC_BOUNDARY_NORMALIZATION",
+                "word": word["word"],
+                "original_start_ms": word["start_ms"],
+                "original_end_ms": word["end_ms"],
+                "start_ms": item["start_ms"], "end_ms": item["end_ms"],
+                "acoustic_timing_verified": False,
+            })
         clean.append(item)
         previous_end = item["end_ms"]
     return clean

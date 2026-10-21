@@ -488,13 +488,16 @@ def finish_approved_chirp(
                     records[row["window_id"]] = repair_window(raw_bytes, row).words
                 else:
                     raise
+    merge_timing_evidence: list[dict[str, Any]] = []
     if prior_sha is None or has_lossless_base_repair:
         from app.pipeline.golden_v2_chirp_window_repair import merge_base_windows
         merged = merge_base_windows(
             [{"start_ms": row["start_ms"], "end_ms": row["end_ms"],
               "words": records[row["window_id"]]} for row in base],
-            duration_ms,
+            duration_ms, audit=merge_timing_evidence,
         )
+    else:
+        merge_timing_evidence = prior.get("merge_timing_evidence", [])
     for row in repairs:
         if row["result_sha"] in prior_results and not has_lossless_base_repair:
             continue
@@ -552,6 +555,7 @@ def finish_approved_chirp(
         "timing_normalization_evidence": (
             base_repair_evidence if has_lossless_base_repair else
             prior.get("timing_normalization_evidence", {})),
+        "merge_timing_evidence": merge_timing_evidence,
         "acoustic_timing_verified": False,
         "acoustic_gate": "NOT_RUN", "golden_pass": False,
     }
