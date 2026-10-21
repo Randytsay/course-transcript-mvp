@@ -14,7 +14,8 @@ from types import SimpleNamespace
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.pipeline.golden_v2_pricing import (assert_current, gemini_usage_cents,
-                                          chirp_cents, INPUT_TOKEN_CAP, OUTPUT_TOKEN_CAP)
+                                          chirp_cents, chirp_operation_cents,
+                                          INPUT_TOKEN_CAP, OUTPUT_TOKEN_CAP)
 from app.pipeline.golden_v2_quote_intake import wire
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.providers.golden_v2_immutable import store_immutable_bytes
@@ -150,5 +151,5 @@ def recovery_services(snapshot):
         evidence = gateway.billing_evidence(row)
         job_dir = root/'jobs'/row['job_id']
         store_immutable_bytes(job_dir/'golden-v2'/'chirp-evidence'/row['window_id']/'billed-duration.json',wire(evidence).encode())
-        return chirp_cents(evidence['total_billed_seconds'])
+        return chirp_operation_cents(row, evidence['total_billed_seconds'])
     return dict(gateway=gateway,cost_accountant=accountant,max_operations=8)

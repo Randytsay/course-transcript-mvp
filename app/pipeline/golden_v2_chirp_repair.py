@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
+from app.pipeline.golden_v2_pricing import standard_chirp_cents
 from app.providers.golden_v2_audio_staging import (
     file_sha256, prepare_local_repair_clips,
 )
@@ -163,6 +164,9 @@ def propose_standard_repair_plan(
         cents = estimate_window_cents(estimate_item)
         if type(cents) is not int or cents < 0:
             raise V2Conflict("repair cost estimates must be non-negative integer cents")
+        # Never reserve Dynamic Batch pricing for Standard Batch repair.
+        cents = max(cents, standard_chirp_cents(
+            (item["end_ms"] - item["start_ms"]) / 1000))
         key = (f"{object_prefix}/{claim['job_id']}/{claim['source_sha']}/"
                f"chirp-repair-inputs/{window_id}-{item['clip_sha256']}.flac")
         output = (f"gs://{bucket_name}/{object_prefix}/{claim['job_id']}/"
