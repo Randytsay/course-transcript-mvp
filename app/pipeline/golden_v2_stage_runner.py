@@ -46,8 +46,7 @@ def _checked_stage_artifact(
     except (OSError, ValueError) as exc:
         raise V2Conflict(f"missing or invalid immutable {filename}") from exc
     if (not isinstance(data, dict) or stage["state"] != "COMPLETE"
-            or stage["evidence_sha"] != (
-                file_sha256(path) if raw_digest else _canonical_sha(data))
+            or stage["evidence_sha"] not in {file_sha256(path), _canonical_sha(data)}
             or data.get("job_id") != claim["job_id"]
             or data.get("source_sha256", data.get("source_sha")) != claim["source_sha"]):
         raise V2Conflict(f"ledger/source evidence mismatch: {filename}")

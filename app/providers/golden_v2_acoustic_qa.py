@@ -176,6 +176,41 @@ def inspect_v2_acoustic(
             "reason": "acoustic_gap_probe_limit_reached",
         })
 
+    reviewed_nonspeech_path = Path(job_dir) / "golden-v2" / "acoustic-reviewed-nonspeech.json"
+    if reviewed_nonspeech_path.is_file():
+        if reviewed_nonspeech_path.is_symlink():
+            raise V2Conflict("unsafe reviewed nonspeech sidecar")
+        try:
+            att = json.loads(reviewed_nonspeech_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise V2Conflict("invalid reviewed nonspeech sidecar") from exc
+        if (not isinstance(att, dict)
+                or att.get("schema") != "golden-v2-acoustic-reviewed-nonspeech-v1"
+                or att.get("source_sha256") != merged["source_sha"]
+                or not str(att.get("reviewer") or "").strip()
+                or not str(att.get("review_reference") or "").strip()
+                or not isinstance(att.get("intervals"), list)):
+            raise V2Conflict("reviewed nonspeech sidecar is not bound to source")
+        att_entries = [e for e in att["intervals"] if isinstance(e, dict)]
+        for interval in intervals:
+            if interval["disposition"] == "NONSPEECH_CONFIRMED":
+                continue
+            for entry in att_entries:
+                if (entry.get("disposition") == "NONSPEECH_CONFIRMED"
+                        and str(entry.get("reason") or "").strip()
+                        and isinstance(entry.get("start_ms"), int)
+                        and isinstance(entry.get("end_ms"), int)
+                        and abs(entry["start_ms"] - interval["start_ms"]) <= 250
+                        and abs(entry["end_ms"] - interval["end_ms"]) <= 250):
+                    interval["disposition"] = "NONSPEECH_CONFIRMED"
+                    interval["reason"] = "human_reviewed_nonspeech_confirmed"
+                    interval["review_attestation"] = {
+                        "reviewer": att["reviewer"],
+                        "review_reference": att["review_reference"],
+                        "note": entry["reason"],
+                    }
+                    break
+
     blockers = [interval for interval in intervals
                 if interval["disposition"] != "NONSPEECH_CONFIRMED"]
     speech_gaps = [interval for interval in intervals

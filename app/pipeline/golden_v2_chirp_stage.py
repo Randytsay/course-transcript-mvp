@@ -401,7 +401,11 @@ def finish_approved_chirp(
     # already has immutable, ledger-attested word boundaries; reuse it as-is.
     prior_sha = ledger.prior_chirp_merge_for_active_repair(job_id)
     prior_results: set[str] = set()
-    if prior_sha is not None:
+    has_lossless_base_repair = any(
+        json.loads((job_dir / "golden-v2" / "chirp-evidence" / w["window_id"] / "window.json").read_bytes()).get("lossless_repaired") is True
+        for w in base
+    )
+    if prior_sha is not None and not has_lossless_base_repair:
         prior_path = resolve_versioned(job_dir / "golden-v2" / "chirp-merged.json",
                                        prior_sha)
         prior = json.loads(prior_path.read_bytes())
@@ -438,20 +442,29 @@ def finish_approved_chirp(
                 or file_sha256(root / "provider-raw.json") != row["result_sha"]):
             raise V2Conflict("Chirp raw evidence or cost changed after recovery")
         if row["result_sha"] not in prior_results:
-            records[row["window_id"]] = _parse_words(
-                (root / "provider-raw.json").read_bytes(), row)
-    if prior_sha is None:
-        boundaries = [(earlier["end_ms"] + later["start_ms"]) // 2
-                      for earlier, later in zip(base, base[1:])]
-        for idx, row in enumerate(base):
-            lower = boundaries[idx - 1] if idx else 0
-            upper = boundaries[idx] if idx < len(boundaries) else duration_ms + 250
-            for word in records[row["window_id"]]:
-                mid = (word["start_ms"] + word["end_ms"]) / 2
-                if lower <= mid < upper:
-                    if merged and word["start_ms"] < merged[-1]["start_ms"]:
-                        raise V2Conflict("merged Chirp timestamps are not monotonic")
-                    merged.append(word)
+            raw_bytes = (root / "provider-raw.json").read_bytes()
+            if saved.get("lossless_repaired") is True:
+                from app.pipeline.golden_v2_chirp_window_repair import repair_window
+                repaired = repair_window(raw_bytes, row).words
+                if saved.get("words") != repaired:
+                    raise V2Conflict("lossless repaired window words do not match raw repair")
+                records[row["window_id"]] = repaired
+            else:
+                try:
+                    records[row["window_id"]] = _parse_words(raw_bytes, row)
+                except V2Conflict:
+                    from app.pipeline.golden_v2_chirp_window_repair import repair_window
+                    if row.get("purpose") == "REPAIR" or has_lossless_base_repair:
+                        records[row["window_id"]] = repair_window(raw_bytes, row).words
+                    else:
+                        raise
+    if prior_sha is None or has_lossless_base_repair:
+        from app.pipeline.golden_v2_chirp_window_repair import merge_base_windows
+        merged = merge_base_windows(
+            [{"start_ms": row["start_ms"], "end_ms": row["end_ms"],
+              "words": records[row["window_id"]]} for row in base],
+            duration_ms,
+        )
     for row in repairs:
         if row["result_sha"] in prior_results:
             continue
@@ -464,8 +477,31 @@ def finish_approved_chirp(
         def targeted(word: dict[str, Any]) -> bool:
             midpoint = (word["start_ms"] + word["end_ms"]) / 2
             return any(target["start_ms"] <= midpoint < target["end_ms"] for target in targets)
-        merged = [word for word in merged if not targeted(word)]
-        merged.extend(word for word in records[row["window_id"]] if targeted(word))
+        kept_base: list[dict[str, Any]] = []
+        for word in merged:
+            if targeted(word):
+                continue
+            wcopy = dict(word)
+            for target in targets:
+                if wcopy["start_ms"] < target["start_ms"] < wcopy["end_ms"]:
+                    wcopy["end_ms"] = target["start_ms"]
+                elif wcopy["start_ms"] < target["end_ms"] < wcopy["end_ms"]:
+                    wcopy["start_ms"] = target["end_ms"]
+            if wcopy["end_ms"] > wcopy["start_ms"]:
+                kept_base.append(wcopy)
+        merged = kept_base
+        for word in records[row["window_id"]]:
+            if not targeted(word):
+                continue
+            wcopy = dict(word)
+            midpoint = (wcopy["start_ms"] + wcopy["end_ms"]) / 2
+            for target in targets:
+                if target["start_ms"] <= midpoint < target["end_ms"]:
+                    wcopy["start_ms"] = max(wcopy["start_ms"], target["start_ms"])
+                    wcopy["end_ms"] = min(wcopy["end_ms"], target["end_ms"])
+                    break
+            if wcopy["end_ms"] > wcopy["start_ms"]:
+                merged.append(wcopy)
     merged.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
     previous_end = 0
     for word in merged:
