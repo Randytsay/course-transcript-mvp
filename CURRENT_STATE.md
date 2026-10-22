@@ -20,8 +20,28 @@
 - Distinguish future design, runtime implementation, audit evidence, and
   accepted user decisions; do not overwrite provider raw or use old backups.
 
-## Historical milestones — superseded runtime descriptions
+## 2026-10-23 — Development-only V2 review freshness and bounded output fix
 
+Isolated `fix/v2-review-freshness-20261023` starts from the verified API
+release `17d33faf6239ca5a1fcdfe91f18cef202f271b0f`. Review GET now uses a
+read-only Ledger snapshot and selects the exact held Chirp candidate's acoustic
+report by full hashes; it never certifies Golden or human listening. The runtime
+wrapper preserves smaller adapter output limits instead of raising them to
+65,536. Container tests: Golden V2 474/474; primary adapter 12/12. Real restored
+Ledger/evidence HTTP and held-state gates exercised without network/credentials.
+
+**Not merged, pushed, deployed, paid, or published by this change.** All three
+formal jobs remain NEEDS_REVIEW; all 44 saved Chirp operations are DONE but
+primary reference coverage remains incomplete. Starting the old stopped workers
+would not repair the evidence or resume these held jobs. Six pending-QA Drive
+copies and six preserved legacy files were freshly downloaded and SHA verified;
+none was changed. Backup restores DB + 249 evidence files, not audio disaster
+recovery. Remaining promotion/consumer integration, genuine audio review,
+exact-plan paid approval and formal publication are NOT completed. See
+[controlled review / resume evidence and boundaries](docs/GOLDEN_V2_CONTROLLED_REVIEW_AND_RESUME.md).
+
+
+## Historical milestones — superseded runtime descriptions
 
 ## 2026-10-13 — Operational private ChatGPT Skill entry (non-paid)
 

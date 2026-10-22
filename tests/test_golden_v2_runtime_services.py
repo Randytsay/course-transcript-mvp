@@ -22,6 +22,51 @@ class RuntimeServicesTests(unittest.TestCase):
         wrapper.generate_content(model='gemini-3.8-flash',contents=['audio'],config={})
         self.assertEqual(models.generate_content.call_args.kwargs['config']['max_output_tokens'],65536)
 
+    def test_smaller_adapter_output_limit_is_never_increased(self):
+        models = MagicMock()
+        models.count_tokens.return_value = SimpleNamespace(total_tokens=100)
+        wrapper = BudgetedModels(SimpleNamespace(models=models))
+        config = dict(max_output_tokens=16384, thinking_config={'thinking_level': 'LOW'})
+        wrapper.generate_content(model='gemini-3.8-flash', contents=['audio'], config=config)
+        self.assertEqual(models.generate_content.call_args.kwargs['config']['max_output_tokens'], 16384)
+        self.assertEqual(config['max_output_tokens'], 16384)
+        self.assertEqual(models.generate_content.call_args.kwargs['config']['thinking_config'], config['thinking_config'])
+
+    def test_real_sdk_output_limit_is_preserved_without_mutating_config(self):
+        from google.genai import types
+        models = MagicMock()
+        models.count_tokens.return_value = SimpleNamespace(total_tokens=100)
+        wrapper = BudgetedModels(SimpleNamespace(models=models))
+        config = types.GenerateContentConfig(max_output_tokens=8192,
+            thinking_config=types.ThinkingConfig(thinking_level='LOW'), temperature=0)
+        wrapper.generate_content(model='gemini-3.8-flash', contents=['audio'], config=config)
+        sent = models.generate_content.call_args.kwargs['config']
+        self.assertEqual(sent.max_output_tokens, 8192)
+        self.assertEqual(sent.thinking_config, config.thinking_config)
+        self.assertEqual(sent.temperature, 0)
+        self.assertIsNot(sent, config)
+        self.assertEqual(config.max_output_tokens, 8192)
+
+    def test_invalid_output_limits_never_generate(self):
+        for cap in (0, -1, 65537, True, 1.5, '8192'):
+            with self.subTest(cap=cap):
+                models = MagicMock()
+                models.count_tokens.return_value = SimpleNamespace(total_tokens=100)
+                wrapper = BudgetedModels(SimpleNamespace(models=models))
+                with self.assertRaises(V2Conflict):
+                    wrapper.generate_content(model='gemini-3.8-flash', contents=['audio'],
+                                             config={'max_output_tokens': cap})
+                models.generate_content.assert_not_called()
+
+    def test_missing_object_limit_uses_reserved_cap_without_mutating_input(self):
+        models = MagicMock()
+        models.count_tokens.return_value = SimpleNamespace(total_tokens=100)
+        wrapper = BudgetedModels(SimpleNamespace(models=models))
+        config = SimpleNamespace(max_output_tokens=None)
+        wrapper.generate_content(model='gemini-3.8-flash', contents=['audio'], config=config)
+        self.assertEqual(models.generate_content.call_args.kwargs['config'].max_output_tokens, 65536)
+        self.assertIsNone(config.max_output_tokens)
+
     def test_grants_require_secret_and_detect_forgery_source_quote_and_cap(self):
         with patch.dict(os.environ,{'COURSE_TRANSCRIPT_V2_GRANT_SECRET':''}):
             with self.assertRaises(V2Conflict): signed_grant({})

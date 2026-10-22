@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.golden_v2_routes import _authorized_database, _authorized_write_database
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
+from app.jobs.golden_v2_read import get_v2_status
 from app.pipeline.golden_v2_primary_stage import finalize_reviewed_primary_overlaps
 from app.pipeline.golden_v2_stage_runner import complete_adjudication_or_hold
 from app.providers.golden_v2_audio_staging import file_sha256
@@ -16,6 +17,7 @@ from app.pipeline.golden_v2_delivery import checked_outputs
 from app.pipeline.golden_v2_delivery import manifest_digest
 from app.providers.golden_v2_versioned_artifacts import resolve_versioned
 from app.pipeline.golden_v2_runtime_services import signed_grant
+from app.pipeline.golden_v2_review_snapshot import inspect_current_chirp_acoustic_review
 from app.providers.golden_v2_immutable import store_immutable_bytes
 from app.pipeline.golden_v2_quote_intake import wire
 import os
@@ -118,7 +120,10 @@ def job_directory(database, job_id):
 @router.get('/jobs/{job_id}/review')
 def review_packet(job_id: str, authorization: str | None = Header(default=None)):
     database=_authorized_database(authorization); job=job_directory(database,job_id)
-    ledger=GoldenV2Ledger.open_existing(database); state=ledger.status(job_id)
+    snapshot=get_v2_status(database,job_id=job_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404,detail='Unknown V2 job')
+    state={**snapshot['job'],'stages':snapshot['stages']}
     first=state['stages'][0]
     if first['state']=='REVIEW_REQUIRED':
         try:
@@ -167,11 +172,24 @@ def review_packet(job_id: str, authorization: str | None = Header(default=None))
         if path.stat().st_size<=2*1024**2:
             reports['acoustic-qa.json']={'sha256':file_sha256(path),
                 'report':json.loads(path.read_text()),'legacy_unbound':True}
+    try:
+        chirp_review=inspect_current_chirp_acoustic_review(snapshot=snapshot,job_dir=job)
+    except (V2Conflict,OSError,ValueError,TypeError,KeyError) as exc:
+        raise HTTPException(status_code=409,detail='Current Chirp review evidence conflict') from exc
+    chirp_report=chirp_review.pop('acoustic_report',None)
+    if not acoustic_sha and chirp_report is not None:
+        if 'acoustic-qa.json' in reports:
+            reports['historical-acoustic-qa.json']=reports.pop('acoustic-qa.json')
+        reports['acoustic-qa.json']={
+            'sha256':chirp_review['acoustic_evidence_sha256'],'report':chirp_report,
+            'bound_current_chirp':True,'golden_qa_attested':False,
+            'evidence_scope':chirp_review['evidence_scope']}
     delivery=directory/'drive-delivery.json'
     if delivery.is_file() and not delivery.is_symlink():
         reports['drive-delivery.json']={'sha256':file_sha256(delivery),'report':json.loads(delivery.read_text())}
     return {'kind':'GOLDEN_EVIDENCE_REVIEW','job_id':job_id,'revision':state['revision'],
             'status':state['status'],'reports':reports,'human_listening_required':True,
+            'current_chirp_acoustic_review':chirp_review,
             'reviewer_identity':os.environ.get('COURSE_TRANSCRIPT_V2_OWNER_ACTOR','')}
 
 
