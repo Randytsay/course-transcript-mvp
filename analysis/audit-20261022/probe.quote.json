@@ -1,0 +1,32 @@
+{
+  "schema": "golden-v2-audio-review-probe-quote-v1",
+  "model": "gemini-3.8-flash",
+  "count_tokens_response": {
+    "sdk_http_response": {
+      "headers": {
+        "content-type": "application/json; charset=UTF-8",
+        "vary": "Origin, X-Origin, Referer",
+        "content-encoding": "gzip",
+        "date": "Wed, 21 Oct 2026 15:30:20 GMT",
+        "server": "scaffolding on HTTPServer2",
+        "x-xss-protection": "0",
+        "x-frame-options": "SAMEORIGIN",
+        "x-content-type-options": "nosniff",
+        "alt-svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+        "transfer-encoding": "chunked"
+      }
+    },
+    "total_tokens": 1788
+  },
+  "input_tokens": 1788,
+  "max_output_tokens_including_thoughts": 2048,
+  "repository_price_version": "google-list-global-20261014",
+  "maximum_usd_by_repository_catalog": "0.009021",
+  "reserved_cents": 1,
+  "clip_sha256": "9c2bdd0917b0a94b946fe6277b8cfe371c3b691400592b212d88a8a4b3b6bdc7",
+  "prompt_sha256": "dfc52d5babd8809660c9f532badeadcf817baeef96e76d40d2028986763ed07e",
+  "submit_authorized": false,
+  "generation_calls_started": 0,
+  "ledger_mutations": 0,
+  "drive_mutations": 0
+}

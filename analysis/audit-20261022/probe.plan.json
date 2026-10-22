@@ -1,0 +1,28 @@
+{
+  "schema": "golden-v2-audio-review-probe-plan-v1",
+  "job_id": "v2p_62a124bdd4595aca91c53085c3732ca7",
+  "source_sha256": "750bb7fe2c42ec226f84fe508e08d73fc6e2d9c4fee87d1eebf75436374cab34",
+  "ledger_revision": 11,
+  "model": "gemini-3.8-flash",
+  "clip": {
+    "path": "/output/probe-tail-10700-10765.flac",
+    "source_start_ms": 10700000,
+    "source_end_ms": 10765000,
+    "duration_seconds": 65.0,
+    "sha256": "9c2bdd0917b0a94b946fe6277b8cfe371c3b691400592b212d88a8a4b3b6bdc7",
+    "bytes": 2378468
+  },
+  "prompt": "請只根據附件原音，完整輸出本片段可辨識的繁體中文口語或唱誦。不要依熟悉經文補字、不要摘要、不要讀取外部資料。沒有語音的環境聲、衣物聲、呼吸、停頓不能寫成詞語。無法辨識請標記〔聽不清楚〕，不要猜。回覆一個JSON物件，欄位transcript（完整逐字稿）、speech_intervals（陣列，start_seconds、end_seconds、text）、nonspeech_intervals（陣列，start_seconds、end_seconds、description）、uncertainties（陣列）。秒數相對此片段，屬模型估計；不要宣稱逐字強制對齊，也不要宣稱主人本人已聽。",
+  "prompt_sha256": "dfc52d5babd8809660c9f532badeadcf817baeef96e76d40d2028986763ed07e",
+  "max_output_tokens": 2048,
+  "requested_thinking_level": "LOW",
+  "comparison_sha256": "f54f99d349b81b77db0132aa9c2d9f6da9d5d795011e53a9d0bc1d47bae96072",
+  "candidate_count": 3199,
+  "approved_job_cents": 261,
+  "recorded_actual_cents": 114,
+  "remaining_original_ceiling_cents": 147,
+  "unused_primary_reservation_cents": 147,
+  "submit_authorized": false,
+  "provider_generation_calls_started": 0,
+  "actor_kind": "MACHINE_REVIEW_NOT_OWNER_LISTENING"
+}
