@@ -37,6 +37,30 @@ def chirp_cents(seconds):
     return cents(Decimal(math.ceil(seconds)) * Decimal('0.003') / 60)
 
 
+def standard_chirp_cents(seconds):
+    """Speech-to-Text V2 Standard Batch (non-Dynamic) conservative ceiling.
+
+    Standard repair requests must not reuse the discounted Dynamic Batch
+    estimate. Pricing is versioned by PRICE_VERSION; provider invoice and
+    GCS charges are still separate reconciliation obligations.
+    """
+    if type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds <= 0:
+        raise ValueError('verified Standard Chirp billable duration required')
+    return cents(Decimal(math.ceil(seconds)) * Decimal('0.016') / 60)
+
+
+def chirp_operation_cents(row, billed_seconds):
+    """Use the recorded submission strategy, never a discounted rate by default."""
+    if not isinstance(row, dict):
+        raise ValueError('verified Chirp operation metadata required')
+    purpose = row.get('purpose')
+    if purpose == 'REPAIR':
+        return standard_chirp_cents(billed_seconds)
+    if purpose == 'BASE':
+        return chirp_cents(billed_seconds)
+    raise ValueError('unknown Chirp operation price category')
+
+
 def quote_duration(seconds, *, today=None):
     assert_current(today)
     if type(seconds) not in (int, float) or not math.isfinite(seconds) or not 0 < seconds <= 43200:

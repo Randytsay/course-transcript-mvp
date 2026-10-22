@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger
-from app.pipeline.golden_v2_pricing import quote_duration, gemini_usage_cents, chirp_cents
+from app.pipeline.golden_v2_pricing import quote_duration, gemini_usage_cents, chirp_cents, standard_chirp_cents, chirp_operation_cents
 from app.pipeline.golden_v2_quote_intake import enqueue_quote, read_quote, run_quote_intake_pass
 
 
@@ -42,6 +42,16 @@ class TrustedQuoteTests(unittest.TestCase):
             with self.assertRaises(ValueError): gemini_usage_cents([{'usage_metadata':usage}])
         self.assertEqual(chirp_cents(60),1)
         self.assertEqual(chirp_cents(1200),6)
+        self.assertEqual(standard_chirp_cents(60),2)
+        self.assertEqual(standard_chirp_cents(1200),32)
+        self.assertGreater(standard_chirp_cents(455.52),chirp_cents(455.52))
+        self.assertEqual(chirp_operation_cents({'purpose':'BASE'},60),1)
+        self.assertEqual(chirp_operation_cents({'purpose':'REPAIR'},60),2)
+        with self.assertRaises(ValueError):
+            chirp_operation_cents({'purpose':'UNVERIFIED'},60)
+        for invalid in (0,True,float('inf'),-1):
+            with self.assertRaises(ValueError):
+                standard_chirp_cents(invalid)
 
     def test_enqueue_deduplicates_and_has_no_job_or_approval(self):
         first = self.enqueue(); self.assertEqual(first,self.enqueue())

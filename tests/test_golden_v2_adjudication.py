@@ -169,6 +169,19 @@ class V2AdjudicationTests(unittest.TestCase):
             ledger=self.ledger, claim=qa_claim, job_dir=self.job_dir)
         self.assertEqual(result["status"], "PASS")
 
+    def test_review_bundle_selects_ledger_bound_versioned_comparison(self):
+        complete_adjudication_or_hold(
+            ledger=self.ledger, claim=self.claim, job_dir=self.job_dir,
+            reviewer="local-reviewer", review_reference="listen-session-01")
+        digest=next(s['evidence_sha'] for s in self.ledger.status(self.job)['stages'] if s['name']=='compare')
+        canonical=self.v2dir/'engine-comparison.json'
+        canonical.replace(self.v2dir/('engine-comparison-'+digest+'.json'))
+        canonical.write_bytes(b'{"stale":true}')
+        bundle=inspect_review_bundle(database=self.ledger.database,job_id=self.job,
+                                     job_dir=self.job_dir,normalized_audio=self.audio)
+        self.assertEqual(bundle['comparison_evidence_sha256'],digest)
+        self.assertEqual(len(bundle['candidate_snapshot']),1)
+
     def test_review_bundle_is_read_only_and_imports_exact_listened_candidate(self):
         hold = complete_adjudication_or_hold(
             ledger=self.ledger, claim=self.claim, job_dir=self.job_dir,
