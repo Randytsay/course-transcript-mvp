@@ -396,11 +396,47 @@ def finish_approved_chirp(
     for earlier, later in zip(base, base[1:]):
         if later["start_ms"] > earlier["end_ms"]:
             raise V2Conflict("missing Chirp window region")
-    # A post-review repair does not reparse an earlier *completed* base stage.
-    # Some historical raw provider responses omit word offsets. The old merge
-    # already has immutable, ledger-attested word boundaries; reuse it as-is.
+    # Bind this round to the prior completed, ledger-attested merge. Rebuild
+    # anchored base windows from raw below, or retain the prior baseline when
+    # historical raw cannot support a new timing hypothesis.
     prior_sha = ledger.prior_chirp_merge_for_active_repair(job_id)
     prior_results: set[str] = set()
+    prior: dict[str, Any] = {}
+    # The immutable provider raw is the source of truth. Recompute every base
+    # window losslessly from it and keep the result only when NOT ONE
+    # recognized character is lost. A stored window.json is a derived cache and
+    # may have been written by an older, lossy parser.
+    from app.pipeline.golden_v2_chirp_window_repair import repair_window
+    base_lossless: dict[str, list[dict[str, Any]]] = {}
+    base_repair_evidence: dict[str, dict[str, Any]] = {}
+    for row in base:
+        raw_path = job_dir / "golden-v2" / "chirp-evidence" / row["window_id"] / "provider-raw.json"
+        try:
+            raw_bytes = raw_path.read_bytes()
+            payload = json.loads(raw_bytes)
+            # A raw response with no complete, in-window timing anchor cannot
+            # replace an already-attested baseline using DEFAULT_TAIL_FILL.
+            # Preserve that baseline; a new timing hypothesis needs review.
+            entries = [entry for result in payload.get("results", [])
+                       for alt in result.get("alternatives", [])[:1]
+                       for entry in alt.get("words", [])]
+            if not any(
+                "endOffset" in entry
+                and 0 <= _offset_ms(entry.get("startOffset", "0s"))
+                < _offset_ms(entry["endOffset"])
+                <= row["end_ms"] - row["start_ms"] + 250
+                for entry in entries
+            ):
+                continue
+            repaired = repair_window(raw_bytes, row)
+        except (OSError, ValueError, V2Conflict):
+            continue
+        base_lossless[row["window_id"]] = repaired.words
+        base_repair_evidence[row["window_id"]] = {
+            "raw_sha": row["result_sha"], "summary": repaired.summary(),
+            "acoustic_timing_verified": False,
+        }
+    has_lossless_base_repair = len(base_lossless) == len(base) and bool(base)
     if prior_sha is not None:
         prior_path = resolve_versioned(job_dir / "golden-v2" / "chirp-merged.json",
                                        prior_sha)
@@ -424,6 +460,7 @@ def finish_approved_chirp(
                 int(row["actual_cents"]) for row in windows
                 if row["result_sha"] in prior_results):
             raise V2Conflict("previous completed Chirp merge cost changed")
+    if prior_sha is not None and not has_lossless_base_repair:
         merged: list[dict[str, Any]] = [dict(word) for word in prior["words"]]
     else:
         merged = []
@@ -437,23 +474,32 @@ def finish_approved_chirp(
                 or saved["request_id"] != row["request_id"]
                 or file_sha256(root / "provider-raw.json") != row["result_sha"]):
             raise V2Conflict("Chirp raw evidence or cost changed after recovery")
-        if row["result_sha"] not in prior_results:
-            records[row["window_id"]] = _parse_words(
-                (root / "provider-raw.json").read_bytes(), row)
-    if prior_sha is None:
-        boundaries = [(earlier["end_ms"] + later["start_ms"]) // 2
-                      for earlier, later in zip(base, base[1:])]
-        for idx, row in enumerate(base):
-            lower = boundaries[idx - 1] if idx else 0
-            upper = boundaries[idx] if idx < len(boundaries) else duration_ms + 250
-            for word in records[row["window_id"]]:
-                mid = (word["start_ms"] + word["end_ms"]) / 2
-                if lower <= mid < upper:
-                    if merged and word["start_ms"] < merged[-1]["start_ms"]:
-                        raise V2Conflict("merged Chirp timestamps are not monotonic")
-                    merged.append(word)
+        if row["window_id"] in base_lossless:
+            records[row["window_id"]] = base_lossless[row["window_id"]]
+        elif row["result_sha"] not in prior_results or (
+                has_lossless_base_repair and row.get("purpose") == "REPAIR"):
+            # A rebuilt base does not contain ANY historical repair. Reparse
+            # every completed repair so replay cannot silently drop paid text.
+            raw_bytes = (root / "provider-raw.json").read_bytes()
+            try:
+                records[row["window_id"]] = _parse_words(raw_bytes, row)
+            except V2Conflict:
+                if row.get("purpose") == "REPAIR" or has_lossless_base_repair:
+                    records[row["window_id"]] = repair_window(raw_bytes, row).words
+                else:
+                    raise
+    merge_timing_evidence: list[dict[str, Any]] = []
+    if prior_sha is None or has_lossless_base_repair:
+        from app.pipeline.golden_v2_chirp_window_repair import merge_base_windows
+        merged = merge_base_windows(
+            [{"start_ms": row["start_ms"], "end_ms": row["end_ms"],
+              "words": records[row["window_id"]]} for row in base],
+            duration_ms, audit=merge_timing_evidence,
+        )
+    else:
+        merge_timing_evidence = prior.get("merge_timing_evidence", [])
     for row in repairs:
-        if row["result_sha"] in prior_results:
+        if row["result_sha"] in prior_results and not has_lossless_base_repair:
             continue
         try:
             targets = json.loads(row["target_intervals_json"])
@@ -464,8 +510,31 @@ def finish_approved_chirp(
         def targeted(word: dict[str, Any]) -> bool:
             midpoint = (word["start_ms"] + word["end_ms"]) / 2
             return any(target["start_ms"] <= midpoint < target["end_ms"] for target in targets)
-        merged = [word for word in merged if not targeted(word)]
-        merged.extend(word for word in records[row["window_id"]] if targeted(word))
+        kept_base: list[dict[str, Any]] = []
+        for word in merged:
+            if targeted(word):
+                continue
+            wcopy = dict(word)
+            for target in targets:
+                if wcopy["start_ms"] < target["start_ms"] < wcopy["end_ms"]:
+                    wcopy["end_ms"] = target["start_ms"]
+                elif wcopy["start_ms"] < target["end_ms"] < wcopy["end_ms"]:
+                    wcopy["start_ms"] = target["end_ms"]
+            if wcopy["end_ms"] > wcopy["start_ms"]:
+                kept_base.append(wcopy)
+        merged = kept_base
+        for word in records[row["window_id"]]:
+            if not targeted(word):
+                continue
+            wcopy = dict(word)
+            midpoint = (wcopy["start_ms"] + wcopy["end_ms"]) / 2
+            for target in targets:
+                if target["start_ms"] <= midpoint < target["end_ms"]:
+                    wcopy["start_ms"] = max(wcopy["start_ms"], target["start_ms"])
+                    wcopy["end_ms"] = min(wcopy["end_ms"], target["end_ms"])
+                    break
+            if wcopy["end_ms"] > wcopy["start_ms"]:
+                merged.append(wcopy)
     merged.sort(key=lambda item: (item["start_ms"], item["end_ms"]))
     previous_end = 0
     for word in merged:
@@ -481,6 +550,13 @@ def finish_approved_chirp(
         "repair_result_shas": [w["result_sha"] for w in repairs],
         "actual_cents": sum(int(w["actual_cents"]) for w in windows),
         "words": merged, "timing_authority": "chirp_3",
+        # Provider ancestry is not proof that every normalized boundary was
+        # acoustically verified. Retain the actual normalization decisions.
+        "timing_normalization_evidence": (
+            base_repair_evidence if has_lossless_base_repair else
+            prior.get("timing_normalization_evidence", {})),
+        "merge_timing_evidence": merge_timing_evidence,
+        "acoustic_timing_verified": False,
         "acoustic_gate": "NOT_RUN", "golden_pass": False,
     }
     candidate_sha = hashlib.sha256(_wire(candidate)).hexdigest()

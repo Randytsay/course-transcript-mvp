@@ -174,6 +174,15 @@ class GoldenV2Ledger:
                     PRIMARY KEY(job_id,from_revision),
                     FOREIGN KEY(job_id) REFERENCES v2_jobs(id)
                 );
+                CREATE TABLE IF NOT EXISTS v2_primary_repairs (
+                    job_id TEXT NOT NULL, from_revision INTEGER NOT NULL,
+                    previous_evidence_sha TEXT NOT NULL,
+                    repaired_evidence_sha TEXT NOT NULL,
+                    reviewer TEXT NOT NULL, review_reference TEXT NOT NULL,
+                    repaired_at TEXT NOT NULL,
+                    PRIMARY KEY(job_id,from_revision),
+                    FOREIGN KEY(job_id) REFERENCES v2_jobs(id)
+                );
             """)
             # Existing isolated V2 test databases may predate per-window
             # reservations. Migrate additively without touching V1 tables.
@@ -858,6 +867,70 @@ class GoldenV2Ledger:
                 "UPDATE v2_jobs SET status='PROCESSING',revision=revision+1 WHERE id=?",
                 (job_id,),
             )
+
+    def record_primary_repair(
+        self, job_id: str, *, revision: int,
+        previous_evidence_sha: str, repaired_evidence_sha: str,
+        reviewer: str, review_reference: str,
+    ) -> None:
+        """Record an audited primary-stage repair with compare-and-swap.
+
+        A repaired primary artifact must be traceable to the exact artifact
+        it replaces. The swap on ``previous_evidence_sha`` prevents a stale
+        approval from silently promoting a different repair, and the ledger
+        row is the only place a repair may be asserted from.
+
+        This records intent and provenance. It deliberately does not move
+        stage state or spend budget; the caller owns the artifact write and
+        must verify the repaired file independently.
+        """
+        def sha(value: str) -> bool:
+            return isinstance(value, str) and len(value) == 64 and all(
+                char in "0123456789abcdef" for char in value)
+
+        if (type(revision) is not int or revision < 0
+                or not sha(previous_evidence_sha) or not sha(repaired_evidence_sha)
+                or previous_evidence_sha == repaired_evidence_sha
+                or not str(reviewer or "").strip()
+                or not str(review_reference or "").strip()):
+            raise ValueError("audited primary repair requires full provenance")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stages = self._stages(db, job_id)
+            first = stages[0]
+            if (job["revision"] != revision
+                    or job["status"] not in {"PROCESSING", "NEEDS_REVIEW"}
+                    or first["name"] != "gemini_primary"
+                    or first["state"] not in {"COMPLETE", "REVIEW_REQUIRED"}):
+                raise V2Conflict("primary repair revision/state mismatch")
+            if first["evidence_sha"] != previous_evidence_sha:
+                raise V2Conflict(
+                    "primary repair must swap the exact recorded evidence SHA")
+            db.execute(
+                "INSERT INTO v2_primary_repairs VALUES(?,?,?,?,?,?,?)",
+                (job_id, revision, previous_evidence_sha, repaired_evidence_sha,
+                 reviewer, review_reference, _now()),
+            )
+            db.execute(
+                "UPDATE v2_stages SET evidence_sha=?,updated_at=? "
+                "WHERE job_id=? AND name='gemini_primary'",
+                (repaired_evidence_sha, _now(), job_id),
+            )
+            db.execute(
+                "UPDATE v2_jobs SET revision=revision+1 WHERE id=?", (job_id,))
+
+    def primary_repairs(self, job_id: str) -> list[dict[str, Any]]:
+        """Return the audited primary repairs recorded for a job."""
+        with closing(sqlite3.connect(
+                f"{Path(self.database).resolve().as_uri()}?mode=ro", uri=True)) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute(
+                "SELECT job_id,from_revision,previous_evidence_sha,"
+                "repaired_evidence_sha,reviewer,review_reference,repaired_at "
+                "FROM v2_primary_repairs WHERE job_id=? ORDER BY from_revision",
+                (job_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def mark_outcome_unknown(
         self, claim: dict[str, Any], *, known_cents: int = 0,

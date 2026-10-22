@@ -45,7 +45,28 @@ def checked_outputs(root, job_id):
         manifest.get('source_sha256')!=state['source_sha']):
         raise V2Conflict('Golden QA/manifest/source binding mismatch')
     preflight=json.loads((job/'source-preflight.json').read_text())
-    source=preflight['drive_observation']; source_path=preflight['drive_source_path']
+    source=dict(preflight['drive_observation']); source_path=preflight['drive_source_path']
+    if 'downloaded_md5' not in source and isinstance(preflight.get('original_md5_checksum'), str):
+        source['downloaded_md5']=preflight['original_md5_checksum']
+    allowed_versions={str(source['version'])}
+    reval_dir=folder/'revision-revalidation'
+    if reval_dir.is_dir():
+        if reval_dir.is_symlink(): raise V2Conflict('unsafe revision revalidation directory')
+        for rpath in sorted(reval_dir.glob('source-version-*.json')):
+            if rpath.is_symlink(): raise V2Conflict('unsafe revision revalidation artifact')
+            rdoc=json.loads(rpath.read_text())
+            curr=rdoc.get('current_observation') if isinstance(rdoc,dict) else None
+            if (isinstance(curr,dict)
+                    and rdoc.get('schema')=='golden-v2-identical-audio-revision-v1'
+                    and rdoc.get('job_id') in (None, job_id)
+                    and rdoc.get('normalized_sha256')==state['source_sha']
+                    and rdoc.get('audio_bytes_identical') is True
+                    and rdoc.get('original_observation')==preflight['drive_observation']
+                    and curr.get('file_id')==source['file_id']
+                    and curr.get('size_bytes')==source['size_bytes']
+                    and curr.get('downloaded_md5')==source.get('downloaded_md5')):
+                allowed_versions.add(str(curr['version']))
+    source['allowed_versions']=sorted(allowed_versions)
     stem=Path(source_path).stem
     names=[stem+'.srt',stem+('' if stem.endswith('_') else '_')+'逐字稿.txt']
     paths=[
@@ -131,7 +152,8 @@ def publish_granted_outputs(*, root:Path, job_id:str, lock_root:Path, gateway=No
     gateway=gateway or DriveDeliveryGateway()
     def check_source():
         live=gateway.get(source['file_id'])
-        if (not live or live.get('trashed') or str(live.get('version'))!=str(source['version']) or
+        allowed_versions=set(source.get('allowed_versions') or [str(source['version'])])
+        if (not live or live.get('trashed') or str(live.get('version')) not in allowed_versions or
             int(live.get('size',-1))!=source['size_bytes'] or live.get('md5Checksum')!=source['downloaded_md5'] or
             len(live.get('parents',[]))!=1):
             raise V2Conflict('Drive source revision changed before delivery')
