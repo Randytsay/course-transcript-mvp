@@ -61,7 +61,7 @@ def inspect_review_bundle(
         raise V2Conflict("normalized audio differs from the approved source SHA")
 
     claim_stub = {"job_id": job_id, "source_sha": state["source_sha"]}
-    _, merged, bound = _bound_inputs(
+    _, merged, bound, _primary = _bound_inputs(
         ledger=GoldenV2Ledger.open_existing(database),
         claim=claim_stub, job_dir=job_dir,
     )
@@ -217,7 +217,7 @@ def apply_review_bundle(
 
     replacements: list[dict[str, Any]] = []
     replacement_ids: set[int] = set()
-    _, merged, _ = _bound_inputs(
+    _, merged, _, _primary = _bound_inputs(
         ledger=GoldenV2Ledger.open_existing(database),
         claim={"job_id": job_id, "source_sha": current["source_sha256"]},
         job_dir=job_dir,
