@@ -139,3 +139,35 @@ python -B -m unittest discover -s tests -p 'test_gemini_primary_audio.py' -v
 下一步所需授權應拆清：review/merge 的 exact commit、API-only 部署
 （其他 Worker 維持 stopped、Ledger diff=0）、必要的 key 輪替／重簽，及
 另外報價的單筆 bounded repair。**API-only 部署本身不會完成 Golden。**
+
+## 對外部運轉回報的逐項查核（2026-10-23）
+
+證據：`patch-tests/findings-20261023.json`、`probe-3830/`、`listening/`。
+
+| 回報說法 | 查核結果 |
+|---|---|
+| 重啟過期 worker 就能補齊功能 | **不成立**。API flags 為 paid/publish true，capabilities 為 false 只因 paid/delivery heartbeat 過期；三個停止的容器仍指向舊 image `8748404`，不是 `17d33faf`。 |
+| 入口只有預覽／狀態／非付費 intake，無受控執行路徑 | **不成立**。review／adjudication／publication 路由與 `execute_trusted_paid_stage`、`publish_granted_outputs` 都存在；缺的是受控重入契約未接通。 |
+| 需重送或重新對帳既有辨識 | **不需要**。44/44 saved operations 經 GET 對帳為 DONE，raw/cost 綁定一致。 |
+| 聲學待審 64／149／133，未檢查 59／148／133 | **已被取代**。那些數字來自綁定其他 merge 的 legacy `acoustic-qa.json`。Ledger 綁定當前報告為 12／25／12，未檢查區間皆 0，probe slices 全部具 VAD。 |
+| PR #148 未解 P1 仍使重複語音遺失 | **部署版無法重現**。舊 commit exact repro 失敗；部署版 51/51、418 排序變體通過，修正已在祖先 `9ef976c`。 |
+
+### 251018 00:38:20 已可定位並定性
+
+- 保留的**正式舊 SRT** 確實有涵蓋 00:38:20 的 `165.16s` 空段
+  （`00:37:49,640 --> 00:40:34,800`，cue 531 之後）。
+- Ledger 選定的 Chirp merge 在同一區間已有 **466 個 provider word**；待審校字版
+  SRT 以 41 個 cue／483 字覆蓋該區段，本身無空段。
+- 原因是**正式檔從未由現行 merge 重新產生**，不是辨識漏字。
+- 但比對顯示相似度 `0.9631`，且待審副本把 raw Chirp 的「萬宗歸一」寫成
+  「中取一」。這是**待審副本中新發現的疑似錯誤**，在原音或真人確認前不得
+  當成已修正，也不得隨 promotion 進入正式檔。
+
+### 集中聽審清單（已產生，未代替真人）
+
+`patch-tests/listening/consolidated-listening-list.json`：每筆列出 Ledger 綁定
+報告中需真人判讀的區間、時碼、probe disposition 與峰值。需聽審數為
+251025 **12**、251018 **25**、261017 **12**。較長者包括 251025
+`00:47:22 --> 00:48:57`（95.04s）、251018 `03:39:37 --> 03:40:08`（31.32s）、
+261017 `02:58:24 --> 02:59:00`（35.38s，該區間同時出現 NONSPEECH 與
+SPEECH flags，本身即需人工判讀）。VAD／峰值只代表疑似活動。
