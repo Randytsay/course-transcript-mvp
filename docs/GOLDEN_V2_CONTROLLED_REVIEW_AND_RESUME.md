@@ -171,3 +171,25 @@ python -B -m unittest discover -s tests -p 'test_gemini_primary_audio.py' -v
 `00:47:22 --> 00:48:57`（95.04s）、251018 `03:39:37 --> 03:40:08`（31.32s）、
 261017 `02:58:24 --> 02:59:00`（35.38s，該區間同時出現 NONSPEECH 與
 SPEECH flags，本身即需人工判讀）。VAD／峰值只代表疑似活動。
+
+### 校字層缺陷與新護欄（2026-10-23）
+
+稽核三份已交付待審產物的**全部 20 處**文字修正後，得到兩個事實：
+
+1. **架構允許單一未經聽審的第二引擎讀音覆寫 Chirp 文字。**
+   `萬宗歸 -> 中取` 忠實採用了 Gemini primary 的一次讀音，並被寫進交付檔。
+2. **更嚴重：交付的 merge 已無法從不可變 Chirp 文字重現。**
+   `merged.json` 的 word 陣列已帶著「修正後」文字，因此 gate 對 20/20 全部
+   觸發 `before_text_does_not_match_chirp_words`。也就是說，artifact 本身無法
+   證明 Chirp 原本說了什麼——證據鏈已被就地改寫。
+
+新增 `app/pipeline/golden_v2_text_correction_gate.py`：只有**具名真人聽審**或
+**source-bound 原音 probe（clip 覆蓋整個編輯區間且回應文字含替換字）**才可覆寫
+Chirp 文字；其餘一律降級為 candidate、保留 Chirp 文字並列入聽審。降級不代表
+Chirp 必然正確，只代表這個改字無權靜默生效。
+
+對真實產物實跑結果：**20 處修正，admissible=0，downgraded=20，三筆全部 BLOCKED**。
+測試 21/21；Golden V2 suite 495/495。
+
+後續必須做的是**重建一份保留原始 Chirp 文字的產物**，再以 probe 或聽審重新
+授權；不能就地修補現有 `merged.json`。
