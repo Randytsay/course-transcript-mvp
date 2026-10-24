@@ -1,7 +1,7 @@
 # Golden Transcript V2 — 開發序、驗收矩陣及交付簽核
 
-> 2026-10-11 決策基準｜`V2.0-design-1`｜狀態：**規格已建檔，尚未表示任何程式完成或上線**  
-> 上位技術規格：[GOLDEN_V2_ARCHITECTURE_PLAN.md](GOLDEN_V2_ARCHITECTURE_PLAN.md)  
+> 2026-10-11 決策基準｜`V2.0-design-1`｜性質：**保留的 2026-10-11 原始驗收合約；現行部署和每筆 Golden QA 結果另以實際 runtime/immutable evidence 驗證**
+> 現行唯一架構：[GOLDEN_V2_CURRENT_ARCHITECTURE.md](GOLDEN_V2_CURRENT_ARCHITECTURE.md)；獨立審查：[GOLDEN_V2_INDEPENDENT_AUDIT.md](GOLDEN_V2_INDEPENDENT_AUDIT.md)
 > 現況先讀：[CURRENT_STATE.md](../CURRENT_STATE.md)；Agent 使用：[AGENTS.md](../AGENTS.md)、[AI_AGENT_HANDOFF.md](../AI_AGENT_HANDOFF.md)。  
 > 此表是**驗收合約**。任何後續 Agent 均不得把「PR 已建立／測試程式存在／pipeline completed」誤報為正式 `GOLDEN_PASS`。
 

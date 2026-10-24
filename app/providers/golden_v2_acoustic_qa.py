@@ -71,8 +71,8 @@ def inspect_v2_acoustic(
     *, job_dir: Path, merged: dict[str, Any],
     gap_min_ms: int = 3000, tail_min_ms: int = 2000,
     max_repair_intervals: int = 12, max_repair_total_ms: int = 600_000,
-    word_boundary_grace_ms: int = 200, max_gaps_to_probe: int = 16,
-    max_gap_probe_ms: int = 30_000, max_total_probe_slices: int = 48,
+    word_boundary_grace_ms: int = 200, max_gaps_to_probe: int = 512,
+    max_gap_probe_ms: int = 30_000, max_total_probe_slices: int = 1024,
 ) -> dict[str, Any]:
     """Validate source and Chirp timebase and flag only audibly suspicious gaps.
 
@@ -83,10 +83,10 @@ def inspect_v2_acoustic(
             or not 0 < max_repair_intervals <= 100
             or not 0 < max_repair_total_ms <= 3_600_000
             or not 0 <= word_boundary_grace_ms <= 500
-            or type(max_gaps_to_probe) is not int or not 1 <= max_gaps_to_probe <= 64
+            or type(max_gaps_to_probe) is not int or not 1 <= max_gaps_to_probe <= 2048
             or type(max_gap_probe_ms) is not int or not 1000 <= max_gap_probe_ms <= 120_000
             or type(max_total_probe_slices) is not int
-            or not 1 <= max_total_probe_slices <= 256):
+            or not 1 <= max_total_probe_slices <= 4096):
         raise V2Conflict("invalid bounded acoustic QA settings")
     audio = Path(job_dir) / "normalized.flac"
     if (not audio.is_file() or merged.get("timing_authority") != "chirp_3"
@@ -117,10 +117,8 @@ def inspect_v2_acoustic(
     probed = gaps[:max_gaps_to_probe]
     unprobed = gaps[max_gaps_to_probe:]
     for start, end, position in probed:
-        # Chirp offsets are approximate at phoneme edges. Treat at most 200 ms
-        # adjacent to recognized words as part of the word, not missing speech.
-        # Inspect the remaining interval; a genuine multi-second omission still
-        # blocks publication. Never trim a gap that contains no recognized edge.
+        # Chirp timestamps can drift at phoneme edges. Ignore no more than
+        # 200 ms per adjacent recognized word; check the entire remaining gap.
         probe_start = start + (word_boundary_grace_ms if position != "LEADING" else 0)
         probe_end = end - (word_boundary_grace_ms if position != "TAIL" else 0)
         if probe_end <= probe_start:
@@ -174,9 +172,44 @@ def inspect_v2_acoustic(
             "start_ms": start, "end_ms": end, "position": position,
             "acoustic_probe_start_ms": None, "acoustic_probe_end_ms": None,
             "audible_above_rms_threshold": None, "max_volume_dbfs": None,
-            "vad": None, "disposition": "REVIEW",
+            "vad": None, "probe_slices": [], "disposition": "REVIEW",
             "reason": "acoustic_gap_probe_limit_reached",
         })
+
+    reviewed_nonspeech_path = Path(job_dir) / "golden-v2" / "acoustic-reviewed-nonspeech.json"
+    if reviewed_nonspeech_path.is_file():
+        if reviewed_nonspeech_path.is_symlink():
+            raise V2Conflict("unsafe reviewed nonspeech sidecar")
+        try:
+            att = json.loads(reviewed_nonspeech_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise V2Conflict("invalid reviewed nonspeech sidecar") from exc
+        if (not isinstance(att, dict)
+                or att.get("schema") != "golden-v2-acoustic-reviewed-nonspeech-v1"
+                or att.get("source_sha256") != merged["source_sha"]
+                or not str(att.get("reviewer") or "").strip()
+                or not str(att.get("review_reference") or "").strip()
+                or not isinstance(att.get("intervals"), list)):
+            raise V2Conflict("reviewed nonspeech sidecar is not bound to source")
+        att_entries = [e for e in att["intervals"] if isinstance(e, dict)]
+        for interval in intervals:
+            if interval["disposition"] == "NONSPEECH_CONFIRMED":
+                continue
+            for entry in att_entries:
+                if (entry.get("disposition") == "NONSPEECH_CONFIRMED"
+                        and str(entry.get("reason") or "").strip()
+                        and isinstance(entry.get("start_ms"), int)
+                        and isinstance(entry.get("end_ms"), int)
+                        and abs(entry["start_ms"] - interval["start_ms"]) <= 250
+                        and abs(entry["end_ms"] - interval["end_ms"]) <= 250):
+                    interval["disposition"] = "NONSPEECH_CONFIRMED"
+                    interval["reason"] = "human_reviewed_nonspeech_confirmed"
+                    interval["review_attestation"] = {
+                        "reviewer": att["reviewer"],
+                        "review_reference": att["review_reference"],
+                        "note": entry["reason"],
+                    }
+                    break
 
     blockers = [interval for interval in intervals
                 if interval["disposition"] != "NONSPEECH_CONFIRMED"]
@@ -184,7 +217,10 @@ def inspect_v2_acoustic(
                    if interval["disposition"] == "SPEECH_CONFIRMED"]
     repair_intervals: list[dict[str, Any]] = []
     total = 0
-    for gap_index, gap in enumerate(speech_gaps):
+    truncated_by_cap = False
+    for gap_index, gap in enumerate(intervals):
+        if gap["disposition"] != "SPEECH_CONFIRMED":
+            continue
         cursor = gap["start_ms"]
         while cursor < gap["end_ms"]:
             if len(repair_intervals) >= max_repair_intervals:
@@ -205,10 +241,11 @@ def inspect_v2_acoustic(
             total += end - start
             cursor = target_end
         if cursor < gap["end_ms"]:
+            truncated_by_cap = True
             break
     nonspeech_count = sum(i["disposition"] == "NONSPEECH_CONFIRMED" for i in intervals)
     uncertain_count = sum(i["disposition"] == "REVIEW" for i in intervals)
-    repair_truncated = len(repair_intervals) < len(speech_gaps)
+    repair_truncated = truncated_by_cap or len(repair_intervals) < len(speech_gaps)
     return {
         "schema": "golden-v2-acoustic-qa-v1", "source_sha256": merged["source_sha"],
         "merged_sha256": hashlib.sha256(_wire(merged)).hexdigest(),

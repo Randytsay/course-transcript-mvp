@@ -163,6 +163,26 @@ class GoldenV2Ledger:
                     PRIMARY KEY(job_id,plan_sha),
                     FOREIGN KEY(job_id) REFERENCES v2_jobs(id)
                 );
+                CREATE TABLE IF NOT EXISTS v2_chirp_repair_rounds (
+                    job_id TEXT NOT NULL, from_revision INTEGER NOT NULL,
+                    source_sha TEXT NOT NULL,
+                    prior_stage_snapshot_json TEXT NOT NULL,
+                    prior_stage_snapshot_sha TEXT NOT NULL,
+                    transfer_cents INTEGER NOT NULL,
+                    actor TEXT NOT NULL, reference TEXT NOT NULL,
+                    resumed_at TEXT NOT NULL,
+                    PRIMARY KEY(job_id,from_revision),
+                    FOREIGN KEY(job_id) REFERENCES v2_jobs(id)
+                );
+                CREATE TABLE IF NOT EXISTS v2_primary_repairs (
+                    job_id TEXT NOT NULL, from_revision INTEGER NOT NULL,
+                    previous_evidence_sha TEXT NOT NULL,
+                    repaired_evidence_sha TEXT NOT NULL,
+                    reviewer TEXT NOT NULL, review_reference TEXT NOT NULL,
+                    repaired_at TEXT NOT NULL,
+                    PRIMARY KEY(job_id,from_revision),
+                    FOREIGN KEY(job_id) REFERENCES v2_jobs(id)
+                );
             """)
             # Existing isolated V2 test databases may predate per-window
             # reservations. Migrate additively without touching V1 tables.
@@ -646,6 +666,158 @@ class GoldenV2Ledger:
                 (job_id,),
             )
 
+    def resume_chirp_review_for_repair(
+        self, job_id: str, *, revision: int, source_sha: str,
+        previous_chirp_evidence_sha: str, previous_qa_evidence_sha: str,
+        transfer_cents: int, reviewer: str, review_reference: str,
+        worker_id: str, aggregate_cap_cents: int, evidence_verifier: Any,
+    ) -> dict[str, Any]:
+        """CAS reopen of a completed Chirp stage without replaying paid operations.
+
+        Reassign only unused Gemini reservations within the EXISTING approval.
+        Preserve every downstream stage snapshot in an append-only audit row.
+        Caller must independently verify source, old QA and raw Chirp results.
+        """
+        def sha(v: Any) -> bool:
+            return isinstance(v, str) and len(v) == 64 and all(
+                c in "0123456789abcdef" for c in v
+            )
+        if (type(revision) is not int or revision < 0
+                or not all(map(sha, (source_sha, previous_chirp_evidence_sha,
+                                    previous_qa_evidence_sha)))
+                or type(transfer_cents) is not int or transfer_cents <= 0
+                or type(aggregate_cap_cents) is not int
+                or not 1 <= aggregate_cap_cents <= 100000
+                or not reviewer.strip() or not review_reference.strip()
+                or not worker_id.strip() or not callable(evidence_verifier)):
+            raise V2Conflict("repair resume requires verified CAS, owner and budget")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            rows = self._stages(db, job_id)
+            stages = {row["name"]: row for row in rows}
+            gemini = stages["gemini_primary"]
+            chirp = stages["chirp_independent"]
+            qa = stages["golden_qa"]
+            expected_states = ("COMPLETE", "COMPLETE", "COMPLETE", "SKIPPED",
+                               "COMPLETE", "REVIEW_REQUIRED")
+            if (job["revision"] != revision or job["status"] != "NEEDS_REVIEW"
+                    or job["source_sha"] != source_sha
+                    or job["approved_cents"] is None or job["mode"] != "FLASH_CHIRP"
+                    or tuple(row["state"] for row in rows) != expected_states
+                    or chirp["evidence_sha"] != previous_chirp_evidence_sha
+                    or qa["evidence_sha"] != previous_qa_evidence_sha):
+                raise V2Conflict("repair resume state/revision/evidence mismatch")
+            windows = [dict(w) for w in db.execute(
+                "SELECT * FROM v2_chirp_operations WHERE job_id=? ORDER BY window_id",
+                (job_id,),
+            )]
+            if (not windows or any(
+                    w["status"] != "DONE" or not w["operation_name"]
+                    or not sha(w["result_sha"]) or w["actual_cents"] is None
+                    for w in windows)):
+                raise V2Conflict("unfinished/unknown Chirp operation blocks repair")
+            if sum(int(w["actual_cents"]) for w in windows) != chirp["actual_cents"]:
+                raise V2Conflict("Chirp stage cost differs from persisted operations")
+            unused = int(gemini["estimate_cents"]) - int(gemini["actual_cents"] or 0)
+            if transfer_cents > unused:
+                raise V2Conflict("not enough unused Gemini reservation for repair")
+            if (sum(int(x["estimate_cents"]) for x in rows) > job["approved_cents"]
+                    or sum(int(x["actual_cents"] or 0) for x in rows)
+                    + transfer_cents > job["approved_cents"]):
+                raise V2Conflict("repair exceeds original approved job ceiling")
+            if db.execute(
+                "SELECT 1 FROM v2_stages s JOIN v2_jobs j ON s.job_id=j.id "
+                "WHERE j.approved_cents IS NOT NULL "
+                "AND s.name IN ('gemini_primary','chirp_independent','third_optional') "
+                "AND s.state IN ('RUNNING','OUTCOME_UNKNOWN','OVER_BUDGET') LIMIT 1"
+            ).fetchone():
+                raise V2Conflict("unreconciled global paid operation")
+            if approved_trial_exposure(db) > aggregate_cap_cents:
+                raise V2Conflict("aggregate V2 budget cap would be exceeded")
+            if not evidence_verifier(
+                    job_id=job_id, source_sha=source_sha,
+                    old_chirp_sha=previous_chirp_evidence_sha,
+                    old_qa_sha=previous_qa_evidence_sha, windows=windows):
+                raise V2Conflict("independent raw/evidence verification failed")
+            snapshot = [dict(x) for x in rows]
+            prior_json = json.dumps(snapshot, ensure_ascii=False,
+                                    sort_keys=True, separators=(",", ":"))
+            db.execute(
+                "INSERT INTO v2_chirp_repair_rounds "
+                "(job_id,from_revision,source_sha,prior_stage_snapshot_json,"
+                "prior_stage_snapshot_sha,transfer_cents,actor,reference,resumed_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (job_id, revision, source_sha, prior_json, _digest(snapshot),
+                 transfer_cents, reviewer.strip(), review_reference.strip(), _now()),
+            )
+            token = secrets.token_urlsafe(32)
+            db.execute(
+                "UPDATE v2_stages SET estimate_cents=estimate_cents-?,updated_at=? "
+                "WHERE job_id=? AND name='gemini_primary'",
+                (transfer_cents, _now(), job_id),
+            )
+            db.execute(
+                "UPDATE v2_stages SET estimate_cents=estimate_cents+?,state='RUNNING',"
+                "evidence_sha=NULL,claim_hash=?,updated_at=? "
+                "WHERE job_id=? AND name='chirp_independent'",
+                (transfer_cents, hashlib.sha256(token.encode()).hexdigest(),
+                 _now(), job_id),
+            )
+            for stage in ("compare", "adjudication", "golden_qa"):
+                db.execute(
+                    "UPDATE v2_stages SET state='PENDING',evidence_sha=NULL,"
+                    "claim_hash=NULL,review_required=NULL,updated_at=? "
+                    "WHERE job_id=? AND name=?",
+                    (_now(), job_id, stage),
+                )
+            db.execute(
+                "UPDATE v2_jobs SET status='PROCESSING',revision=revision+1 WHERE id=?",
+                (job_id,),
+            )
+            return {"job_id": job_id, "stage": "chirp_independent",
+                    "claim": token, "source_sha": source_sha,
+                    "estimate_cents": int(chirp["estimate_cents"]) + transfer_cents,
+                    "repair_transfer_cents": transfer_cents}
+
+    def prior_chirp_merge_for_active_repair(self, job_id: str) -> str | None:
+        """Return the ledger-attested prior merge SHA, never a loose file path.
+
+        A reopened stage can merge new source-bound repairs against an already
+        verified completed Chirp base without reparsing historically malformed
+        provider JSON. Every old raw SHA stays immutable and auditable.
+        """
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stage = db.execute(
+                "SELECT state FROM v2_stages "
+                "WHERE job_id=? AND name='chirp_independent'", (job_id,),
+            ).fetchone()
+            if (job["status"] != "PROCESSING" or stage is None
+                    or stage["state"] != "RUNNING"):
+                raise V2Conflict("prior merge can only be read for active repair")
+            row = db.execute(
+                "SELECT source_sha,prior_stage_snapshot_json,"
+                "prior_stage_snapshot_sha FROM v2_chirp_repair_rounds "
+                "WHERE job_id=? ORDER BY from_revision DESC LIMIT 1", (job_id,),
+            ).fetchone()
+            if row is None:
+                return None
+            try:
+                snapshot = json.loads(row["prior_stage_snapshot_json"])
+            except (ValueError, TypeError) as exc:
+                raise V2Conflict("prior Chirp stage snapshot is corrupt") from exc
+            if (not isinstance(snapshot, list)
+                    or _digest(snapshot) != row["prior_stage_snapshot_sha"]
+                    or row["source_sha"] != job["source_sha"]):
+                raise V2Conflict("prior Chirp repair audit/source digest mismatch")
+            chirp = next((item for item in snapshot
+                          if item.get("name") == "chirp_independent"), None)
+            if (chirp is None or chirp.get("state") != "COMPLETE"
+                    or not isinstance(chirp.get("evidence_sha"), str)
+                    or len(chirp["evidence_sha"]) != 64):
+                raise V2Conflict("previous paid stage was not completed")
+            return chirp["evidence_sha"]
+
     def complete_reviewed_primary(
         self, job_id: str, *, revision: int, reviewer: str,
         review_reference: str, previous_evidence_sha: str,
@@ -695,6 +867,70 @@ class GoldenV2Ledger:
                 "UPDATE v2_jobs SET status='PROCESSING',revision=revision+1 WHERE id=?",
                 (job_id,),
             )
+
+    def record_primary_repair(
+        self, job_id: str, *, revision: int,
+        previous_evidence_sha: str, repaired_evidence_sha: str,
+        reviewer: str, review_reference: str,
+    ) -> None:
+        """Record an audited primary-stage repair with compare-and-swap.
+
+        A repaired primary artifact must be traceable to the exact artifact
+        it replaces. The swap on ``previous_evidence_sha`` prevents a stale
+        approval from silently promoting a different repair, and the ledger
+        row is the only place a repair may be asserted from.
+
+        This records intent and provenance. It deliberately does not move
+        stage state or spend budget; the caller owns the artifact write and
+        must verify the repaired file independently.
+        """
+        def sha(value: str) -> bool:
+            return isinstance(value, str) and len(value) == 64 and all(
+                char in "0123456789abcdef" for char in value)
+
+        if (type(revision) is not int or revision < 0
+                or not sha(previous_evidence_sha) or not sha(repaired_evidence_sha)
+                or previous_evidence_sha == repaired_evidence_sha
+                or not str(reviewer or "").strip()
+                or not str(review_reference or "").strip()):
+            raise ValueError("audited primary repair requires full provenance")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stages = self._stages(db, job_id)
+            first = stages[0]
+            if (job["revision"] != revision
+                    or job["status"] not in {"PROCESSING", "NEEDS_REVIEW"}
+                    or first["name"] != "gemini_primary"
+                    or first["state"] not in {"COMPLETE", "REVIEW_REQUIRED"}):
+                raise V2Conflict("primary repair revision/state mismatch")
+            if first["evidence_sha"] != previous_evidence_sha:
+                raise V2Conflict(
+                    "primary repair must swap the exact recorded evidence SHA")
+            db.execute(
+                "INSERT INTO v2_primary_repairs VALUES(?,?,?,?,?,?,?)",
+                (job_id, revision, previous_evidence_sha, repaired_evidence_sha,
+                 reviewer, review_reference, _now()),
+            )
+            db.execute(
+                "UPDATE v2_stages SET evidence_sha=?,updated_at=? "
+                "WHERE job_id=? AND name='gemini_primary'",
+                (repaired_evidence_sha, _now(), job_id),
+            )
+            db.execute(
+                "UPDATE v2_jobs SET revision=revision+1 WHERE id=?", (job_id,))
+
+    def primary_repairs(self, job_id: str) -> list[dict[str, Any]]:
+        """Return the audited primary repairs recorded for a job."""
+        with closing(sqlite3.connect(
+                f"{Path(self.database).resolve().as_uri()}?mode=ro", uri=True)) as db:
+            db.row_factory = sqlite3.Row
+            rows = db.execute(
+                "SELECT job_id,from_revision,previous_evidence_sha,"
+                "repaired_evidence_sha,reviewer,review_reference,repaired_at "
+                "FROM v2_primary_repairs WHERE job_id=? ORDER BY from_revision",
+                (job_id,),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def mark_outcome_unknown(
         self, claim: dict[str, Any], *, known_cents: int = 0,

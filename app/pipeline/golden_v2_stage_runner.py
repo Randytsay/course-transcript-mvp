@@ -19,38 +19,16 @@ from app.providers.golden_v2_audio_staging import file_sha256
 from app.providers.golden_v2_compare import compare_gemini_chirp
 from app.providers.golden_v2_final_gate import validate_golden_v2
 from app.subtitles.golden_v2_render import render_golden_v2
+from app.providers.golden_v2_versioned_artifacts import resolve_versioned, write_versioned
+from app.pipeline.golden_v2_alignment_health import assess_alignment_health
+from app.pipeline.golden_v2_review_evidence import require_real_review_evidence
 
 
 def _write_evidence(path: Path, data: dict[str, Any]) -> str:
-    wire = json.dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
-    digest = hashlib.sha256(wire).hexdigest()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_name = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.",
-                                         delete=False) as stream:
-            tmp_name = stream.name
-            stream.write(wire)
-            stream.flush()
-            os.fsync(stream.fileno())
-        try:
-            os.link(tmp_name, path)
-        except FileExistsError:
-            try:
-                existing = json.loads(path.read_text(encoding="utf-8"))
-                previous = _canonical_sha(existing)
-            except (OSError, ValueError, TypeError) as exc:
-                raise V2Conflict("invalid prior immutable V2 evidence") from exc
-            if previous != digest:
-                raise V2Conflict("immutable V2 stage artifact content mismatch")
-        fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    finally:
-        if tmp_name is not None:
-            Path(tmp_name).unlink(missing_ok=True)
+    """Keep historical evidence immutable across repaired rounds."""
+    wire = json.dumps(data, ensure_ascii=False, sort_keys=True,
+                      separators=(",", ":")).encode()
+    digest, _ = write_versioned(path, wire)
     return digest
 
 
@@ -63,14 +41,14 @@ def _checked_stage_artifact(
     *, job_dir: Path, filename: str, stage: dict[str, Any],
     claim: dict[str, Any], raw_digest: bool = False,
 ) -> dict[str, Any]:
-    path = job_dir / "golden-v2" / filename
+    path = resolve_versioned(job_dir / "golden-v2" / filename,
+                             stage["evidence_sha"])
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         raise V2Conflict(f"missing or invalid immutable {filename}") from exc
     if (not isinstance(data, dict) or stage["state"] != "COMPLETE"
-            or stage["evidence_sha"] != (
-                file_sha256(path) if raw_digest else _canonical_sha(data))
+            or stage["evidence_sha"] not in {file_sha256(path), _canonical_sha(data)}
             or data.get("job_id") != claim["job_id"]
             or data.get("source_sha256", data.get("source_sha")) != claim["source_sha"]):
         raise V2Conflict(f"ledger/source evidence mismatch: {filename}")
@@ -78,38 +56,50 @@ def _checked_stage_artifact(
 
 
 def _write_immutable_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = content.encode("utf-8")
-    # An exclusive open of the *final* path can leave a truncated but
-    # apparently immutable artifact after ENOSPC or a process crash. Stage
-    # complete bytes privately, then atomically link into the final name.
-    tmp_name = None
-    try:
-        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.",
-                                         delete=False) as stream:
-            tmp_name = stream.name
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-        try:
-            os.link(tmp_name, path)
-        except FileExistsError:
-            if path.read_bytes() != data:
-                raise V2Conflict(f"immutable final artifact conflict: {path.name}")
-        # The ledger is committed only after every immutable artifact exists;
-        # fsync the directory to make the new name survive a host crash.
-        fd = os.open(path.parent, os.O_RDONLY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
-    finally:
-        if tmp_name is not None:
-            Path(tmp_name).unlink(missing_ok=True)
+    write_versioned(path, content.encode("utf-8"))
+
+
+def _primary_coverage_ratio(
+    primary: dict[str, Any], duration_ms: int | None = None,
+) -> float | None:
+    """Fraction of the audio the reference text actually covers.
+
+    Derived from the primary artifact's own window evidence: only windows
+    that finished cleanly (STOP) contributed text. A window that was refused,
+    truncated, or never attempted leaves its span uncovered, which is exactly
+    the hole that made 251025 and 251018 unauditable.
+
+    The denominator is the real audio duration when known, not the last
+    window's end: 251025 planned windows ending at 5390s but the recording
+    runs 8883.67s, so measuring against the window span would report 50%
+    coverage when the true figure is 30.4%.
+    """
+    evidence = primary.get("window_evidence")
+    if not isinstance(evidence, list) or not evidence:
+        return None
+    covered_ms = 0.0
+    span_ms = 0.0
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        window = (item.get("identity") or {}).get("window") or {}
+        start, end = window.get("start_seconds"), window.get("end_seconds")
+        if not isinstance(start, (int, float)) or not isinstance(end, (int, float)):
+            continue
+        if end <= start:
+            continue
+        span_ms = max(span_ms, float(end) * 1000.0)
+        if item.get("finish_reason") == "STOP":
+            covered_ms += (float(end) - float(start)) * 1000.0
+    denominator = float(duration_ms) if isinstance(duration_ms, int) and duration_ms > 0 else span_ms
+    if denominator <= 0:
+        return None
+    return covered_ms / denominator
 
 
 def _bound_inputs(*, ledger: GoldenV2Ledger, claim: dict[str, Any],
-                  job_dir: Path) -> tuple[str, dict[str, Any], dict[str, Any]]:
+                  job_dir: Path) -> tuple[str, dict[str, Any], dict[str, Any],
+                                       dict[str, Any]]:
     """Use actual completed ledger artifacts as the sole comparison inputs."""
     stages = {item["name"]: item for item in ledger.status(claim["job_id"])["stages"]}
     original = job_dir / "golden-v2" / "primary-stage.json"
@@ -154,7 +144,7 @@ def _bound_inputs(*, ledger: GoldenV2Ledger, claim: dict[str, Any],
             or merged.get("timing_authority") != "chirp_3"
             or not isinstance(merged.get("words"), list)):
         raise V2Conflict("complete source-bound primary and Chirp evidence required")
-    return text, merged, stages
+    return text, merged, stages, primary
 
 
 def _correction_matches_candidate(
@@ -194,7 +184,8 @@ def complete_adjudication_or_hold(
         ledger.assert_stage_claim(claim, stage="adjudication")
     if file_sha256(job_dir / "normalized.flac") != claim["source_sha"]:
         raise V2Conflict("review audio SHA differs from approved normalized source")
-    _, merged, stages = _bound_inputs(ledger=ledger, claim=claim, job_dir=job_dir)
+    _, merged, stages, _primary = _bound_inputs(
+        ledger=ledger, claim=claim, job_dir=job_dir)
     comparison = _checked_stage_artifact(
         job_dir=job_dir, filename="engine-comparison.json",
         stage=stages["compare"], claim=claim)
@@ -271,6 +262,11 @@ def complete_adjudication_or_hold(
     render_golden_v2(merged=merged, replacements=replacements,
                      punctuation_after=punctuation_after)
 
+    # Review evidence gate: a batch whose windows and reasons are generated
+    # rather than listened to must not become a completed adjudication.
+    evidence = require_real_review_evidence(
+        candidates=candidates, decisions=decisions)
+
     complete = len(seen) == len(candidates) and all(
         entry.get("status") == "RESOLVED" for entry in decisions)
     if not candidates and not comparison.get("exact_normalized_match"):
@@ -288,6 +284,7 @@ def complete_adjudication_or_hold(
         "adjudications": sorted(decisions, key=lambda item: item["candidate_index"]),
         "replacements": replacements,
         "punctuation_after": {str(k): v for k, v in punctuation_after.items()},
+        "review_evidence": evidence,
         "status": "COMPLETE" if complete else "REVIEW_REQUIRED",
     }
     filename = "adjudications.json" if complete else f"adjudication-review-{revision}.json"
@@ -325,15 +322,11 @@ def complete_evidence_bound_qa(
             or comparison.get("chirp_timing_authority") is not True):
         raise V2Conflict("comparison evidence is incomplete")
 
-    primary_text, checked_merged, bound_stages = _bound_inputs(
+    primary_text, checked_merged, bound_stages, bound_primary = _bound_inputs(
         ledger=ledger, claim=claim, job_dir=job_dir)
-    expected = compare_gemini_chirp(
-        primary_text, checked_merged["words"], source_sha256=claim["source_sha"])
-    expected.update({
-        "job_id": claim["job_id"], "source_sha256": claim["source_sha"],
-        "primary_evidence_sha256": bound_stages["gemini_primary"]["evidence_sha"],
-        "chirp_evidence_sha256": bound_stages["chirp_independent"]["evidence_sha"],
-    })
+    expected = _build_comparison_report(
+        primary_text=primary_text, merged=checked_merged, primary=bound_primary,
+        claim=claim, stages=bound_stages)
     if expected != comparison:
         raise V2Conflict("persisted comparison differs from actual primary/Chirp evidence")
 
@@ -430,6 +423,7 @@ def complete_evidence_bound_qa(
     # Bind the exact final manifest into the ledger-attested QA bytes. A later
     # publisher must verify this chain rather than accepting a loose PASS file.
     result['render_sha256'] = render_digest
+    result['acoustic_sha256'] = acoustic_digest
     qa_digest = _write_evidence(job_dir / "golden-v2" / "golden-qa.json", result)
     if result["safe_publish_allowed"]:
         ledger.complete(claim, evidence_sha=qa_digest, actual_cents=0)
@@ -441,23 +435,54 @@ def complete_evidence_bound_qa(
             "drive_mutation_started": False}
 
 
+def _build_comparison_report(
+    *, primary_text: str, merged: dict[str, Any], primary: dict[str, Any],
+    claim: dict[str, Any], stages: dict[str, Any],
+) -> dict[str, Any]:
+    """Build the comparison report and enforce the alignment health gate.
+
+    Both the compare stage and the final QA stage build the comparison this
+    way, so a report that QA accepts is byte-identical to the one the compare
+    stage wrote. The gate is re-applied here deliberately: QA must not accept
+    a comparison that the compare stage would now refuse.
+    """
+    report = compare_gemini_chirp(
+        primary_text, merged["words"], source_sha256=claim["source_sha"])
+    alignment = assess_alignment_health(
+        candidates=report.get("candidates") or [],
+        comparison=report,
+        primary_coverage_ratio=_primary_coverage_ratio(
+            primary, merged.get("duration_ms")),
+        duration_ms=merged.get("duration_ms"),
+    )
+    report["alignment_health"] = alignment
+    if alignment["status"] != "PASS":
+        raise V2Conflict(
+            "comparison alignment is not trustworthy: "
+            + ", ".join(alignment["reasons"]))
+    report.update({
+        "job_id": claim["job_id"],
+        "source_sha256": claim["source_sha"],
+        "primary_evidence_sha256": stages["gemini_primary"]["evidence_sha"],
+        "chirp_evidence_sha256": stages["chirp_independent"]["evidence_sha"],
+    })
+    return report
+
+
 def complete_comparison(
     *, ledger: GoldenV2Ledger, claim: dict[str, Any],
     job_dir: Path, primary_text: str | None = None,
     chirp_words: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     ledger.assert_stage_claim(claim, stage="compare")
-    verified_text, merged, stages = _bound_inputs(
+    verified_text, merged, stages, primary = _bound_inputs(
         ledger=ledger, claim=claim, job_dir=job_dir)
     if ((primary_text is not None and primary_text != verified_text)
             or (chirp_words is not None and chirp_words != merged["words"])):
         raise V2Conflict("caller comparison inputs differ from immutable provider artifacts")
-    report = compare_gemini_chirp(verified_text, merged["words"],
-                                  source_sha256=claim["source_sha"])
-    report["job_id"] = claim["job_id"]
-    report["source_sha256"] = claim["source_sha"]
-    report["primary_evidence_sha256"] = stages["gemini_primary"]["evidence_sha"]
-    report["chirp_evidence_sha256"] = stages["chirp_independent"]["evidence_sha"]
+    report = _build_comparison_report(
+        primary_text=verified_text, merged=merged, primary=primary,
+        claim=claim, stages=stages)
     digest = _write_evidence(job_dir / "golden-v2" / "engine-comparison.json", report)
     ledger.complete(
         claim, evidence_sha=digest, actual_cents=0,

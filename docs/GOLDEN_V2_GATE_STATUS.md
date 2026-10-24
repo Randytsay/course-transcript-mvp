@@ -1,5 +1,7 @@
 # Golden Transcript V2 — 驗收 Gate 狀態追蹤
 
+> **歷史 Gate 證據，不是目前四筆任務的即時狀態。** 現行架構請讀 [GOLDEN_V2_CURRENT_ARCHITECTURE.md](GOLDEN_V2_CURRENT_ARCHITECTURE.md)；根因審查交辦請讀 [GOLDEN_V2_INDEPENDENT_AUDIT.md](GOLDEN_V2_INDEPENDENT_AUDIT.md)。以下 2026-10-11～13 的「未部署」僅為當時記錄，不可推為 10/25 現況。
+
 ### 2026-10-13 — P5 latest four-minute real-evidence QA rehearsal (does NOT advance G5 to PASS)
 
 - New owner policy: 3.8 main semantic transcript; Chirp 3 acoustic and original word timestamp authority; 3.5 Preview optional targeted review, not mandatory full third model. ChatGPT supervises semantic arbitration, WebCodex bounded QA execution, VPS Durable Worker intended for queued continuation, authenticated owner final authorization.
@@ -172,7 +174,7 @@
 - Local Python 3.12: **836 unittest**, **27 handoff pytest**, compileall, production API import, review CLI help and `git diff --check` PASS. Exact-SHA [GitHub CI #38207679768](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38207679768) and [Release Compose #38207679804](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38207679804) both PASS, including frontend tests/build, Docker images, Compose and release provenance.
 - Negative tests cover disabled route, wrong token, unconfirmed/malformed input, incomplete or over-ceiling estimate, missing schema without migration, and persisted unapproved status. No provider call, Drive/GCS write, IAM/firewall change or production deployment occurred. G7 remains PARTIAL; G0–G7 remain PARTIAL, G8 NOT_RUN, 0/9 PASS.
 
-規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[2026-10-12 實況盤點／六階段完工計畫](GOLDEN_V2_PROGRESS_AUDIT_2026-10-12.md)
+規格：[架構](GOLDEN_V2_CURRENT_ARCHITECTURE.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[2026-10-12 實況盤點／六階段完工計畫](GOLDEN_V2_PROGRESS_AUDIT_2026-10-12.md)
 
 > 此文件是會隨 PR/驗收更新的狀態登記簿。**只有提交機器／人工可核對的 evidence link、commit、測試報告與操作者資訊後，才能把某一 Gate 設為 PASS。** 「文件已提交」不代表其他工程 Gate 已 PASS。禁止憑對話主觀印象標已完成。
 
@@ -190,10 +192,10 @@
 
 ## V2 文件提交紀錄
 
-- `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md`：V2 模型角色分流（3.8 音訊、3.7 純文字校正）、完整流程、長檔/帳務/權限/安全。
+- `docs/GOLDEN_V2_CURRENT_ARCHITECTURE.md`：2026-10-25 新的權威架構，取代舊 2026-10-11 設計文件（原稿可於 Git SHA 17d33faf 查回）。歷史設計包括 V2 模型角色分流（3.8 音訊、3.7 純文字校正）、完整流程、長檔/帳務/權限/安全。
 - `docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md`：P0–P8 施工序、G0–G8 逐項核准與資料證據。
 - `AGENTS.md`、`README.md`、`docs/KNOWLEDGE_INDEX.md`、`CURRENT_STATE.md`、`DECISIONS.md`：已更新 V2 索引/決策／舊系統現況界線。
-- `docs/GOLDEN_V2_INTEGRATION_HANDOFF.md`：現有 V2 SQLite/bridge 的實作交接與尚未整合項目。
+- `docs/GOLDEN_V2_INDEPENDENT_AUDIT.md`：2026-10-25 新的外部 Agent 審查交辦書，取代過時整合 handoff（原稿可於 Git SHA 17d33faf 查回）。
 - `docs/GOLDEN_V2_PROGRESS_AUDIT_2026-10-12.md`：原始九項目標、當前各 Gate 真實證據、剩餘工作六個波次與權限/費用邊界。
 - 非付費 CI：提交 `73f1a8265bd4458699cd66da1c9d6f88cf0779f1`，run [38157612105](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38157612105) 743 Python tests、Next.js、Docker build/Compose 通過；Release Compose [38157612126](https://github.com/Randytsay/course-transcript-mvp/actions/runs/38157612126) 通過。**不代表 G0–G8 PASS 或 Google Vertex/Drive 實測通過。**
 - 原本 V1 程式、任務、模型服務、Google Drive 檔案、正式部署：**未因本文件工作而變更**。

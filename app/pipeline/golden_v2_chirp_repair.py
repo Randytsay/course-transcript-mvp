@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
+from app.pipeline.golden_v2_pricing import standard_chirp_cents
 from app.providers.golden_v2_audio_staging import (
     file_sha256, prepare_local_repair_clips,
 )
@@ -31,6 +32,54 @@ def _safe_prefix(value: str) -> bool:
         and all(ch.isalnum() or ch in "_-." for ch in part)
         for part in value.strip("/").split("/")
     ) and value == value.strip("/")
+
+
+def verified_prior_chirp_evidence(job_dir: Path) -> Callable[..., bool]:
+    """Fail-closed independent verifier for a completed stage's immutable bytes.
+
+    The caller selects a trusted job_dir; supplied ledger metadata cannot
+    redirect filesystem access. No provider, Drive or ledger writes occur.
+    """
+    root = Path(job_dir).resolve(strict=True)
+
+    def verify(*, job_id: str, source_sha: str, old_chirp_sha: str,
+               old_qa_sha: str, windows: list[dict[str, Any]]) -> bool:
+        if root.name != job_id or not windows:
+            return False
+        stage = root / "golden-v2"
+        try:
+            if (file_sha256(root / "normalized.flac") != source_sha
+                    or file_sha256(stage / "chirp-merged.json") != old_chirp_sha
+                    or file_sha256(stage / "golden-qa.json") != old_qa_sha):
+                return False
+            lineage = json.loads((stage / "source-lineage.json").read_bytes())
+            if lineage.get("normalized_sha256") != source_sha:
+                return False
+            for row in windows:
+                if (row["job_id"] != job_id or row["source_sha"] != source_sha
+                        or row["status"] != "DONE"
+                        or row["actual_cents"] is None
+                        or not row["operation_name"]
+                        or row["purpose"] not in {"BASE", "REPAIR"}):
+                    return False
+                folder = stage / "chirp-evidence" / row["window_id"]
+                raw = folder / "provider-raw.json"
+                meta = json.loads((folder / "window.json").read_bytes())
+                if (file_sha256(raw) != row["result_sha"]
+                        or meta["raw_sha"] != row["result_sha"]
+                        or meta["source_sha"] != source_sha
+                        or meta["clip_sha"] != row["clip_sha"]
+                        or meta["operation_name"] != row["operation_name"]
+                        or meta["request_id"] != row["request_id"]
+                        or meta["start_ms"] != row["start_ms"]
+                        or meta["end_ms"] != row["end_ms"]
+                        or meta["actual_cents"] != row["actual_cents"]):
+                    return False
+            return True
+        except (OSError, KeyError, ValueError, TypeError):
+            return False
+
+    return verify
 
 
 def _candidate_for_assessment(job_dir: Path, expected_sha: str) -> Path:
@@ -115,6 +164,9 @@ def propose_standard_repair_plan(
         cents = estimate_window_cents(estimate_item)
         if type(cents) is not int or cents < 0:
             raise V2Conflict("repair cost estimates must be non-negative integer cents")
+        # Never reserve Dynamic Batch pricing for Standard Batch repair.
+        cents = max(cents, standard_chirp_cents(
+            (item["end_ms"] - item["start_ms"]) / 1000))
         key = (f"{object_prefix}/{claim['job_id']}/{claim['source_sha']}/"
                f"chirp-repair-inputs/{window_id}-{item['clip_sha256']}.flac")
         output = (f"gs://{bucket_name}/{object_prefix}/{claim['job_id']}/"

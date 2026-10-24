@@ -1,6 +1,13 @@
 # Golden Course Transcript V2 — Draft ChatGPT/WebCodex Operator Skill
 
-> **Status: FULL-WORKFLOW DRAFT.** This repository document remains the future full paid/Golden/publication contract. A separate private `golden-subtitles-v2` Skill v0.1.0 is now saved in the owner’s ChatGPT account and connects to a verified independent non-paid VPS entry. See `docs/GOLDEN_V2_CHAT_ENTRY.md` and its deployment evidence. Its real capabilities are source preview/intake/status; paid recognition and Golden delivery are not enabled. Existing `skills/golden-course-transcript/SKILL.md` remains the V1 production-compatible contract until formal migration.
+> **Status: full-workflow Skill draft, not a live runtime status page.**
+> The initial non-paid private chat entry described below is a dated
+> 2026-10-13 checkpoint. A separately deployed V2 API/Paid/Delivery release
+> now exists (observed 17d33faf), but each Golden job still has unresolved
+> quality/receipt gates. Current architecture and status: see
+> docs/GOLDEN_V2_CURRENT_ARCHITECTURE.md. No ChatGPT private plugin
+> capability or publication completion is inferred from this draft;
+> the existing V1 Skill is a separate contract.
 
 ## Purpose
 
@@ -17,7 +24,7 @@ inventory / lineage / non-paid preflight / budget approval
 ```
 
 Reference specifications:
-- `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md`
+- `docs/GOLDEN_V2_CURRENT_ARCHITECTURE.md`
 - `docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md`
 - `docs/GOLDEN_V2_GATE_STATUS.md`
 - `CURRENT_STATE.md`, `AGENTS.md`, `DECISIONS.md`

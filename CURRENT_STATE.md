@@ -1,5 +1,28 @@
 # Current State
 
+> **Golden V2 current read-only snapshot: 2026-10-25 00:42 Asia/Taipei.**
+> 2026-10-13 entries below are historical, not present runtime truth.
+
+## 2026-10-25 — Golden V2 exact-SHA live runtime
+
+- [Authoritative current architecture](docs/GOLDEN_V2_CURRENT_ARCHITECTURE.md);
+  [independent audit handoff](docs/GOLDEN_V2_INDEPENDENT_AUDIT.md).
+- API, Paid Worker, Delivery Worker observed on release
+  17d33faf6239ca5a1fcdfe91f18cef202f271b0f; API healthy.
+  Intake container Exited on older 8748404, despite changing heartbeat.
+- Ledger: 251025 NEEDS_REVIEW rev15; 251018 NEEDS_REVIEW rev21;
+  261017 NEEDS_REVIEW rev12; 250503 PROCESSING rev5.
+  None has live evidence of final Golden QA PASS or verified Drive delivery.
+- codex/golden-v2-goal-completion at 9506e4f has unrelated uncommitted
+  work. Never equate this development branch with the running release.
+- Provider billing export, final Drive sidecars and remote SHAs are not
+  verified by this snapshot; investigate them separately.
+- Distinguish future design, runtime implementation, audit evidence, and
+  accepted user decisions; do not overwrite provider raw or use old backups.
+
+## Historical milestones — superseded runtime descriptions
+
+
 ## 2026-10-13 — Operational private ChatGPT Skill entry (non-paid)
 
 The owner requested first enabling direct ChatGPT invocation of 黃金字幕 V2.
@@ -39,15 +62,15 @@ No provider call, Drive write or production activation is implied.
 - All paid actions default OFF. Main/V1 runtime not changed; long-duration paid jobs, G0–G8 final acceptance and Drive publication remain pending. Evidence and continuation plan: [P5 checkpoint](docs/GOLDEN_V2_P5_CHATGPT_WEBCODEX_QA_2026-10-13.md).
 
 
-Last reviewed: 2026-10-13 (P5 four-minute offline QA prototype; production SHA remains unverified)
+Historical snapshot reviewed: 2026-10-13 (superseded by 2026-10-25 V2 section above)
 
-## V2 work in an isolated Draft PR — not deployed
+## 2026-10-13 — Former Draft PR only (historical)
 
-- [V2 architecture specification](docs/GOLDEN_V2_ARCHITECTURE_PLAN.md) separates Gemini `gemini-3.8-flash` **full-audio recognition** from Vertex Gemini `gemini-3.8-flash` **text-only correction** (independent adapter); Chirp 3 remains the independent recognizer/time authority, with optional Gemini 3.5 Transcribe and ChatGPT/WebCodex QA.
-- Isolated Draft PR #144 has provider-free source and fake-provider integration for durable stages, bounded repair, acoustic QA, and immutable evidence. Its last verified CI SHA is recorded in `docs/GOLDEN_V2_GATE_STATUS.md`; G0–G8 remain incomplete and no production state is inferred from CI.
-- [V2 development and acceptance gates](docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md) define P0–P8/G0–G8 milestones.
-- This is an **implementation in a draft branch only**, not proof of production deployment, active job state, credentials, billing, or live model availability. Do not rewrite historic model provenance.
-- Continue provider-free implementation and verification in the isolated branch. Paid provider calls, IAM/billing mutations, Drive publication, and production cutover remain outside scope without separate explicit authorization.
+At that date the V2 implementation and review was experimental.
+By the read-only 2026-10-25 live check, API/Paid/Delivery components
+are deployed, but all four jobs remain unclosed. Use current architecture
+rather than assuming the original PR #144 no-production statements still
+hold. G0–G8 release criteria remain contractual, not automatically PASSED.
 
 
 This file is the entry point for the **current repository state**. It intentionally separates merged main, reviewed-but-unmerged work, and uncommitted runtime work. Do not infer production state from a development worktree.
