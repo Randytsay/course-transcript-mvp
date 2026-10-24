@@ -1,0 +1,26 @@
+{
+  "schema": "golden-v2-archive-redundancy-proof-v1",
+  "results": [
+    {
+      "archive": "/opt/course-transcript-v2-chat/backups/artifacts-pre-9ea535b-20261019010501.tar.gz",
+      "members_checked": 144,
+      "byte_identical_to_live": 144,
+      "unmatched": 0,
+      "unmatched_samples": [],
+      "verified_bytes": 3267263548,
+      "fully_redundant": true
+    },
+    {
+      "archive": "/opt/course-transcript-v2-chat/data/golden-v2/qa-reviews/2026-10-20-direct-quality-audit/jobs-evidence.pre-audit.tar.gz",
+      "members_checked": 346,
+      "byte_identical_to_live": 346,
+      "unmatched": 0,
+      "unmatched_samples": [],
+      "verified_bytes": 2585962616,
+      "fully_redundant": true
+    }
+  ],
+  "method": "Each member was SHA-256 hashed from the archive and compared with SHA-256 of every live file of the same size under both data roots.",
+  "provider_generation_calls": 0,
+  "production_mutations": 0
+}

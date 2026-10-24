@@ -1,0 +1,490 @@
+{
+  "schema": "golden-v2-docker-image-cleanup-v1",
+  "created_at_utc": "2026-10-24T19:38:51.361470+00:00",
+  "method": "explicit per-image `docker rmi <id>` (then -f); no blanket prune",
+  "kept_by_policy": [
+    "course-transcript-v2-chat:17d33faf6239ca5a1fcdfe91f18cef202f271b0f",
+    "course-transcript-v2-chat:3ccf083db9afbe29c9cba130e073ee0aa9b92ac9",
+    "course-transcript-v2-runtime:17d33faf6239ca5a1fcdfe91f18cef202f271b0f",
+    "course-transcript-v2-runtime:3ccf083db9afbe29c9cba130e073ee0aa9b92ac9",
+    "node:22-alpine"
+  ],
+  "inventory": [
+    {
+      "tag": "course-transcript-v2-chat:3ccf083db9afbe29c9cba130e073ee0aa9b92ac9",
+      "id": "77be3405fbe695637090ed276a9211fbbf0d2f60b0df75ca3b3e87680c4d231a",
+      "unique_bytes": 331700000,
+      "unique_gib": 0.309,
+      "containers": 2,
+      "referenced_by": [
+        "golden-v2-chat-api-1",
+        "golden-v2-chat-delivery-1"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:3ccf083db9afbe29c9cba130e073ee0aa9b92ac9",
+      "id": "df18afe7b9893f93649355ce47f807fd3420ff263d4b5d3e1fa243f577781f4f",
+      "unique_bytes": 333900000,
+      "unique_gib": 0.311,
+      "containers": 1,
+      "referenced_by": [
+        "golden-v2-chat-paid-1"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:17d33faf6239ca5a1fcdfe91f18cef202f271b0f",
+      "id": "516c30eaf4212557a8469204e2903f12930aaf03af3e7f6fbb1d935c454c9797",
+      "unique_bytes": 333800000,
+      "unique_gib": 0.311,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": true,
+      "reason": "kept by policy"
+    },
+    {
+      "tag": "course-transcript-v2-chat:17d33faf6239ca5a1fcdfe91f18cef202f271b0f",
+      "id": "1003c145a59c63355557cdfb83535c613b9cdcc25c2c8eeca71c1aded1df9192",
+      "unique_bytes": 331600000,
+      "unique_gib": 0.309,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": true,
+      "reason": "kept by policy"
+    },
+    {
+      "tag": "node:22-alpine",
+      "id": "fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914",
+      "unique_bytes": 234700000,
+      "unique_gib": 0.219,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": true,
+      "reason": "kept by policy"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:8748404553a8a3eb7dd8479a13cc0b868c89d4a8",
+      "id": "e14baca88a096823aeafd94669cdfc294afcf35ea6147f75b8276b11ab87bf10",
+      "unique_bytes": 1236000000,
+      "unique_gib": 1.151,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-chat:8748404553a8a3eb7dd8479a13cc0b868c89d4a8",
+      "id": "e5f70b5bcefc42dc0cdf9e0a3d7d2e5536dcf0b12ca752f0c5c442649c4acf77",
+      "unique_bytes": 353500000,
+      "unique_gib": 0.329,
+      "containers": 1,
+      "referenced_by": [
+        "golden-v2-chat-intake-1"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "course-transcript-v2-chat:a24863d92dac88f142327bed201d91463f8f11e0",
+      "id": "bf1062dc66bc8722d87b1d1673ab1276bbc926465dc9be13b446e88cccab3f6e",
+      "unique_bytes": 1237000000,
+      "unique_gib": 1.152,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:121b63795251a37c95b6cb5910be485ecb1a8d05",
+      "id": "9177da8d02e4bda278eef56052aa0a9830c03c7f386d3489b9cc535b0ca80683",
+      "unique_bytes": 348200000,
+      "unique_gib": 0.324,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-chat:121b63795251a37c95b6cb5910be485ecb1a8d05",
+      "id": "bcbce05be0b723eebd08a5b16e7eb0b515cdbd01866f8cde4e19995e80bebe1a",
+      "unique_bytes": 331900000,
+      "unique_gib": 0.309,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:9457528e18c5eefefd2d65be0098a58a74b06900",
+      "id": "c962e252f731da4401ad88a98bf8d2bff4cca4bee5f2ca9eaa4fa103b0ffe5dc",
+      "unique_bytes": 348200000,
+      "unique_gib": 0.324,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-chat:9457528e18c5eefefd2d65be0098a58a74b06900",
+      "id": "2a0a5990e685feab75d5b6e64a80c7695e4554ad6561fd00d6cec85093a99cce",
+      "unique_bytes": 331900000,
+      "unique_gib": 0.309,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:679666cfeb22639b7d519d0a68d7168de3ca4f62",
+      "id": "728f9bbeb0ed035a77a804d121b60b8a7cdc91ce85541800d5f4e16516bad253",
+      "unique_bytes": 348200000,
+      "unique_gib": 0.324,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-chat:679666cfeb22639b7d519d0a68d7168de3ca4f62",
+      "id": "911852626fcbc1be38382206da44a42cbc6da0b46bed2ff0ecf00e9e8815cf0a",
+      "unique_bytes": 331900000,
+      "unique_gib": 0.309,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:4576c21a2679da86cdc0d0fdf96a304c999c307c",
+      "id": "f775e4f054955404d1e7627f7419f330bc3685062582624cb07b7ef828beb8cf",
+      "unique_bytes": 348200000,
+      "unique_gib": 0.324,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-chat:4576c21a2679da86cdc0d0fdf96a304c999c307c",
+      "id": "d2e3be6ad61e2cb4b9c07c521ea120fb7a923aabdca904a02898a68de921b6d6",
+      "unique_bytes": 331900000,
+      "unique_gib": 0.309,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:9ea535bf8805516aca6babda66b3b6df90bb49b1",
+      "id": "73f907f834d6f643b566f8e128a67e89e7dc8919dd8705cb17bf3edc31de9ee8",
+      "unique_bytes": 347800000,
+      "unique_gib": 0.324,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "course-transcript-v2-chat:9ea535bf8805516aca6babda66b3b6df90bb49b1",
+      "id": "c8740cc7b2855e23cf003f05163189c9a06bf883f9eb4687b56903cae39705af",
+      "unique_bytes": 331500000,
+      "unique_gib": 0.309,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "golden-v2-smoke:83c8b6",
+      "id": "b2fe7200aaf46444843eb74b80cc9a3b3e4c68afebe1b97f1c310cc7f0726535",
+      "unique_bytes": 352800000,
+      "unique_gib": 0.329,
+      "containers": 1,
+      "referenced_by": [
+        "golden-v2-realtest-ad01f98"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "golden-v2-realtest:4f75c1",
+      "id": "b38b2e2e7bd68d768783775b9c250320b03291d951e3a33105854cd6675e71c7",
+      "unique_bytes": 331000000,
+      "unique_gib": 0.308,
+      "containers": 0,
+      "referenced_by": [],
+      "protected": false,
+      "reason": "unreferenced"
+    },
+    {
+      "tag": "golden-v2-canary:cdf9114",
+      "id": "4087567c7cfdf2a508fbe440f3f40f0f474b4d01edb2b2d54ddc8c2c238aa16a",
+      "unique_bytes": 1236000000,
+      "unique_gib": 1.151,
+      "containers": 1,
+      "referenced_by": [
+        "golden-v2-canary"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "course-transcript-frontend:adafd952b9b89db111730ab28e8e8baff9551021",
+      "id": "eaa6fd15a5e0b3d08796ea12e6cd45cb089182a44a9b0bf606ba1dcf912e1374",
+      "unique_bytes": 302600000,
+      "unique_gib": 0.282,
+      "containers": 1,
+      "referenced_by": [
+        "course-transcript-source-frontend-1"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "course-transcript-api:adafd952b9b89db111730ab28e8e8baff9551021",
+      "id": "cf653900d02609879370fcc3775b612d2896e442dc254491c8158e8e3bbddbb1",
+      "unique_bytes": 1235000000,
+      "unique_gib": 1.15,
+      "containers": 6,
+      "referenced_by": [
+        "course-transcript-source-api-1"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "course-transcript-pipeline-worker:8500dbe8e63b873809755fc47e58a4f08abfcf81",
+      "id": "8c1367a7f522d2c03adf92878bcc3e1d66dab1980124205f96bb88f907e83278",
+      "unique_bytes": 1295000000,
+      "unique_gib": 1.206,
+      "containers": 1,
+      "referenced_by": [
+        "ct-hotfix-test-131"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "puxin-video-studio-runtime:20261002-h3",
+      "id": "7a658ab727db2d65e4d50cf8c0d390e8dcbf427cc4243ea8ceee17a90e179572",
+      "unique_bytes": 2089000000,
+      "unique_gib": 1.946,
+      "containers": 1,
+      "referenced_by": [
+        "puxin-video-studio-app"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "course-transcript-golden-v3:20260925",
+      "id": "1eddccda509e0c7ea470aac3d8121acb7a53602259024fa54dbaf5bd39ad3eb7",
+      "unique_bytes": 1287000000,
+      "unique_gib": 1.199,
+      "containers": 1,
+      "referenced_by": [
+        "course-transcript-golden-v3-once"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "docker.n8n.io/n8nio/n8n:latest",
+      "id": "a8c95f75c6fdf65f5f2b7a7b354744eaa1c62bb911b5c00af6499c3f38e4cd32",
+      "unique_bytes": 1996000000,
+      "unique_gib": 1.859,
+      "containers": 1,
+      "referenced_by": [],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "ghcr.io/n8n-io/n8n-sandbox-service-runner-dind:1.3.4",
+      "id": "a065eb3480600104a8e5bdcb23d73f7057d61dbf53f749cf4901b075612c51db",
+      "unique_bytes": 523600000,
+      "unique_gib": 0.488,
+      "containers": 1,
+      "referenced_by": [
+        "n8n-sandbox-sandbox-runner-1-1"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "ghcr.io/n8n-io/n8n-sandbox-service-api:1.3.4",
+      "id": "fb14de143c66aef84a2f0f81332365cd2aa2acab4140549226d8f1e533cec5ab",
+      "unique_bytes": 75370000,
+      "unique_gib": 0.07,
+      "containers": 1,
+      "referenced_by": [
+        "n8n-sandbox-sandbox-api-1"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "cloudflare/cloudflared:latest",
+      "id": "e39ee8da81ad5e05d77f38d2f51c60ca51bf2a8450ac3abab50c17fdb91d91bf",
+      "unique_bytes": 103400000,
+      "unique_gib": 0.096,
+      "containers": 2,
+      "referenced_by": [
+        "puxin-video-studio-tunnel",
+        "course-transcript-cloudflared-1"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "wantcat/trendradar:latest",
+      "id": "b159d7a153b47c36ac268e77b7f24be0a7f84143ab872e3795f1d23708a53277",
+      "unique_bytes": 573400000,
+      "unique_gib": 0.534,
+      "containers": 1,
+      "referenced_by": [
+        "trendradar"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    },
+    {
+      "tag": "hermes-webui:latest",
+      "id": "7dba517b3aa60a38539375496df45e1b8007af807cd6e43a16f195fafbcfa165",
+      "unique_bytes": 360400000,
+      "unique_gib": 0.336,
+      "containers": 1,
+      "referenced_by": [
+        "hermes-webui-hermes-webui-1"
+      ],
+      "protected": true,
+      "reason": "referenced by container"
+    }
+  ],
+  "removed": [
+    {
+      "tag": "course-transcript-v2-runtime:8748404553a8a3eb7dd8479a13cc0b868c89d4a8",
+      "id": "e14baca88a096823aeafd94669cdfc294afcf35ea6147f75b8276b11ab87bf10",
+      "unique_bytes": 1236000000,
+      "unique_gib": 1.151,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-runtime:8748404553a8a3eb7dd8479a13cc0b868c89d4a8\nDeleted: sha256:e14baca88a096823aeafd94669cdfc294afcf35ea6147f75b8276b11ab87bf10"
+    },
+    {
+      "tag": "course-transcript-v2-chat:a24863d92dac88f142327bed201d91463f8f11e0",
+      "id": "bf1062dc66bc8722d87b1d1673ab1276bbc926465dc9be13b446e88cccab3f6e",
+      "unique_bytes": 1237000000,
+      "unique_gib": 1.152,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-chat:a24863d92dac88f142327bed201d91463f8f11e0\nDeleted: sha256:bf1062dc66bc8722d87b1d1673ab1276bbc926465dc9be13b446e88cccab3f6e"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:121b63795251a37c95b6cb5910be485ecb1a8d05",
+      "id": "9177da8d02e4bda278eef56052aa0a9830c03c7f386d3489b9cc535b0ca80683",
+      "unique_bytes": 348200000,
+      "unique_gib": 0.324,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-runtime:121b63795251a37c95b6cb5910be485ecb1a8d05\nDeleted: sha256:9177da8d02e4bda278eef56052aa0a9830c03c7f386d3489b9cc535b0ca80683"
+    },
+    {
+      "tag": "course-transcript-v2-chat:121b63795251a37c95b6cb5910be485ecb1a8d05",
+      "id": "bcbce05be0b723eebd08a5b16e7eb0b515cdbd01866f8cde4e19995e80bebe1a",
+      "unique_bytes": 331900000,
+      "unique_gib": 0.309,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-chat:121b63795251a37c95b6cb5910be485ecb1a8d05\nDeleted: sha256:bcbce05be0b723eebd08a5b16e7eb0b515cdbd01866f8cde4e19995e80bebe1a"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:9457528e18c5eefefd2d65be0098a58a74b06900",
+      "id": "c962e252f731da4401ad88a98bf8d2bff4cca4bee5f2ca9eaa4fa103b0ffe5dc",
+      "unique_bytes": 348200000,
+      "unique_gib": 0.324,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-runtime:9457528e18c5eefefd2d65be0098a58a74b06900\nDeleted: sha256:c962e252f731da4401ad88a98bf8d2bff4cca4bee5f2ca9eaa4fa103b0ffe5dc"
+    },
+    {
+      "tag": "course-transcript-v2-chat:9457528e18c5eefefd2d65be0098a58a74b06900",
+      "id": "2a0a5990e685feab75d5b6e64a80c7695e4554ad6561fd00d6cec85093a99cce",
+      "unique_bytes": 331900000,
+      "unique_gib": 0.309,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-chat:9457528e18c5eefefd2d65be0098a58a74b06900\nDeleted: sha256:2a0a5990e685feab75d5b6e64a80c7695e4554ad6561fd00d6cec85093a99cce"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:679666cfeb22639b7d519d0a68d7168de3ca4f62",
+      "id": "728f9bbeb0ed035a77a804d121b60b8a7cdc91ce85541800d5f4e16516bad253",
+      "unique_bytes": 348200000,
+      "unique_gib": 0.324,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-runtime:679666cfeb22639b7d519d0a68d7168de3ca4f62\nDeleted: sha256:728f9bbeb0ed035a77a804d121b60b8a7cdc91ce85541800d5f4e16516bad253"
+    },
+    {
+      "tag": "course-transcript-v2-chat:679666cfeb22639b7d519d0a68d7168de3ca4f62",
+      "id": "911852626fcbc1be38382206da44a42cbc6da0b46bed2ff0ecf00e9e8815cf0a",
+      "unique_bytes": 331900000,
+      "unique_gib": 0.309,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-chat:679666cfeb22639b7d519d0a68d7168de3ca4f62\nDeleted: sha256:911852626fcbc1be38382206da44a42cbc6da0b46bed2ff0ecf00e9e8815cf0a"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:4576c21a2679da86cdc0d0fdf96a304c999c307c",
+      "id": "f775e4f054955404d1e7627f7419f330bc3685062582624cb07b7ef828beb8cf",
+      "unique_bytes": 348200000,
+      "unique_gib": 0.324,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-runtime:4576c21a2679da86cdc0d0fdf96a304c999c307c\nDeleted: sha256:f775e4f054955404d1e7627f7419f330bc3685062582624cb07b7ef828beb8cf"
+    },
+    {
+      "tag": "course-transcript-v2-chat:4576c21a2679da86cdc0d0fdf96a304c999c307c",
+      "id": "d2e3be6ad61e2cb4b9c07c521ea120fb7a923aabdca904a02898a68de921b6d6",
+      "unique_bytes": 331900000,
+      "unique_gib": 0.309,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-chat:4576c21a2679da86cdc0d0fdf96a304c999c307c\nDeleted: sha256:d2e3be6ad61e2cb4b9c07c521ea120fb7a923aabdca904a02898a68de921b6d6"
+    },
+    {
+      "tag": "course-transcript-v2-runtime:9ea535bf8805516aca6babda66b3b6df90bb49b1",
+      "id": "73f907f834d6f643b566f8e128a67e89e7dc8919dd8705cb17bf3edc31de9ee8",
+      "unique_bytes": 347800000,
+      "unique_gib": 0.324,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-runtime:9ea535bf8805516aca6babda66b3b6df90bb49b1\nDeleted: sha256:73f907f834d6f643b566f8e128a67e89e7dc8919dd8705cb17bf3edc31de9ee8"
+    },
+    {
+      "tag": "course-transcript-v2-chat:9ea535bf8805516aca6babda66b3b6df90bb49b1",
+      "id": "c8740cc7b2855e23cf003f05163189c9a06bf883f9eb4687b56903cae39705af",
+      "unique_bytes": 331500000,
+      "unique_gib": 0.309,
+      "exit_code": 0,
+      "output": "Untagged: course-transcript-v2-chat:9ea535bf8805516aca6babda66b3b6df90bb49b1\nDeleted: sha256:c8740cc7b2855e23cf003f05163189c9a06bf883f9eb4687b56903cae39705af"
+    },
+    {
+      "tag": "golden-v2-realtest:4f75c1",
+      "id": "b38b2e2e7bd68d768783775b9c250320b03291d951e3a33105854cd6675e71c7",
+      "unique_bytes": 331000000,
+      "unique_gib": 0.308,
+      "exit_code": 0,
+      "output": "Untagged: golden-v2-realtest:4f75c1\nDeleted: sha256:b38b2e2e7bd68d768783775b9c250320b03291d951e3a33105854cd6675e71c7"
+    }
+  ],
+  "removed_count": 13,
+  "failed": [],
+  "failed_count": 0,
+  "counters": {
+    "SERVICES_RESTARTED": 0,
+    "CONTAINERS_REMOVED": 0,
+    "PRODUCTION_DB_MODIFIED": false,
+    "JOB_PRIMARY_ARTIFACTS_DELETED": 0
+  },
+  "production_db_sha256_before": "0fe5a9ec1fc3ddfcab0ad9ab8e140b67e5778b7dad03345637d0d0e0361776df",
+  "production_db_sha256_after": "0fe5a9ec1fc3ddfcab0ad9ab8e140b67e5778b7dad03345637d0d0e0361776df",
+  "free_bytes_before": 14648053760,
+  "free_bytes_after": 19550654464,
+  "reclaimed_bytes": 4902600704,
+  "reclaimed_gib": 4.57,
+  "container_count_after": 23,
+  "provider_generation_calls": 0,
+  "drive_mutations": 0
+}

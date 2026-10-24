@@ -1,0 +1,53 @@
+{
+  "9c2011eeee465d0754127ac0bbaec9831c38cae34202176f852045293996eb8b": {
+    "schema": "golden-v2-audio-native-probe-receipt-v1",
+    "job_id": "v2p_c8f1e1cb3ecf53ccb1eae33b5ab221be",
+    "source_sha256": "2069df0d67444a30e5243b27236c8f387292e9776e4e5eda65aca80c7f71a9fb",
+    "clip_start_ms": 3365560,
+    "clip_end_ms": 3395560,
+    "clip_sha256": "470dcdcb1365250bfaacca960137068f4eca39395d71b5e73b1f0330ae754cbe",
+    "model": "gemini-3.8-flash",
+    "requested_model": "gemini-3.8-flash",
+    "prompt_sha256": "f3080cbac5e48fab9d23aab5bec58dbf108905b6ecc4ef25a65528408129bcc3",
+    "response_text": "{\n \"transcript\": \"他也得問，你為什麼這樣說？或者說如來怎麼這樣說，大菩薩你怎麼這樣說，或者說法者你為什麼這樣說？你連問都不想問。問他不相信啊，他不相信啊，我也聽不懂，那我也不相信啊。就算聽懂我也不相信啊。不聞不知不覺是很可惜的一件事。\",\n \"speech_intervals\": [\n  {\n   \"text\": \"他也得問\",\n   \"start_seconds\": 0.0,\n   \"end_seconds\": 1.504,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  },\n  {\n   \"text\": \"你為什麼這樣說？\",\n   \"start_seconds\": 2.224,\n   \"end_seconds\": 3.792,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  },\n  {\n   \"text\": \"或者說如來怎麼這樣說，\",\n   \"start_seconds\": 3.792,\n   \"end_seconds\": 6.368,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  },\n  {\n   \"text\": \"大菩薩你怎麼這樣說，\",\n   \"start_seconds\": 6.48,\n   \"end_seconds\": 8.528,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  },\n  {\n   \"text\": \"或者說法者你為什麼這樣說？\",\n   \"start_seconds\": 8.544,\n   \"end_seconds\": 11.536,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  },\n  {\n   \"text\": \"你連問都不想問。\",\n   \"start_seconds\": 12.336,\n   \"end_seconds\": 15.536,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  },\n  {\n   \"text\": \"問他不相信啊，\",\n   \"start_seconds\": 16.272,\n   \"end_seconds\": 18.064,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  },\n  {\n   \"text\": \"他不相信啊，\",\n   \"start_seconds\": 18.272,\n   \"end_seconds\": 19.456,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  },\n  {\n   \"text\": \"我也聽不懂，那我也不相信啊。\",\n   \"start_seconds\": 19.536,\n   \"end_seconds\": 21.84,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  },\n  {\n   \"text\": \"就算聽懂我也不相信啊。\",\n   \"start_seconds\": 22.16,\n   \"end_seconds\": 24.624,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  },\n  {\n   \"text\": \"不聞不知不覺是很可惜的一件事。\",\n   \"start_seconds\": 25.856,\n   \"end_seconds\": 30.16,\n   \"speaker_description\": \"講者使用帶有濃厚口音的普通話/閩南特色語音，語調嚴肅\"\n  }\n ],\n \"uncertainties\": []\n}",
+    "response_sha256": "013d52c42e57a6e92a95587bd96019825d6e2859d86e8a386ec93048df34d0a1",
+    "source_clip_path": "/srv/ai-workspace/tmp/subtitle-delivery-20261022/251025-gap1-probe/251025-gap1-native.flac",
+    "provider": "vertex_ai",
+    "recorded_from": "existing_paid_probe_no_new_call",
+    "sha256": "9c2011eeee465d0754127ac0bbaec9831c38cae34202176f852045293996eb8b"
+  },
+  "25371cad307112188c00dd9d324ee5a099da203266aa81381f81540d311a2600": {
+    "schema": "golden-v2-audio-native-probe-receipt-v1",
+    "job_id": "v2p_c8f1e1cb3ecf53ccb1eae33b5ab221be",
+    "source_sha256": "2069df0d67444a30e5243b27236c8f387292e9776e4e5eda65aca80c7f71a9fb",
+    "clip_start_ms": 4219440,
+    "clip_end_ms": 4249440,
+    "clip_sha256": "b937d3dd8ba6c3c52a6120205774dad47e1cea2e889b7149a28833636b3582c6",
+    "model": "gemini-3.8-flash",
+    "requested_model": "gemini-3.8-flash",
+    "prompt_sha256": "f3080cbac5e48fab9d23aab5bec58dbf108905b6ecc4ef25a65528408129bcc3",
+    "response_text": "{\n \"transcript\": \"有那麼多，你奔波、流離，左右說明的旁邊。 有什麼奇怪？ 如果你用修行的內涵，去看這件事就不奇怪啊！就就變成很自然了，應該要這個樣子的。 我們過去曾經講過， 姓住行迴地， 信有十信， 住有十、有十住，\",\n \"speech_intervals\": [\n  {\n   \"text\": \"有那麼多，你奔波、流離，左右說明的旁邊。\",\n   \"start_seconds\": 0.0,\n   \"end_seconds\": 6.8\n  },\n  {\n   \"text\": \"有什麼奇怪？\",\n   \"start_seconds\": 7.4,\n   \"end_seconds\": 9.4\n  },\n  {\n   \"text\": \"如果你用修行的內涵，去看這件事就不奇怪啊！就就變成很自然了，應該要這個樣子的。\",\n   \"start_seconds\": 10.4,\n   \"end_seconds\": 21.0\n  },\n  {\n   \"text\": \"我們過去曾經講過，\",\n   \"start_seconds\": 22.3,\n   \"end_seconds\": 24.6\n  },\n  {\n   \"text\": \"姓住行迴地，\",\n   \"start_seconds\": 25.4,\n   \"end_seconds\": 28.2\n  },\n  {\n   \"text\": \"信有十信，\",\n   \"start_seconds\": 29.3,\n   \"end_seconds\": 31.6\n  },\n  {\n   \"text\": \"住有十、有十住，\",\n   \"start_seconds\": 32.3,\n   \"end_seconds\": 35.1\n  }\n ],\n \"uncertainties\": []\n}",
+    "response_sha256": "f8ad46b18e1e39afa90644f041ded6af50a078a2223d91e4d9b94dd14d6c438e",
+    "source_clip_path": "/srv/ai-workspace/tmp/subtitle-delivery-20261022/251025-gap2-probe/251025-gap2-native.flac",
+    "provider": "vertex_ai",
+    "recorded_from": "existing_paid_probe_no_new_call",
+    "sha256": "25371cad307112188c00dd9d324ee5a099da203266aa81381f81540d311a2600"
+  },
+  "081f542f696d3e32860a7315d4e7f6ff11354dbf6ce4663592ee54ef2c7546f1": {
+    "schema": "golden-v2-audio-native-probe-receipt-v1",
+    "job_id": "v2p_62a124bdd4595aca91c53085c3732ca7",
+    "source_sha256": "750bb7fe2c42ec226f84fe508e08d73fc6e2d9c4fee87d1eebf75436374cab34",
+    "clip_start_ms": 10740000,
+    "clip_end_ms": 10781820,
+    "clip_sha256": "519a201b77b7fb18e4cb58f58da485f1f9f18b1f5ad38ae1e9b80b2a49610691",
+    "model": "gemini-3.8-flash",
+    "requested_model": "gemini-3.8-flash",
+    "prompt_sha256": "ebb7c543c896bbc8175d4fea124f5600ba457268254d6f27e5792a2c6725b33a",
+    "response_text": "{\n \"transcript\": \"迴向，弟子，某某，弟子陳銘輝，至誠願以今夜法會功德，至誠願以今夜法會功德，迴向彌勒淨土，迴向彌勒淨土，福慧增長，福慧增長，以此功德，以此功德，供養三世一切諸佛，供養三世一切諸佛，供養三世一切菩薩，供養三世一切菩薩，但願三世一切眾生，但願三世一切眾生，蒙佛接引，蒙佛接引，往生佛國，往生佛國，彌勒尊佛。彌勒尊佛。\",\n \"speech_intervals\": [\n  {\n   \"text\": \"迴向，弟子，某某，\",\n   \"start_seconds\": 0.0,\n   \"end_seconds\": 1.76\n  },\n  {\n   \"text\": \"弟子陳銘輝，\",\n   \"start_seconds\": 1.76,\n   \"end_seconds\": 3.74\n  },\n  {\n   \"text\": \"至誠願以今夜法會功德，\",\n   \"start_seconds\": 3.74,\n   \"end_seconds\": 6.84\n  },\n  {\n   \"text\": \"至誠願以今夜法會功德，\",\n   \"start_seconds\": 6.84,\n   \"end_seconds\": 9.98\n  },\n  {\n   \"text\": \"迴向彌勒淨土，\",\n   \"start_seconds\": 9.98,\n   \"end_seconds\": 12.0\n  },\n  {\n   \"text\": \"迴向彌勒淨土，\",\n   \"start_seconds\": 12.0,\n   \"end_seconds\": 14.28\n  },\n  {\n   \"text\": \"福慧增長，\",\n   \"start_seconds\": 14.28,\n   \"end_seconds\": 16.3\n  },\n  {\n   \"text\": \"福慧增長，\",\n   \"start_seconds\": 16.3,\n   \"end_seconds\": 18.28\n  },\n  {\n   \"text\": \"以此功德，\",\n   \"start_seconds\": 18.28,\n   \"end_seconds\": 20.2\n  },\n  {\n   \"text\": \"以此功德，\",\n   \"start_seconds\": 20.2,\n   \"end_seconds\": 22.28\n  },\n  {\n   \"text\": \"供養三世一切諸佛，\",\n   \"start_seconds\": 22.28,\n   \"end_seconds\": 24.68\n  },\n  {\n   \"text\": \"供養三世一切諸佛，\",\n   \"start_seconds\": 24.68,\n   \"end_seconds\": 27.68\n  },\n  {\n   \"text\": \"供養三世一切菩薩，\",\n   \"start_seconds\": 27.68,\n   \"end_seconds\": 30.12\n  },\n  {\n   \"text\": \"供養三世一切菩薩，\",\n   \"start_seconds\": 30.12,\n   \"end_seconds\": 33.24\n  },\n  {\n   \"text\": \"但願三世一切眾生，\",\n   \"start_seconds\": 33.24,\n   \"end_seconds\": 35.84\n  },\n  {\n   \"text\": \"但願三世一切眾生，\",\n   \"start_seconds\": 35.84,\n   \"end_seconds\": 38.84\n  },\n  {\n   \"text\": \"蒙佛接引，\",\n   \"start_seconds\": 38.84,\n   \"end_seconds\": 40.82\n  },\n  {\n   \"text\": \"蒙佛接引，\",\n   \"start_seconds\": 40.82,\n   \"end_seconds\": 42.92\n  },\n  {\n   \"text\": \"往生佛國，\",\n   \"start_seconds\": 42.92,\n   \"end_seconds\": 44.82\n  },\n  {\n   \"text\": \"往生佛國，\",\n   \"start_seconds\": 44.82,\n   \"end_seconds\": 47.02\n  },\n  {\n   \"text\": \"彌勒尊佛。\",\n   \"start_seconds\": 47.02,\n   \"end_seconds\": 48.74\n  },\n  {\n   \"text\": \"彌勒尊佛。\",\n   \"start_seconds\": 48.74,\n   \"end_seconds\": 51.52\n  }\n ],\n \"uncertainties\": []\n}",
+    "response_sha256": "7360eec9b294a970ad7fe88c68e14c49ec06104982f5780a77e8c8746113cc20",
+    "source_clip_path": "/srv/ai-workspace/tmp/subtitle-delivery-20261022/261017-ending-probe/261017-ending-10740-10781.82.flac",
+    "provider": "vertex_ai",
+    "recorded_from": "existing_paid_probe_no_new_call",
+    "sha256": "081f542f696d3e32860a7315d4e7f6ff11354dbf6ce4663592ee54ef2c7546f1"
+  }
+}
