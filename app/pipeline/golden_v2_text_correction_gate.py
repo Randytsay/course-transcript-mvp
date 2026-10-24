@@ -127,7 +127,10 @@ def assess_text_corrections(
         reasons: list[str] = []
         evidence_class = 'SECOND_ENGINE_TEXT_ONLY'
         evidence_sha: str | None = None
-        if rendered != record['before']:
+        # Chirp may attach a sentence-final mark to the last word of a span, so
+        # a claimed `before` that omits that mark still names the same words.
+        # Only a lexical difference counts as a mismatch.
+        if _normalize(rendered) != _normalize(str(record['before'])):
             reasons.append('before_text_does_not_match_chirp_words')
         probe, probe_reasons = _probe_support(record, (start, end), receipts, source_sha)
         listened, listening_reasons = _listening_support(record)

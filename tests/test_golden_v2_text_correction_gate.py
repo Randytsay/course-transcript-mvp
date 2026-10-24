@@ -173,6 +173,36 @@ class AudioNativeProbeTests(unittest.TestCase):
                           report['corrections'][0]['reasons'])
 
 
+class PunctuationAttachmentTests(unittest.TestCase):
+    """Chirp may attach a sentence-final mark to the last word of a span.
+
+    A claimed `before` that omits that mark still describes the same words, so
+    the binding is not a mismatch; a lexical difference must still be refused.
+    """
+
+    WORDS = [
+        {'word': '同', 'start_ms': 10, 'end_ms': 20},
+        {'word': '佛', 'start_ms': 20, 'end_ms': 30},
+        {'word': '接', 'start_ms': 30, 'end_ms': 40},
+        {'word': '引。', 'start_ms': 40, 'end_ms': 50},
+    ]
+
+    def _assess(self, indices):
+        return assess_text_corrections(
+            corrections=[{'id': 1, 'before': '同佛接引', 'after': '蒙佛接引',
+                          'source_word_indices': indices}],
+            words=self.WORDS, source_sha=SOURCE, probe_receipts={})
+
+    def test_claimed_before_without_the_attached_mark_still_matches(self):
+        item = self._assess([0, 1, 2, 3])['corrections'][0]
+        self.assertNotIn('before_text_does_not_match_chirp_words', item['reasons'])
+        self.assertEqual(item['retained_text'], '同佛接引。')
+
+    def test_lexical_difference_is_still_refused(self):
+        item = self._assess([0, 1])['corrections'][0]
+        self.assertIn('before_text_does_not_match_chirp_words', item['reasons'])
+
+
 class BindingTests(unittest.TestCase):
     def test_correction_must_match_the_words_it_claims_to_edit(self):
         report = assess([correction(before='萬宗', after='萬取')])
