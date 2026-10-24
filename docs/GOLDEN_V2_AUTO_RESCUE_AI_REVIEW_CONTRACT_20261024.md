@@ -100,3 +100,30 @@ machine QA PASS。
 正式發布應先在無付費請求的 shadow smoke test 驗證來源、
 未完成 LRO、費用上限、備份／還原、舊任務／new job 隔離，
 經 Owner 明確核准後再以 exact SHA 佈署。
+
+
+## 2026-10-24 新增：Chirp 原始時碼救援與 AI 草稿
+
+- 舊 Worker `reconcile_reviewed_chirp_window` 會將 offset 異常直接保留
+  REVIEW；`finish_approved_chirp` 的時碼錨點檢查亦會被
+  缺失 offset 例外中斷。現採 **確定性的本地無損修復**：
+  僅已存在不可變 raw、已知越界／重疊錯誤、有原始合法時間錨點、
+  字元完全保留、時碼單調且在來源窗格（+250ms 容差）範圍內時
+  允許將單窗轉為 DONE。保存每一修復 note、raw digest 和
+  `acoustic_timing_verified=false`，不重送付費服務。
+- 正式資料的**隔離帳本副本**測試：`250503` 的 4 個被隔離分段
+  `chunk-0001/0003/0004/0005` 均能本地無損恢復；
+  13/13 個分段有可驗證的來源字詞紀錄。模擬整段合併得
+  32,212 Chirp 字詞單位，時間軸末端 10,800.160 秒，
+  **聲學閘依然 REVIEW**，並沒有冒稱完全驗收。
+- 新增 `AI_DRAFT_REVIEW_REQUIRED` 候選稿路徑：
+  2,860 條 SRT、對應 TXT、SHA-256、immutable manifest 與
+  原始 Speech 結果 ancestry；強制 `publication_allowed=false`，
+  `semantic_gate=REVIEW`、`acoustic_gate=REVIEW`，
+  不假冒 `AI_REVIEWED_NOT_GOLDEN` 或 `Golden PASS`。
+- 本地救援 Worker 如果 Chirp 全部回來但真實 acoustic QA 阻擋，
+  可自動整理上述候選稿，使後續校對不必重新 ASR。
+  候選稿產生不會提交 provider 請求、修改原音或回寫 Drive。
+
+**剩餘的聲學驗收與語意裁決不可由時間碼歸一化等同 PASS。**
+候選稿可供校對，不可自動外發。Production Worker 尚未更版。

@@ -23,6 +23,7 @@ def run_chirp_recovery_pass(
     gateway: Any, cost_accountant: Callable[[dict[str, Any]], int],
     max_operations: int = 8,
     acoustic_inspector: Callable[..., dict[str, Any]] | None = None,
+    auto_prepare_ai_draft: bool = False,
 ) -> dict[str, Any]:
     """Process at most max_operations saved LROs; caller schedules later passes.
 
@@ -31,6 +32,8 @@ def run_chirp_recovery_pass(
     """
     if type(max_operations) is not int or not 1 <= max_operations <= 64:
         raise V2Conflict("recovery pass needs a bounded operation limit")
+    if type(auto_prepare_ai_draft) is not bool:
+        raise V2Conflict("auto AI draft flag must be an explicit boolean")
     if not callable(cost_accountant):
         raise V2Conflict("independently verified cost accountant required")
 
@@ -162,6 +165,34 @@ def run_chirp_recovery_pass(
         else:
             result["action"] = "MANUAL_ACOUSTIC_REVIEW_REQUIRED"
             result["manual_review_required"] = True
+        # Do not strand the useful source-bound words while acoustic QA
+        # remains REVIEW. This is an auditable *draft only*, not AI_CERTIFIED,
+        # Golden PASS, or a Drive-publication grant.
+        if (auto_prepare_ai_draft and merged["acoustic_gate"] != "PASS"
+                and merged.get("candidate_path") and merged.get("acoustic_qa_sha256")
+                and state["status"] == "PROCESSING"
+                and next((s["state"] for s in state["stages"]
+                          if s["name"]=="gemini_primary"), None) == "REVIEW_REQUIRED"):
+            from app.pipeline.golden_v2_ai_draft import prepare_ai_draft
+            candidate = Path(merged["candidate_path"])
+            try:
+                draft = prepare_ai_draft(
+                    root=job_dir.parent.parent, job_id=job_id,
+                    candidate_sha256=file_sha256(candidate),
+                    acoustic_sha256=merged["acoustic_qa_sha256"],
+                    expected_revision=ledger.status(job_id)["revision"])
+                result["ai_draft"] = {
+                    "quality_tier": draft["quality_tier"],
+                    "cue_count": draft["cue_count"],
+                    "draft_manifest_sha256": draft["draft_manifest_sha256"],
+                    "publication_allowed": False,
+                }
+            except (V2Conflict, OSError, ValueError, KeyError) as exc:
+                result["ai_draft"] = {
+                    "action": "DRAFT_HELD_FOR_REVIEW",
+                    "reason_type": type(exc).__name__,
+                    "publication_allowed": False,
+                }
     else:
         raise V2Conflict("unexpected Chirp recovery state")
     final_state = ledger.status(job_id)

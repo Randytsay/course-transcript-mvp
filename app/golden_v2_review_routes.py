@@ -14,6 +14,7 @@ from app.pipeline.golden_v2_stage_runner import complete_adjudication_or_hold
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.pipeline.golden_v2_delivery import checked_outputs
 from app.pipeline.golden_v2_delivery import manifest_digest
+from app.pipeline.golden_v2_ai_draft import prepare_ai_draft
 from app.pipeline.golden_v2_ai_delivery import (
     attest_ai_review, checked_ai_outputs, authorize_ai_publication,
     prepare_ai_quality_report,
@@ -356,3 +357,33 @@ def authorize_machine_publication(
             actor=actor, review_reference=body.review_reference)
     except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
         raise HTTPException(status_code=409, detail="AI publication source/QA/grant conflict") from exc
+
+
+class AIReviewDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: StrictInt = Field(ge=0)
+    candidate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    acoustic_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirm: Literal[True]
+
+
+@router.post("/jobs/{job_id}/prepare-ai-draft")
+def prepare_machine_review_draft(
+    job_id: str, body: AIReviewDraftRequest,
+    authorization: str | None = Header(default=None),
+):
+    database, actor, _ = _authorized_write_database(authorization)
+    job_directory(database, job_id)
+    if os.environ.get("COURSE_TRANSCRIPT_V2_AI_DRAFT_API_ENABLED", "").lower() != "true":
+        raise HTTPException(status_code=404, detail="AI draft not enabled")
+    try:
+        if not actor.strip():
+            raise V2Conflict("AI draft requires authenticated owner")
+        return prepare_ai_draft(
+            root=database.parent, job_id=job_id,
+            candidate_sha256=body.candidate_sha256,
+            acoustic_sha256=body.acoustic_sha256,
+            expected_revision=body.revision,
+        )
+    except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=409, detail="Source-bound AI draft is not eligible") from exc

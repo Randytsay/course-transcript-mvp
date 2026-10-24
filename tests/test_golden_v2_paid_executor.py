@@ -159,6 +159,7 @@ class ExecutorTests(unittest.TestCase):
                                        'gateway': object(), 'cost_accountant': lambda _: 3})
         self.assertEqual(result['outcomes'][0]['action'], 'WAITING_FOR_EXISTING_OPERATIONS')
         self.assertEqual(recovery.call_count, 1)
+        self.assertTrue(recovery.call_args.kwargs['auto_prepare_ai_draft'])
         local.assert_not_called()
         submit.assert_not_called()
 

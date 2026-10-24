@@ -81,7 +81,8 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
                             'gateway', 'cost_accountant', 'max_operations', 'acoustic_inspector'}:
                         raise V2Conflict('invalid rescue recovery service contract')
                     outcomes.append(run_chirp_recovery_pass(
-                        ledger=ledger, job_id=job_id, job_dir=job_dir, **options))
+                        ledger=ledger, job_id=job_id, job_dir=job_dir,
+                        auto_prepare_ai_draft=True, **options))
                     continue
                 # A known, audited SAFETY refusal permits *one* independent
                 # Chirp claim under the existing exact-source signed grant.
