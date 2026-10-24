@@ -127,3 +127,21 @@ machine QA PASS。
 
 **剩餘的聲學驗收與語意裁決不可由時間碼歸一化等同 PASS。**
 候選稿可供校對，不可自動外發。Production Worker 尚未更版。
+
+### 250503 真實聲學抽查（正式 Drive 與帳本未修改）
+
+在同版 V2 runtime、無網路、唯讀掛載 source/ledger 的隔離容器中，
+對全部 13 個已保存 Chirp 操作先安全還原（4 quarantine windows 無損），
+再執行本地 `inspect_v2_acoustic` 的**前 12 處**長空窗抽查：
+
+- 全段候選稿計 **146 處長空窗**（聲學 QA 的 gaps_examined 資料）。
+- 其中 **2 處 SPEECH_CONFIRMED**：
+  `239320..262240 ms`（03:59.320–04:22.240）、
+  `745520..762920 ms`（12:25.520–12:42.920）。
+- `REVIEW` 144 處，內含 **134 處因設定的初輪上限而尚未探測**；
+  另外抽查 10 處聲學證據仍不足，不能當成靜音。
+- 此測試沒有產生全部 146 處的最終聲學 verdict。
+  這兩處明確有語音的空窗應交給有剩餘預算且正式授權的
+  **定點語音補辨識**，不是重新 POST 全部 Chirp 13 個窗格。
+- 不得以 `AI_DRAFT_REVIEW_REQUIRED` 冒稱 `AI_REVIEWED_NOT_GOLDEN`
+  或本檔正式 SRT 已交付。
