@@ -3,7 +3,6 @@ import hashlib
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -132,8 +131,10 @@ class ProviderReviewDiagnosticTests(unittest.TestCase):
                    return_value=self.job_dir/'ledger.db'), \
                 patch('app.golden_v2_review_routes.job_directory',
                       return_value=self.job_dir), \
-                patch('app.golden_v2_review_routes.GoldenV2Ledger.open_existing',
-                      return_value=SimpleNamespace(status=lambda _: state)), \
+                patch('app.golden_v2_review_routes.get_v2_status',
+                      return_value={'job': {key: value for key, value in state.items()
+                                            if key != 'stages'},
+                                    'stages': state['stages']}), \
                 patch('app.golden_v2_review_routes.inspect_pending_overlaps',
                       side_effect=ValueError('private audio transcript')):
             response = TestClient(app).get(

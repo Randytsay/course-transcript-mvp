@@ -1,0 +1,17 @@
+{
+  "schema": "golden-v2-v1-backup-audio-redundancy-v1",
+  "backup": "/opt/course-transcript-backups/20261010T130348Z-predeploy-adafd952b9b8",
+  "audio_files_total": 80,
+  "audio_redundant": 80,
+  "audio_unique": 0,
+  "redundant_bytes": 9340736912,
+  "unique_bytes": 0,
+  "redundant_gib": 8.7,
+  "unique_gib": 0.0,
+  "evidence_files": 24497,
+  "evidence_bytes": 3065001961,
+  "unique_files": [],
+  "method": "SHA-256 of every backup audio file compared with SHA-256 of every live file of the same size under both data roots.",
+  "provider_generation_calls": 0,
+  "production_mutations": 0
+}

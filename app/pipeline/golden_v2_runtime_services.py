@@ -71,8 +71,22 @@ class BudgetedModels:
         tokens = getattr(counted,'total_tokens',None)
         if type(tokens) is not int or not 0 < tokens <= INPUT_TOKEN_CAP:
             raise V2Conflict('actual input token reservation exceeded')
-        if isinstance(config,dict): config = {**config,'max_output_tokens':OUTPUT_TOKEN_CAP}
-        else: config.max_output_tokens = OUTPUT_TOKEN_CAP
+        if isinstance(config,dict):
+            output_cap = config.get('max_output_tokens')
+            if output_cap is None: output_cap = OUTPUT_TOKEN_CAP
+            if type(output_cap) is not int or not 0 < output_cap <= OUTPUT_TOKEN_CAP:
+                raise V2Conflict('actual output token reservation exceeded')
+            config = {**config,'max_output_tokens':output_cap}
+        else:
+            # Preserve the adapter's bounded generation identity; never raise
+            # its cap or mutate the config object retained in its receipt.
+            from copy import copy
+            output_cap = getattr(config,'max_output_tokens',None)
+            if output_cap is None: output_cap = OUTPUT_TOKEN_CAP
+            if type(output_cap) is not int or not 0 < output_cap <= OUTPUT_TOKEN_CAP:
+                raise V2Conflict('actual output token reservation exceeded')
+            config = copy(config)
+            config.max_output_tokens = output_cap
         return self.models.generate_content(model=model,contents=contents,config=config)
 
 

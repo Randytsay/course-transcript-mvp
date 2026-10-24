@@ -1,0 +1,582 @@
+{
+  "schema": "golden-v2-v1-backup-audio-deletion-receipt-v1",
+  "created_at_utc": "2026-10-24T19:44:32.901960+00:00",
+  "backup": "/opt/course-transcript-backups/20261010T130348Z-predeploy-adafd952b9b8",
+  "basis": "SHA-256 identity with a live file re-verified immediately before each delete",
+  "proof_file": "/srv/ai-workspace/tmp/golden-v2-controlled-resume-20261023/patch-tests/disk/v1-backup-audio-redundancy.json",
+  "deleted": [
+    {
+      "path": "jobs/01-20260807-052344-47fe40/chunks/chunk-004/audio.flac",
+      "bytes": 27692561,
+      "sha256": "2e022ca63456548201a316f1747c7a5d92d4777d55679e14ee2d21d8cdfec106",
+      "live_match": "/opt/course-transcript-source/data/jobs/01-20260807-052344-47fe40/chunks/chunk-004/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/01-20260807-052344-47fe40/normalized.flac",
+      "bytes": 205770982,
+      "sha256": "c4a333ec3555a5093df62bd4976a2589e7ad69b4adc0ad71b4302ec3da3b7189",
+      "live_match": "/opt/course-transcript-source/data/jobs/01-20260807-052344-47fe40/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/20260823-20260922-161602-738878/20260823.MP3",
+      "bytes": 116455599,
+      "sha256": "4def36de763a5eb0300afce1646c9676226a06763d5eabf07397b539db5f0b60",
+      "live_match": "/opt/course-transcript-source/data/jobs/20260823-20260922-161602-738878/20260823.MP3",
+      "deleted": true
+    },
+    {
+      "path": "jobs/20260823-20260925-122516-c3a627/chunks/chunk-006/audio.flac",
+      "bytes": 34254246,
+      "sha256": "ef7b45fefd911327c646f3314a60272d6291ce536502eeae9cfa55f85a30b51a",
+      "live_match": "/opt/course-transcript-source/data/jobs/20260823-20260925-122516-c3a627/chunks/chunk-006/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/20260823-20260925-122516-c3a627/normalized.flac",
+      "bytes": 265110071,
+      "sha256": "de819dae6a096d1f20e9cd630fe8dc597177ce00b0c29d503f9d4b879cb27135",
+      "live_match": "/opt/course-transcript-source/data/jobs/20260823-20260925-122516-c3a627/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/20260830-20260926-030829-e818af/normalized.flac",
+      "bytes": 247287513,
+      "sha256": "15ce6cc7a117944599c0a697e047b3f983dc8a4a21f3aff04109658acda92056",
+      "live_match": "/opt/course-transcript-source/data/jobs/20260830-20260926-030829-e818af/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/20260920-20260926-070043-737e83/normalized.flac",
+      "bytes": 273302838,
+      "sha256": "75f2ee05b2ec7c7800be8d77143374cbdcbe43975d1563f815da51a115f60259",
+      "live_match": "/opt/course-transcript-source/data/jobs/20260920-20260926-070043-737e83/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/240614-20261004-044734-162b92/chunks/chunk-920002/audio.flac",
+      "bytes": 10778422,
+      "sha256": "985076f54dbc84fa95c39c1efb3652509c827357e1cadf031f01e50ecbd56bd5",
+      "live_match": "/opt/course-transcript-source/data/jobs/240614-20261004-044734-162b92/chunks/chunk-920002/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/240614-20261004-044734-162b92/local-asr-fallback/gap-01.wav",
+      "bytes": 17944500,
+      "sha256": "debf28c51961294f6417fb063b45956e7c971fa5c775ab3fa5ce79e39401b7e1",
+      "live_match": "/opt/course-transcript-source/data/jobs/240614-20261004-044734-162b92/local-asr-fallback/gap-01.wav",
+      "deleted": true
+    },
+    {
+      "path": "jobs/240614-20261004-044734-162b92/local-asr-fallback/gap-02.wav",
+      "bytes": 4340660,
+      "sha256": "9f51a2d8df0411def0538c395a97bef24e56a7ad22062aa17d91ddf619fd5e0e",
+      "live_match": "/opt/course-transcript-source/data/jobs/240614-20261004-044734-162b92/local-asr-fallback/gap-02.wav",
+      "deleted": true
+    },
+    {
+      "path": "jobs/240614-20261004-044734-162b92/local-asr-fallback/gap-03.wav",
+      "bytes": 10450100,
+      "sha256": "356cd348f1263a6ffded72d4683a3e986250e5858b711eba05b95dd161c4d765",
+      "live_match": "/opt/course-transcript-source/data/jobs/240614-20261004-044734-162b92/local-asr-fallback/gap-03.wav",
+      "deleted": true
+    },
+    {
+      "path": "jobs/240614-20261004-044734-162b92/local-asr-fallback/gap-04.wav",
+      "bytes": 354740,
+      "sha256": "d6107585be89b532f0a8445f1cbcd4755cf0e3d60e618015cc1613244d02ab90",
+      "live_match": "/opt/course-transcript-source/data/jobs/240614-20261004-044734-162b92/local-asr-fallback/gap-04.wav",
+      "deleted": true
+    },
+    {
+      "path": "jobs/240614-20261004-044734-162b92/local-asr-fallback/tail.wav",
+      "bytes": 59380,
+      "sha256": "aa4eec094e250449c8b638ad8369dff74cafbde41ee3caf7fd0075052cfc0dd4",
+      "live_match": "/opt/course-transcript-source/data/jobs/240614-20261004-044734-162b92/local-asr-fallback/tail.wav",
+      "deleted": true
+    },
+    {
+      "path": "jobs/240614-20261004-044734-162b92/normalized.flac",
+      "bytes": 354240881,
+      "sha256": "a75cb5deb9e0362f3ff447d415d8a2db9cc5e3074e043db784ed3df83dca6847",
+      "live_match": "/opt/course-transcript-source/data/jobs/240614-20261004-044734-162b92/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250301-20261009-104458-cf7bd7/normalized.flac",
+      "bytes": 291559420,
+      "sha256": "9717d703d24b9c58caa6f87f2d50fb395bec6285446c12caddbd46fa95bafcf5",
+      "live_match": "/opt/course-transcript-source/data/jobs/250301-20261009-104458-cf7bd7/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250308-1945-20261009-104458-0c7810/chunks/chunk-002/attempts/retry-20261009T125831Z-d02f705c/audio.flac",
+      "bytes": 29981189,
+      "sha256": "b61d268ef39ac7d2fdd3e0c56466c9c615b6041e8e12445d0b0ed50273552908",
+      "live_match": "/opt/course-transcript-source/data/jobs/250308-1945-20261009-104458-0c7810/chunks/chunk-002/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250308-1945-20261009-104458-0c7810/chunks/chunk-002/audio.flac",
+      "bytes": 29981189,
+      "sha256": "b61d268ef39ac7d2fdd3e0c56466c9c615b6041e8e12445d0b0ed50273552908",
+      "live_match": "/opt/course-transcript-source/data/jobs/250308-1945-20261009-104458-0c7810/chunks/chunk-002/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250308-1945-20261009-104458-0c7810/normalized.flac",
+      "bytes": 278449061,
+      "sha256": "50502e55fe9de568d61b9cba05fd98bd70ac8d9c25baf3d96e384c6fb1774b9a",
+      "live_match": "/opt/course-transcript-source/data/jobs/250308-1945-20261009-104458-0c7810/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250315-20261009-104458-fac5fe/normalized.flac",
+      "bytes": 313615936,
+      "sha256": "f2048443042cba4ed9cf8f51b1c8a1dc181853f868c3086388c111569d7eb80d",
+      "live_match": "/opt/course-transcript-source/data/jobs/250315-20261009-104458-fac5fe/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250322-20261009-104458-3ebe8a/normalized.flac",
+      "bytes": 181664754,
+      "sha256": "3ab15fac7d61191ab2ff8b8609b560ada0fbd90ab8163736a19916e71d03de45",
+      "live_match": "/opt/course-transcript-source/data/jobs/250322-20261009-104458-3ebe8a/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250322-20261009-104458-3ebe8a/source-recovery-20261010.mp3",
+      "bytes": 126913225,
+      "sha256": "a33a8bf09820951181bf712375e8336da15b08602f0307b1943bc612a3af54a5",
+      "live_match": "/opt/course-transcript-source/data/jobs/250322-20261009-104458-3ebe8a/source-recovery-20261010.mp3",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250329-1939-20261009-104458-874695/normalized.flac",
+      "bytes": 277827568,
+      "sha256": "5d44bdd3614c47ad2bf19ebd43c83091a7241a51eb15f16dd84835268ee12cac",
+      "live_match": "/opt/course-transcript-source/data/jobs/250329-1939-20261009-104458-874695/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250405-1933-20261009-104458-005fe6/normalized.flac",
+      "bytes": 425146955,
+      "sha256": "0d8e0fe2620f3360b7db7e6f8b283dd39750c70b36427353ae917ee84845b639",
+      "live_match": "/opt/course-transcript-source/data/jobs/250405-1933-20261009-104458-005fe6/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250412-1917-20261009-104458-5d75f6/normalized.flac",
+      "bytes": 351968974,
+      "sha256": "872b198edad210cb92d942981e7857f8f0d6a82f2b1a4b37dc43d8d9b72b2e7b",
+      "live_match": "/opt/course-transcript-source/data/jobs/250412-1917-20261009-104458-5d75f6/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250419-20261009-104458-01c673/normalized.flac",
+      "bytes": 406979947,
+      "sha256": "f093dee0539b711d64cc9a4b59fdae1f63c8c16781851af776f9773ad9fbf3ae",
+      "live_match": "/opt/course-transcript-source/data/jobs/250419-20261009-104458-01c673/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250426-1926-20261009-104458-c57c1c/normalized.flac",
+      "bytes": 451508436,
+      "sha256": "15cb20adc87a785a5d1ba28541f5e14e8ca008955890d4a8a016fe6c0ed5bd85",
+      "live_match": "/opt/course-transcript-source/data/jobs/250426-1926-20261009-104458-c57c1c/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-000.flac",
+      "bytes": 1952459,
+      "sha256": "22545bbce4fefcce74b112a9a86ad9d97b634b76430212cf75a868978a5deaf4",
+      "live_match": "/opt/course-transcript-source/data/jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-000.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-001.flac",
+      "bytes": 1984322,
+      "sha256": "e93944027912d7135f1d325d31af2e91b1939bb2502ec95b53b70991898d06c7",
+      "live_match": "/opt/course-transcript-source/data/jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-001.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-002.flac",
+      "bytes": 1974391,
+      "sha256": "76dc2dbd5c96368ce43a7389415115aa01477c6154d0f48e0e0f6962ce0cb622",
+      "live_match": "/opt/course-transcript-source/data/jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-002.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-003.flac",
+      "bytes": 1965418,
+      "sha256": "834dc8585474cb68c81edb53f3bf92347c5c1a40e746c2ff49a8b3fa288fd9b1",
+      "live_match": "/opt/course-transcript-source/data/jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-003.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-004.flac",
+      "bytes": 1911166,
+      "sha256": "e6f7ef83be67c4ff6986ee2a59dd62d37d829bc831381ddb79e7f79ff1f429b1",
+      "live_match": "/opt/course-transcript-source/data/jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-004.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-005.flac",
+      "bytes": 1794138,
+      "sha256": "de2594a9892d07030fc53d9c0a8bea1b40abbcc5be557a77fb9d7575504a1965",
+      "live_match": "/opt/course-transcript-source/data/jobs/250727-1324-20261004-044734-fd8f9c/sync-fallback-973808.tmp/segment-005.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260404-1929-20260926-174313-c8e2c3/normalized.flac",
+      "bytes": 301671168,
+      "sha256": "15991b6a8dfdf67d7fdec4f935d2a9ea66d7340d9ae9a91fc174b774a6b47574",
+      "live_match": "/opt/course-transcript-source/data/jobs/260404-1929-20260926-174313-c8e2c3/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260411-194615-00-09-39-038-02-20-53-359-20260926-180913-02c961/normalized.flac",
+      "bytes": 277366345,
+      "sha256": "5a4e87a84d5e9a78c09af495c17ab09da226fc042b06a175f45db5a9e4059a47",
+      "live_match": "/opt/course-transcript-source/data/jobs/260411-194615-00-09-39-038-02-20-53-359-20260926-180913-02c961/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260912-20260926-075532-532a4d/chunks/chunk-000/audio.flac",
+      "bytes": 32716374,
+      "sha256": "e0a518b987e970bb0b13a6223b06d7dcafb716dcbd6eacd5019086d8a4931796",
+      "live_match": "/opt/course-transcript-source/data/jobs/260912-20260926-075532-532a4d/chunks/chunk-000/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260912-20260926-075532-532a4d/chunks/chunk-002/audio.flac",
+      "bytes": 31793246,
+      "sha256": "2b392d5eb9169ca850855fe5828f46170cfe80f15c6f2ed28004b155e7212030",
+      "live_match": "/opt/course-transcript-source/data/jobs/260912-20260926-075532-532a4d/chunks/chunk-002/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260912-20260926-075532-532a4d/chunks/chunk-009/audio.flac",
+      "bytes": 31524881,
+      "sha256": "25327f5dbd8e42e68ab40ea7a3b92c74328a405e6aa4143b333b43ba2c814f78",
+      "live_match": "/opt/course-transcript-source/data/jobs/260912-20260926-075532-532a4d/chunks/chunk-009/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260912-20260926-075532-532a4d/normalized.flac",
+      "bytes": 402946435,
+      "sha256": "b1ac80f5f4478284318c5b7b02aad9779b026ee779fd1918f8a500c4285255e8",
+      "live_match": "/opt/course-transcript-source/data/jobs/260912-20260926-075532-532a4d/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-160244-ff430c/normalized.flac",
+      "bytes": 334301894,
+      "sha256": "bd3372670599b664257836148968ee501cf404eb6594165809cbdd8803bace0a",
+      "live_match": "/opt/course-transcript-source/data/jobs/manual-260926-standard-patch/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-162509-fc374f/normalized.flac",
+      "bytes": 334301894,
+      "sha256": "bd3372670599b664257836148968ee501cf404eb6594165809cbdd8803bace0a",
+      "live_match": "/opt/course-transcript-source/data/jobs/manual-260926-standard-patch/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920001/audio.flac",
+      "bytes": 575313,
+      "sha256": "5e9686c72d9b886cf8b876c3a2620687a2df4e32e140998398c84973dc91c1b4",
+      "live_match": "/opt/course-transcript-source/data/jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174541Z/chunk-920001/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920002/audio.flac",
+      "bytes": 5790075,
+      "sha256": "8032f7fa572478eb635834b7a000439ae7a72ad49ec1e4f94be941d98fda1b6d",
+      "live_match": "/opt/course-transcript-source/data/jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920002/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920003/audio.flac",
+      "bytes": 542920,
+      "sha256": "91fab23bf28337e9db1076e1ab9af5da0273901163d9a1fdb00ea35c0eb0953a",
+      "live_match": "/opt/course-transcript-source/data/jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920003/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920004/audio.flac",
+      "bytes": 618947,
+      "sha256": "c164acbc6b1834fb3cd5619aaa4072901d6be01183b1fe778a1e4ee0046516db",
+      "live_match": "/opt/course-transcript-source/data/jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920004/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920005/audio.flac",
+      "bytes": 549265,
+      "sha256": "0f7b678316168e56f7a16f8729770f4782b1c7774f746992c8b3a3e81b02f6ad",
+      "live_match": "/opt/course-transcript-source/data/jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920005/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920006/audio.flac",
+      "bytes": 1657384,
+      "sha256": "5d699116e1e7b12b5e36da6050920af1e6ceafb6fc5eb70fb44765af917427ed",
+      "live_match": "/opt/course-transcript-source/data/jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174539Z/chunk-920006/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174541Z/chunk-920001/audio.flac",
+      "bytes": 575313,
+      "sha256": "5e9686c72d9b886cf8b876c3a2620687a2df4e32e140998398c84973dc91c1b4",
+      "live_match": "/opt/course-transcript-source/data/jobs/260926-20260926-162509-fc374f/targeted-patch-archives/dynamic-round1-rescue-20260926T174541Z/chunk-920001/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-162509-fc374f/targeted-patch-archives/stalled-dynamic-20260926T173944Z/chunk-900700/audio.flac",
+      "bytes": 6145853,
+      "sha256": "48319c1787ef30684ee4eb745d685a88e7ae6b36b1ecf68ddc8cbce1344c63e8",
+      "live_match": "/opt/course-transcript-source/data/jobs/260926-20260926-162509-fc374f/targeted-patch-archives/stalled-dynamic-20260926T174058Z-retry2/chunk-900700/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/260926-20260926-162509-fc374f/targeted-patch-archives/stalled-dynamic-20260926T174058Z-retry2/chunk-900700/audio.flac",
+      "bytes": 6145853,
+      "sha256": "48319c1787ef30684ee4eb745d685a88e7ae6b36b1ecf68ddc8cbce1344c63e8",
+      "live_match": "/opt/course-transcript-source/data/jobs/260926-20260926-162509-fc374f/targeted-patch-archives/stalled-dynamic-20260926T174058Z-retry2/chunk-900700/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/audit-20260913-chirp3/normalized.flac",
+      "bytes": 118114061,
+      "sha256": "66f97600ac1b064e68aaf0929d3a0256a62a541f6eb333fb6a5b151b5a3298f4",
+      "live_match": "/opt/course-transcript-source/data/jobs/audit-20260913-chirp3/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20230630-child-2/normalized.flac",
+      "bytes": 139062474,
+      "sha256": "0f52f75923d558f03d1031a826ea16d2a664c6f21d07009b26e206d13a56891d",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20230630-child-2/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20230630-child-2/source-original.mp3",
+      "bytes": 91342807,
+      "sha256": "d7c877ef4284675c5340b08621cead4f88eb1face1d81332a65e20e5b5a7afa2",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20230630-child-2/source-original.mp3",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20241025-gut-1/normalized.flac",
+      "bytes": 178379940,
+      "sha256": "ff479df1b385fe5bcc1efb35a39c319827079208fedfcd169204d686b9f49c9b",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20241025-gut-1/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20241025-gut-1/source-original.mp3",
+      "bytes": 117375606,
+      "sha256": "7d2dc2b668a2062b2279fd62ed8c2dfd109ca7ad30a9fa0b9f8920ff040c8b04",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20241025-gut-1/source-original.mp3",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20241025-gut-2/chunks/chunk-003/audio.flac",
+      "bytes": 32860794,
+      "sha256": "a31141427b26648c7386d78ae47d196a116419a531078da94c6af9d58f1ac7f0",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20241025-gut-2/chunks/chunk-003/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20241025-gut-2/normalized.flac",
+      "bytes": 187922081,
+      "sha256": "130b80ed4a8974c6272011a823ce4bd57111196be24099a59693df4f367dd786",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20241025-gut-2/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20241025-gut-2/source-original.mp3",
+      "bytes": 123060060,
+      "sha256": "4e8f6667679738ade20b6988688df5194740141f63a4158424b891da84c79b4a",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20241025-gut-2/source-original.mp3",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20260705-repair-1/chunks/chunk-003/audio.flac",
+      "bytes": 34701596,
+      "sha256": "991cef3da4e54dfde32f037c6e058c67d4f0e531fe9b4790b386b21337a053e2",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20260705-repair-1/chunks/chunk-003/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20260705-repair-1/normalized.flac",
+      "bytes": 225498840,
+      "sha256": "ade1141583d5dec51f7ab78abb78069cc72cdaac03a1df43e6d3267fbb4936f5",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20260705-repair-1/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20260705-repair-1/source-original.mp3",
+      "bytes": 138820253,
+      "sha256": "50a4bddae95d3072d6e178c4e8b08eb7dbcaaf987d8419fd69da59f950fe91f4",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20260705-repair-1/source-original.mp3",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20260705-repair-2/normalized.flac",
+      "bytes": 156483475,
+      "sha256": "10c587a835c0cb61fc7f326297d9204704bdfdbdfb806df9efcea908ac76924c",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20260705-repair-2/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20260705-repair-2/source-original.mp3",
+      "bytes": 97652319,
+      "sha256": "d26c500e74f664ed98c59d11c876d791e1880a2afabd84c1c6291e240849f7d0",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20260705-repair-2/source-original.mp3",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20260705-repair-qa/normalized.flac",
+      "bytes": 47105755,
+      "sha256": "c7cc96c10b13074e709d9935c0fd047f8036450f5f848e1341cb9cd88cc21190",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20260705-repair-qa/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/ma-20260705-repair-qa/source-original.m4a",
+      "bytes": 20861073,
+      "sha256": "97c979424e769a70384cac7da303b20452b219e7ff2f1ab39f896a1d2f02fdb0",
+      "live_match": "/opt/course-transcript-source/data/jobs/ma-20260705-repair-qa/source-original.m4a",
+      "deleted": true
+    },
+    {
+      "path": "jobs/manual-261003-golden/normalized.flac",
+      "bytes": 278553122,
+      "sha256": "b7b9627474d09e127e7699f9b7ae7097f7b229879d1454386c8b6a7129b4c609",
+      "live_match": "/opt/course-transcript-source/data/jobs/manual-261003-golden/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/manual-261003-golden/source-original.mp3",
+      "bytes": 192694776,
+      "sha256": "7d37b39f93cace0549ac5e314d0a5db2942c198e1556ea1442a0523855aee477",
+      "live_match": "/opt/course-transcript-source/data/jobs/manual-261003-golden/source-original.mp3",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg1/source.mp3",
+      "bytes": 53590482,
+      "sha256": "0e12cfe5052d35165e499f547657f90389a712f46dbcd7d68b0b2194a2c7c564",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg1/source.mp3",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg2/chunks/chunk-000/audio.flac",
+      "bytes": 32606033,
+      "sha256": "089db1252648152ff15c9f27b7842bc041cea929a68bcaff76720d2d3e36662d",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg2/chunks/chunk-000/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg2/chunks/chunk-001/audio.flac",
+      "bytes": 32994982,
+      "sha256": "f0aa782e51847e5c1add015ce17e5b12dfcd2e0fb09f1688a6dbfcf84fe4e318",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg2/chunks/chunk-001/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg2/chunks/chunk-002/audio.flac",
+      "bytes": 32762348,
+      "sha256": "24cf0aa3d457f20795386ee42fb4f2114ed275c4b6afa23401f55a9e4ad9d4d1",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg2/chunks/chunk-002/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg2/chunks/chunk-003/audio.flac",
+      "bytes": 32701084,
+      "sha256": "f66c1705e2589ef20677797c9ec13e7cc169e36e7b971c31df5af2970c01bbc5",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg2/chunks/chunk-003/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg2/chunks/chunk-004/audio.flac",
+      "bytes": 2106783,
+      "sha256": "41e62ff7f5ca28b31ccebb2b8977641e26293d06b78407dd6cdbe5af10b8023f",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg2/chunks/chunk-004/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg2/normalized.flac",
+      "bytes": 130302692,
+      "sha256": "4252edfa42d9cb4a04d58b028da30635fba1aa45d1f7f6ab77acc322c2512c82",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg2/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg2/source.mp3",
+      "bytes": 58383954,
+      "sha256": "b6791e7feb070eb5b501eb81209dcd57dea804b51447941b15ab37ea7648e178",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg2/source.mp3",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg3/chunks/chunk-000/audio.flac",
+      "bytes": 32071800,
+      "sha256": "bb4c297312477d369e8065da0d77ce04cfbab9a943822be62f7e2017f86f8e77",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg3/chunks/chunk-000/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg3/chunks/chunk-001/audio.flac",
+      "bytes": 32080965,
+      "sha256": "20ebc7b1dbf6206607e3f78d812c60648bf50f63c2b415821309eb4d099f41cf",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg3/chunks/chunk-001/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg3/chunks/chunk-002/audio.flac",
+      "bytes": 31984507,
+      "sha256": "ded1bee7add83f1dafb098f692b6a7854621d15f0db57b0bb6aa1705bb0edc9f",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg3/chunks/chunk-002/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg3/chunks/chunk-003/audio.flac",
+      "bytes": 15001798,
+      "sha256": "e24966d58d8ebd1c85d373a9899c1eb14003e8d56acdaaaea91152232f609e69",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg3/chunks/chunk-003/audio.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg3/normalized.flac",
+      "bytes": 109069865,
+      "sha256": "3b6f00c2b0cfadb9118ccf16c04325e10cd6c4b3d0c52f7342f8bba75ba86990",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg3/normalized.flac",
+      "deleted": true
+    },
+    {
+      "path": "jobs/voice_11386603-seg3/source.mp3",
+      "bytes": 50146386,
+      "sha256": "1f62626b6ca47038e8beec82c3e253635f6ee64f757a815a5515776a8a638ae0",
+      "live_match": "/opt/course-transcript-source/data/jobs/voice_11386603-seg3/source.mp3",
+      "deleted": true
+    }
+  ],
+  "deleted_count": 80,
+  "deleted_bytes": 9340736912,
+  "deleted_gib": 8.7,
+  "skipped": [],
+  "skipped_count": 0,
+  "failed": [],
+  "failed_count": 0,
+  "remaining_audio_files": [],
+  "remaining_total_files": 24497,
+  "evidence_files_kept": 24497,
+  "provider_generation_calls": 0,
+  "drive_mutations": 0,
+  "production_mutations": 0
+}
