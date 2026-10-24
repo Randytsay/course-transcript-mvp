@@ -7,6 +7,7 @@ services:
     environment:
       COURSE_TRANSCRIPT_V2_PAID_API_ENABLED: ${V2_CHAT_PAID_API_ENABLED:-false}
       COURSE_TRANSCRIPT_V2_PUBLISH_API_ENABLED: ${V2_CHAT_PUBLISH_API_ENABLED:-false}
+      COURSE_TRANSCRIPT_V2_AI_PUBLISH_API_ENABLED: ${V2_CHAT_AI_PUBLISH_API_ENABLED:-false}
   paid:
     profiles: [v2-paid]
     image: course-transcript-v2-runtime:${V2_CHAT_RELEASE_SHA:?exact release required}
@@ -34,8 +35,9 @@ services:
       - ${V2_CHAT_GRANT_ENV_FILE:-/opt/course-transcript-v2-chat/secrets/grant.env}
     environment:
       RCLONE_CONFIG: /run/secrets/rclone.conf
+      COURSE_TRANSCRIPT_V2_AI_DELIVERY_ENABLED: ${V2_CHAT_AI_DELIVERY_ENABLED:-false}
     volumes:
       - ${V2_CHAT_DATA_DIR:-/opt/course-transcript-v2-chat/data}:/app/data
       - ${V2_CHAT_DRIVE_CONFIG:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
       - /opt/course-transcript-source/data/locks:/app/drive-lock-state/locks
-    command: [python, scripts/golden_v2_delivery_daemon.py, --artifact-root, /app/data/golden-v2, --lock-root, /app/drive-lock-state, --enable-publication]
+    command: [python, scripts/golden_v2_delivery_daemon.py, --artifact-root, /app/data/golden-v2, --lock-root, /app/drive-lock-state, --enable-publication, --enable-ai-publication]

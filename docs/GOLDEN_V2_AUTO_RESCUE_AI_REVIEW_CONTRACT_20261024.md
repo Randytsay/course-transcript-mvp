@@ -46,8 +46,57 @@ Paid worker 在 `--auto-rescue-known-refusal` 明示開啟時：
 **兩個具 `_AI校對` 後綴、原資料夾的新建檔名**。
 新建目標數量查詢必須為 0；有同名衝突就停止，不能改名/覆蓋。
 
-正式可交付前的**剩餘工程**：將此 validator 與可信 ledger
-SHA 檢查接到獨立 `authorize-ai-publication` API，完成 AI 專用
-signed grant 驗證、Driver 源檔 freshness、new-file-only 上傳、
-重入去重與 Drive hash 讀回，再做 mock 故障注入驗收。
-這一步沒完成之前，不得在 UI 顯示「已回寫」。
+### 本 PR 的第二階段已接入（可測試，但正式預設關閉）
+
+- `app/pipeline/golden_v2_ai_delivery.py`: ledger Chirp COMPLETE、
+  原始 Chirp/acoustic SHA、機器 QA 報告、SRT/TXT render manifest
+  互相校驗；AI 校對證書只能由真實檔案組裝；提供獨立
+  `attest_ai_review`、`authorize_ai_publication` 與
+  `publish_granted_ai_outputs`。
+- 管理員 owner API `attest-ai-review` 及
+  `authorize-ai-publication` 使用現有私有 token，不含
+  `confirm_listened`，不得混用 Golden publish grant。
+- Delivery Worker 支援原資料夾新建 `_AI校對.srt` 和
+  `_AI校對.txt`，預先存下 ID、斷線後恢復同一 ID、
+  SHA-256 回讀與來源版本再次檢查；遇到同名檔絕不覆蓋。
+- API 預設 `V2_CHAT_AI_PUBLISH_API_ENABLED=false`，交付
+  Worker 仍須 `V2_CHAT_AI_DELIVERY_ENABLED=true` 才啟用。
+  此兩個開關彼此獨立，且任何交付仍須每任務額外的
+  signed owner grant。
+- 可用 `python -m unittest tests.test_golden_v2_ai_delivery
+  tests.test_golden_v2_ai_review_contract` 進行離線測試。
+
+### 可驗證的機器 QA 準備與對話指令
+
+- 新增 `prepare_ai_quality_report`：從實際 ledger
+  `golden_qa COMPLETE`、`safe_publish_allowed=TRUE`、
+  Chirp/acoustic SHA、最後的 SRT/TXT content hash 及
+  嚴格可解析的時間軸自動組成 `ai-review-report.json`，
+  再生成不可冒稱 Golden 的 AI 證書；未完整通過 QA
+  不會生成假 `PASS`。
+- 新增 owner-only `prepare-ai-review`、`attest-ai-review`、
+  `authorize-ai-publication` API，從 `scripts/golden_v2_chat_client.py`
+  傳 JSON 可操作。交付仍需獨立 owner signed grant。
+- Delivery worker 的 AI 發布採獨立環境旗標預設關閉。
+  此版本可對通過 Golden **機器 QA**、但未宣稱人工覆聽的
+  SRT/TXT 生成 AI 校對版；`Golden` 認證依舊另有
+  嚴格人工流程。
+
+### 上線前必須補齊的功能
+
+**最重要：獨立於 Golden final QA 的 AI-only renderer/QA 還未完成。**
+目前後端只會在 Golden QA 通過時保存正式 `final.srt` /
+`final-corrected-transcript.txt` / `render-manifest.json`。
+目前已新增以 Golden 機器 QA PASS 為可信來源的 AI 報告產生器，
+但它還無法在 Golden `REVIEW_REQUIRED` 時，自行產生經聲學與語意驗證的獨立候選字幕。不能將
+`ai-review-report.json` 的字串 `PASS` 當成實際原聲證據。
+應另以既有 Chirp raw operations、聲學 PASS、Gemini 或另一合法
+語意證據、差異裁決、可追溯修訂，無新付費前提下形成
+完整候選檔；有真實缺漏時產生時間碼清單，不可自行宣稱
+machine QA PASS。
+
+因此本 PR 保持 Draft；通過單元測試不代表已完成
+`250503` 字幕，也不能直接重啟正式 paid worker。
+正式發布應先在無付費請求的 shadow smoke test 驗證來源、
+未完成 LRO、費用上限、備份／還原、舊任務／new job 隔離，
+經 Owner 明確核准後再以 exact SHA 佈署。

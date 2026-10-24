@@ -62,6 +62,9 @@ def build_ai_review_certificate(
     cert = {
         "schema": SCHEMA, "quality_tier": QUALITY_TIER,
         "job_id": job_id, **expected,
+        "report_sha256": hashlib.sha256(json.dumps(
+            report, ensure_ascii=False, sort_keys=True,
+            separators=(",", ":")).encode()).hexdigest(),
         "cue_count": report["cue_count"], "word_count": report["word_count"],
         "machine_quality_status": "PASS",
         "human_listening": "NOT_CLAIMED",

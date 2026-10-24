@@ -14,6 +14,10 @@ from app.pipeline.golden_v2_stage_runner import complete_adjudication_or_hold
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.pipeline.golden_v2_delivery import checked_outputs
 from app.pipeline.golden_v2_delivery import manifest_digest
+from app.pipeline.golden_v2_ai_delivery import (
+    attest_ai_review, checked_ai_outputs, authorize_ai_publication,
+    prepare_ai_quality_report,
+)
 from app.providers.golden_v2_versioned_artifacts import resolve_versioned
 from app.pipeline.golden_v2_runtime_services import signed_grant
 from app.providers.golden_v2_immutable import store_immutable_bytes
@@ -274,3 +278,81 @@ def authorize_publication(job_id: str, body: PublicationReview, authorization: s
         return {'job_id':job_id,'status':'PUBLICATION_AUTHORIZED','filenames':body.filenames}
     except (ValueError,RuntimeError,OSError,KeyError) as exc:
         raise HTTPException(status_code=409,detail='Final reviewed QA and immutable delivery hashes required') from exc
+
+
+
+class AIPrepareReview(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    revision: StrictInt=Field(ge=0)
+    confirm: Literal[True]
+
+
+@router.post("/jobs/{job_id}/prepare-ai-review")
+def prepare_machine_review(
+    job_id: str, body: AIPrepareReview,
+    authorization: str | None=Header(default=None),
+):
+    database, actor, _ = _authorized_write_database(authorization)
+    job_directory(database, job_id)
+    if os.environ.get("COURSE_TRANSCRIPT_V2_AI_PUBLISH_API_ENABLED", "").lower() != "true":
+        raise HTTPException(status_code=404,detail="AI review not enabled")
+    try:
+        state=GoldenV2Ledger.open_existing(database).status(job_id)
+        if state["revision"] != body.revision or not actor.strip():
+            raise V2Conflict("review revision changed")
+        prepared=prepare_ai_quality_report(database.parent,job_id)
+        attested=attest_ai_review(database.parent,job_id)
+        return {**prepared, **attested}
+    except (ValueError,RuntimeError,OSError,KeyError,TypeError) as exc:
+        raise HTTPException(status_code=409, detail="AI machine QA not yet eligible") from exc
+
+class AIReviewAttestation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: StrictInt = Field(ge=0)
+    report_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    confirm: Literal[True]
+
+
+@router.post("/jobs/{job_id}/attest-ai-review")
+def attest_machine_review(job_id: str, body: AIReviewAttestation,
+                          authorization: str | None = Header(default=None)):
+    database, actor, _ = _authorized_write_database(authorization)
+    job = job_directory(database, job_id)
+    if os.environ.get("COURSE_TRANSCRIPT_V2_AI_PUBLISH_API_ENABLED", "").lower() != "true":
+        raise HTTPException(status_code=404, detail="AI review is not enabled")
+    try:
+        state, _, _, cert, _ = checked_ai_outputs(
+            database.parent, job_id, require_attestation=False)
+        if (body.revision != state["revision"] or
+                body.report_sha256 != cert["report_sha256"] or not actor.strip()):
+            raise V2Conflict("AI report changed since owner review")
+        return attest_ai_review(database.parent, job_id)
+    except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=409, detail="AI QA evidence not eligible") from exc
+
+
+class AIPublicationReview(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: StrictInt = Field(ge=0)
+    certificate_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    filenames: list[str] = Field(min_length=2, max_length=2)
+    review_reference: str = Field(min_length=1, max_length=256)
+    confirm: Literal[True]
+
+
+@router.post("/jobs/{job_id}/authorize-ai-publication")
+def authorize_machine_publication(
+    job_id: str, body: AIPublicationReview,
+    authorization: str | None = Header(default=None),
+):
+    database, actor, _ = _authorized_write_database(authorization)
+    job = job_directory(database, job_id)
+    if os.environ.get("COURSE_TRANSCRIPT_V2_AI_PUBLISH_API_ENABLED", "").lower() != "true":
+        raise HTTPException(status_code=404, detail="AI publication not enabled")
+    try:
+        return authorize_ai_publication(
+            root=database.parent, job_id=job_id, revision=body.revision,
+            certificate_sha256=body.certificate_sha256, filenames=body.filenames,
+            actor=actor, review_reference=body.review_reference)
+    except (ValueError, RuntimeError, OSError, KeyError, TypeError) as exc:
+        raise HTTPException(status_code=409, detail="AI publication source/QA/grant conflict") from exc
