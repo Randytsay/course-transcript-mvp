@@ -105,7 +105,8 @@ class ExecutorTests(unittest.TestCase):
         options = dict(verify_owner=lambda _: True,
                        verify_capability_and_pricing=lambda _: True,
                        stage_options={'gateway': sentinel, 'bucket_name': 'verified'})
-        with (patch.object(executor, 'verify_same_audio_revision', return_value=True),
+        with (patch.object(executor, 'verify_primary_refusal', return_value=True),
+              patch.object(executor, 'verify_same_audio_revision', return_value=True),
               patch.object(executor, 'claim_independent_rescue', return_value={'stage': 'chirp_independent'}) as claim_rescue,
               patch.object(executor, 'plan_approved_chirp') as planned,
               patch.object(executor, 'submit_planned_chirp') as submitted):
@@ -124,8 +125,13 @@ class ExecutorTests(unittest.TestCase):
         options = dict(verify_owner=lambda _: True,
                        verify_capability_and_pricing=lambda _: True,
                        stage_options={'gateway': object()})
-        with (patch.object(executor, 'verify_same_audio_revision', return_value=False),
-              patch.object(executor, 'claim_independent_rescue', side_effect=lambda **_: (_ for _ in ()).throw(V2Conflict('not authorized'))) as rescue,
+        def fail_if_stale(**kwargs):
+            if kwargs['verify_authorization_and_live_source']() is not True:
+                raise V2Conflict('source freshness rejected')
+            self.fail('stale source must never claim')
+        with (patch.object(executor, 'verify_primary_refusal', return_value=True),
+              patch.object(executor, 'verify_same_audio_revision', return_value=False),
+              patch.object(executor, 'claim_independent_rescue', side_effect=fail_if_stale) as rescue,
               patch.object(executor, 'submit_planned_chirp') as submit):
             result = self.run_pass(auto_rescue_known_refusal=True,
                                    paid_services=lambda _: options)

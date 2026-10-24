@@ -17,7 +17,9 @@ from app.jobs.golden_v2_read import list_v2_active_jobs, list_v2_rescue_jobs
 from app.pipeline.golden_v2_chirp_recovery_worker import run_chirp_recovery_pass
 from app.pipeline.golden_v2_coordinator import run_ready_local
 from app.pipeline.golden_v2_trusted_dispatch import execute_trusted_paid_stage
-from app.pipeline.golden_v2_primary_rescue import claim_independent_rescue, verify_same_audio_revision
+from app.pipeline.golden_v2_primary_rescue import (
+    claim_independent_rescue, verify_same_audio_revision, verify_primary_refusal,
+)
 from app.pipeline.golden_v2_chirp_stage import plan_approved_chirp, submit_planned_chirp
 
 
@@ -51,9 +53,10 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
             return {'action': 'PAID_EXECUTOR_BUSY', 'outcomes': [], 'provider_calls_started': False}
         outcomes = []
         scheduled = list_v2_active_jobs(path, limit=max_jobs)
-        if auto_rescue_known_refusal:
+        if auto_rescue_known_refusal and len(scheduled) < max_jobs:
             known = {job["job_id"] for job in scheduled}
-            scheduled.extend(job for job in list_v2_rescue_jobs(path, limit=max_jobs)
+            slots = max_jobs - len(scheduled)
+            scheduled.extend(job for job in list_v2_rescue_jobs(path, limit=slots)
                              if job["job_id"] not in known)
         for job in scheduled:
             job_id = job['job_id']
@@ -89,6 +92,14 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
                     snapshot = dict(job_id=job_id, source_sha256=state['source_sha'],
                                     revision=state['revision'], stage='chirp_independent',
                                     aggregate_cap_cents=aggregate_cap_cents)
+                    # Prove known SAFETY refusal using the immutable primary
+                    # report and raw native Gemini audit before allocating a
+                    # cloud SDK client or considering any new paid submission.
+                    verify_primary_refusal(
+                        job_dir=job_dir, job_id=job_id,
+                        source_sha=state['source_sha'],
+                        evidence_sha=primary['evidence_sha'],
+                        actual_cents=primary['actual_cents'])
                     options = paid_services(dict(snapshot))
                     if not isinstance(options, dict) or set(options) - {
                             'verify_owner', 'verify_capability_and_pricing',
