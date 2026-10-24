@@ -25,7 +25,7 @@ services:
       - ${V2_CHAT_DATA_DIR:-/opt/course-transcript-v2-chat/data}:/app/data
       - /opt/course-transcript/secrets/ai-runtime:/run/ai-runtime:ro
       - ${V2_CHAT_DRIVE_CONFIG:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
-    command: [python, scripts/golden_v2_paid_executor_daemon.py, --database, /app/data/golden-v2/ledger.sqlite, --artifact-root, /app/data/golden-v2, --services-module, app.pipeline.golden_v2_runtime_services, --aggregate-cap-cents, '1000', --enable-paid]
+    command: [python, scripts/golden_v2_paid_executor_daemon.py, --database, /app/data/golden-v2/ledger.sqlite, --artifact-root, /app/data/golden-v2, --services-module, app.pipeline.golden_v2_runtime_services, --aggregate-cap-cents, '1000', --enable-paid, --auto-rescue-known-refusal]
   delivery:
     profiles: [v2-publish]
     image: course-transcript-v2-chat:${V2_CHAT_RELEASE_SHA:?exact release required}

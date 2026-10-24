@@ -13,17 +13,22 @@ from pathlib import Path
 from typing import Callable
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
-from app.jobs.golden_v2_read import list_v2_active_jobs
+from app.jobs.golden_v2_read import list_v2_active_jobs, list_v2_rescue_jobs
 from app.pipeline.golden_v2_chirp_recovery_worker import run_chirp_recovery_pass
 from app.pipeline.golden_v2_coordinator import run_ready_local
 from app.pipeline.golden_v2_trusted_dispatch import execute_trusted_paid_stage
+from app.pipeline.golden_v2_primary_rescue import claim_independent_rescue, verify_same_audio_revision
+from app.pipeline.golden_v2_chirp_stage import plan_approved_chirp, submit_planned_chirp
 
 
 def run_paid_executor_pass(*, database: Path, artifact_root: Path,
                            enabled: bool = False, aggregate_cap_cents: int = 1000,
                            paid_services: Callable[[dict], dict] | None = None,
                            recovery_services: Callable[[dict], dict] | None = None,
-                           worker_id: str = 'golden-v2-paid-executor', max_jobs: int = 100) -> dict:
+                           worker_id: str = 'golden-v2-paid-executor', max_jobs: int = 100,
+                           auto_rescue_known_refusal: bool = False) -> dict:
+    if type(auto_rescue_known_refusal) is not bool:
+        raise ValueError('explicit rescue switch required')
     if type(enabled) is not bool:
         raise ValueError('explicit executor flag required')
     if not enabled:
@@ -45,7 +50,12 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
         except BlockingIOError:
             return {'action': 'PAID_EXECUTOR_BUSY', 'outcomes': [], 'provider_calls_started': False}
         outcomes = []
-        for job in list_v2_active_jobs(path, limit=max_jobs):
+        scheduled = list_v2_active_jobs(path, limit=max_jobs)
+        if auto_rescue_known_refusal:
+            known = {job["job_id"] for job in scheduled}
+            scheduled.extend(job for job in list_v2_rescue_jobs(path, limit=max_jobs)
+                             if job["job_id"] not in known)
+        for job in scheduled:
             job_id = job['job_id']
             try:
                 jobs_root = root / 'jobs'
@@ -53,6 +63,61 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
                 if (jobs_root.is_symlink() or job_dir.is_symlink() or not job_dir.is_dir()
                         or job_dir.resolve().parent != jobs_root or job_dir.resolve() != job_dir):
                     raise V2Conflict('source artifact directory unavailable')
+                state = ledger.status(job_id)
+                primary, chirp = state['stages'][:2]
+                # Rescue an *already submitted* Chirp without re-POSTing it.
+                # A refused Gemini is intentionally still REVIEW_REQUIRED; the
+                # ordinary coordinator would otherwise strand this paid stage.
+                if (auto_rescue_known_refusal and primary['state'] == 'REVIEW_REQUIRED'
+                        and chirp['state'] == 'RUNNING' and state['status'] == 'PROCESSING'):
+                    snapshot = dict(job_id=job_id, source_sha256=state['source_sha'],
+                                    revision=state['revision'], stage='chirp_independent',
+                                    aggregate_cap_cents=aggregate_cap_cents)
+                    options = recovery_services(dict(snapshot))
+                    if not isinstance(options, dict) or set(options) - {
+                            'gateway', 'cost_accountant', 'max_operations', 'acoustic_inspector'}:
+                        raise V2Conflict('invalid rescue recovery service contract')
+                    outcomes.append(run_chirp_recovery_pass(
+                        ledger=ledger, job_id=job_id, job_dir=job_dir, **options))
+                    continue
+                # A known, audited SAFETY refusal permits *one* independent
+                # Chirp claim under the existing exact-source signed grant.
+                # Unknown model outcomes, existing LROs and budget uncertainty
+                # remain blocked by claim_independent_rescue.
+                if (auto_rescue_known_refusal and primary['state'] == 'REVIEW_REQUIRED'
+                        and chirp['state'] == 'PENDING' and state['status'] == 'NEEDS_REVIEW'):
+                    snapshot = dict(job_id=job_id, source_sha256=state['source_sha'],
+                                    revision=state['revision'], stage='chirp_independent',
+                                    aggregate_cap_cents=aggregate_cap_cents)
+                    options = paid_services(dict(snapshot))
+                    if not isinstance(options, dict) or set(options) - {
+                            'verify_owner', 'verify_capability_and_pricing',
+                            'stage_options', 'read_metadata'}:
+                        raise V2Conflict('invalid rescue paid service contract')
+                    from app.jobs.drive_api import read_drive_media_metadata, download_drive_media
+                    def verified():
+                        preview = dict(source_sha256=state['source_sha'])
+                        return (options['verify_owner'](preview) is True
+                                and options['verify_capability_and_pricing'](preview) is True
+                                and verify_same_audio_revision(
+                                    job_dir=job_dir,
+                                    read_metadata=read_drive_media_metadata,
+                                    download_media=download_drive_media) is True)
+                    claim = claim_independent_rescue(
+                        ledger=ledger, job_id=job_id, job_dir=job_dir,
+                        revision=state['revision'], source_sha=state['source_sha'],
+                        cap_cents=aggregate_cap_cents,
+                        reference='trusted-auto-chirp-rescue-known-primary-refusal',
+                        verify_authorization_and_live_source=verified)
+                    stage_options = dict(options['stage_options'])
+                    gateway = stage_options.pop('gateway')
+                    plan_approved_chirp(ledger=ledger, claim=claim,
+                                        normalized_audio=job_dir/'normalized.flac',
+                                        job_dir=job_dir, **stage_options)
+                    submit_planned_chirp(ledger=ledger, claim=claim, gateway=gateway)
+                    outcomes.append(dict(job_id=job_id,
+                        action='AUTO_INDEPENDENT_CHIRP_SUBMITTED_ONCE'))
+                    continue
                 local = run_ready_local(ledger=ledger, job_id=job_id, job_dir=job_dir, worker_id=worker_id)
                 state = ledger.status(job_id)
                 pending = next((s for s in state['stages'] if s['state'] not in {'COMPLETE', 'SKIPPED'}), None)

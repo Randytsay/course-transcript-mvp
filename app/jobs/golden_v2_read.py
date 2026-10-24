@@ -80,3 +80,26 @@ def list_v2_active_jobs(database: Path, *, limit: int = 100) -> list[dict[str, s
         ).fetchall()
         return [{"job_id": str(row["id"]), "status": str(row["status"])}
                 for row in rows]
+
+
+def list_v2_rescue_jobs(database: Path, *, limit: int = 100) -> list[dict[str, str]]:
+    """Only jobs with a held Gemini primary and an eligible independent Chirp.
+
+    Include a saved RUNNING Chirp regardless of the primary's held state.
+    Never discover unrelated REVIEW_REQUIRED jobs for provider dispatch.
+    """
+    if not 1 <= limit <= 1000:
+        raise ValueError("invalid rescue-job query limit")
+    with closing(_connection(database)) as db:
+        db.execute("BEGIN")
+        rows = db.execute(
+            "SELECT j.id, j.status FROM v2_jobs j "
+            "JOIN v2_stages p ON p.job_id=j.id AND p.name='gemini_primary' "
+            "JOIN v2_stages c ON c.job_id=j.id AND c.name='chirp_independent' "
+            "WHERE j.approved_cents IS NOT NULL AND p.state='REVIEW_REQUIRED' "
+            "AND ((j.status='NEEDS_REVIEW' AND c.state='PENDING') "
+            "OR (j.status='PROCESSING' AND c.state='RUNNING')) "
+            "ORDER BY j.created_at,j.id LIMIT ?", (limit,)
+        ).fetchall()
+        return [{"job_id": str(row["id"]), "status": str(row["status"])}
+                for row in rows]
