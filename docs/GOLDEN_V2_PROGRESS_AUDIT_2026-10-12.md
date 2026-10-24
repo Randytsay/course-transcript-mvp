@@ -1,8 +1,9 @@
 # Golden Transcript V2｜2026-10-12 實況盤點與六階段完工計畫
 
+> **歷史 2026-10-12 紀錄（非 2026-10-25 即時狀態）**：最新架構請讀 [GOLDEN_V2_CURRENT_ARCHITECTURE.md](GOLDEN_V2_CURRENT_ARCHITECTURE.md)。
 > **性質：當日唯讀核驗 + 下一階段工程規劃。** 不代表已部署、執行付費 API 或修改 Google Drive。  
 > 最初盤點對應 [PR #143](https://github.com/Randytsay/course-transcript-mvp/pull/143) 舊版提交 `73f1a8265bd4458699cd66da1c9d6f88cf0779f1`；2026-10-12 隔離續作進入 [Draft PR #144](https://github.com/Randytsay/course-transcript-mvp/pull/144)，新 SHA/CI 另以 Gate 狀態簿為準。
-> 權威規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[G0–G8 完整驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[最新狀態](GOLDEN_V2_GATE_STATUS.md)｜[整合交接](GOLDEN_V2_INTEGRATION_HANDOFF.md)。
+> 權威規格：[架構](GOLDEN_V2_CURRENT_ARCHITECTURE.md)｜[G0–G8 完整驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[最新狀態](GOLDEN_V2_GATE_STATUS.md)｜[整合交接](GOLDEN_V2_INDEPENDENT_AUDIT.md)。
 
 > **更新（2026-10-12）：**使用者已明確決定把 ASR 後的純文字校正由 3.7 改為 3.8。以下先前提到的 3.7 續報屬歷史記錄，不再代表預定正式模型。對應目前 Draft PR #144；實際 Vertex 3.8 校正仍待小額 smoke 與正式驗收。
 

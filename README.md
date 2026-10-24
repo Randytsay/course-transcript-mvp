@@ -8,15 +8,19 @@ accepted policy, dirty runtime work and historical provenance so old handoff
 documents are not mistaken for current production truth.
 
 
-## Golden Transcript V2 — approved *design*, not production status
+## Golden Transcript V2 — current architecture and audit
 
-The 2026-10-11 V2 upgrade specification is documented in:
+- [Authoritative current architecture](docs/GOLDEN_V2_CURRENT_ARCHITECTURE.md)
+- [Independent AI Agent root-cause audit handoff](docs/GOLDEN_V2_INDEPENDENT_AUDIT.md)
+- [P0–P8 / G0–G8 acceptance contract](docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)
+- [Historical milestone evidence](docs/GOLDEN_V2_GATE_STATUS.md)
 
-- [Three-engine architecture: Gemini 3.8 audio recognition and Gemini 3.8 text correction](docs/GOLDEN_V2_ARCHITECTURE_PLAN.md)
-- [P0–P8 development sequence and G0–G8 acceptance checklist](docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)
-- [Live V2 Gate status (initially NOT_RUN)](docs/GOLDEN_V2_GATE_STATUS.md)
+**Observed 2026-10-25:** V2 API, Paid and Delivery run SHA 17d33faf,
+but Intake is stopped on an older image. Four tasks remain in review or
+processing, not formal Golden QA/Drive publication. The 2026-10-11 target
+plan and 2026-10-13 handoffs are historical; source of truth is the
+current exact-SHA implementation and live read-only evidence, not PR CI.
 
-**V2 target:** Gemini 3.8 Flash full-audio transcript first → independent Chirp 3 acoustic/timing comparison → optional Gemini 3.5 Transcribe → Vertex Gemini 3.8 Flash text-only correction → ChatGPT/WebCodex adjudication and Golden SRT/TXT QA. V1 historical evidence may also contain Gemini 3.7. **Do not construe this documentation as proof that production has switched to the V2 pipeline.** Check `CURRENT_STATE.md` and runtime exact-SHA evidence before making a production claim.
 
 Private, resumable long-audio transcription MVP. Chirp 3 provides word-level
 timing; Google Vertex AI Gemini 3.8 Flash performs text-only correction after
