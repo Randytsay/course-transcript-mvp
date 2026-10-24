@@ -320,10 +320,73 @@ def reconcile_reviewed_chirp_window(
             or review.get("raw_sha") != evidence_sha
             or review.get("actual_cents") != row["actual_cents"]):
         raise V2Conflict("quarantined raw identity or cost evidence changed")
+    repaired_evidence = None
     try:
         words = _parse_words(raw_bytes, row)
-    except V2Conflict:
-        return "REVIEW_REQUIRED"
+    except V2Conflict as exc:
+        # Only a known offset/overlap defect may enter the provider-free,
+        # lossless window normalizer. This fixes words' timestamp geometry;
+        # it does NOT certify that the repaired timing matches the audio.
+        # Inexact provider grammar, absent words or unknown errors stay held.
+        # The provider may return an otherwise valid Standard repair chunk
+        # with an omitted final word end and no same-time successor. A
+        # source-anchored, text-lossless timestamp fill is a draft-only
+        # recovery, never evidence that an acoustic gap has been resolved.
+        known_timing_defect = str(exc) in {
+            "Speech word offsets out of source window",
+            "Speech word offsets overlap in source window",
+        } or (
+            row.get("purpose") == "REPAIR"
+            and str(exc) == "missing word end has no same-time successor"
+        )
+        if not known_timing_defect:
+            return "REVIEW_REQUIRED"
+        from app.pipeline.golden_v2_chirp_window_repair import (
+            _offset_ms as safe_offset_ms, repair_window,
+        )
+        try:
+            payload = json.loads(raw_bytes)
+            entries = [entry for result in payload.get("results", [])
+                       for alt in result.get("alternatives", [])[:1]
+                       for entry in alt.get("words", [])]
+            # At least one original provider word must anchor the repaired
+            # timeline; clock-only guesses without any source timestamp are
+            # not eligible for local reconciliation.
+            if not any(
+                safe_offset_ms(entry.get("startOffset")) is not None
+                and safe_offset_ms(entry.get("endOffset")) is not None
+                and 0 <= safe_offset_ms(entry["startOffset"])
+                < safe_offset_ms(entry["endOffset"]) <= row["end_ms"] - row["start_ms"] + 250
+                for entry in entries
+            ):
+                return "REVIEW_REQUIRED"
+            repair = repair_window(raw_bytes, row)
+            if (repair.characters_lost != 0 or not repair.words
+                    or any(
+                        type(w.get("start_ms")) is not int
+                        or type(w.get("end_ms")) is not int
+                        or not row["start_ms"] <= w["start_ms"] < w["end_ms"] <= row["end_ms"] + 250
+                        for w in repair.words
+                    ) or any(left["end_ms"] > right["start_ms"]
+                             for left, right in zip(repair.words, repair.words[1:]))):
+                return "REVIEW_REQUIRED"
+        except (V2Conflict, ValueError, TypeError, KeyError):
+            return "REVIEW_REQUIRED"
+        repaired_evidence = {
+            "schema": "golden-v2-chirp-window-lossless-normalization-v1",
+            "method": "REPARSE_QUARANTINED_RAW_WITH_LOSSLESS_WINDOW_REPAIR",
+            "original_reason": str(exc),
+            "provider_raw_sha256": evidence_sha,
+            "original_characters": repair.source_characters,
+            "repaired_characters": repair.repaired_characters,
+            "characters_lost": repair.characters_lost,
+            "acoustic_timing_verified": False,
+            "summary": repair.summary(),
+        }
+        # Source-bound deterministic evidence is immutable and explicit.
+        # The normalizer may shift clocks, but never invent/lose word text.
+        # Full acoustic QA at finish_approved_chirp is still mandatory.
+        words = repair.words
     if not words:
         return "REVIEW_REQUIRED"
     normalizations = [
@@ -341,6 +404,9 @@ def reconcile_reviewed_chirp_window(
         "words": words, "timing_normalizations": normalizations,
         "actual_cents": row["actual_cents"], "acoustic_gate": "NOT_RUN",
     }
+    if repaired_evidence is not None:
+        manifest["lossless_repair"] = repaired_evidence
+        manifest["timing_normalizations"] = repaired_evidence["summary"]["repairs"]
     window_path = root / "window.json"
     _immutable(window_path, _wire(manifest))
 
@@ -406,7 +472,9 @@ def finish_approved_chirp(
     # window losslessly from it and keep the result only when NOT ONE
     # recognized character is lost. A stored window.json is a derived cache and
     # may have been written by an older, lossy parser.
-    from app.pipeline.golden_v2_chirp_window_repair import repair_window
+    from app.pipeline.golden_v2_chirp_window_repair import (
+        _offset_ms as safe_offset_ms, repair_window,
+    )
     base_lossless: dict[str, list[dict[str, Any]]] = {}
     base_repair_evidence: dict[str, dict[str, Any]] = {}
     for row in base:
@@ -421,9 +489,10 @@ def finish_approved_chirp(
                        for alt in result.get("alternatives", [])[:1]
                        for entry in alt.get("words", [])]
             if not any(
-                "endOffset" in entry
-                and 0 <= _offset_ms(entry.get("startOffset", "0s"))
-                < _offset_ms(entry["endOffset"])
+                safe_offset_ms(entry.get("startOffset")) is not None
+                and safe_offset_ms(entry.get("endOffset")) is not None
+                and 0 <= safe_offset_ms(entry["startOffset"])
+                < safe_offset_ms(entry["endOffset"])
                 <= row["end_ms"] - row["start_ms"] + 250
                 for entry in entries
             ):
