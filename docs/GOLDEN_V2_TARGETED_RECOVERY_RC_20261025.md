@@ -65,3 +65,25 @@ repair driver **43 項 unittest PASS**。
 部署視為四筆錄音結案。
 
 **Owner 待核准：正式 Production 切換到本最小 RC 的 exact commit SHA。**
+
+## CI 安全閘補修（同一候選版的限定兩檔依賴升級）
+
+PR 首次 CI 的「Next.js tests and production build」唯一失敗原因是
+`npm audit --omit=dev --audit-level=high`：原 `next@16.3.8` 有
+Critical security advisory（含 Image Optimization / Server Actions）。
+既有 64 項 Node 測試、TypeScript 與 build 實際成功，並非 Golden
+字幕 API/Worker regression。**未關閉 npm audit。**
+
+只將 `frontend/package.json` / `frontend/package-lock.json`
+的 Next 及相應 @next/env / SWC 鎖定依賴升級為 `16.4.3`。
+保留原 lockfile 的 glibc/musl optional platform 限制，避免
+Alpine 產生的鎖檔刪掉 Linux 平台依賴辨識。
+獨立 Node 22 容器驗證：
+- `npm ci`：完成
+- `npm test`：64 / 64 PASS（repo root mounted）
+- `npm run build`：正式 Next.js 16.4.3 建置成功
+- `npm audit --omit=dev --audit-level=high`：**found 0 vulnerabilities**
+
+這是為了維持原有 CI security gate 而做的最小前端依賴補修，
+不是擴大 Golden 字幕業務範圍。RC 目前相對正式基底變動 **8 檔**；
+Production 仍等待 exact SHA owner 授權。
