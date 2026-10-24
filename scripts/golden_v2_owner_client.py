@@ -45,7 +45,7 @@ def main() -> int:
     pi = paid.add_mutually_exclusive_group(required=True)
     pi.add_argument('--request-file',type=Path); pi.add_argument('--request-stdin',action='store_true')
     review=sub.add_parser('review'); review.add_argument('job_id')
-    for action in ['review-overlaps','review-adjudication','authorize-publication']:
+    for action in ['review-overlaps','review-adjudication','authorize-publication','attest-ai-review','authorize-ai-publication','prepare-ai-review','prepare-ai-draft']:
         entry=sub.add_parser(action); entry.add_argument('job_id')
         ri=entry.add_mutually_exclusive_group(required=True)
         ri.add_argument('--request-file',type=Path); ri.add_argument('--request-stdin',action='store_true')
@@ -59,7 +59,7 @@ def main() -> int:
             raise ValueError
     except ValueError:
         parser.error("Owner API requires an HTTPS origin or private loopback/container origin")
-    write = args.action in {"create-batch", "approve-job", 'quote', 'authorize-paid','review-overlaps','review-adjudication','authorize-publication'}
+    write = args.action in {"create-batch", "approve-job", 'quote', 'authorize-paid','review-overlaps','review-adjudication','authorize-publication','attest-ai-review','authorize-ai-publication','prepare-ai-review','prepare-ai-draft'}
     token = os.environ.get("COURSE_TRANSCRIPT_V2_WRITE_TOKEN" if write else "COURSE_TRANSCRIPT_V2_STATUS_TOKEN", "")
     if len(token) < 32:
         parser.error("Required scoped owner token is not configured")
@@ -79,7 +79,7 @@ def main() -> int:
     elif args.action == "drive-health": route = "drive-health"
     else:
         if not re.fullmatch(r"v2p?_[0-9a-f]{32}", args.job_id): parser.error("Invalid job ID")
-        suffix = '/'+args.action if args.action in {'authorize-paid','review','review-overlaps','review-adjudication','authorize-publication','paid-readiness'} else '/approval' if write else ''
+        suffix = '/'+args.action if args.action in {'authorize-paid','review','review-overlaps','review-adjudication','authorize-publication','paid-readiness','attest-ai-review','authorize-ai-publication','prepare-ai-review','prepare-ai-draft'} else '/approval' if write else ''
         route = "jobs/" + args.job_id + suffix
     if write:
         try:

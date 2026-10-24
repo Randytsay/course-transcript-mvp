@@ -27,6 +27,8 @@ def main() -> int:
     parser.add_argument('--aggregate-cap-cents', type=int, default=1000)
     parser.add_argument('--poll-seconds', type=float, default=30)
     parser.add_argument('--enable-paid', action='store_true')
+    parser.add_argument('--auto-rescue-known-refusal', action='store_true',
+                        help='opt-in trusted independent Chirp rescue for audited SAFETY refusal')
     parser.add_argument('--once', action='store_true')
     args = parser.parse_args()
     if not 1 <= args.poll_seconds <= 3600 or not 1 <= args.aggregate_cap_cents <= 100000:
@@ -51,7 +53,8 @@ def main() -> int:
         result = run_paid_executor_pass(database=args.database, artifact_root=args.artifact_root,
                                        enabled=args.enable_paid, aggregate_cap_cents=args.aggregate_cap_cents,
                                        paid_services=services.paid_services if services else None,
-                                       recovery_services=services.recovery_services if services else None)
+                                       recovery_services=services.recovery_services if services else None,
+                                       auto_rescue_known_refusal=args.auto_rescue_known_refusal)
         print(json.dumps(result, ensure_ascii=False), flush=True)
         if args.once or stop.wait(args.poll_seconds): break
     finally:
