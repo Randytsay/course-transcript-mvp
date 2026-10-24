@@ -109,6 +109,58 @@ class ChirpRecoveryWorkerTests(unittest.TestCase):
         self.assertTrue(review_path.is_file())
         self.assertEqual(len(self.h.speech.calls), 2)
 
+    def test_quarantined_overlap_repaired_losslessly_without_new_submission(self):
+        self.h.plan()
+        rows=submit_planned_chirp(
+            ledger=self.h.ledger, claim=self.h.claim, gateway=self.h.gateway)
+        self.h._complete_outputs(rows)
+        window=rows[0]
+        prefix=window["output_uri"].split("private-test-bucket/",1)[1]
+        # Recognized words remain identical; two word offsets are reversed.
+        raw=chirp_fixtures.speech_words(("一",0.2,1.2),("二",0.9,1.7))
+        self.h.cloud.results[prefix+"output.json"]=chirp_fixtures.FakeResult(
+            prefix+"output.json",raw)
+        held=self.recover()
+        self.assertEqual(held["action"],"WINDOW_REVIEW_REQUIRED")
+        self.assertEqual(held["review_required"],[window["window_id"]])
+        # The next cycle re-parses the SAME saved immutable raw and updates
+        # ledger evidence after lossless normalization. No Speech POST.
+        outcome=self.recover()
+        self.assertEqual(outcome["provider_submissions"],0)
+        self.assertIn(outcome["action"], {"CHIRP_COMPLETE","MANUAL_ACOUSTIC_REVIEW_REQUIRED",
+                                         "STANDARD_REPAIR_APPROVAL_REQUIRED"})
+        self.assertEqual(outcome["reconciled"],1)
+        manifest_path=(self.h.job_dir/"golden-v2"/"chirp-evidence"/window["window_id"]/"window.json")
+        import json
+        manifest=json.loads(manifest_path.read_text())
+        self.assertEqual("".join(w["word"] for w in manifest["words"]),"一二")
+        self.assertEqual(manifest["lossless_repair"]["characters_lost"],0)
+        self.assertFalse(manifest["lossless_repair"]["acoustic_timing_verified"])
+        self.assertEqual(len(self.h.speech.calls),2)
+
+    def test_quarantined_invalid_words_are_not_auto_normalized(self):
+        self.h.plan()
+        rows=submit_planned_chirp(
+            ledger=self.h.ledger, claim=self.h.claim, gateway=self.h.gateway)
+        self.h._complete_outputs(rows)
+        window=rows[0]
+        prefix=window["output_uri"].split("private-test-bucket/",1)[1]
+        raw=chirp_fixtures.speech_words(("越界詞",0.2,50.0))
+        self.h.cloud.results[prefix+"output.json"]=chirp_fixtures.FakeResult(
+            prefix+"output.json",raw)
+        held=self.recover()
+        self.assertEqual(held["action"],"WINDOW_REVIEW_REQUIRED")
+        after=self.recover()
+        # Repair can re-anchor a severe provider outlier but must either
+        # preserve all words with explicit provenance, or remain held;
+        # never produce a silent text truncation or unapproved cloud POST.
+        self.assertEqual(after["provider_submissions"],0)
+        self.assertEqual(len(self.h.speech.calls),2)
+        if after["reconciled"]:
+            import json
+            manifest=json.loads((self.h.job_dir/"golden-v2"/"chirp-evidence"/window["window_id"]/"window.json").read_text())
+            self.assertEqual(manifest["lossless_repair"]["characters_lost"],0)
+
     def test_uncertain_submission_never_retried_by_recovery(self):
         self.h.plan(max_window_seconds=10)
         self.h.speech.fail = True
