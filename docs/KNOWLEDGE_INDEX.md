@@ -14,13 +14,21 @@ This index tells future Agents which documents are current contracts versus hist
 - `skills/golden-course-transcript/SKILL.md` — Golden workflow operator contract on the current branch.
 - `docs/GOLDEN_COURSE_TRANSCRIPT_WORKFLOW.md` — stable Golden workflow pointer.
 
-## Approved future specification (NOT yet deployed)
+## Golden V2 — current authoritative documentation
 
-- `docs/GOLDEN_V2_ARCHITECTURE_PLAN.md` — V2 Gemini 3.8 full-audio primary, Chirp 3, optional Gemini 3.5 Transcribe, Vertex Gemini 3.8 text-only correction, and final WebCodex/Golden QA design.
-- `docs/GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md` — P0–P8 sequence, G0–G8 auditable release gates, user approval boundaries.
-- `docs/GOLDEN_V2_GATE_STATUS.md` — evidence-based milestone status. Initially all G0–G8 are NOT_RUN.
+- [Current architecture](GOLDEN_V2_CURRENT_ARCHITECTURE.md) — exact-SHA
+  deployed runtime, implementation map, verified current blockers.
+- [Independent external audit](GOLDEN_V2_INDEPENDENT_AUDIT.md) — directly
+  reusable instructions to investigate why four tasks cannot reach Golden QA.
+- [Acceptance contract](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md) — retained
+  G0–G8 standards, not proof any particular task passed.
+- [Historical gate diary](GOLDEN_V2_GATE_STATUS.md) — preserve dated evidence;
+  not the live status database.
 
-These documents have authority for **new V2 implementation intent**, not as evidence of current executable code or production status. For current behavior use exact commit/runtime code, `CURRENT_STATE.md`, and tested implementation evidence.
+The original 2026-10-11 architecture plan and obsolete integration handoff
+are removed from the active tree; their exact bytes remain accessible in
+Git history at 17d33faf6239ca5a1fcdfe91f18cef202f271b0f.
+Do not let historical drafts override current exact-sha code or runtime.
 
 ## 2026-10-13 — Active P5 QA handoff
 
