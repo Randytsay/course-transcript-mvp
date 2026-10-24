@@ -91,6 +91,12 @@ def _candidate_for_assessment(job_dir: Path, expected_sha: str) -> Path:
                 return path
         except (OSError, ValueError):
             continue
+    # A prior REVIEW_REQUIRED Chirp has a ledger-attested historical candidate
+    # and may also have a newer provider-free merged file. The latter is a
+    # valid acoustic candidate only when its exact bytes match assessment SHA.
+    alias = Path(job_dir) / "golden-v2" / "chirp-merged.json"
+    if alias.is_file() and not alias.is_symlink() and file_sha256(alias) == expected_sha:
+        return alias
     raise V2Conflict("acoustic assessment has no matching immutable Chirp candidate")
 
 
@@ -100,8 +106,15 @@ def propose_standard_repair_plan(
     bucket_name: str, object_prefix: str,
     estimate_window_cents: Callable[[dict[str, Any]], int],
     max_intervals: int = 12, max_total_ms: int = 600_000,
+    selected_proposal_indices: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Create a local-only proposal; no owner approval, upload or provider call."""
+    """Create one bounded local Standard proposal.
+
+    An exact selection is required when the acoustic report contains >12
+    clips or more than 10 minutes of positive interval context. Each selected
+    interval is still verified against the original full acoustic report;
+    selection cannot introduce new or enlarge existing positive speech.
+    """
     ledger.assert_stage_claim(claim, stage="chirp_independent")
     if (not callable(estimate_window_cents) or not bucket_name
             or "/" in bucket_name or not _safe_prefix(object_prefix)):
@@ -140,6 +153,18 @@ def propose_standard_repair_plan(
                     or target.get("end_ms", 0) > gaps[index].get("end_ms", -1)):
                 raise V2Conflict("repair target lacks matching positive speech evidence")
 
+    if selected_proposal_indices is not None:
+        if (not isinstance(selected_proposal_indices, list)
+                or not selected_proposal_indices
+                or len(selected_proposal_indices) > max_intervals
+                or any(type(i) is not int or i < 0 or i >= len(proposals)
+                       for i in selected_proposal_indices)
+                or selected_proposal_indices != sorted(set(selected_proposal_indices))):
+            raise V2Conflict("repair batch must be a unique ordered positive-QA subset")
+        proposals = [proposals[i] for i in selected_proposal_indices]
+    elif len(proposals) > max_intervals or sum(
+            i["end_ms"]-i["start_ms"] for i in proposals) > max_total_ms:
+        raise V2Conflict("acoustic repairs require bounded explicit batch selection")
     local_dir = Path(job_dir) / "golden-v2" / "chirp-repair-clips"
     local_manifest = prepare_local_repair_clips(
         source=normalized_audio, expected_source_sha256=claim["source_sha"],
@@ -188,6 +213,7 @@ def propose_standard_repair_plan(
         "assessment_sha": assessment_sha, "repair_round": round_id,
         "strategy": "STANDARD_BATCH", "submit_authorized": False,
         "window_rows": rows, "estimated_cents": sum(r["estimated_cents"] for r in rows),
+        "selected_proposal_indices": selected_proposal_indices,
         "local_manifest_sha256": hashlib.sha256(_wire(local_manifest)).hexdigest(),
         "local_manifest": local_manifest,
     }
