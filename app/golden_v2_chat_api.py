@@ -133,6 +133,54 @@ def authorize_paid(job_id: str, body: PaidGrantRequest, authorization: str | Non
         raise HTTPException(status_code=503,detail='Trusted quote or grant unavailable') from exc
 
 
+
+class AutoFolderPolicyRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    cap_per_folder_cents: Literal[600]
+    valid_through: str = Field(pattern=r"^20[0-9]{2}-[0-9]{2}-[0-9]{2}$")
+    enabled: StrictBool
+    confirm: Literal[True]
+
+
+@app.get('/api/v1/golden-v2/auto-budget')
+def read_auto_folder_policy(authorization: str | None = Header(default=None)):
+    database=_authorized_database(authorization)
+    from app.pipeline.golden_v2_auto_six import policy_status
+    return policy_status(database.parent)
+
+
+@app.post('/api/v1/golden-v2/auto-budget')
+def set_auto_folder_policy(body: AutoFolderPolicyRequest,
+                           authorization: str | None = Header(default=None)):
+    database,actor,_=_authorized_write_database(authorization)
+    from app.pipeline.golden_v2_auto_six import configure_policy
+    try:
+        return configure_policy(root=database.parent,actor=actor,
+                                enabled=body.enabled,valid_through=body.valid_through)
+    except (V2Conflict,ValueError,sqlite3.Error) as exc:
+        raise _mutation_error(exc) from exc
+
+
+class AutoFolderAuthorizeRequest(BaseModel):
+    model_config=ConfigDict(extra="forbid")
+    submitted_folder_path: str = Field(min_length=9,max_length=1024)
+    confirm: Literal[True]
+
+
+@app.post('/api/v1/golden-v2/jobs/{job_id}/auto-budget/authorize')
+def auto_folder_authorize(job_id: str,body: AutoFolderAuthorizeRequest,
+                          authorization: str | None = Header(default=None)):
+    database,actor,ceiling=_authorized_write_database(authorization)
+    if os.environ.get('COURSE_TRANSCRIPT_V2_PAID_API_ENABLED','').lower()!='true':
+        raise HTTPException(status_code=409,detail='Paid API disabled; no automatic submission')
+    from app.pipeline.golden_v2_auto_six import auto_authorize_quote
+    try:
+        return auto_authorize_quote(root=database.parent,actor=actor,job_id=job_id,
+                                    submitted_folder_path=body.submitted_folder_path,
+                                    aggregate_cap_cents=ceiling)
+    except (V2Conflict,ValueError,sqlite3.Error) as exc:
+        raise _mutation_error(exc) from exc
+
 def _revision() -> str:
     value = os.environ.get("COURSE_TRANSCRIPT_V2_RELEASE_SHA", "")
     return value if re.fullmatch(r"[0-9a-f]{40}", value) else "UNVERIFIED"

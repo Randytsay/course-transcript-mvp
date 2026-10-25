@@ -38,6 +38,14 @@ def main() -> int:
     sub.add_parser("jobs")
     sub.add_parser("service-status")
     sub.add_parser("drive-health")
+    sub.add_parser("auto-budget-status")
+    for action in ("auto-budget-configure","auto-budget-authorize"):
+        entry=sub.add_parser(action)
+        if action=="auto-budget-authorize":
+            entry.add_argument("job_id")
+        args_group=entry.add_mutually_exclusive_group(required=True)
+        args_group.add_argument("--request-file",type=Path)
+        args_group.add_argument("--request-stdin",action="store_true")
     job = sub.add_parser("job-status"); job.add_argument("job_id")
     readiness = sub.add_parser("paid-readiness"); readiness.add_argument("job_id")
     approve = sub.add_parser("approve-job"); approve.add_argument("job_id"); approve.add_argument("--request-file", type=Path, required=True)
@@ -67,7 +75,7 @@ def main() -> int:
             raise ValueError
     except ValueError:
         parser.error("Owner API requires an HTTPS origin or private loopback/container origin")
-    write = args.action in {"create-batch", "approve-job", 'quote', 'authorize-paid','review-overlaps','review-adjudication','authorize-publication','ai-limited-prepare','ai-limited-authorize-publication','ai-limited-publish'}
+    write = args.action in {"auto-budget-configure","auto-budget-authorize","create-batch", "approve-job", 'quote', 'authorize-paid','review-overlaps','review-adjudication','authorize-publication','ai-limited-prepare','ai-limited-authorize-publication','ai-limited-publish'}
     token = os.environ.get("COURSE_TRANSCRIPT_V2_WRITE_TOKEN" if write else "COURSE_TRANSCRIPT_V2_STATUS_TOKEN", "")
     if len(token) < 32:
         parser.error("Required scoped owner token is not configured")
@@ -85,9 +93,13 @@ def main() -> int:
     elif args.action == "jobs": route = "jobs"
     elif args.action == "service-status": route = "service"
     elif args.action == "drive-health": route = "drive-health"
+    elif args.action in ("auto-budget-status","auto-budget-configure"):
+        route = "auto-budget"
     else:
         if not re.fullmatch(r"v2p?_[0-9a-f]{32}", args.job_id): parser.error("Invalid job ID")
-        if args.action.startswith('ai-limited-'):
+        if args.action=="auto-budget-authorize":
+            suffix="/auto-budget/authorize"
+        elif args.action.startswith('ai-limited-'):
             suffix='/ai-limited/'+args.action[len('ai-limited-'):]
         else:
             suffix = '/'+args.action if args.action in {'authorize-paid','review','review-overlaps','review-adjudication','authorize-publication','paid-readiness'} else '/approval' if write else ''
