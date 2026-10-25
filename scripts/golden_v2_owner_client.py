@@ -49,6 +49,14 @@ def main() -> int:
         entry=sub.add_parser(action); entry.add_argument('job_id')
         ri=entry.add_mutually_exclusive_group(required=True)
         ri.add_argument('--request-file',type=Path); ri.add_argument('--request-stdin',action='store_true')
+    ai_status=sub.add_parser('ai-limited-status')
+    ai_status.add_argument('job_id')
+    for action in ['ai-limited-prepare','ai-limited-authorize-publication','ai-limited-publish']:
+        entry=sub.add_parser(action)
+        entry.add_argument('job_id')
+        request=entry.add_mutually_exclusive_group(required=True)
+        request.add_argument('--request-file',type=Path)
+        request.add_argument('--request-stdin',action='store_true')
     args = parser.parse_args()
     base = os.environ.get("COURSE_TRANSCRIPT_V2_OWNER_API_URL", "http://127.0.0.1:8000").rstrip("/")
     try:
@@ -59,7 +67,7 @@ def main() -> int:
             raise ValueError
     except ValueError:
         parser.error("Owner API requires an HTTPS origin or private loopback/container origin")
-    write = args.action in {"create-batch", "approve-job", 'quote', 'authorize-paid','review-overlaps','review-adjudication','authorize-publication'}
+    write = args.action in {"create-batch", "approve-job", 'quote', 'authorize-paid','review-overlaps','review-adjudication','authorize-publication','ai-limited-prepare','ai-limited-authorize-publication','ai-limited-publish'}
     token = os.environ.get("COURSE_TRANSCRIPT_V2_WRITE_TOKEN" if write else "COURSE_TRANSCRIPT_V2_STATUS_TOKEN", "")
     if len(token) < 32:
         parser.error("Required scoped owner token is not configured")
@@ -79,7 +87,10 @@ def main() -> int:
     elif args.action == "drive-health": route = "drive-health"
     else:
         if not re.fullmatch(r"v2p?_[0-9a-f]{32}", args.job_id): parser.error("Invalid job ID")
-        suffix = '/'+args.action if args.action in {'authorize-paid','review','review-overlaps','review-adjudication','authorize-publication','paid-readiness'} else '/approval' if write else ''
+        if args.action.startswith('ai-limited-'):
+            suffix='/ai-limited/'+args.action[len('ai-limited-'):]
+        else:
+            suffix = '/'+args.action if args.action in {'authorize-paid','review','review-overlaps','review-adjudication','authorize-publication','paid-readiness'} else '/approval' if write else ''
         route = "jobs/" + args.job_id + suffix
     if write:
         try:
