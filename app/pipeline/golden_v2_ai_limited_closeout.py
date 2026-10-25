@@ -104,6 +104,9 @@ def prepare_limited_manifest(
     paths = [Path(srt_path), Path(txt_path), Path(triage_path)]
     if any(not path.resolve().is_relative_to(jobdir.resolve()) for path in paths):
         raise V2Conflict("delivery evidence must stay inside the bound job")
+    if ("_AI校對_含待複核" not in remote_names[0]
+            or remote_names[1] != remote_names[0][:-4]+".txt"):
+        raise V2Conflict("AI-limited filenames must explicitly disclose open QA items")
     srt_raw = _check_file(paths[0], 20_000_000)
     txt_raw = _check_file(paths[1], 20_000_000)
     triage_raw = _check_file(paths[2], 10_000_000)
@@ -148,6 +151,8 @@ def prepare_limited_manifest(
         ],
         "output_names": list(remote_names),
         "source_srt_filename": Path(srt_path).name,
+        "source_txt_filename": Path(txt_path).name,
+        "source_triage_filename": Path(triage_path).name,
         "limitations": [
             "Unresolved acoustic/semantic evidence has not been certified.",
             "SRT/TXT are readable AI-assisted drafts, not Golden PASS.",
@@ -176,6 +181,15 @@ def register_proposal(root: Path, manifest: dict) -> dict:
         raise V2Conflict("stale Golden ledger revision / source")
     with ledger._tx() as db:
         _schema(db)
+        locked_job = db.execute(
+            "SELECT revision,source_sha,status FROM v2_jobs WHERE id=?",
+            (canonical["job_id"],)
+        ).fetchone()
+        if (locked_job is None or
+                locked_job["revision"] != canonical["ledger_revision"] or
+                locked_job["source_sha"] != canonical["source_sha256"] or
+                locked_job["status"] != "NEEDS_REVIEW"):
+            raise V2Conflict("concurrent Golden job revision changed")
         delivered = db.execute(
             "SELECT manifest_sha FROM v2_ai_limited_deliveries "
             "WHERE job_id=? AND state='DELIVERED'", (canonical["job_id"],)

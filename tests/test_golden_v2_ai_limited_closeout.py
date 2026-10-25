@@ -20,19 +20,23 @@ class AILimitedCloseoutTests(unittest.TestCase):
         self.job_id = "v2p_"+"a"*32
         self.folder = self.root/"jobs"/self.job_id
         self.folder.mkdir(parents=True)
+        self.assets = self.folder / "golden-v2"
+        self.assets.mkdir()
         self.audio = b"normalized synthetic test audio, not real speech"
         self.sha = hashlib.sha256(self.audio).hexdigest()
         (self.folder/"normalized.flac").write_bytes(self.audio)
         (self.folder/"source-preflight.json").write_text(json.dumps({
             "source_sha256": self.sha,
-            "drive_observation":{"file_id":"f123","version":"7"},
+            "drive_observation":{"file_id":"f123","version":"7",
+                                 "size_bytes":len(self.audio),"downloaded_md5":"unit-md5"},
+            "drive_source_path":"gdrive:lecture/source.wav",
         }))
-        self.srt = self.folder/"original_review.srt"
+        self.srt = self.assets/"original_review.srt"
         self.srt.write_text("1\n00:00:00,000 --> 00:00:01,000\n佛法\n\n"
                             "2\n00:00:01,100 --> 00:00:02,000\n修行\n")
-        self.txt = self.folder/"review_transcript.txt"
+        self.txt = self.assets/"review_transcript.txt"
         self.txt.write_text("佛法\n修行\n")
-        self.qa = self.folder/"source_acoustic_triage.json"
+        self.qa = self.assets/"source_acoustic_triage.json"
         self.qa.write_text(json.dumps({
             "job_id":self.job_id,"srt_sha256":hashlib.sha256(self.srt.read_bytes()).hexdigest(),
             "total_acoustic_gaps":2,
