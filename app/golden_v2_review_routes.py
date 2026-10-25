@@ -384,7 +384,23 @@ def authorize_ai_limited(job_id: str, body: AILimitedPublishApprovalRequest,
                 state['source_sha']!=manifest['source_sha256'] or
                 state['status']!='NEEDS_REVIEW'):
             raise V2Conflict('approval revision or scope changed')
+        # Google Drive metadata can advance without the source audio changing.
+        # The authenticated grant pins the *current* revision and the exact
+        # immutable preflight content MD5/size. This never approves content drift.
+        from app.pipeline.golden_v2_delivery import DriveDeliveryGateway
+        preflight=json.loads((job/'source-preflight.json').read_text())
+        obs=preflight['drive_observation']
+        live=DriveDeliveryGateway().get(manifest['source_file_id'])
+        if (not live or live.get('trashed') or
+                live.get('id')!=obs['file_id'] or
+                int(live.get('size',-1))!=int(obs['size_bytes']) or
+                live.get('md5Checksum')!=preflight['original_md5_checksum'] or
+                len(live.get('parents',[]))!=1 or
+                not str(live.get('version','')).isdigit() or
+                int(live['version'])<int(obs['version'])):
+            raise V2Conflict('source bytes or Drive revision changed before owner approval')
         payload={
+            'source_version_at_approval':str(live['version']),
             'job_id':job_id,'manifest_sha256':body.manifest_sha256,
             'quality_tier':TIER,'source_sha256':manifest['source_sha256'],
             'output_names':manifest['output_names'],'approve_delivery':True,

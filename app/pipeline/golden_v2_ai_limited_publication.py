@@ -92,13 +92,20 @@ def publish_signed_ai_limited(
             or str(obs["version"])!=manifest["source_version"]
             or preflight["source_sha256"]!=manifest["source_sha256"]):
         raise V2Conflict("original Drive source metadata drift")
+    # The owner must have authenticated and approved the live source revision,
+    # not just the historical preflight version. Content MD5 and file ID remain
+    # immutable, and the live version is verified on every publication step.
+    approved_version=str(payload.get("source_version_at_approval",""))
+    if (not approved_version.isdigit() or
+            int(approved_version)<int(obs["version"])):
+        raise V2Conflict("unbound or older source revision approval")
     gateway = gateway or DriveDeliveryGateway()
 
     def check_source():
         remote = gateway.get(obs["file_id"])
         if (not remote or remote.get("trashed") or
                 remote.get("id")!=obs["file_id"] or
-                str(remote.get("version"))!=str(obs["version"]) or
+                str(remote.get("version"))!=approved_version or
                 int(remote.get("size",-1))!=int(obs["size_bytes"]) or
                 remote.get("md5Checksum") != obs.get("downloaded_md5",
                     preflight.get("original_md5_checksum")) or

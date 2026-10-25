@@ -71,6 +71,7 @@ class LimitedPublisherTests(AILimitedCloseoutTests):
             'quality_tier':TIER,'source_sha256':self.sha,
             'output_names':list(self.names),'approve_delivery':True,
             'actor':'authenticated-owner','reference':'explicit-owner-limited-quality-review',
+            'source_version_at_approval':'7',
             'confirm_listened':None,
         }
         self.grant_path=(self.folder/'owner-ai-limited-grant-'/
@@ -127,6 +128,23 @@ class LimitedPublisherTests(AILimitedCloseoutTests):
 
     def test_changed_source_version_stops_before_post(self):
         self.gateway.files['f123']['version']='8'
+        with self.assertRaisesRegex(V2Conflict,'source'):
+            self.publish()
+        self.assertEqual(self.gateway.count,0)
+
+    def test_metadata_revision_changes_only_when_owner_signed_new_revision(self):
+        self.gateway.files['f123']['version']='8'
+        payload=dict(self.grant,source_version_at_approval='8')
+        self.grant_path.write_text(json.dumps(sign(payload)))
+        result=self.publish()
+        self.assertTrue(result['readback_verified'])
+        self.assertEqual(len(result['files']),2)
+
+    def test_md5_changed_even_with_owner_new_revision_stops(self):
+        self.gateway.files['f123']['version']='8'
+        self.gateway.files['f123']['md5Checksum']='different-content'
+        payload=dict(self.grant,source_version_at_approval='8')
+        self.grant_path.write_text(json.dumps(sign(payload)))
         with self.assertRaisesRegex(V2Conflict,'source'):
             self.publish()
         self.assertEqual(self.gateway.count,0)
