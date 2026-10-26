@@ -111,7 +111,8 @@ def read_chirp_first_reference(
     text, extent, defects = _reference_text_and_extent(raw, duration_ms)
     return text, {
         "reference_format_issues": defects,
-        "reference_requires_format_review": bool(defects["blank_cue_count"]),
+        "reference_requires_format_review": bool(
+            defects["blank_cue_count"] or defects["short_overlap_count"]),
         "schema": "golden-v2-chirp-first-reference-v1",
         "reference_evidence_sha256": file_sha256(metadata),
         "reference_srt_sha256": packet["reference_srt_sha256"],

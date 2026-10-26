@@ -77,6 +77,31 @@ class ChirpFirstReferenceTests(unittest.TestCase):
         with self.assertRaisesRegex(V2Conflict, "full source timeline"):
             self.read()
 
+    def test_small_reference_overlap_requires_qa_review(self):
+        self.srt_path.write_text(
+            "1\n00:00:00,100 --> 00:00:02,100\n復次\n\n"
+            "2\n00:00:02,000 --> 00:00:07,950\n文殊師利\n",
+            encoding="utf-8")
+        self.packet["reference_srt_sha256"] = hashlib.sha256(
+            self.srt_path.read_bytes()).hexdigest()
+        self.persist()
+        _, report = self.read()
+        self.assertTrue(report["reference_requires_format_review"])
+        self.assertEqual(report["reference_format_issues"]["short_overlap_count"], 1)
+
+    def test_blank_reference_cue_requires_qa_review(self):
+        self.srt_path.write_text(
+            "1\n00:00:00,100 --> 00:00:02,000\n復次\n\n"
+            "2\n00:00:02,000 --> 00:00:04,000\n\n"
+            "3\n00:00:04,000 --> 00:00:07,950\n文殊師利\n",
+            encoding="utf-8")
+        self.packet["reference_srt_sha256"] = hashlib.sha256(
+            self.srt_path.read_bytes()).hexdigest()
+        self.persist()
+        _, report = self.read()
+        self.assertTrue(report["reference_requires_format_review"])
+        self.assertEqual(report["reference_format_issues"]["blank_cue_count"], 1)
+
     def test_symlinked_reference_rejected(self):
         self.srt_path.unlink()
         self.srt_path.symlink_to(self.audio)
