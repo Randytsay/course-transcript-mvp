@@ -12,7 +12,7 @@ from typing import Any
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, STAGES, V2Conflict
 from app.pipeline.golden_v2_stage_runner import (
     complete_adjudication_or_hold, complete_comparison,
-    complete_evidence_bound_qa,
+    complete_evidence_bound_qa, require_chirp_first_reference_ready,
 )
 
 
@@ -59,6 +59,17 @@ def advance_local(
         if comparison_stage["review_required"]:
             return {"job_id": job_id, "stage": stage,
                     "action": "HUMAN_AUDIO_REVIEW_REQUIRED"}
+
+    # Chirp-first compares only a pinned, source-bound, operator-attested
+    # human SRT; an absent reference must not create a new/stale RUNNING claim.
+    if stage == "compare" and stages[0]["state"] == "SKIPPED":
+        try:
+            require_chirp_first_reference_ready(
+                ledger=ledger, job_id=job_id, job_dir=job_dir)
+        except (V2Conflict, KeyError, TypeError, ValueError) as exc:
+            return {"job_id": job_id, "stage": stage,
+                    "action": "CHIRP_FIRST_REFERENCE_ALIGN_REQUIRED",
+                    "state": pending["state"], "reason": str(exc)}
 
     if pending["state"] == "RUNNING":
         try:

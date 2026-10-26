@@ -1221,6 +1221,40 @@ class GoldenV2Ledger:
             })
         return normalized
 
+    @staticmethod
+    def _reject_completed_repair_overlap(
+        operations: list[sqlite3.Row], proposed: list[dict[str, Any]],
+    ) -> None:
+        """Reject an old QA plan that re-targets a completed paid repair.
+
+        A provider DONE result is not proof of nonspeech. The next action is
+        REVIEW, not another paid attempt over the same source interval.
+        """
+        completed: list[tuple[int, int]] = []
+        for op in operations:
+            if op["purpose"] != "REPAIR" or op["status"] != "DONE":
+                continue
+            try:
+                targets = json.loads(op["target_intervals_json"])
+            except (TypeError, ValueError) as exc:
+                raise V2Conflict("invalid completed repair target evidence") from exc
+            if not isinstance(targets, list):
+                raise V2Conflict("invalid completed repair target evidence")
+            for target in targets:
+                if not isinstance(target, dict):
+                    raise V2Conflict("invalid completed repair target evidence")
+                start, end = target.get("start_ms"), target.get("end_ms")
+                if type(start) is not int or type(end) is not int or end <= start:
+                    raise V2Conflict("invalid completed repair target evidence")
+                completed.append((start, end))
+        for window in proposed:
+            for target in window["target_intervals"]:
+                if any(target["start_ms"] < end and start < target["end_ms"]
+                       for start, end in completed):
+                    raise V2Conflict(
+                        "repair target overlaps completed Standard Batch; acoustic review required"
+                    )
+
     def approve_chirp_repair_plan(
         self, job_id: str, *, expected_revision: int, assessment_sha: str,
         windows: list[dict[str, Any]], approved_cents: int,
@@ -1250,14 +1284,17 @@ class GoldenV2Ledger:
             if (not existing or any(row["status"] != "DONE" for row in existing)):
                 raise V2Conflict("repair approval requires all prior Chirp operations complete")
             rows = self._repair_plan_rows(windows, job["source_sha"])
+            self._reject_completed_repair_overlap(existing, rows)
             if any(row["assessment_sha"] != assessment_sha for row in rows):
                 raise V2Conflict("repair plan does not match acoustic assessment")
             estimate = sum(row["estimated_cents"] for row in rows)
             chirp_actual = sum(int(row["actual_cents"] or 0) for row in existing)
             other_actual = sum(int(row["actual_cents"] or 0) for row in self._stages(db, job_id)
                                if row["name"] != "chirp_independent")
-            available = min(int(stage["estimate_cents"]) - chirp_actual,
-                            int(job["approved_cents"] or 0) - other_actual - chirp_actual)
+            # BASE estimates are not the ceiling for a later owner-approved
+            # repair.  Reserve the exact approved windows against the job cap;
+            # plan_chirp_repair_windows atomically expands the stage estimate.
+            available = int(job["approved_cents"] or 0) - other_actual - chirp_actual
             if (estimate <= 0 or estimate > approved_cents
                     or approved_cents > available):
                 raise V2Conflict("repair cost approval exceeds available preapproved budget")
@@ -1304,6 +1341,7 @@ class GoldenV2Ledger:
             if not existing or any(row["status"] != "DONE" for row in existing):
                 raise V2Conflict("all prior Chirp operations must complete before repair")
             rows = self._repair_plan_rows(windows, job["source_sha"])
+            self._reject_completed_repair_overlap(existing, rows)
             approved = json.loads(approval["plan_json"])
             if (rows != approved["windows"] or approved["assessment_sha"] != approval["assessment_sha"]
                     or _digest(approved) != plan_sha):
@@ -1312,12 +1350,17 @@ class GoldenV2Ledger:
             if total > approval["approved_cents"]:
                 raise V2Conflict("repair window estimates exceed owner-approved ceiling")
             actual = sum(int(row["actual_cents"] or 0) for row in existing)
-            if actual + total > stage["estimate_cents"]:
-                raise V2Conflict("repair estimates exceed remaining Chirp stage budget")
             other = sum(int(row["actual_cents"] or 0) for row in self._stages(db, claim["job_id"])
                         if row["name"] != "chirp_independent")
             if other + actual + total > int(job["approved_cents"] or 0):
                 raise V2Conflict("repair estimates exceed remaining job approval")
+            # This enlargement is only allowed inside the immutable owner-plan
+            # consumption transaction; an unapproved stage top-up is impossible.
+            required_stage_cents = actual + total
+            if required_stage_cents > int(stage["estimate_cents"]):
+                db.execute("UPDATE v2_stages SET estimate_cents=? WHERE job_id=? "
+                           "AND name='chirp_independent'",
+                           (required_stage_cents, claim["job_id"]))
             for row in rows:
                 request_id = _digest({"job": claim["job_id"], **row})
                 db.execute(

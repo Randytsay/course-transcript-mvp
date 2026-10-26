@@ -103,6 +103,86 @@ class CoordinatorTests(unittest.TestCase):
         self.assertTrue(all(action.get("provider_calls_started") is not True
                             for action in actions))
 
+    def test_chirp_first_skipped_primary_does_not_claim_compare(self):
+        job = self.seed()
+        with self.store._tx() as db:
+            db.execute("UPDATE v2_stages SET state='SKIPPED' WHERE job_id=? "
+                       "AND name='gemini_primary'", (job,))
+        before = self.store.status(job)
+        response = advance_local(ledger=self.store, job_id=job, job_dir=self.job_dir)
+        self.assertEqual(response['action'], 'CHIRP_FIRST_REFERENCE_ALIGN_REQUIRED')
+        after = self.store.status(job)
+        self.assertEqual(after['revision'], before['revision'])
+        self.assertEqual(next(s['state'] for s in after['stages']
+                              if s['name'] == 'compare'), 'PENDING')
+
+    def test_chirp_first_existing_compare_claim_is_not_retried(self):
+        job = self.seed()
+        self.store.claim_next(job, worker_id='prior-worker')
+        with self.store._tx() as db:
+            db.execute("UPDATE v2_stages SET state='SKIPPED' WHERE job_id=? "
+                       "AND name='gemini_primary'", (job,))
+        before = self.store.status(job)
+        response = advance_local(ledger=self.store, job_id=job, job_dir=self.job_dir,
+                                 minimum_recovery_age_seconds=0)
+        self.assertEqual(response['action'], 'CHIRP_FIRST_REFERENCE_ALIGN_REQUIRED')
+        after = self.store.status(job)
+        self.assertEqual(after['revision'], before['revision'])
+        self.assertEqual(next(s['state'] for s in after['stages']
+                              if s['name'] == 'compare'), 'RUNNING')
+
+
+    def test_chirp_first_attested_reference_completes_comparison(self):
+        job = self.seed()
+        with self.store._tx() as db:
+            db.execute("UPDATE v2_stages SET state='SKIPPED' WHERE job_id=? "
+                       "AND name='gemini_primary'", (job,))
+        ref_path = self.v2dir / "chirp-first-reference.srt"
+        ref_path.write_text(
+            "1\n00:00:00,000 --> 00:00:08,000\n復次\n", encoding="utf-8")
+        packet = {
+            "schema": "golden-v2-chirp-first-reference-v1",
+            "source_kind": "HUMAN_CORRECTED_SRT",
+            "job_id": job, "source_sha256": self.sha,
+            "reference_srt_sha256": hashlib.sha256(ref_path.read_bytes()).hexdigest(),
+            "reviewer": "owner-fixture", "review_reference": "verified-test-srt",
+        }
+        (self.v2dir / "chirp-first-reference.json").write_bytes(_wire(packet))
+        action = advance_local(ledger=self.store, job_id=job, job_dir=self.job_dir)
+        self.assertEqual(action["action"], "COMPARISON_COMPLETE")
+        report = json.loads((self.v2dir / "engine-comparison.json").read_text())
+        self.assertEqual(report["comparison_reference_kind"], "HUMAN_CORRECTED_SRT")
+        self.assertEqual(report["pending_review_count"], 0)
+        self.assertIsNone(report["primary_evidence_sha256"])
+        self.assertEqual(next(s["state"] for s in self.store.status(job)["stages"]
+                              if s["name"] == "compare"), "COMPLETE")
+
+
+    def test_chirp_first_operator_staging_is_dry_run_then_idempotent(self):
+        from scripts.golden_v2_prepare_chirp_first_reference import prepare
+        job = self.seed()
+        with self.store._tx() as db:
+            db.execute("UPDATE v2_stages SET state='SKIPPED' WHERE job_id=? "
+                       "AND name='gemini_primary'", (job,))
+        source = Path(self.temp.name) / "pinned-manual.srt"
+        source.write_text(
+            "1\n00:00:00,000 --> 00:00:08,000\n復次\n", encoding="utf-8")
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        opts = dict(ledger=self.store, job_id=job, job_dir=self.job_dir,
+                    source_srt=source, expected_srt_sha=digest,
+                    reviewer="owner-fixture", review_reference="verified-test-ref")
+        dry = prepare(**opts, apply=False)
+        self.assertFalse(dry["applied"])
+        self.assertFalse((self.v2dir / "chirp-first-reference.json").exists())
+        applied = prepare(**opts, apply=True)
+        self.assertTrue(applied["applied"])
+        self.assertEqual(applied["reference_packet_sha256"],
+                         dry["reference_packet_sha256"])
+        self.assertEqual(prepare(**opts, apply=True), applied)
+        self.assertEqual(advance_local(
+            ledger=self.store, job_id=job, job_dir=self.job_dir)["action"],
+            "COMPARISON_COMPLETE")
+
     def test_disputed_flash_waits_for_human_without_claiming_review(self):
         job = self.seed(mode="FLASH_CHIRP", primary_text="復此")
         actions = run_ready_local(ledger=self.store, job_id=job, job_dir=self.job_dir)
