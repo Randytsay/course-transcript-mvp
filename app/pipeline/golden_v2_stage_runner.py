@@ -22,6 +22,7 @@ from app.subtitles.golden_v2_render import render_golden_v2
 from app.providers.golden_v2_versioned_artifacts import resolve_versioned, write_versioned
 from app.pipeline.golden_v2_alignment_health import assess_alignment_health
 from app.pipeline.golden_v2_review_evidence import require_real_review_evidence
+from app.pipeline.golden_v2_chirp_first_reference import read_chirp_first_reference
 
 
 def _write_evidence(path: Path, data: dict[str, Any]) -> str:
@@ -97,11 +98,43 @@ def _primary_coverage_ratio(
     return covered_ms / denominator
 
 
+def require_chirp_first_reference_ready(
+    *, ledger: GoldenV2Ledger, job_id: str, job_dir: Path,
+) -> None:
+    """Preflight reference before claiming/reclaiming local compare."""
+    state = ledger.status(job_id)
+    stages = {row["name"]: row for row in state["stages"]}
+    if stages["gemini_primary"]["state"] != "SKIPPED":
+        return
+    if stages["chirp_independent"]["state"] != "COMPLETE":
+        raise V2Conflict("Chirp-first reference requires completed Chirp evidence")
+    # Evidence lookup must use the immutable ledger SHA, not just a loose alias.
+    claim = {"job_id": job_id, "source_sha": state["source_sha"]}
+    merged = _checked_stage_artifact(
+        job_dir=job_dir, filename="chirp-merged.json",
+        stage=stages["chirp_independent"], claim=claim, raw_digest=True)
+    if merged.get("timing_authority") != "chirp_3":
+        raise V2Conflict("Chirp-first reference requires Chirp timing evidence")
+    read_chirp_first_reference(
+        job_dir=job_dir, job_id=job_id,
+        source_sha=state["source_sha"], duration_ms=merged["duration_ms"])
+
+
 def _bound_inputs(*, ledger: GoldenV2Ledger, claim: dict[str, Any],
                   job_dir: Path) -> tuple[str, dict[str, Any], dict[str, Any],
                                        dict[str, Any]]:
     """Use actual completed ledger artifacts as the sole comparison inputs."""
     stages = {item["name"]: item for item in ledger.status(claim["job_id"])["stages"]}
+    if stages["gemini_primary"]["state"] == "SKIPPED":
+        merged = _checked_stage_artifact(
+            job_dir=job_dir, filename="chirp-merged.json",
+            stage=stages["chirp_independent"], claim=claim, raw_digest=True)
+        if merged.get("schema") != "golden-v2-chirp-merged-v1" or merged.get("timing_authority") != "chirp_3":
+            raise V2Conflict("Chirp-first requires verified merged word timing")
+        reference_text, reference = read_chirp_first_reference(
+            job_dir=job_dir, job_id=claim["job_id"],
+            source_sha=claim["source_sha"], duration_ms=merged["duration_ms"])
+        return reference_text, merged, stages, reference
     original = job_dir / "golden-v2" / "primary-stage.json"
     # The paid stage may have completed directly or been promoted after an
     # audio-reviewed seam resolution. Match the immutable file to its ledger
@@ -362,8 +395,11 @@ def complete_evidence_bound_qa(
                 for item in adjudications)
     )
     semantic_gate = "PASS" if (
-        (not candidate_ids and comparison.get("exact_normalized_match") is True)
-        or (candidate_ids and evidence_resolved)
+        not comparison.get("reference_requires_format_review", False)
+        and (
+            (not candidate_ids and comparison.get("exact_normalized_match") is True)
+            or (candidate_ids and evidence_resolved)
+        )
     ) else "REVIEW"
     trusted_replacements = record.get("replacements", [])
     trusted_punctuation = {int(k): v for k, v in record.get("punctuation_after", {}).items()}
@@ -448,11 +484,13 @@ def _build_comparison_report(
     """
     report = compare_gemini_chirp(
         primary_text, merged["words"], source_sha256=claim["source_sha"])
+    chirp_first = primary.get("schema") == "golden-v2-chirp-first-reference-v1"
     alignment = assess_alignment_health(
         candidates=report.get("candidates") or [],
         comparison=report,
-        primary_coverage_ratio=_primary_coverage_ratio(
-            primary, merged.get("duration_ms")),
+        primary_coverage_ratio=(
+            primary["reference_timeline_extent_ratio"] if chirp_first else
+            _primary_coverage_ratio(primary, merged.get("duration_ms"))),
         duration_ms=merged.get("duration_ms"),
     )
     report["alignment_health"] = alignment
@@ -463,7 +501,18 @@ def _build_comparison_report(
     report.update({
         "job_id": claim["job_id"],
         "source_sha256": claim["source_sha"],
-        "primary_evidence_sha256": stages["gemini_primary"]["evidence_sha"],
+        "primary_evidence_sha256": (
+            None if chirp_first else stages["gemini_primary"]["evidence_sha"]),
+        "reference_evidence_sha256": (
+            primary["reference_evidence_sha256"] if chirp_first else None),
+        "comparison_reference_kind": (
+            "HUMAN_CORRECTED_SRT" if chirp_first else "GEMINI_PRIMARY"),
+        "reference_format_issues": (
+            primary.get("reference_format_issues", {}) if chirp_first else {}),
+        "reference_requires_format_review": (
+            primary.get("reference_requires_format_review", False)
+            if chirp_first else False),
+        "reference_is_acoustic_evidence": False,
         "chirp_evidence_sha256": stages["chirp_independent"]["evidence_sha"],
     })
     return report
