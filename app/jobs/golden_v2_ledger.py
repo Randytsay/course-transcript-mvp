@@ -1256,8 +1256,10 @@ class GoldenV2Ledger:
             chirp_actual = sum(int(row["actual_cents"] or 0) for row in existing)
             other_actual = sum(int(row["actual_cents"] or 0) for row in self._stages(db, job_id)
                                if row["name"] != "chirp_independent")
-            available = min(int(stage["estimate_cents"]) - chirp_actual,
-                            int(job["approved_cents"] or 0) - other_actual - chirp_actual)
+            # BASE estimates are not the ceiling for a later owner-approved
+            # repair.  Reserve the exact approved windows against the job cap;
+            # plan_chirp_repair_windows atomically expands the stage estimate.
+            available = int(job["approved_cents"] or 0) - other_actual - chirp_actual
             if (estimate <= 0 or estimate > approved_cents
                     or approved_cents > available):
                 raise V2Conflict("repair cost approval exceeds available preapproved budget")
@@ -1312,12 +1314,17 @@ class GoldenV2Ledger:
             if total > approval["approved_cents"]:
                 raise V2Conflict("repair window estimates exceed owner-approved ceiling")
             actual = sum(int(row["actual_cents"] or 0) for row in existing)
-            if actual + total > stage["estimate_cents"]:
-                raise V2Conflict("repair estimates exceed remaining Chirp stage budget")
             other = sum(int(row["actual_cents"] or 0) for row in self._stages(db, claim["job_id"])
                         if row["name"] != "chirp_independent")
             if other + actual + total > int(job["approved_cents"] or 0):
                 raise V2Conflict("repair estimates exceed remaining job approval")
+            # This enlargement is only allowed inside the immutable owner-plan
+            # consumption transaction; an unapproved stage top-up is impossible.
+            required_stage_cents = actual + total
+            if required_stage_cents > int(stage["estimate_cents"]):
+                db.execute("UPDATE v2_stages SET estimate_cents=? WHERE job_id=? "
+                           "AND name='chirp_independent'",
+                           (required_stage_cents, claim["job_id"]))
             for row in rows:
                 request_id = _digest({"job": claim["job_id"], **row})
                 db.execute(

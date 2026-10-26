@@ -60,6 +60,16 @@ def advance_local(
             return {"job_id": job_id, "stage": stage,
                     "action": "HUMAN_AUDIO_REVIEW_REQUIRED"}
 
+    # The historical Chirp-first intake intentionally skipped Gemini.  The
+    # ordinary comparison requires a COMPLETE, evidence-bound primary and
+    # must not claim (or reclaim) compare until a separately audited
+    # reference-alignment path is available.  Preserve existing claims.
+    if stage == "compare" and stages[0]["state"] == "SKIPPED":
+        return {"job_id": job_id, "stage": stage,
+                "action": "CHIRP_FIRST_REFERENCE_ALIGN_REQUIRED",
+                "state": pending["state"],
+                "reason": "Gemini primary was skipped; standard comparison needs completed primary evidence"}
+
     if pending["state"] == "RUNNING":
         try:
             claim = ledger.reclaim_stale_local(

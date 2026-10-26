@@ -103,6 +103,34 @@ class CoordinatorTests(unittest.TestCase):
         self.assertTrue(all(action.get("provider_calls_started") is not True
                             for action in actions))
 
+    def test_chirp_first_skipped_primary_does_not_claim_compare(self):
+        job = self.seed()
+        with self.store._tx() as db:
+            db.execute("UPDATE v2_stages SET state='SKIPPED' WHERE job_id=? "
+                       "AND name='gemini_primary'", (job,))
+        before = self.store.status(job)
+        response = advance_local(ledger=self.store, job_id=job, job_dir=self.job_dir)
+        self.assertEqual(response['action'], 'CHIRP_FIRST_REFERENCE_ALIGN_REQUIRED')
+        after = self.store.status(job)
+        self.assertEqual(after['revision'], before['revision'])
+        self.assertEqual(next(s['state'] for s in after['stages']
+                              if s['name'] == 'compare'), 'PENDING')
+
+    def test_chirp_first_existing_compare_claim_is_not_retried(self):
+        job = self.seed()
+        self.store.claim_next(job, worker_id='prior-worker')
+        with self.store._tx() as db:
+            db.execute("UPDATE v2_stages SET state='SKIPPED' WHERE job_id=? "
+                       "AND name='gemini_primary'", (job,))
+        before = self.store.status(job)
+        response = advance_local(ledger=self.store, job_id=job, job_dir=self.job_dir,
+                                 minimum_recovery_age_seconds=0)
+        self.assertEqual(response['action'], 'CHIRP_FIRST_REFERENCE_ALIGN_REQUIRED')
+        after = self.store.status(job)
+        self.assertEqual(after['revision'], before['revision'])
+        self.assertEqual(next(s['state'] for s in after['stages']
+                              if s['name'] == 'compare'), 'RUNNING')
+
     def test_disputed_flash_waits_for_human_without_claiming_review(self):
         job = self.seed(mode="FLASH_CHIRP", primary_text="復此")
         actions = run_ready_local(ledger=self.store, job_id=job, job_dir=self.job_dir)

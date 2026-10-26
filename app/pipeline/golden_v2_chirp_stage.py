@@ -28,6 +28,69 @@ def _immutable(path: Path, content: bytes) -> str:
     return store_immutable_bytes(path, content)
 
 
+def suppress_completed_repair_proposals(
+    acoustic: dict[str, Any], completed_repairs: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Prevent repeat billing for overlapping completed Standard Batch targets.
+
+    A completed provider attempt is *not* proof of silence or full lexical
+    coverage. Preserve REVIEW and escalate overlaps rather than resubmit them.
+    Only immutable, DONE repair rows from the caller's verified ledger are used.
+    """
+    plan = acoustic.get("repair_plan")
+    if acoustic.get("status") != "REVIEW" or not isinstance(plan, dict):
+        return acoustic
+    proposals = plan.get("intervals")
+    if not isinstance(proposals, list) or not proposals or not completed_repairs:
+        return acoustic
+    prior_targets: list[tuple[int, int]] = []
+    for row in completed_repairs:
+        if row.get("status") != "DONE" or row.get("purpose") != "REPAIR":
+            continue
+        try:
+            targets = json.loads(row["target_intervals_json"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise V2Conflict("completed repair has invalid target evidence") from exc
+        if not isinstance(targets, list):
+            raise V2Conflict("completed repair has invalid target list")
+        for target in targets:
+            start, end = target.get("start_ms"), target.get("end_ms")
+            if type(start) is not int or type(end) is not int or start >= end:
+                raise V2Conflict("completed repair target times invalid")
+            prior_targets.append((start, end))
+    if not prior_targets:
+        return acoustic
+    fresh, repeated = [], []
+    for proposal in proposals:
+        targets = proposal.get("target_intervals") if isinstance(proposal, dict) else None
+        if not isinstance(targets, list) or not targets:
+            raise V2Conflict("acoustic repair proposal lacks targets")
+        overlaps = False
+        for target in targets:
+            start, end = target.get("start_ms"), target.get("end_ms")
+            if type(start) is not int or type(end) is not int or start >= end:
+                raise V2Conflict("acoustic repair target times invalid")
+            if any(start < prev_end and prev_start < end
+                   for prev_start, prev_end in prior_targets):
+                overlaps = True
+        if overlaps:
+            repeated.append(proposal)
+        else:
+            fresh.append(proposal)
+    if not repeated:
+        return acoustic
+    updated = {**acoustic}
+    new_plan = {**plan, "intervals": fresh,
+                "total_duration_ms": sum(row["end_ms"] - row["start_ms"]
+                                         for row in fresh),
+                "status": ("PROPOSED_REQUIRES_APPROVAL" if fresh else "NONE"),
+                "manual_review_required": True,
+                "completed_repair_overlap_review_required": repeated}
+    updated["repair_plan"] = new_plan
+    # Do not turn REVIEW into PASS merely because an earlier call completed.
+    return updated
+
+
 def plan_approved_chirp(
     *, ledger: GoldenV2Ledger, claim: dict[str, Any],
     normalized_audio: Path, job_dir: Path,
@@ -640,6 +703,9 @@ def finish_approved_chirp(
             or acoustic.get("source_sha256") != candidate["source_sha"]
             or acoustic.get("merged_sha256") != candidate_sha):
         raise V2Conflict("independent acoustic QA did not bind to this Chirp merge")
+    # A previously completed Standard Batch attempt must never be charged
+    # again for a still-flagged acoustic gap. Keep REVIEW for manual evidence.
+    acoustic = suppress_completed_repair_proposals(acoustic, repairs)
     acoustic_bytes = _wire(acoustic)
     acoustic_sha = hashlib.sha256(acoustic_bytes).hexdigest()
     acoustic_path = (job_dir / "golden-v2" /

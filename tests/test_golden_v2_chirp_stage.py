@@ -84,6 +84,55 @@ def passing_acoustic_inspector(*, job_dir, merged):
             "local_only": True, "provider_calls_started": False}
 
 
+class CompletedRepairSuppressionTests(unittest.TestCase):
+    def test_repaired_speech_gap_stays_review_without_duplicate_proposal(self):
+        from app.pipeline.golden_v2_chirp_stage import suppress_completed_repair_proposals
+        gap = {"start_ms": 7934160, "end_ms": 7950960,
+               "target_intervals": [{"start_ms": 7934160, "end_ms": 7950960}]}
+        report = {"status": "REVIEW", "repair_plan": {
+            "status": "PROPOSED_REQUIRES_APPROVAL",
+            "intervals": [gap], "total_duration_ms": 16800,
+            "manual_review_required": False}}
+        repaired = [{"purpose": "REPAIR", "status": "DONE",
+                     "target_intervals_json": json.dumps([
+                         {"start_ms": 7855700, "end_ms": 8013460}])}]
+        outcome = suppress_completed_repair_proposals(report, repaired)
+        self.assertEqual(outcome["status"], "REVIEW")
+        self.assertEqual(outcome["repair_plan"]["intervals"], [])
+        self.assertEqual(outcome["repair_plan"]["status"], "NONE")
+        self.assertTrue(outcome["repair_plan"]["manual_review_required"])
+        self.assertEqual(len(outcome["repair_plan"]
+                             ["completed_repair_overlap_review_required"]), 1)
+        self.assertEqual(report["repair_plan"]["intervals"], [gap])
+
+    def test_new_disjoint_gap_still_repairable(self):
+        from app.pipeline.golden_v2_chirp_stage import suppress_completed_repair_proposals
+        first = {"start_ms": 100, "end_ms": 300,
+                 "target_intervals": [{"start_ms": 100, "end_ms": 300}]}
+        second = {"start_ms": 500, "end_ms": 700,
+                  "target_intervals": [{"start_ms": 500, "end_ms": 700}]}
+        report = {"status": "REVIEW", "repair_plan": {
+            "intervals": [first, second], "status": "PROPOSED_REQUIRES_APPROVAL",
+            "total_duration_ms": 400}}
+        repairs = [{"purpose": "REPAIR", "status": "DONE",
+                    "target_intervals_json": json.dumps([
+                        {"start_ms": 50, "end_ms": 350}])}]
+        outcome = suppress_completed_repair_proposals(report, repairs)
+        self.assertEqual(outcome["repair_plan"]["intervals"], [second])
+        self.assertEqual(outcome["repair_plan"]["total_duration_ms"], 200)
+        self.assertEqual(outcome["status"], "REVIEW")
+
+    def test_incomplete_attempt_does_not_suppress_repair(self):
+        from app.pipeline.golden_v2_chirp_stage import suppress_completed_repair_proposals
+        gap = {"start_ms": 100, "end_ms": 300,
+               "target_intervals": [{"start_ms": 100, "end_ms": 300}]}
+        report = {"status": "REVIEW", "repair_plan": {"intervals": [gap]}}
+        pending = [{"purpose": "REPAIR", "status": "SUBMITTED",
+                    "target_intervals_json": json.dumps([
+                        {"start_ms": 50, "end_ms": 350}])}]
+        self.assertIs(suppress_completed_repair_proposals(report, pending), report)
+
+
 class ChirpStageIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.temp = TemporaryDirectory()
