@@ -82,6 +82,23 @@ class ChirpRepairBudgetTests(unittest.TestCase):
                 windows=[self.window()],
             )
 
+    def test_stale_qa_cannot_reapprove_completed_repair(self):
+        approval = self.approve()
+        self.ledger.plan_chirp_repair_windows(
+            self.claim, plan_sha=approval["plan_sha"], windows=[self.window()])
+        with self.ledger._tx() as db:
+            db.execute("UPDATE v2_chirp_operations SET status='DONE',actual_cents=6 "
+                       "WHERE job_id=? AND window_id='repair-r01-00'", (self.job,))
+        new_window = {**self.window(), "window_id": "repair-r02-00"}
+        with self.assertRaisesRegex(V2Conflict, "overlaps completed Standard Batch"):
+            self.ledger.approve_chirp_repair_plan(
+                self.job, expected_revision=self.ledger.status(self.job)["revision"],
+                assessment_sha="b" * 64, windows=[new_window],
+                approved_cents=6, reference="stale-acoustic-report",
+                actor="test-owner",
+            )
+        self.assertEqual(len(self.ledger.chirp_windows(self.job)), 2)
+
     def test_cannot_reserve_beyond_job_approval(self):
         with self.assertRaisesRegex(V2Conflict, "preapproved budget"):
             self.approve(cents=574, cap=574)
