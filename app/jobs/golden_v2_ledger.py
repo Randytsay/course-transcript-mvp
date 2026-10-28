@@ -792,8 +792,11 @@ class GoldenV2Ledger:
                 "SELECT state FROM v2_stages "
                 "WHERE job_id=? AND name='chirp_independent'", (job_id,),
             ).fetchone()
-            if (job["status"] != "PROCESSING" or stage is None
-                    or stage["state"] != "RUNNING"):
+            active = (job["status"] == "PROCESSING" and stage is not None
+                      and stage["state"] == "RUNNING")
+            frozen = (job["status"] == "NEEDS_RECONCILIATION"
+                      and stage is not None and stage["state"] == "OVER_BUDGET")
+            if not (active or frozen):
                 raise V2Conflict("prior merge can only be read for active repair")
             row = db.execute(
                 "SELECT source_sha,prior_stage_snapshot_json,"
