@@ -38,12 +38,14 @@ def run_chirp_recovery_pass(
     stage = next((s for s in state["stages"] if s["name"] == "chirp_independent"), None)
     if stage is None:
         raise V2Conflict("missing Chirp stage")
-    if stage["state"] == "COMPLETE":
+    if stage["state"] in {"COMPLETE", "REVIEW_REQUIRED"}:
         merged = resolve_versioned(job_dir / "golden-v2" / "chirp-merged.json",
                                    stage["evidence_sha"])
         if file_sha256(merged) != stage["evidence_sha"]:
             raise V2Conflict("completed Chirp evidence missing or changed")
-        return {"job_id": job_id, "action": "ALREADY_COMPLETE",
+        return {"job_id": job_id, "action": (
+                    "ACOUSTIC_REVIEW_REQUIRED" if stage["state"] == "REVIEW_REQUIRED"
+                    else "ALREADY_COMPLETE"),
                 "recovered": 0, "pending": [], "unknown": [],
                 "provider_submissions": 0, "drive_mutations": 0}
     allowed_state = (
@@ -133,7 +135,8 @@ def run_chirp_recovery_pass(
     chirp_actual = sum(int(row["actual_cents"] or 0) for row in current)
     result["chirp_known_actual_cents"] = max(stage_actual, chirp_actual)
     result["known_actual_cents"] = other_actual + result["chirp_known_actual_cents"]
-    if current_job["status"] == "NEEDS_RECONCILIATION":
+    if (current_job["status"] == "NEEDS_RECONCILIATION"
+            and not all(r["status"] == "DONE" for r in current)):
         result["action"] = "COST_RECONCILIATION_REQUIRED"
     elif unknown:
         result["action"] = "UNKNOWN_OPERATION_REQUIRES_REVIEW"
@@ -146,10 +149,19 @@ def run_chirp_recovery_pass(
     elif unsubmitted:
         result["action"] = "APPROVED_SUBMISSION_WORKER_REQUIRED"
     elif all(r["status"] == "DONE" for r in current):
-        merged = finish_approved_chirp(
-            ledger=ledger, job_id=job_id, job_dir=job_dir,
-            acoustic_inspector=acoustic_inspector,
-        )
+        try:
+            merged = finish_approved_chirp(
+                ledger=ledger, job_id=job_id, job_dir=job_dir,
+                acoustic_inspector=acoustic_inspector, settle_review=True,
+            )
+        except V2Conflict as exc:
+            if (current_job["status"] != "NEEDS_RECONCILIATION"
+                    or "exceed owner job approval" not in str(exc)):
+                raise
+            result["action"] = "COST_RECONCILIATION_REQUIRED"
+            result["recovery_errors"].append({
+                "window_id": "chirp_independent", "reason": str(exc)})
+            return result
         result["word_count"] = len(merged["words"])
         result["acoustic_gate"] = merged["acoustic_gate"]
         result["acoustic_qa_sha256"] = merged.get("acoustic_qa_sha256")
