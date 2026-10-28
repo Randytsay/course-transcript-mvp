@@ -320,6 +320,54 @@ class ChirpStageIntegrationTests(unittest.TestCase):
         self.assertEqual(self.ledger.claim_next(self.job_id, worker_id="next")["stage"], "compare")
         self.assertEqual(len(self.speech.calls), 2)
 
+    def test_recovery_worker_settles_acoustic_review_without_new_speech_calls(self):
+        from app.pipeline.golden_v2_chirp_recovery_worker import run_chirp_recovery_pass
+
+        self.plan()
+        rows = submit_planned_chirp(
+            ledger=self.ledger, claim=self.claim, gateway=self.gateway)
+        self._complete_outputs(rows)
+        for row in rows:
+            self.assertEqual(recover_chirp_window(
+                ledger=self.ledger, job_id=self.job_id, window_id=row["window_id"],
+                job_dir=self.job_dir, gateway=self.gateway,
+                cost_accountant=lambda _: 2), "DONE")
+        already_sent = len(self.speech.calls)
+
+        def review_inspector(*, job_dir, merged):
+            packed = json.dumps(merged, ensure_ascii=False, sort_keys=True,
+                                separators=(",", ":")).encode()
+            return {
+                "schema": "golden-v2-acoustic-qa-v1", "status": "REVIEW",
+                "source_sha256": self.sha,
+                "merged_sha256": hashlib.sha256(packed).hexdigest(),
+                "gaps_examined": [],
+                "repair_plan": {"intervals": [], "manual_review_required": True},
+                "local_only": True, "provider_calls_started": False,
+            }
+
+        outcome = run_chirp_recovery_pass(
+            ledger=self.ledger, job_id=self.job_id, job_dir=self.job_dir,
+            gateway=self.gateway, cost_accountant=lambda _: 2,
+            acoustic_inspector=review_inspector)
+        self.assertEqual(outcome["acoustic_gate"], "REVIEW")
+        self.assertEqual(outcome["action"], "MANUAL_ACOUSTIC_REVIEW_REQUIRED")
+        held = self.ledger.status(self.job_id)
+        self.assertEqual(held["status"], "NEEDS_REVIEW")
+        self.assertEqual(held["stages"][1]["state"], "REVIEW_REQUIRED")
+        self.assertEqual(held["stages"][1]["actual_cents"], 4)
+        self.assertEqual(held["stages"][1]["review_required"], 1)
+        self.assertFalse(json.loads(
+            (self.job_dir / "golden-v2" / "chirp-merged.json").read_text())["golden_pass"])
+        with self.assertRaises(V2Conflict):
+            self.ledger.claim_next(self.job_id, worker_id="no-qa-bypass")
+        repeat = run_chirp_recovery_pass(
+            ledger=self.ledger, job_id=self.job_id, job_dir=self.job_dir,
+            gateway=self.gateway, cost_accountant=lambda _: 2,
+            acoustic_inspector=review_inspector)
+        self.assertEqual(repeat["action"], "ACOUSTIC_REVIEW_REQUIRED")
+        self.assertEqual(len(self.speech.calls), already_sent)
+
     def test_ambiguous_post_crash_blocks_automatic_replay(self):
         self.plan(max_window_seconds=10)
         self.speech.fail = True
