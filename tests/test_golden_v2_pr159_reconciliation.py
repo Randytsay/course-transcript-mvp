@@ -67,7 +67,7 @@ class CompletedChirpReconciliationTests(unittest.TestCase):
         self.assertEqual(state["stages"][1]["actual_cents"], 136)
         self.assertEqual(state["stages"][1]["review_required"], 1)
         self.assertEqual(state["spent_cents"], 137)
-        with self.assertRaisesRegex(V2Conflict, "unresolved"):
+        with self.assertRaisesRegex(V2Conflict, "job not authorized/processing"):
             self.ledger.claim_next(job, worker_id="must-not-compare")
         with self.assertRaises(V2Conflict):
             self.attest(job, acoustic_review_required=False)
