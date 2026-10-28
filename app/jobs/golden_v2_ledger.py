@@ -1691,35 +1691,66 @@ class GoldenV2Ledger:
             db.execute("UPDATE v2_stages SET updated_at=? WHERE job_id=? "
                        "AND name='chirp_independent'", (_now(), job_id))
 
-    def finish_recovered_chirp(self, job_id: str, *, evidence_sha: str,
-                               verifier: Any) -> None:
-        """Close a restarted stage only after independently checking the merge."""
-        if not isinstance(evidence_sha, str) or len(evidence_sha) != 64 or any(
-                c not in "0123456789abcdef" for c in evidence_sha):
-            raise V2Conflict("invalid merged Chirp SHA")
+    def finish_recovered_chirp(
+        self, job_id: str, *, evidence_sha: str, verifier: Any,
+        acoustic_review_required: bool = False,
+    ) -> None:
+        """Settle existing Chirp operations without authorizing any new call.
+
+        The original stage estimate is retained; actual externally-incurred
+        costs may exceed it only when the already-approved job ceiling covers
+        the full known usage. Acoustic REVIEW is a content hold, not a running
+        paid operation. Unknown/incomplete operations remain blocked.
+        """
+        if (not isinstance(evidence_sha, str) or len(evidence_sha) != 64
+                or any(c not in "0123456789abcdef" for c in evidence_sha)
+                or type(acoustic_review_required) is not bool):
+            raise V2Conflict("invalid merged Chirp SHA or acoustic decision")
         with self._tx() as db:
             job = self._job(db, job_id)
-            stage = db.execute("SELECT * FROM v2_stages WHERE job_id=? AND name='chirp_independent'",
-                               (job_id,)).fetchone()
+            stage = db.execute(
+                "SELECT * FROM v2_stages WHERE job_id=? AND name='chirp_independent'",
+                (job_id,),
+            ).fetchone()
             windows = db.execute(
                 "SELECT * FROM v2_chirp_operations WHERE job_id=? "
                 "ORDER BY CASE purpose WHEN 'BASE' THEN 0 ELSE 1 END,start_ms,window_id",
                 (job_id,),
             ).fetchall()
-            if (job["status"] != "PROCESSING" or stage is None
-                    or stage["state"] != "RUNNING" or not windows
-                    or any(row["status"] != "DONE" for row in windows)):
+            active = (job["status"] == "PROCESSING" and stage is not None
+                      and stage["state"] == "RUNNING")
+            frozen = (job["status"] == "NEEDS_RECONCILIATION"
+                      and stage is not None and stage["state"] == "OVER_BUDGET")
+            if (not (active or frozen) or not windows
+                    or any(row["status"] != "DONE" or row["actual_cents"] is None
+                           or not row["operation_name"] or not row["result_sha"]
+                           for row in windows)):
                 raise V2Conflict("cannot finish incomplete Chirp stage")
             if not callable(verifier) or not verifier(
                     job_id=job_id, source_sha=job["source_sha"],
                     evidence_sha=evidence_sha, windows=[dict(row) for row in windows]):
                 raise V2Conflict("merged Chirp evidence not verified")
             actual = sum(int(row["actual_cents"]) for row in windows)
-            if actual > stage["estimate_cents"]:
-                raise V2Conflict("Chirp merge usage exceeds stage reservation")
-            db.execute("UPDATE v2_stages SET state='COMPLETE',actual_cents=?,"
-                       "evidence_sha=?,claim_hash=NULL,updated_at=? WHERE job_id=? "
-                       "AND name='chirp_independent'", (actual, evidence_sha, _now(), job_id))
+            other_actual = sum(int(row["actual_cents"] or 0)
+                               for row in self._stages(db, job_id)
+                               if row["name"] != "chirp_independent")
+            if (job["approved_cents"] is None
+                    or other_actual + actual > job["approved_cents"]):
+                raise V2Conflict("verified Chirp charges exceed owner job approval")
+            db.execute(
+                "UPDATE v2_stages SET state=?,actual_cents=?,evidence_sha=?,"
+                "review_required=?,claim_hash=NULL,updated_at=? WHERE job_id=? "
+                "AND name='chirp_independent'",
+                ("REVIEW_REQUIRED" if acoustic_review_required else "COMPLETE",
+                 actual, evidence_sha, 1 if acoustic_review_required else None,
+                 _now(), job_id),
+            )
+            if acoustic_review_required or frozen:
+                db.execute(
+                    "UPDATE v2_jobs SET status=?,revision=revision+1 WHERE id=?",
+                    ("NEEDS_REVIEW" if acoustic_review_required else "PROCESSING",
+                     job_id),
+                )
 
     def status(self, job_id: str) -> dict[str, Any]:
         with self._tx() as db:
