@@ -78,6 +78,39 @@ def paid_readiness(job_id: str, authorization: str | None = Header(default=None)
         raise HTTPException(status_code=503, detail='Readiness evidence unavailable') from exc
 
 
+@app.get('/api/v1/golden-v2/jobs/{job_id}/chirp-reconciliation-preview')
+def chirp_reconciliation_preview(
+    job_id: str, authorization: str | None = Header(default=None),
+):
+    """Owner-authenticated, read-only local evidence and known-cost preview.
+
+    This is NOT live GCP confirmation, an Owner grant, paid execution,
+    acoustic QA PASS, production reconciliation or publication authorization.
+    The ledger remains query-only. An unknown source fails closed.
+    """
+    database = _authorized_database(authorization)
+    if not re.fullmatch(r'v2p_[0-9a-f]{32}', job_id):
+        raise HTTPException(status_code=422, detail='Invalid source-preflight job ID')
+    from app.pipeline.golden_v2_chirp_reconciliation_preview import (
+        preview_chirp_reconciliation,
+    )
+    try:
+        result = preview_chirp_reconciliation(
+            artifact_root=database.parent, job_id=job_id)
+    except ValueError as exc:
+        if str(exc) == 'unknown V2 job':
+            raise HTTPException(status_code=404, detail='V2 job not found') from exc
+        raise HTTPException(
+            status_code=503, detail='Read-only reconciliation evidence unavailable',
+        ) from exc
+    except (OSError, sqlite3.Error, TypeError, KeyError) as exc:
+        raise HTTPException(
+            status_code=503, detail='Read-only reconciliation evidence unavailable',
+        ) from exc
+    return result
+
+
+
 @app.get('/api/v1/golden-v2/quotes/{quote_id}')
 def quote_status(quote_id: str, authorization: str | None = Header(default=None)):
     database = _authorized_database(authorization)
