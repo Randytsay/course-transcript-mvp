@@ -63,6 +63,8 @@ def preview_chirp_reconciliation(*, artifact_root: Path, job_id: str) -> dict[st
                       if row["name"] == "chirp_independent"), None)
         if chirp is None:
             raise ValueError("missing isolated Chirp stage")
+        if chirp["state"] not in {"RUNNING", "OVER_BUDGET", "REVIEW_REQUIRED"}:
+            blockers.append("CHIRP_STAGE_NOT_A_RECONCILIATION_CANDIDATE")
         operations = [dict(row) for row in db.execute(
             "SELECT job_id,window_id,source_sha,clip_sha,operation_name,"
             "request_id,result_sha,status,actual_cents,start_ms,end_ms "
