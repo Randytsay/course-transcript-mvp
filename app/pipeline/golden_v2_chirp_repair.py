@@ -111,10 +111,17 @@ def verified_early_chirp_acoustic_evidence(job_dir: Path) -> Callable[..., bool]
                 return False
             merged = json.loads(merged_file.read_bytes())
             report = json.loads(report_file.read_bytes())
-            lineage_file = golden / "source-lineage.json"
-            if (not safe_file(lineage_file)
-                    or json.loads(lineage_file.read_bytes()).get("normalized_sha256")
-                       != source_sha
+            # Original source-preflight writes lineage at the job root.
+            # Some legacy stage adapters also preserve a golden-v2 copy.
+            # Check every existing lineage file; never trust a mismatched
+            # sidecar to override the registered source.
+            lineage_paths = (root / "source-lineage.json",
+                             golden / "source-lineage.json")
+            present_lineage = [path for path in lineage_paths if path.exists()]
+            if (not present_lineage
+                    or any(not safe_file(path)
+                           or json.loads(path.read_bytes()).get("normalized_sha256")
+                              != source_sha for path in present_lineage)
                     or merged.get("job_id") != job_id
                     or merged.get("source_sha") != source_sha
                     or merged.get("acoustic_gate") != "REVIEW"
