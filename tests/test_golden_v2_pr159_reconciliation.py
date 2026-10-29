@@ -14,11 +14,12 @@ class CompletedChirpReconciliationTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    def completed_over_estimate(self, approved_cents=600, cost_cents=136):
+    def completed_over_estimate(self, approved_cents=600, cost_cents=136,
+                                gemini_reservation=1):
         job = self.ledger.create(
             source_sha="a" * 64, mode="FLASH_CHIRP",
             estimated_stage_cents={
-                "gemini_primary": 1, "chirp_independent": 78,
+                "gemini_primary": gemini_reservation, "chirp_independent": 78,
                 "compare": 0, "third_optional": 0,
                 "adjudication": 0, "golden_qa": 0,
             },
@@ -96,7 +97,8 @@ class CompletedChirpReconciliationTests(unittest.TestCase):
         self.assertEqual(state["chirp_known_actual_cents"], 136)
 
     def test_early_review_reentry_is_cas_evidence_and_budget_bound(self):
-        job = self.completed_over_estimate(approved_cents=600, cost_cents=136)
+        job = self.completed_over_estimate(approved_cents=600, cost_cents=136,
+                                           gemini_reservation=240)
         self.attest(job, acoustic_review_required=True)
         state = self.ledger.status(job)
         options = dict(
@@ -140,7 +142,8 @@ class CompletedChirpReconciliationTests(unittest.TestCase):
             self.ledger.resume_early_chirp_acoustic_review(job, **options)
 
     def test_early_reentry_remains_frozen_when_unverified_provider_or_cap(self):
-        job = self.completed_over_estimate(approved_cents=600, cost_cents=136)
+        job = self.completed_over_estimate(approved_cents=600, cost_cents=136,
+                                           gemini_reservation=240)
         self.attest(job, acoustic_review_required=True)
         state = self.ledger.status(job)
         values = dict(
@@ -156,7 +159,7 @@ class CompletedChirpReconciliationTests(unittest.TestCase):
             self.ledger.resume_early_chirp_acoustic_review(job, **values)
         self.assertEqual(self.ledger.status(job)["status"], "NEEDS_REVIEW")
         self.assertEqual(self.ledger.status(job)["stages"][1]["state"], "REVIEW_REQUIRED")
-        self.assertEqual(self.ledger.status(job)["stages"][0]["estimate_cents"], 1)
+        self.assertEqual(self.ledger.status(job)["stages"][0]["estimate_cents"], 240)
         self.assertEqual(self.ledger.chirp_windows(job)[0]["status"], "DONE")
 
     def test_pass_settles_sunk_charges_without_overwriting_estimate(self):
