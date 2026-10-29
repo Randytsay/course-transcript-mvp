@@ -30,8 +30,10 @@ class EarlyAcousticEvidenceTests(unittest.TestCase):
             (directory / "normalized.flac").write_bytes(media)
             golden = directory / "golden-v2"
             golden.mkdir()
-            (golden / "source-lineage.json").write_bytes(
-                wire({"normalized_sha256": source_sha}))
+            lineage = wire({"normalized_sha256": source_sha})
+            original_lineage = directory / "source-lineage.json"
+            original_lineage.write_bytes(lineage)
+            (golden / "source-lineage.json").write_bytes(lineage)
             window = dict(
                 job_id=job, window_id="chunk-0000", source_sha=source_sha,
                 clip_sha="c" * 64, operation_name="operations/persisted-001",
@@ -87,6 +89,10 @@ class EarlyAcousticEvidenceTests(unittest.TestCase):
             receipt.write_bytes(original.replace(b"persisted-001", b"fake-replaced"))
             self.assertFalse(proof(**args))
             receipt.write_bytes(original)
+            self.assertTrue(proof(**args))
+            original_lineage.write_bytes(wire({"normalized_sha256": "0" * 64}))
+            self.assertFalse(proof(**args))
+            original_lineage.write_bytes(lineage)
             self.assertTrue(proof(**args))
             merged_path.write_bytes(wire({**merged, "golden_pass": True}))
             self.assertFalse(proof(**args))
