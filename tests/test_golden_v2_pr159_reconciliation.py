@@ -102,14 +102,14 @@ class CompletedChirpReconciliationTests(unittest.TestCase):
         options = dict(
             revision=state["revision"], source_sha="a" * 64,
             previous_chirp_evidence_sha="f" * 64,
-            previous_acoustic_qa_sha="q" * 64,
+            previous_acoustic_qa_sha="c" * 64,
             transfer_cents=64, reviewer="authenticated-owner",
             review_reference="approved-source-bound-review-only",
             worker_id="operator-local", aggregate_cap_cents=1000,
             evidence_verifier=lambda **r: (
                 r["job_id"] == job and r["source_sha"] == "a" * 64
                 and r["old_chirp_sha"] == "f" * 64
-                and r["old_acoustic_sha"] == "q" * 64
+                and r["old_acoustic_sha"] == "c" * 64
                 and len(r["windows"]) == 1
             ),
         )
@@ -149,7 +149,7 @@ class CompletedChirpReconciliationTests(unittest.TestCase):
             previous_acoustic_qa_sha="c" * 64,
             transfer_cents=64, reviewer="authenticated-owner",
             review_reference="review-only", worker_id="operator",
-            aggregate_cap_cents=150,
+            aggregate_cap_cents=140,
             evidence_verifier=lambda **_: True,
         )
         with self.assertRaisesRegex(V2Conflict, "reopened Chirp exposure exceeds aggregate cap"):
