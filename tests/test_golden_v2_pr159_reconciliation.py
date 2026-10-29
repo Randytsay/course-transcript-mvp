@@ -95,6 +95,70 @@ class CompletedChirpReconciliationTests(unittest.TestCase):
         self.assertEqual(state["stages"][1]["state"], "OVER_BUDGET")
         self.assertEqual(state["chirp_known_actual_cents"], 136)
 
+    def test_early_review_reentry_is_cas_evidence_and_budget_bound(self):
+        job = self.completed_over_estimate(approved_cents=600, cost_cents=136)
+        self.attest(job, acoustic_review_required=True)
+        state = self.ledger.status(job)
+        options = dict(
+            revision=state["revision"], source_sha="a" * 64,
+            previous_chirp_evidence_sha="f" * 64,
+            previous_acoustic_qa_sha="q" * 64,
+            transfer_cents=64, reviewer="authenticated-owner",
+            review_reference="approved-source-bound-review-only",
+            worker_id="operator-local", aggregate_cap_cents=1000,
+            evidence_verifier=lambda **r: (
+                r["job_id"] == job and r["source_sha"] == "a" * 64
+                and r["old_chirp_sha"] == "f" * 64
+                and r["old_acoustic_sha"] == "q" * 64
+                and len(r["windows"]) == 1
+            ),
+        )
+        # The independent source / raw verifier and stage CAS fail closed.
+        for altered in (
+            {"source_sha": "b" * 64},
+            {"revision": state["revision"] + 1},
+            {"previous_chirp_evidence_sha": "a" * 64},
+            {"transfer_cents": 40},
+            {"evidence_verifier": lambda **_: False},
+        ):
+            with self.assertRaises(V2Conflict):
+                self.ledger.resume_early_chirp_acoustic_review(
+                    job, **{**options, **altered})
+        self.assertEqual(self.ledger.status(job)["status"], "NEEDS_REVIEW")
+        claimed = self.ledger.resume_early_chirp_acoustic_review(job, **options)
+        self.assertEqual(claimed["stage"], "chirp_independent")
+        self.assertEqual(claimed["provider_submissions"], 0)
+        resumed = self.ledger.status(job)
+        self.assertEqual(resumed["revision"], state["revision"] + 1)
+        self.assertEqual(resumed["stages"][1]["state"], "RUNNING")
+        self.assertEqual(resumed["stages"][1]["estimate_cents"], 142)
+        self.assertEqual(resumed["stages"][1]["actual_cents"], 136)
+        self.assertEqual(resumed["stages"][0]["state"], "COMPLETE")
+        self.assertEqual(self.ledger.prior_chirp_merge_for_active_repair(job), "f" * 64)
+        self.assertEqual(len(self.ledger.chirp_windows(job)), 1)
+        with self.assertRaisesRegex(V2Conflict, "revision/state/evidence mismatch"):
+            self.ledger.resume_early_chirp_acoustic_review(job, **options)
+
+    def test_early_reentry_remains_frozen_when_unverified_provider_or_cap(self):
+        job = self.completed_over_estimate(approved_cents=600, cost_cents=136)
+        self.attest(job, acoustic_review_required=True)
+        state = self.ledger.status(job)
+        values = dict(
+            revision=state["revision"], source_sha="a" * 64,
+            previous_chirp_evidence_sha="f" * 64,
+            previous_acoustic_qa_sha="c" * 64,
+            transfer_cents=64, reviewer="authenticated-owner",
+            review_reference="review-only", worker_id="operator",
+            aggregate_cap_cents=150,
+            evidence_verifier=lambda **_: True,
+        )
+        with self.assertRaisesRegex(V2Conflict, "reopened Chirp exposure exceeds aggregate cap"):
+            self.ledger.resume_early_chirp_acoustic_review(job, **values)
+        self.assertEqual(self.ledger.status(job)["status"], "NEEDS_REVIEW")
+        self.assertEqual(self.ledger.status(job)["stages"][1]["state"], "REVIEW_REQUIRED")
+        self.assertEqual(self.ledger.status(job)["stages"][0]["estimate_cents"], 1)
+        self.assertEqual(self.ledger.chirp_windows(job)[0]["status"], "DONE")
+
     def test_pass_settles_sunk_charges_without_overwriting_estimate(self):
         job = self.completed_over_estimate(approved_cents=600, cost_cents=136)
         self.attest(job, acoustic_review_required=False)
