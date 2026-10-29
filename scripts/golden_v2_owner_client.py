@@ -48,6 +48,7 @@ def main() -> int:
         args_group.add_argument("--request-stdin",action="store_true")
     job = sub.add_parser("job-status"); job.add_argument("job_id")
     readiness = sub.add_parser("paid-readiness"); readiness.add_argument("job_id")
+    recon = sub.add_parser("chirp-reconciliation-preview"); recon.add_argument("job_id")
     approve = sub.add_parser("approve-job"); approve.add_argument("job_id"); approve.add_argument("--request-file", type=Path, required=True)
     paid = sub.add_parser('authorize-paid'); paid.add_argument('job_id')
     pi = paid.add_mutually_exclusive_group(required=True)
@@ -97,7 +98,11 @@ def main() -> int:
         route = "auto-budget"
     else:
         if not re.fullmatch(r"v2p?_[0-9a-f]{32}", args.job_id): parser.error("Invalid job ID")
-        if args.action=="auto-budget-authorize":
+        if args.action=="chirp-reconciliation-preview":
+            if not re.fullmatch(r"v2p_[0-9a-f]{32}", args.job_id):
+                parser.error("Canonical source-preflight V2 job ID required")
+            suffix="/chirp-reconciliation-preview"
+        elif args.action=="auto-budget-authorize":
             suffix="/auto-budget/authorize"
         elif args.action.startswith('ai-limited-'):
             suffix='/ai-limited/'+args.action[len('ai-limited-'):]
