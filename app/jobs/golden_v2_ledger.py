@@ -779,6 +779,138 @@ class GoldenV2Ledger:
                     "estimate_cents": int(chirp["estimate_cents"]) + transfer_cents,
                     "repair_transfer_cents": transfer_cents}
 
+    def resume_early_chirp_acoustic_review(
+        self, job_id: str, *, revision: int, source_sha: str,
+        previous_chirp_evidence_sha: str, previous_acoustic_qa_sha: str,
+        transfer_cents: int, reviewer: str, review_reference: str,
+        worker_id: str, aggregate_cap_cents: int, evidence_verifier: Any,
+    ) -> dict[str, Any]:
+        """Trusted-operator CAS reentry from early Chirp acoustic REVIEW.
+
+        Only existing, fully reconciled DONE operations may be retained. This
+        step does not add/submit a repair window: a separate exact-interval
+        Standard repair plan and owner approval remain mandatory. The caller
+        must authenticate reviewer/review_reference and verify the persisted
+        source, raw provider results, acoustic report and prior merge by SHA.
+        Never expose this ledger method as a public unauthenticated API.
+        """
+        def sha(value: Any) -> bool:
+            return isinstance(value, str) and len(value) == 64 and all(
+                char in "0123456789abcdef" for char in value)
+        if (type(revision) is not int or revision < 0
+                or not all(map(sha, (source_sha, previous_chirp_evidence_sha,
+                                    previous_acoustic_qa_sha)))
+                or type(transfer_cents) is not int or transfer_cents <= 0
+                or type(aggregate_cap_cents) is not int
+                or not 1 <= aggregate_cap_cents <= 100000
+                or not isinstance(reviewer, str) or not reviewer.strip()
+                or not isinstance(review_reference, str)
+                or not review_reference.strip()
+                or not isinstance(worker_id, str) or not worker_id.strip()
+                or not callable(evidence_verifier)):
+            raise V2Conflict("early acoustic repair needs owner, revision and immutable evidence")
+        with self._tx() as db:
+            job = self._job(db, job_id)
+            stages = self._stages(db, job_id)
+            by_name = {row["name"]: row for row in stages}
+            gemini = by_name["gemini_primary"]
+            chirp = by_name["chirp_independent"]
+            if (job["revision"] != revision
+                    or job["status"] != "NEEDS_REVIEW"
+                    or job["mode"] != "FLASH_CHIRP"
+                    or job["source_sha"] != source_sha
+                    or job["approved_cents"] is None
+                    or gemini["state"] not in {"SKIPPED", "COMPLETE"}
+                    or chirp["state"] != "REVIEW_REQUIRED"
+                    or chirp["review_required"] != 1
+                    or chirp["evidence_sha"] != previous_chirp_evidence_sha
+                    or any(by_name[name]["state"] != "PENDING" for name in
+                           ("compare", "third_optional", "adjudication", "golden_qa"))):
+                raise V2Conflict("early acoustic repair revision/state/evidence mismatch")
+            operations = [dict(row) for row in db.execute(
+                "SELECT * FROM v2_chirp_operations WHERE job_id=? "
+                "ORDER BY CASE purpose WHEN 'BASE' THEN 0 ELSE 1 END,start_ms,window_id",
+                (job_id,),
+            )]
+            if (not operations or any(
+                    row["status"] != "DONE" or not row["operation_name"]
+                    or not sha(row["result_sha"]) or row["actual_cents"] is None
+                    or row["source_sha"] != source_sha
+                    for row in operations)):
+                raise V2Conflict("unresolved Chirp provider result blocks early repair")
+            spent = sum(int(row["actual_cents"]) for row in operations)
+            if spent != chirp["actual_cents"]:
+                raise V2Conflict("Chirp operation and stage actual costs differ")
+            unused = int(gemini["estimate_cents"]) - int(gemini["actual_cents"] or 0)
+            # The reopened stage estimate must cover sunk billed usage before
+            # any new *separately authorized* Standard repair reservations.
+            if (transfer_cents > unused
+                    or int(chirp["estimate_cents"]) + transfer_cents < spent):
+                raise V2Conflict("insufficient unused Gemini reservation for reconciled Chirp")
+            other_spent = sum(int(row["actual_cents"] or 0) for row in stages
+                              if row["name"] != "chirp_independent")
+            if (other_spent + spent + transfer_cents > job["approved_cents"]
+                    or sum(int(row["estimate_cents"]) for row in stages)
+                       > job["approved_cents"]):
+                raise V2Conflict("early repair exceeds original owner job cap")
+            if db.execute(
+                "SELECT 1 FROM v2_stages s JOIN v2_jobs j ON j.id=s.job_id "
+                "WHERE j.approved_cents IS NOT NULL "
+                "AND s.name IN ('gemini_primary','chirp_independent','third_optional') "
+                "AND s.state IN ('RUNNING','OUTCOME_UNKNOWN','OVER_BUDGET') "
+                "LIMIT 1"
+            ).fetchone():
+                raise V2Conflict("unreconciled global paid operation")
+            if approved_trial_exposure(db) > aggregate_cap_cents:
+                raise V2Conflict("aggregate V2 exposure cap exceeded")
+            if evidence_verifier(
+                job_id=job_id, source_sha=source_sha,
+                old_chirp_sha=previous_chirp_evidence_sha,
+                old_acoustic_sha=previous_acoustic_qa_sha,
+                windows=operations,
+            ) is not True:
+                raise V2Conflict("independent early acoustic/source/raw evidence verification failed")
+            snapshot = [dict(row) for row in stages]
+            prior_json = json.dumps(snapshot, ensure_ascii=False,
+                                    sort_keys=True, separators=(",", ":"))
+            # All checks and audit are in one transaction; crash before commit
+            # leaves the REVIEW unchanged, not an implicit new paid consent.
+            db.execute(
+                "INSERT INTO v2_chirp_repair_rounds "
+                "(job_id,from_revision,source_sha,prior_stage_snapshot_json,"
+                "prior_stage_snapshot_sha,transfer_cents,actor,reference,resumed_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (job_id, revision, source_sha, prior_json, _digest(snapshot),
+                 transfer_cents, reviewer.strip(), review_reference.strip(), _now()),
+            )
+            claim = secrets.token_urlsafe(32)
+            db.execute(
+                "UPDATE v2_stages SET estimate_cents=estimate_cents-?,updated_at=? "
+                "WHERE job_id=? AND name='gemini_primary'",
+                (transfer_cents, _now(), job_id),
+            )
+            db.execute(
+                "UPDATE v2_stages SET estimate_cents=estimate_cents+?,"
+                "state='RUNNING',review_required=NULL,evidence_sha=NULL,"
+                "claim_hash=?,updated_at=? WHERE job_id=? AND name='chirp_independent'",
+                (transfer_cents, hashlib.sha256(claim.encode()).hexdigest(),
+                 _now(), job_id),
+            )
+            db.execute(
+                "UPDATE v2_jobs SET status='PROCESSING',revision=revision+1 "
+                "WHERE id=? AND revision=?",
+                (job_id, revision),
+            )
+            if approved_trial_exposure(db) > aggregate_cap_cents:
+                raise V2Conflict("reopened Chirp exposure exceeds aggregate cap")
+            return {
+                "job_id": job_id, "stage": "chirp_independent",
+                "claim": claim, "source_sha": source_sha,
+                "estimate_cents": int(chirp["estimate_cents"]) + transfer_cents,
+                "repair_transfer_cents": transfer_cents,
+                "provider_submissions": 0,
+            }
+
     def prior_chirp_merge_for_active_repair(self, job_id: str) -> str | None:
         """Return the ledger-attested prior merge SHA, never a loose file path.
 
@@ -815,7 +947,7 @@ class GoldenV2Ledger:
                 raise V2Conflict("prior Chirp repair audit/source digest mismatch")
             chirp = next((item for item in snapshot
                           if item.get("name") == "chirp_independent"), None)
-            if (chirp is None or chirp.get("state") != "COMPLETE"
+            if (chirp is None or chirp.get("state") not in {"COMPLETE", "REVIEW_REQUIRED"}
                     or not isinstance(chirp.get("evidence_sha"), str)
                     or len(chirp["evidence_sha"]) != 64):
                 raise V2Conflict("previous paid stage was not completed")
