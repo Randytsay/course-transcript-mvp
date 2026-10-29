@@ -94,12 +94,22 @@ def preview_chirp_reconciliation(*, artifact_root: Path, job_id: str) -> dict[st
             blockers.append("OPERATION_ACTUAL_USAGE_UNKNOWN")
         else:
             known_cents += int(cents)
-        evidence_dir = job_dir / "golden-v2" / "chirp-evidence" / row["window_id"]
+        evidence_root = job_dir / "golden-v2" / "chirp-evidence"
+        window_id = row["window_id"]
+        safe_window_id = (
+            isinstance(window_id, str)
+            and re.fullmatch(r"[a-zA-Z0-9_.-]{1,80}", window_id) is not None
+            and window_id not in {".", ".."}
+        )
+        evidence_dir = evidence_root / window_id if safe_window_id else evidence_root
         raw = evidence_dir / "provider-raw.json"
         receipt = evidence_dir / "window.json"
         verified = False
-        if (row["source_sha"] == job["source_sha"]
+        if (safe_window_id and row["source_sha"] == job["source_sha"]
                 and row["result_sha"] is not None
+                and evidence_root.is_dir() and not evidence_root.is_symlink()
+                and evidence_dir.is_dir() and not evidence_dir.is_symlink()
+                and evidence_dir.resolve().parent == evidence_root.resolve()
                 and raw.is_file() and receipt.is_file()
                 and not raw.is_symlink() and not receipt.is_symlink()
                 and raw.resolve().parent == evidence_dir.resolve()
