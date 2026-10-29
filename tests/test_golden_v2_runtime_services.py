@@ -43,6 +43,55 @@ class RuntimeServicesTests(unittest.TestCase):
                 forged={**signed_grant(grant),'signature':'0'*64}; grant_path.write_text(wire(forged))
                 with self.assertRaises(V2Conflict): verify_job_grant(root=root,snapshot=snapshot)
 
+    def test_signed_issuance_revision_survives_approved_stage_transitions(self):
+        # A valid owner grant signs the pre-approval revision; authorize() and
+        # claim_next() legitimately increment the job revision afterward.
+        with TemporaryDirectory() as temporary, patch.dict(
+                os.environ, {'COURSE_TRANSCRIPT_V2_GRANT_SECRET': 'm' * 48}):
+            root = Path(temporary)
+            ledger = GoldenV2Ledger(root / 'ledger.sqlite')
+            costs = dict(gemini_primary=1, chirp_independent=2, compare=0,
+                         third_optional=0, adjudication=0, golden_qa=0)
+            job = ledger.create_from_preflight(
+                source_sha='a' * 64, mode='FLASH_CHIRP',
+                estimated_stage_cents=costs, registration_sha256='d' * 64)
+            folder = root / 'jobs' / job
+            folder.mkdir(parents=True)
+            quote = folder / 'trusted-quote.json'
+            quote.write_text(wire(dict(
+                source_sha256='a' * 64, estimated_cents=3, mode='FLASH_CHIRP')))
+            grant = dict(
+                job_id=job, source_sha256='a' * 64,
+                quote_sha256=file_sha256(quote),
+                approved_cents=100, actor='owner',
+                revision=0, reference='approved-exact-quote')
+            grant_file = folder / 'owner-paid-grant.json'
+            grant_file.write_text(wire(signed_grant(grant)))
+            ledger.approve(job, revision=0, approved_cents=100,
+                           reference='approved-exact-quote', actor='owner')
+            snapshot = dict(job_id=job, source_sha256='a' * 64,
+                            aggregate_cap_cents=1000)
+            with patch('app.pipeline.golden_v2_runtime_services.assert_current'):
+                self.assertEqual(
+                    verify_job_grant(root=root, snapshot=snapshot)[1], grant)
+                claim = ledger.claim_next(job, worker_id='test')
+                self.assertEqual(ledger.status(job)['revision'], 2)
+                self.assertEqual(
+                    verify_job_grant(root=root, snapshot=snapshot)[1], grant)
+                for changed in (
+                    {'revision': 2},
+                    {'reference': 'different-approval-reference'},
+                    {'source_sha256': 'b' * 64},
+                ):
+                    forged_but_resigned = {**grant, **changed}
+                    grant_file.write_text(wire(signed_grant(forged_but_resigned)))
+                    with self.assertRaises(V2Conflict):
+                        verify_job_grant(root=root, snapshot=snapshot)
+                grant_file.write_text(wire(signed_grant(grant)))
+                ledger.complete(claim, evidence_sha='e' * 64, actual_cents=1)
+                self.assertEqual(
+                    verify_job_grant(root=root, snapshot=snapshot)[1], grant)
+
     def test_paid_route_is_disabled_even_for_authenticated_write_token(self):
         from fastapi.testclient import TestClient
         from app.golden_v2_chat_api import app

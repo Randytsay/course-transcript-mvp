@@ -148,7 +148,7 @@ class ChirpRecoveryWorkerTests(unittest.TestCase):
         with self.assertRaisesRegex(V2Conflict, "missing or changed"):
             self.recover()
 
-    def test_acoustic_review_keeps_chirp_stage_open_for_approved_repair(self):
+    def test_acoustic_review_settles_paid_stage_but_blocks_unapproved_repair(self):
         self.h.plan(max_window_seconds=10)
         rows = submit_planned_chirp(
             ledger=self.h.ledger, claim=self.h.claim, gateway=self.h.gateway)
@@ -172,8 +172,15 @@ class ChirpRecoveryWorkerTests(unittest.TestCase):
         outcome = self.recover(acoustic_inspector=review)
         self.assertEqual(outcome["action"], "STANDARD_REPAIR_APPROVAL_REQUIRED")
         self.assertEqual(outcome["acoustic_gate"], "REVIEW")
-        self.assertFalse((self.h.job_dir / "golden-v2" / "chirp-merged.json").exists())
-        with self.assertRaisesRegex(V2Conflict, "unresolved: RUNNING"):
+        merged = self.h.job_dir / "golden-v2" / "chirp-merged.json"
+        self.assertTrue(merged.is_file())
+        self.assertEqual(json.loads(merged.read_text())["acoustic_gate"], "REVIEW")
+        status = self.h.ledger.status(self.h.job_id)
+        self.assertEqual(status["status"], "NEEDS_REVIEW")
+        self.assertEqual(status["stages"][1]["state"], "REVIEW_REQUIRED")
+        self.assertEqual(status["stages"][1]["review_required"], 1)
+        self.assertEqual(self.recover()["action"], "ACOUSTIC_REVIEW_REQUIRED")
+        with self.assertRaises(V2Conflict):
             self.h.ledger.claim_next(self.h.job_id, worker_id="compare-too-early")
 
     def test_invalid_limit_is_rejected(self):

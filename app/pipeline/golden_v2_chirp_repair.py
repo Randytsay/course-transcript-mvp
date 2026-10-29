@@ -82,6 +82,96 @@ def verified_prior_chirp_evidence(job_dir: Path) -> Callable[..., bool]:
     return verify
 
 
+def verified_early_chirp_acoustic_evidence(job_dir: Path) -> Callable[..., bool]:
+    """Local-only proof for early Chirp REVIEW reentry.
+
+    The caller chooses a trusted job directory; ledger input cannot redirect
+    file access. Every window is bound to immutable provider bytes, merged
+    candidate, normalized source and the exact independent acoustic report.
+    This verifier never approves a paid submission or reports Golden PASS.
+    """
+    root = Path(job_dir).resolve(strict=True)
+
+    def safe_file(path: Path) -> bool:
+        return path.is_file() and not path.is_symlink() and path.resolve().parent == path.parent
+
+    def verify(*, job_id: str, source_sha: str, old_chirp_sha: str,
+               old_acoustic_sha: str, windows: list[dict[str, Any]]) -> bool:
+        if root.name != job_id or not windows:
+            return False
+        golden = root / "golden-v2"
+        merged_file = golden / "chirp-merged.json"
+        report_file = golden / f"chirp-acoustic-qa-{old_acoustic_sha[:20]}.json"
+        try:
+            if (not safe_file(root / "normalized.flac")
+                    or not safe_file(merged_file) or not safe_file(report_file)
+                    or file_sha256(root / "normalized.flac") != source_sha
+                    or file_sha256(merged_file) != old_chirp_sha
+                    or file_sha256(report_file) != old_acoustic_sha):
+                return False
+            merged = json.loads(merged_file.read_bytes())
+            report = json.loads(report_file.read_bytes())
+            # Original source-preflight writes lineage at the job root.
+            # Some legacy stage adapters also preserve a golden-v2 copy.
+            # Check every existing lineage file; never trust a mismatched
+            # sidecar to override the registered source.
+            lineage_paths = (root / "source-lineage.json",
+                             golden / "source-lineage.json")
+            present_lineage = [path for path in lineage_paths if path.exists()]
+            if (not present_lineage
+                    or any(not safe_file(path)
+                           or json.loads(path.read_bytes()).get("normalized_sha256")
+                              != source_sha for path in present_lineage)
+                    or merged.get("job_id") != job_id
+                    or merged.get("source_sha") != source_sha
+                    or merged.get("acoustic_gate") != "REVIEW"
+                    or merged.get("golden_pass") is not False
+                    or merged.get("acoustic_qa_sha256") != old_acoustic_sha
+                    or merged.get("timing_authority") != "chirp_3"
+                    or merged.get("actual_cents") != sum(
+                        int(row["actual_cents"]) for row in windows)
+                    or merged.get("window_result_shas") != [
+                        row["result_sha"] for row in windows]
+                    or report.get("status") != "REVIEW"
+                    or report.get("source_sha256") != source_sha
+                    or not isinstance(report.get("merged_sha256"), str)
+                    or len(report["merged_sha256"]) != 64):
+                return False
+            candidate = golden / (
+                f"chirp-merged-candidate-{report['merged_sha256'][:20]}.json"
+            )
+            if not safe_file(candidate) or file_sha256(candidate) != report["merged_sha256"]:
+                return False
+            for row in windows:
+                if (row["job_id"] != job_id or row["source_sha"] != source_sha
+                        or row["status"] != "DONE"
+                        or not row["operation_name"] or not row["request_id"]
+                        or row["actual_cents"] is None
+                        or row["purpose"] not in {"BASE", "REPAIR"}):
+                    return False
+                evidence = golden / "chirp-evidence" / row["window_id"]
+                raw = evidence / "provider-raw.json"
+                receipt = evidence / "window.json"
+                if not safe_file(raw) or not safe_file(receipt):
+                    return False
+                meta = json.loads(receipt.read_bytes())
+                if (file_sha256(raw) != row["result_sha"]
+                        or meta.get("raw_sha") != row["result_sha"]
+                        or meta.get("source_sha") != source_sha
+                        or meta.get("clip_sha") != row["clip_sha"]
+                        or meta.get("operation_name") != row["operation_name"]
+                        or meta.get("request_id") != row["request_id"]
+                        or meta.get("start_ms") != row["start_ms"]
+                        or meta.get("end_ms") != row["end_ms"]
+                        or meta.get("actual_cents") != row["actual_cents"]):
+                    return False
+            return True
+        except (OSError, KeyError, ValueError, TypeError):
+            return False
+
+    return verify
+
+
 def _candidate_for_assessment(job_dir: Path, expected_sha: str) -> Path:
     for path in sorted((Path(job_dir) / "golden-v2").glob("chirp-merged-candidate-*.json")):
         try:

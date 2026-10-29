@@ -9,6 +9,8 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
+from contextlib import closing
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -54,6 +56,30 @@ def verify_job_grant(*, root, snapshot):
     state = GoldenV2Ledger.open_existing(root/'ledger.sqlite').status(snapshot['job_id'])
     if state['approved_cents'] != payload['approved_cents'] or state['source_sha'] != payload['source_sha256']:
         raise V2Conflict('grant disagrees with ledger approval')
+    # The owner signs the *pre-approval* revision. ledger.approve() increments
+    # it, and later legitimate stage transitions increment it again. A grant
+    # must not require equality with the live job revision; instead validate
+    # its original signed CAS and the durable approval reference. Older grants
+    # without either field preserve their legacy validation contract.
+    if 'revision' in payload or 'reference' in payload:
+        issued_at = payload.get('revision')
+        reference = payload.get('reference')
+        if (type(issued_at) is not int or issued_at < 0
+                or not isinstance(reference, str) or not reference.strip()
+                or state['revision'] <= issued_at):
+            raise V2Conflict('owner grant signed issuance revision invalid')
+        with closing(sqlite3.connect(
+            f"{(root/'ledger.sqlite').resolve().as_uri()}?mode=ro", uri=True,
+        )) as db:
+            db.execute('PRAGMA query_only=ON')
+            row = db.execute(
+                'SELECT revision,approval_reference,approved_cents,source_sha '
+                'FROM v2_jobs WHERE id=?', (snapshot['job_id'],),
+            ).fetchone()
+        if (row is None or row[0] <= issued_at or row[1] != reference
+                or row[2] != payload['approved_cents']
+                or row[3] != payload['source_sha256']):
+            raise V2Conflict('owner grant issuance/reference disagrees with ledger')
     assert_current()
     return quote, payload
 

@@ -499,8 +499,9 @@ def reconcile_reviewed_chirp_window(
 def finish_approved_chirp(
     *, ledger: GoldenV2Ledger, job_id: str, job_dir: Path,
     acoustic_inspector: Callable[..., dict[str, Any]] | None = None,
+    settle_review: bool = False,
 ) -> dict[str, Any]:
-    """Merge base+repair evidence; complete only after local acoustic PASS.
+    """Merge provider evidence and optionally settle an acoustic-review hold.
 
     A REVIEW result preserves every immutable attempt and returns an explicit
     bounded Standard repair proposal or a manual-review disposition. It never
@@ -722,6 +723,27 @@ def finish_approved_chirp(
                 acoustic.get("repair_plan", {}).get("manual_review_required", True)
             ),
         })
+        if settle_review:
+            # The independent provider result is finished; REVIEW keeps the
+            # candidate non-Golden while allowing paid accounting to close.
+            result["golden_pass"] = False
+            dest = job_dir / "golden-v2" / "chirp-merged.json"
+            digest, selected = write_versioned(dest, _wire(result))
+
+            def verify_review(**expected: Any) -> bool:
+                return (
+                    expected["job_id"] == job_id
+                    and expected["source_sha"] == result["source_sha"]
+                    and expected["evidence_sha"] == file_sha256(selected)
+                    and len(expected["windows"]) == len(windows)
+                    and all(item["result_sha"] == saved_sha for item, saved_sha
+                            in zip(expected["windows"], result["window_result_shas"]))
+                )
+
+            ledger.finish_recovered_chirp(
+                job_id, evidence_sha=digest, verifier=verify_review,
+                acoustic_review_required=True,
+            )
         return result
 
     report = dict(candidate)
