@@ -67,6 +67,46 @@ billed-duration evidence, cloud billing and any unknown/outcome-ambiguous rows.
 Write the resulting GCP reconciliation report and SHA into immutable audit
 evidence **without modifying Production**. All 34 must match exactly.
 
+## Controlled file-level backup and restore rehearsal (not yet run on Production)
+
+PR159 includes `scripts/golden_v2_backup_rehearsal.py`, which is **root-only**
+at its command-line entrypoint. Its trusted, hardcoded source is the Golden V2
+host data root and its separate target is the protected host backup directory.
+It does not request or read credentials and does not access Google Cloud/Drive.
+
+Under a separately approved, root-managed operator session, first stage and
+verify the **exact reviewed Git SHA** of this script outside the active live
+release. Confirm the correct host mount source, applicable snapshot retention,
+real disk capacity, and quiesce any intake/paid/delivery writer before starting.
+Do not copy an unreviewed chat code snippet directly into a privileged shell.
+
+Illustrative commands **for an approved operator only**, from the verified
+source checkout (not instructions for ordinary WebCodex uid 999):
+
+```sh
+python3 -m scripts.golden_v2_backup_rehearsal backup --label pr159-20261029T103500Z
+python3 -m scripts.golden_v2_backup_rehearsal verify --label pr159-20261029T103500Z
+```
+
+Use a unique real UTC label; the example is not a pre-existing backup. The
+script never overwrites a prior name. It creates an isolated private snapshot
+containing `ledger.sqlite`, `jobs.tar.gz`, and a SHA manifest. SQLite's
+online Backup API produces a consistent database snapshot even with WAL. It
+detects source-ledger changes during archive creation, hashes each saved job
+file, restores both SQLite and job files to a separate temporary directory,
+checks database integrity/foreign keys and verifies each extracted file SHA.
+It rejects symlinks, unsafe tar entries, insufficient disk space, duplicate
+labels, and changed evidence. No provider request or Drive mutation is made.
+
+**Boundary:** This is an isolated *file-level* restore drill; it is not proof
+of complete host service recovery, rollback of Docker images, cloud resource
+state, or the final invoice. The backup covers `ledger.sqlite` and `jobs/`
+only, not host credentials, external storage, running containers, or other
+data directories. A second authenticated service startup test against a
+separate restored runtime (with network and paid paths disabled) is required
+before any Production deployment. Never restore this backup over a live WAL
+database.
+
 ## G4: release and recover (requires separate Owner sign-off)
 
 1. Confirm target source commit, CI SHA, all SQL schema and all container image
