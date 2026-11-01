@@ -30,6 +30,20 @@ class ReferenceMatchingTests(unittest.TestCase):
         self.assertEqual({v['file_id'] for v in outcome['a']['files']}, {'txt-file', 'srt-file'})
         self.assertEqual(match_sibling_references(media, list(reversed(candidates))), outcome)
 
+
+    def test_reviewed_srt_never_silently_loses_to_base_srt(self):
+        media = [{'file_id': 'audio', 'parent_id': 'dir001',
+                  'name': '20221217-清淨心.mp3'}]
+        candidates = [ref('20221217-清淨心_逐字稿.txt', 'txt')[0],
+                      ref('20221217-清淨心.srt', 'base')[0],
+                      ref('20221217-清淨心（潘一校）.srt', 'reviewed')[0]]
+        result = match_sibling_references(media, candidates)['audio']
+        self.assertEqual(result['status'], 'MATCHED')
+        self.assertTrue(result['requires_manual_selection'])
+        self.assertEqual([item['file_id'] for item in result['files']], ['txt'])
+        self.assertEqual({item['file_id'] for item in result['unresolved_files']},
+                         {'base', 'reviewed'})
+
     def test_ambiguous_and_wrong_folder_fail_closed(self):
         media = [{'file_id': 'a', 'parent_id': 'dir001', 'name': '20221217 清淨心.mp3'},
                  {'file_id': 'b', 'parent_id': 'dir001', 'name': '20221217 法會.mp3'}]

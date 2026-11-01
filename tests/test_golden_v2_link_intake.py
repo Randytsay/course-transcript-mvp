@@ -122,7 +122,8 @@ class DiscoveryTests(unittest.TestCase):
             direct = preview_drive_link(f'https://drive.google.com/file/d/{FILE}/view')
         expected = {**metadata, 'source_path': 'gdrive:課程/第一課逐字稿.txt'}
         self.assertEqual(folder['files'][0]['references'],
-                         {'status': 'MATCHED', 'files': [expected]})
+                         {'status': 'MATCHED', 'files': [expected],
+                          'requires_manual_selection': False, 'unresolved_files': []})
         self.assertEqual(direct['files'][0]['references'], folder['files'][0]['references'])
         self.assertEqual(folder['total_bytes'], 50)
         self.assertGreaterEqual(read.call_count, 2)

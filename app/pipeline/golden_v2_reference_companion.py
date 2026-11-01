@@ -50,38 +50,55 @@ def _score(media_name: str, ref_name: str) -> int:
 
 def match_sibling_references(media: list[dict[str, Any]],
                              references: list[dict[str, Any]]) -> dict[str, dict]:
-    """Match within the same immediate parent. Ties and shared names hold.
+    """Select uniquely associated TXT/SRT only; expose competing versions.
 
-    A TXT+SRT pair may coexist, but two competing TXT or SRT versions must
-    not be chosen by arbitrary listing order.
+    A higher filename similarity MUST NOT silently outrank a human-edited SRT.
+    Competing probable SRT versions therefore require an explicit choice, but
+    a unique TXT may still supply non-authoritative review hints. Shared or
+    date-only ambiguous references cannot be assigned to any media source.
     """
-    ranked: dict[str, list[tuple[int, dict]]] = {}
+    ranked: dict[str, list[dict]] = {}
     for item in media:
         options = [(s, ref) for ref in references
                    if ref['parent_id'] == item['parent_id']
                    if (s := _score(item['name'], ref['name'])) > 0]
-        best_by_format = {ext: max(s for s, ref in options if Path(ref['name']).suffix.lower() == ext)
-                          for ext in {Path(ref['name']).suffix.lower() for _, ref in options}}
-        ranked[item['file_id']] = [(s, ref) for s, ref in options
-                                   if s == best_by_format[Path(ref['name']).suffix.lower()]]
+        selected: list[dict] = []
+        for extension in REFERENCE_EXTENSIONS:
+            group = [(score, ref) for score, ref in options
+                     if Path(ref['name']).suffix.lower() == extension]
+            strong = [ref for score, ref in group if score >= 2]
+            selected.extend(strong or [ref for _, ref in group])
+        ranked[item['file_id']] = selected
+
+    def metadata(ref: dict) -> dict:
+        return {key: ref[key] for key in (
+            'file_id', 'version', 'name', 'source_path',
+            'size_bytes', 'md5_checksum', 'parent_id')}
+
     matched: dict[str, dict] = {}
     for item in media:
-        choices = [ref for _, ref in ranked[item['file_id']]]
+        choices = ranked[item['file_id']]
         if not choices:
             continue
-        shared = any(any(ref['file_id'] == other['file_id'] for _, other in opts)
-                     for key, opts in ranked.items() if key != item['file_id']
-                     for ref in choices)
-        extensions = [Path(ref['name']).suffix.lower() for ref in choices]
-        if shared or len(extensions) != len(set(extensions)):
+        if any(any(ref['file_id'] == other['file_id'] for other in opts)
+               for key, opts in ranked.items() if key != item['file_id']
+               for ref in choices):
             matched[item['file_id']] = {'status': 'AMBIGUOUS', 'files': []}
-        else:
-            matched[item['file_id']] = {
-                'status': 'MATCHED',
-                'files': [{key: ref[key] for key in ('file_id', 'version', 'name',
-                              'source_path', 'size_bytes', 'md5_checksum', 'parent_id')}
-                          for ref in sorted(choices, key=lambda r: r['file_id'])],
-            }
+            continue
+        uniquely_matched, unresolved = [], []
+        for extension in REFERENCE_EXTENSIONS:
+            candidates = [ref for ref in choices
+                          if Path(ref['name']).suffix.lower() == extension]
+            if len(candidates) == 1:
+                uniquely_matched.append(metadata(candidates[0]))
+            elif len(candidates) > 1:
+                unresolved.extend(metadata(ref) for ref in candidates)
+        matched[item['file_id']] = {
+            'status': 'MATCHED' if uniquely_matched else 'AMBIGUOUS',
+            'files': sorted(uniquely_matched, key=lambda item: item['file_id']),
+            'requires_manual_selection': bool(unresolved),
+            'unresolved_files': sorted(unresolved, key=lambda item: item['file_id']),
+        }
     return matched
 
 
