@@ -29,6 +29,7 @@ from app.providers.golden_v2_auto_acceptance import (evaluate_auto_acceptance,
                                                        render_human_review_advisory,TIER)
 from app.providers.golden_v2_immutable import store_immutable_bytes
 from app.providers.golden_v2_auto_gap_triage import load_bound_triage
+from app.providers.golden_v2_auto_context_triage import read_source_bound_comparison
 
 router=APIRouter(prefix='/api/v1/golden-v2')
 
@@ -119,6 +120,15 @@ def prepare_auto(job_id: str, body: AutoPrepare,authorization: str | None=Header
                reference_txt_bytes=None,original_srt_bytes=None,
                acoustic_review_items=(triage['gaps'] if triage else None),chirp_stage=chirp_stage,
                external_provider_reconciled=False,source_revision_verified=False)
+        context=read_source_bound_comparison(job_dir=job,job_id=job_id,
+             source_sha256=state['source_sha'],stages=state['stages'])
+        if context:
+            result.update(context)
+            if context['semantic_review_items']:
+                result['human_review_advisory']['recommended']=True
+        else:
+            result['semantic_status']='NOT_RUN_OR_NOT_ATTESTED'
+            result['semantic_review_items']=[]
         if triage:
             from app.pipeline.golden_v2_auto_closeout import _sha as auto_sha
             result['acoustic_triage_sha256']=auto_sha(_wire(triage))
@@ -150,6 +160,7 @@ def prepare_auto(job_id: str, body: AutoPrepare,authorization: str | None=Header
                 'output_names':list(names)+list(reports),
                 'acoustic_unknown_count':result['acoustic_open_item_count'] if triage else result['subtitle_gaps_over_3s_count'],
                 'human_listening_required':False,'golden_pass':False,
+                'semantic_review_items':len(result.get('semantic_review_items',[])),
                 'publication_granted':False,'actor':actor}
     except (V2Conflict,ValueError,KeyError,RuntimeError,OSError,subprocess.SubprocessError) as exc:
         raise HTTPException(status_code=409,detail='auto source or artifact verification blocked') from exc

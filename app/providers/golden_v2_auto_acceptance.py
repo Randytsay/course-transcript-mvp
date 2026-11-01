@@ -213,6 +213,8 @@ def render_human_review_advisory(result: dict, *, lesson_title: str) -> str:
              f"- 聲學待核對區間：{result.get('acoustic_open_item_count',len(result['acoustic_review_items']))}",
              f"- 已有聲學非語音證據可略過：{result.get('acoustic_nonspeech_confirmed_count',0)}",
              f"- 舊版與輸出文字差異：{len(result['original_srt_disagreements'])}",
+             f"- Gemini/Chirp 比對狀態：{result.get('semantic_status','NOT_RUN_OR_NOT_ATTESTED')}",
+             f"- 語意差異候選：{len(result.get('semantic_review_items',[]))}",
              f"- Chirp 階段：{result['chirp_stage']}",
              '- 舊 Chirp 雲端作業對帳：'+('已獨立完成' if result['external_provider_reconciled'] else '未完成'),
              '', '## 自動驗收檢查', '']
@@ -242,6 +244,13 @@ def render_human_review_advisory(result: dict, *, lesson_title: str) -> str:
             lines.append(f"- 分段數差異：{x['original_count']} → {x['output_count']}")
             continue
         lines += [f"- {fmt(x['start_ms'])}：原版「{x['original']}」；輸出「{x['output']}」"]
+    if result.get('semantic_review_items'):
+        lines += ['', '### Gemini/Chirp 或參考稿/Chirp 語意差異（前 30 項）', '']
+        for x in result['semantic_review_items'][:30]:
+            start=x.get('source_time_start_ms')
+            time=fmt(start) if isinstance(start,int) else '未定位'
+            lines.append(f"- {time}｜{x['kind']}｜Chirp「{x['chirp_excerpt']}」"
+                         f"／參考「{x['reference_excerpt']}」；待複核")
     lines += ['', '## 級別邊界', '',
               '本次可完成的是無須真人介入的**來源與字幕結構／逐字稿一致性之自動驗收**，而非聲稱所有語音已逐字覆核。',
               '如需認證為 Golden PASS，仍須取得符合嚴格聲學及語意 Gate 的獨立證據。',

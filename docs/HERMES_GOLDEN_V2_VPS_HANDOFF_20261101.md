@@ -42,3 +42,12 @@ limits. Verify `NONSPEECH_CONFIRMED` intervals are supported by contiguous
 local probe measurements. Only positive-speech or uncertain spans remain
 recommended for human review; none block the independent auto-tier.
 No new cloud request, auto correction, or Golden PASS may result from this step.
+
+## Existing Gemini/Chirp comparison (offline, already paid evidence only)
+
+`auto-delivery/prepare` automatically imports a `compare` stage's exact
+ledger-SHA-attested `engine-comparison.json` when available. This only lists
+semantic disagreement candidates, never invokes a model or applies guessed
+corrections. If Gemini was `SKIPPED` or the comparison has not completed,
+record `NOT_RUN_OR_NOT_ATTESTED` accurately. Do not commission new provider
+requests to make a report look complete.

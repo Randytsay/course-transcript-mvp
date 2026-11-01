@@ -62,3 +62,14 @@ unknown intervals stay advisory. Budget-exceeded slices stay `REVIEW`.
 Missing triage remains `NOT_RUN` and **never silently becomes PASS**.
 Do **not** run this resource-consuming CLI inline in an HTTP handler; perform
 it as a bounded offline worker pass with operator-approved CPU/disk limits.
+
+## Existing Gemini/Chirp comparison evidence (no new model charges)
+
+On each `prepare`, if the original job's `compare` stage is `COMPLETE` or
+`REVIEW_REQUIRED`, the API reads the **exact ledger-SHA-attested**
+`engine-comparison.json`, validates job/source/timing provenance and imports
+bounded Chirp-vs-Gemini (or Chirp-first vs human reference) text differences
+into the optional human-review report. It does **not** call Gemini or claim
+semantic correctness. Missing/untrusted comparison remains
+`NOT_RUN_OR_NOT_ATTESTED`. Existing decisions are advisory until separately
+verified from audio; no automatic transcription overwrite is performed.
