@@ -56,6 +56,8 @@ class AutoPrepare(BaseModel):
     srt_filename: str=Field(min_length=5,max_length=180)
     txt_filename: str=Field(min_length=5,max_length=180)
     lesson_title: str=Field(min_length=1,max_length=160)
+    original_srt_filename: str | None=Field(default=None,max_length=180)
+    reference_txt_filename: str | None=Field(default=None,max_length=180)
     confirm: Literal[True]
 
 
@@ -102,6 +104,8 @@ def prepare_auto(job_id: str, body: AutoPrepare,authorization: str | None=Header
         srt=_safe_selected(folder,body.srt_filename)
         txt=_safe_selected(folder,body.txt_filename)
         if srt==txt: raise V2Conflict('same source for SRT and TXT')
+        original=_safe_selected(folder,body.original_srt_filename) if body.original_srt_filename else None
+        reference=_safe_selected(folder,body.reference_txt_filename) if body.reference_txt_filename else None
         source=job/'normalized.flac'
         if source.is_symlink() or not source.is_file():
             raise V2Conflict('source missing')
@@ -117,7 +121,8 @@ def prepare_auto(job_id: str, body: AutoPrepare,authorization: str | None=Header
         result=evaluate_auto_acceptance(job_id=job_id,source_sha256=state['source_sha'],
                source_audio_sha_verified=True,source_duration_ms=milliseconds,
                srt_bytes=srt.read_bytes(),txt_bytes=txt.read_bytes(),
-               reference_txt_bytes=None,original_srt_bytes=None,
+               reference_txt_bytes=reference.read_bytes() if reference else None,
+               original_srt_bytes=original.read_bytes() if original else None,
                acoustic_review_items=(triage['gaps'] if triage else None),chirp_stage=chirp_stage,
                external_provider_reconciled=False,source_revision_verified=False)
         context=read_source_bound_comparison(job_dir=job,job_id=job_id,

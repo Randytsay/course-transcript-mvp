@@ -123,7 +123,7 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
     if original_srt_bytes is not None:
         old, old_failures = _check_cues(original_srt_bytes)
         if old_failures:
-            failures.append("invalid_original_reference_srt")
+            original_diffs.append({"type":"INVALID_REFERENCE_SRT", "note":"Reference-only format failure; do not reject current clean output"})
         elif len(old) != len(cues):
             # Different segmentation is allowed, but must be clearly disclosed.
             original_diffs.append({"type":"CUE_COUNT_DIFFERS","original_count":len(old),
@@ -148,7 +148,7 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
                 "comparison_scope":"first_4000_normalized_characters",
             }
         except UnicodeError:
-            failures.append("invalid_reference_txt_encoding")
+            reference_match={"accuracy_certification":False,"warning":"INVALID_OPTIONAL_REFERENCE_TXT_ENCODING"}
     # A source-matched local non-speech classification is a reason to skip
     # a review recommendation for that bounded gap, NOT Golden speech completeness.
     non_speech={(x['start_ms'],x['end_ms']) for x in acoustic
@@ -240,6 +240,9 @@ def render_human_review_advisory(result: dict, *, lesson_title: str) -> str:
               for x in windows]
     lines += ['', '### 文字差異（前 30 項；完整清單見 JSON）', '']
     for x in result['original_srt_disagreements'][:30]:
+        if x.get('type')=='INVALID_REFERENCE_SRT':
+            lines.append('- 原始參考 SRT 含空白或格式錯誤，僅作參考；未影響輸出 SRT 技術驗收')
+            continue
         if 'start_ms' not in x:
             lines.append(f"- 分段數差異：{x['original_count']} → {x['output_count']}")
             continue

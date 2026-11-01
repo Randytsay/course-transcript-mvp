@@ -73,3 +73,13 @@ into the optional human-review report. It does **not** call Gemini or claim
 semantic correctness. Missing/untrusted comparison remains
 `NOT_RUN_OR_NOT_ATTESTED`. Existing decisions are advisory until separately
 verified from audio; no automatic transcription overwrite is performed.
+
+## Optional same-job reference comparison
+
+`POST prepare` optionally accepts `original_srt_filename` and
+`reference_txt_filename` if these source-linked files have been safely staged
+in the same verified private job folder. Differences are advisory only. An
+invalid/blank **reference** SRT or invalid optional TXT encoding becomes an
+explicit review warning; it does not block a clean verified output SRT/TXT.
+Never let a reference override the current actual source audio or supply
+unheard words. This is a comparison, not a semantic accuracy certificate.

@@ -76,6 +76,17 @@ class AutoRouteTests(unittest.TestCase):
             result=self.client.get(self.url+'/status',headers={'Authorization':'Bearer '+self.read})
             self.assertEqual(result.json()['deliveries'][0]['state'],'AUTO_DELIVERED')
 
+    def test_reference_srt_with_empty_cue_does_not_block_auto_close(self):
+        (self.jobdir/'golden-v2'/'broken-original.srt').write_text(
+            '1\n00:00:01,000 --> 00:00:02,000\nHello\n\n'
+            '2\n00:00:02,000 --> 00:00:03,000\n\n')
+        body={**self.body(),'original_srt_filename':'broken-original.srt'}
+        with patch.dict(os.environ,{'COURSE_TRANSCRIPT_V2_AUTO_DELIVERY_API_ENABLED':'true'}):
+            with patch('app.golden_v2_auto_routes.subprocess.run',return_value=SimpleNamespace(stdout='3.000')):
+                res=self.client.post(self.url+'/prepare',headers=self.headers,json=body)
+        self.assertEqual(res.status_code,200,res.text)
+        self.assertEqual(res.json()['state'],'PREPARED')
+
     def test_bad_srt_blocks_without_creating_delivery_receipt(self):
         (self.jobdir/'golden-v2'/'candidate.txt').write_text('different')
         with patch.dict(os.environ,{'COURSE_TRANSCRIPT_V2_AUTO_DELIVERY_API_ENABLED':'true'}):

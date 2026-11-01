@@ -65,6 +65,15 @@ class AutoAcceptanceTests(unittest.TestCase):
         self.assertEqual(len(x['original_srt_disagreements']),1)
         self.assertFalse(x['formal_golden_pass'])
 
+    def test_broken_optional_reference_srt_is_advisory(self):
+        reference=("1\n00:00:01,000 --> 00:00:03,000\n清淨心\n\n"
+                   "2\n00:00:07,000 --> 00:00:09,000\n\n").encode()
+        x=evaluate_auto_acceptance(**(self.params|{'original_srt_bytes':reference}))
+        self.assertEqual(x['status'],TIER)
+        self.assertTrue(x['can_close_without_human'])
+        self.assertEqual(x['original_srt_disagreements'][0]['type'],'INVALID_REFERENCE_SRT')
+        self.assertFalse(x['formal_golden_pass'])
+
     def test_no_references_allowed_with_report(self):
         x=evaluate_auto_acceptance(**(self.params|{'reference_txt_bytes':None,
                            'original_srt_bytes':None,'acoustic_review_items':None}))
