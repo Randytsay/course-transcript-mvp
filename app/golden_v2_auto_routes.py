@@ -28,6 +28,7 @@ from app.pipeline.golden_v2_runtime_services import signed_grant
 from app.providers.golden_v2_auto_acceptance import (evaluate_auto_acceptance,
                                                        render_human_review_advisory,TIER)
 from app.providers.golden_v2_immutable import store_immutable_bytes
+from app.providers.golden_v2_auto_gap_triage import load_bound_triage
 
 router=APIRouter(prefix='/api/v1/golden-v2')
 
@@ -108,14 +109,19 @@ def prepare_auto(job_id: str, body: AutoPrepare,authorization: str | None=Header
                        check=True,capture_output=True,text=True,timeout=30)
         milliseconds=round(float(duration.stdout.strip())*1000)
         chirp_stage=next(s['state'] for s in state['stages'] if s['name']=='chirp_independent')
-        # No artificial 'speech confirmed' flags; unidentified acoustic spans
-        # remain advisory based on actual SRT time gaps only.
+        # Use optional bounded provider-free acoustic sidecar only when it is
+        # exact source/SRT/timebase-bound. Missing sidecar stays NOT_RUN.
+        triage=load_bound_triage(job_dir=job,source_sha256=state['source_sha'],
+            srt_bytes=srt.read_bytes(),duration_ms=milliseconds)
         result=evaluate_auto_acceptance(job_id=job_id,source_sha256=state['source_sha'],
                source_audio_sha_verified=True,source_duration_ms=milliseconds,
                srt_bytes=srt.read_bytes(),txt_bytes=txt.read_bytes(),
                reference_txt_bytes=None,original_srt_bytes=None,
-               acoustic_review_items=None,chirp_stage=chirp_stage,
+               acoustic_review_items=(triage['gaps'] if triage else None),chirp_stage=chirp_stage,
                external_provider_reconciled=False,source_revision_verified=False)
+        if triage:
+            from app.pipeline.golden_v2_auto_closeout import _sha as auto_sha
+            result['acoustic_triage_sha256']=auto_sha(_wire(triage))
         if result['status']!=TIER:
             return {'job_id':job_id,'status':result['status'],
                     'technical_blockers':result['technical_blockers'],
@@ -142,7 +148,7 @@ def prepare_auto(job_id: str, body: AutoPrepare,authorization: str | None=Header
         return {'job_id':job_id,'state':prepared['state'],
                 'manifest_sha256':prepared['manifest_sha256'],
                 'output_names':list(names)+list(reports),
-                'acoustic_unknown_count':result['subtitle_gaps_over_3s_count'],
+                'acoustic_unknown_count':result['acoustic_open_item_count'] if triage else result['subtitle_gaps_over_3s_count'],
                 'human_listening_required':False,'golden_pass':False,
                 'publication_granted':False,'actor':actor}
     except (V2Conflict,ValueError,KeyError,RuntimeError,OSError,subprocess.SubprocessError) as exc:

@@ -31,3 +31,14 @@ You are the **VPS privileged operator / release engineer**, not an alternative s
 - Test Drive original folder, four new file IDs/names/readback SHA and duplicate-retry check.
 - How to rollback, operator audit link, any missing human privilege/owner budget decisions.
 - Final state of 20221217/24/31 and next action. If no authorized V2 root deploy path, stop before change and report that precise blocker instead of using V1 command.
+
+## Provider-free blackboard pause triage (optional, separately bounded)
+
+If verified normalized FLAC and candidate SRT are available, run
+`scripts/golden_v2_auto_gap_triage.py` **offline** from the exact reviewed
+release; do not run heavy audio probes on the API thread. It creates
+source/SRT-bound acoustic evidence using local FFmpeg/VAD with hard segment
+limits. Verify `NONSPEECH_CONFIRMED` intervals are supported by contiguous
+local probe measurements. Only positive-speech or uncertain spans remain
+recommended for human review; none block the independent auto-tier.
+No new cloud request, auto correction, or Golden PASS may result from this step.

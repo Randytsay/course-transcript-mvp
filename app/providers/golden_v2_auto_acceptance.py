@@ -111,9 +111,14 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
         if type(start) is not int or type(end) is not int or not 0 <= start < end <= source_duration_ms:
             failures.append("invalid_acoustic_review_interval")
             continue
+        disposition=item.get("disposition",item.get("acoustic_disposition","REVIEW"))
+        if disposition not in ("NONSPEECH_CONFIRMED","SPEECH_CONFIRMED","REVIEW"):
+            failures.append("invalid_acoustic_disposition")
+            continue
         acoustic.append({"index":item.get("index"),"start_ms":start,"end_ms":end,
-                         "disposition":item.get("disposition",item.get("acoustic_disposition","REVIEW")),
-                         "decision":"UNRESOLVED_NO_HUMAN_ATTESTATION"})
+                         "disposition":disposition,
+                         "decision":("LOCAL_NONSPEECH_EVIDENCE" if disposition=="NONSPEECH_CONFIRMED"
+                                     else "UNRESOLVED_NO_HUMAN_ATTESTATION")})
     original_diffs = []
     if original_srt_bytes is not None:
         old, old_failures = _check_cues(original_srt_bytes)
@@ -144,6 +149,12 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
             }
         except UnicodeError:
             failures.append("invalid_reference_txt_encoding")
+    # A source-matched local non-speech classification is a reason to skip
+    # a review recommendation for that bounded gap, NOT Golden speech completeness.
+    non_speech={(x['start_ms'],x['end_ms']) for x in acoustic
+                if x['disposition']=='NONSPEECH_CONFIRMED'}
+    open_windows=[x for x in windows if (x['start_ms'],x['end_ms']) not in non_speech]
+    unresolved_acoustic=[x for x in acoustic if x['disposition']!='NONSPEECH_CONFIRMED']
     # Text content may be complete-looking even if an acoustic region is omitted.
     # Those uncertainty types are always disclosed, not silently resolved.
     blockers=sorted(set(failures))
@@ -167,12 +178,15 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
         "subtitle_gaps_over_3s_count":len(windows),
         "subtitle_gaps_over_3s":windows,
         "acoustic_review_items":acoustic,
+        "acoustic_nonspeech_confirmed_count":len(non_speech),
+        "acoustic_open_item_count":len(unresolved_acoustic),
+        "acoustic_triage_status":"LOCAL_ONLY" if acoustic_review_items is not None else "NOT_RUN",
         "reference_txt_comparison":reference_match,
         "original_srt_disagreements":original_diffs,
         "technical_blockers":blockers,
         "human_review_advisory":{
            "mandatory_for_auto_closeout":False,
-           "recommended": bool(acoustic or windows or original_diffs or not external_provider_reconciled),
+           "recommended": bool(unresolved_acoustic or open_windows or original_diffs or not external_provider_reconciled),
            "notes":["Source speech completeness was NOT independently certified.",
                     "SRT/TXT machine checks do not certify exhaustive transcription; origin may be human-edited or ASR.",
                     "Unresolved acoustic gaps and semantic differences remain advisory.",
@@ -196,7 +210,8 @@ def render_human_review_advisory(result: dict, *, lesson_title: str) -> str:
              f"- 音訊 SHA-256：`{result['source_sha256']}`",
              f"- SRT 段落：{result['subtitle_cue_count']}",
              f"- 3 秒以上字幕空檔：{result['subtitle_gaps_over_3s_count']}",
-             f"- 聲學待核對區間：{len(result['acoustic_review_items'])}",
+             f"- 聲學待核對區間：{result.get('acoustic_open_item_count',len(result['acoustic_review_items']))}",
+             f"- 已有聲學非語音證據可略過：{result.get('acoustic_nonspeech_confirmed_count',0)}",
              f"- 舊版與輸出文字差異：{len(result['original_srt_disagreements'])}",
              f"- Chirp 階段：{result['chirp_stage']}",
              '- 舊 Chirp 雲端作業對帳：'+('已獨立完成' if result['external_provider_reconciled'] else '未完成'),
@@ -210,11 +225,14 @@ def render_human_review_advisory(result: dict, *, lesson_title: str) -> str:
               '下列是需優先複核的候選，不代表已證實漏字，也不應自動把原版文字蓋回人工校正版。', '']
     def fmt(ms):
         return f'{ms//3600000:02d}:{ms//60000%60:02d}:{ms//1000%60:02d}.{ms%1000:03d}'
-    for item in result['acoustic_review_items'][:60]:
+    for item in [v for v in result['acoustic_review_items'] if v['disposition']!='NONSPEECH_CONFIRMED'][:60]:
         lines.append(f"- 聲學：{fmt(item['start_ms'])}–{fmt(item['end_ms'])}；"
                      f"{item['disposition']}；仍待音訊核對")
     lines += ['', '### 優先檢查字幕空檔（最長的前 30 段）', '']
-    windows=sorted(result['subtitle_gaps_over_3s'],
+    dismissed={(x['start_ms'],x['end_ms']) for x in result['acoustic_review_items']
+               if x['disposition']=='NONSPEECH_CONFIRMED'}
+    windows=sorted([x for x in result['subtitle_gaps_over_3s']
+                    if (x['start_ms'],x['end_ms']) not in dismissed],
                    key=lambda v:v['end_ms']-v['start_ms'],reverse=True)[:30]
     lines += [f"- {fmt(x['start_ms'])}–{fmt(x['end_ms'])}（{(x['end_ms']-x['start_ms'])/1000:.1f}s）"
               for x in windows]

@@ -39,3 +39,26 @@ The new API does **not** discover/choose/edit SRT/TXT by itself from Drive; a tr
 ## Acceptance evidence
 
 Provide release SHA, Docker image digest, CI/Compose links, checksum-verified backup & restore drill (no overwrite of active DB), feature flags **names and boolean values only**, single-course four-file original-folder Drive IDs/SHAs, source observation/revision, independent `AUTO_DELIVERED` ledger query, original `v2_jobs/v2_stages` rows compared before/after, canary retry evidence, worker heartbeat, rollback instructions. Any blocker must yield `NO-GO` and no false production claim.
+
+## Optional provider-free acoustic pass (recommended before `prepare`)
+
+The old QA pipeline's VAD/FFmpeg speech-vs-nonspeech is now reusable for
+subtitle-uncovered intervals, independently of paid Chirp/Gemini inference.
+The operator can execute the bounded, **no paid calls / no Drive writes** CLI:
+
+```bash
+python -m scripts.golden_v2_auto_gap_triage \
+  --job-dir /trusted/v2/jobs/v2p_<validated32hex> \
+  --source-sha '<canonical normalized FLAC SHA-256>' \
+  --srt /trusted/v2/jobs/v2p_<validated32hex>/golden-v2/selected.srt
+```
+
+It emits an immutable, source/SRT/timebase-bound `auto-gap-triage-<sha>.json`
+inside that job's `golden-v2` directory. The `prepare` endpoint uses this
+exact matching file if present. Every fully non-speech interval requires
+contiguous local probe evidence (strong quiet peak or VAD consensus); such
+intervals are excluded from recommended human review. Positive speech and
+unknown intervals stay advisory. Budget-exceeded slices stay `REVIEW`.
+Missing triage remains `NOT_RUN` and **never silently becomes PASS**.
+Do **not** run this resource-consuming CLI inline in an HTTP handler; perform
+it as a bounded offline worker pass with operator-approved CPU/disk limits.
