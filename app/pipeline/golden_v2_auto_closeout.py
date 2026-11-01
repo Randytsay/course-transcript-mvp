@@ -12,7 +12,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
-from app.providers.golden_v2_auto_acceptance import SCHEMA, TIER, evaluate_auto_acceptance
+from app.providers.golden_v2_auto_acceptance import (SCHEMA, TIER, evaluate_auto_acceptance,
+                                                      render_human_review_advisory)
 
 
 def _wire(value):
@@ -43,7 +44,11 @@ def _schema(conn):
 
 def prepare_auto_acceptance(*, root: Path, job_id: str, result: dict,
                             srt_path: Path, txt_path: Path,
-                            target_names: tuple[str, str]) -> dict:
+                            target_names: tuple[str, str],
+                            report_json_path: Path | None = None,
+                            report_md_path: Path | None = None,
+                            report_names: tuple[str, str] | None = None,
+                            lesson_title: str = "") -> dict:
     """Prepare isolated closure without mutating Golden provider-stage rows."""
     if (not re.fullmatch(r'v2p_[0-9a-f]{32}', job_id)
             or not isinstance(result, dict)
@@ -99,6 +104,29 @@ def prepare_auto_acceptance(*, root: Path, job_id: str, result: dict,
         raise V2Conflict('incomplete automatic QA input') from exc
     if technical['status']!=TIER:
         raise V2Conflict('machine-checked acceptance not reproducible')
+    # The optional companion reports are not discretionary in the owner API:
+    # they are machine-derived, linked to the exact acceptance snapshot,
+    # and hashed as part of the same Drive delivery manifest.
+    extras=[]
+    if any(x is not None for x in (report_json_path,report_md_path,report_names)):
+        if (not all(x is not None for x in (report_json_path,report_md_path,report_names))
+                or not isinstance(report_names,tuple) or len(report_names)!=2
+                or not lesson_title.strip()
+                or not report_names[0].endswith('_驗收.json')
+                or not report_names[1].endswith('_人工建議複核.md')
+                or any('/' in x or '\\' in x or len(x)>180 for x in report_names)
+                or len(set((*target_names,*report_names))) !=4):
+            raise V2Conflict('unsafe or incomplete QA companion reports')
+        generated=( _wire(result),
+                    render_human_review_advisory(result,lesson_title=lesson_title).encode('utf-8'))
+        for path,name,expected in zip((report_json_path,report_md_path),report_names,generated):
+            path=Path(path)
+            if (path.is_symlink() or not path.is_file()
+                    or not path.resolve().is_relative_to(job_dir)
+                    or path.stat().st_size>10_000_000
+                    or path.read_bytes()!=expected):
+                raise V2Conflict('acceptance/optional report content or location changed')
+            extras.append({'name':name,'filename':path.name,'sha256':_sha(expected)})
     preflight_path=job_dir/'source-preflight.json'
     if preflight_path.is_symlink():
         raise V2Conflict('unsafe source evidence')
@@ -120,6 +148,7 @@ def prepare_auto_acceptance(*, root: Path, job_id: str, result: dict,
         'human_listening_attested':False,'golden_qa_pass':False,
         'source_srt_name':Path(srt_path).name,
         'source_txt_name':Path(txt_path).name,
+        'extra_artifacts':extras,
     }
     digest=_sha(_wire(canonical));manifest={**canonical,'manifest_sha256':digest}
     with ledger._tx() as db:
@@ -174,7 +203,9 @@ def finalize_auto_acceptance(*, root: Path, manifest: dict,
                                      manifest['source_drive_version']) is not True):
         raise V2Conflict('source-version-bound signed owner delivery grant invalid')
     expected=dict(zip(manifest['output_names'],[manifest['srt_sha256'],manifest['txt_sha256']]))
-    if (not isinstance(remote_files,list) or len(remote_files)!=2 or
+    for extra in manifest.get('extra_artifacts',[]):
+        expected[extra['name']]=extra['sha256']
+    if (not isinstance(remote_files,list) or len(remote_files)!=len(expected) or
             set(x.get('name') for x in remote_files if isinstance(x,dict))!=set(expected)):
         raise V2Conflict('wrong Drive output inventory')
     for item in remote_files:

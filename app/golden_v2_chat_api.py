@@ -41,6 +41,8 @@ limited.routes.extend(route for route in router.routes
 app.include_router(limited)
 from app.golden_v2_review_routes import router as review_router
 app.include_router(review_router)
+from app.golden_v2_auto_routes import router as auto_router
+app.include_router(auto_router)
 
 
 class QuoteRequest(LinkPreviewRequest):
