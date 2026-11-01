@@ -109,6 +109,52 @@ class DiscoveryTests(unittest.TestCase):
             with self.assertRaises(DriveApiError): preview_drive_link(LINK)
 
 
+    def test_txt_reference_discovered_for_folder_and_direct_media(self):
+        companion = {'id': 'reference0012345', 'name': '第一課逐字稿.txt',
+                     'mimeType': 'text/plain', 'parents': [FOLDER]}
+        self.items[companion['id']] = companion
+        self.pages[1]['files'].append(companion)
+        metadata = {'file_id': companion['id'], 'name': companion['name'],
+                    'version': '2', 'size_bytes': 123, 'md5_checksum': 'c'*32,
+                    'parent_id': FOLDER}
+        with patch('app.jobs.drive_api.read_drive_reference_metadata', return_value=metadata) as read:
+            folder = preview_drive_link(LINK)
+            direct = preview_drive_link(f'https://drive.google.com/file/d/{FILE}/view')
+        expected = {**metadata, 'source_path': 'gdrive:課程/第一課逐字稿.txt'}
+        self.assertEqual(folder['files'][0]['references'],
+                         {'status': 'MATCHED', 'files': [expected]})
+        self.assertEqual(direct['files'][0]['references'], folder['files'][0]['references'])
+        self.assertEqual(folder['total_bytes'], 50)
+        self.assertGreaterEqual(read.call_count, 2)
+
+    def test_competing_txt_reference_requires_review_not_guess(self):
+        a = {'id': 'reference0012345', 'name': '第一課逐字稿.txt',
+             'mimeType': 'text/plain', 'parents': [FOLDER]}
+        b = {'id': 'reference0023456', 'name': '第一課參考.txt',
+             'mimeType': 'text/plain', 'parents': [FOLDER]}
+        self.items.update({a['id']: a, b['id']: b})
+        self.pages[1]['files'].extend([a, b])
+        def metadata(file_id, parent_id):
+            return {'file_id': file_id, 'name': self.items[file_id]['name'],
+                    'parent_id': parent_id, 'version': '2',
+                    'size_bytes': 100, 'md5_checksum': 'd'*32}
+        with patch('app.jobs.drive_api.read_drive_reference_metadata', side_effect=metadata):
+            result = preview_drive_link(LINK)
+        self.assertEqual(result['files'][0]['references']['status'], 'AMBIGUOUS')
+        self.assertEqual(result['files'][0]['references']['files'], [])
+
+    def test_rejected_reference_metadata_does_not_sneak_into_intake(self):
+        companion = {'id': 'reference0012345', 'name': '第一課逐字稿.txt',
+                     'mimeType': 'text/plain', 'parents': [FOLDER]}
+        self.items[companion['id']] = companion
+        self.pages[1]['files'].append(companion)
+        with patch('app.jobs.drive_api.read_drive_reference_metadata',
+                   side_effect=DriveApiError('invalid version')):
+            result = preview_drive_link(LINK)
+        self.assertEqual(result['files'][0]['references'],
+                         {'status': 'UNAVAILABLE', 'files': []})
+
+
 class BatchTests(unittest.TestCase):
     def setUp(self):
         temp = TemporaryDirectory(); self.addCleanup(temp.cleanup)

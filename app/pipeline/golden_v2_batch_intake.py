@@ -44,7 +44,7 @@ def run_batch_intake_pass(*, database: Path, artifact_root: Path, ceiling_cents:
                     raise DriveApiError("Drive source changed since batch preview")
                 return observation
             try:
-                result = intake(source_path=source["source_path"], artifact_root=root,
+                result = intake(source_path=source["source_path"], references=source.get("references"), artifact_root=root,
                                 database=database, mode=row["mode"],
                                 estimated_stage_cents=json.loads(row["estimates"]),
                                 estimate_ceiling_cents=ceiling_cents, download=checked_download)

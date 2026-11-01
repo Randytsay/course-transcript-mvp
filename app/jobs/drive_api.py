@@ -578,3 +578,61 @@ def drive_health() -> dict[str, Any]:
         "fallback_available": os.environ.get("COURSE_TRANSCRIPT_DRIVE_BROWSER_FALLBACK", "true").lower() in {"1", "true", "yes"},
         "paid_operation_started": False,
     }
+
+
+def read_drive_reference_metadata(file_id: str, parent_id: str) -> dict[str, Any]:
+    """GET-only snapshot of a small, non-Google-native TXT/SRT sibling."""
+    from app.pipeline.golden_v2_reference_companion import MAX_REFERENCE_BYTES, REFERENCE_EXTENSIONS
+    if not re.fullmatch(r'[A-Za-z0-9_-]{10,200}', file_id):
+        raise DriveApiError('參考逐字稿識別碼無效')
+    item = _api_json(f'/files/{urllib.parse.quote(file_id, safe="")}',
+                     {'fields': _DRIVE_METADATA_FIELDS, 'supportsAllDrives': 'true'})
+    name = str(item.get('name') or '')
+    try:
+        size = int(item.get('size'))
+    except (ValueError, TypeError) as exc:
+        raise DriveApiError('參考逐字稿大小無效') from exc
+    if (item.get('id') != file_id or item.get('trashed') is True
+            or PurePosixPath(name).suffix.lower() not in REFERENCE_EXTENSIONS
+            or not 0 < size <= MAX_REFERENCE_BYTES
+            or str(item.get('mimeType') or '').startswith('application/vnd.google-apps.')
+            or item.get('parents') != [parent_id]
+            or not str(item.get('version') or '').strip()
+            or not re.fullmatch('[0-9a-f]{32}', str(item.get('md5Checksum') or '').lower())):
+        raise DriveApiError('參考逐字稿格式、範圍或 Drive 版本無效')
+    return {'file_id': file_id, 'name': name, 'version': str(item['version']),
+            'size_bytes': size, 'md5_checksum': str(item['md5Checksum']).lower(),
+            'parent_id': parent_id}
+
+
+def download_drive_reference(candidate: dict, destination: Path) -> dict[str, Any]:
+    """Pinned, limited Drive GET: verify ID/version/MD5/parent before and after."""
+    from app.pipeline.golden_v2_reference_companion import MAX_REFERENCE_BYTES
+    file_id, parent_id = candidate['file_id'], candidate['parent_id']
+    before = read_drive_reference_metadata(file_id, parent_id)
+    if any(candidate.get(key) != before[key] for key in
+           ('file_id', 'version', 'name', 'size_bytes', 'md5_checksum', 'parent_id')):
+        raise DriveApiError('參考逐字稿自預覽後已變更')
+    target = Path(destination)
+    if target.exists() or target.is_symlink():
+        raise DriveApiError('參考逐字稿目的地必須為新檔案')
+    total, sha, md5 = 0, hashlib.sha256(), hashlib.md5(usedforsecurity=False)
+    request = urllib.request.Request(
+        f'{_DRIVE_API}/files/{urllib.parse.quote(file_id, safe="")}?alt=media',
+        headers={'Authorization': f'Bearer {_refresh_access_token()}'}, method='GET')
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response, target.open('xb') as output:
+            while chunk := response.read(65536):
+                total += len(chunk)
+                if total > MAX_REFERENCE_BYTES or total > before['size_bytes']:
+                    raise DriveApiError('參考逐字稿下載超過預定大小')
+                output.write(chunk); sha.update(chunk); md5.update(chunk)
+            output.flush(); os.fsync(output.fileno())
+        after = read_drive_reference_metadata(file_id, parent_id)
+        if before != after or total != before['size_bytes'] or md5.hexdigest() != before['md5_checksum']:
+            raise DriveApiError('參考逐字稿來源版本或內容校驗不符')
+    except BaseException:
+        target.unlink(missing_ok=True)
+        raise
+    return {**before, 'source_path': candidate['source_path'],
+            'downloaded_md5': md5.hexdigest(), 'downloaded_sha256': sha.hexdigest()}

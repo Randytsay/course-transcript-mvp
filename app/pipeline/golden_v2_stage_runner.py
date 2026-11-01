@@ -23,6 +23,7 @@ from app.providers.golden_v2_versioned_artifacts import resolve_versioned, write
 from app.pipeline.golden_v2_alignment_health import assess_alignment_health
 from app.pipeline.golden_v2_review_evidence import require_real_review_evidence
 from app.pipeline.golden_v2_chirp_first_reference import read_chirp_first_reference
+from app.pipeline.golden_v2_reference_companion import reference_comparison_hint
 
 
 def _write_evidence(path: Path, data: dict[str, Any]) -> str:
@@ -359,7 +360,7 @@ def complete_evidence_bound_qa(
         ledger=ledger, claim=claim, job_dir=job_dir)
     expected = _build_comparison_report(
         primary_text=primary_text, merged=checked_merged, primary=bound_primary,
-        claim=claim, stages=bound_stages)
+        claim=claim, stages=bound_stages, job_dir=job_dir)
     if expected != comparison:
         raise V2Conflict("persisted comparison differs from actual primary/Chirp evidence")
 
@@ -473,7 +474,7 @@ def complete_evidence_bound_qa(
 
 def _build_comparison_report(
     *, primary_text: str, merged: dict[str, Any], primary: dict[str, Any],
-    claim: dict[str, Any], stages: dict[str, Any],
+    claim: dict[str, Any], stages: dict[str, Any], job_dir: Path,
 ) -> dict[str, Any]:
     """Build the comparison report and enforce the alignment health gate.
 
@@ -515,6 +516,11 @@ def _build_comparison_report(
         "reference_is_acoustic_evidence": False,
         "chirp_evidence_sha256": stages["chirp_independent"]["evidence_sha"],
     })
+    hint = reference_comparison_hint(
+        job_dir=job_dir, job_id=claim['job_id'], source_sha=claim['source_sha'],
+        chirp_words=merged['words'])
+    if hint is not None:
+        report['human_reference_hint'] = hint
     return report
 
 
@@ -531,7 +537,7 @@ def complete_comparison(
         raise V2Conflict("caller comparison inputs differ from immutable provider artifacts")
     report = _build_comparison_report(
         primary_text=verified_text, merged=merged, primary=primary,
-        claim=claim, stages=stages)
+        claim=claim, stages=stages, job_dir=job_dir)
     digest = _write_evidence(job_dir / "golden-v2" / "engine-comparison.json", report)
     ledger.complete(
         claim, evidence_sha=digest, actual_cents=0,

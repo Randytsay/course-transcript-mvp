@@ -10,7 +10,8 @@ from pathlib import Path
 
 from app.jobs.golden_v2_batches import initialize_batch_queue
 from app.jobs.golden_v2_ledger import V2Conflict
-from app.jobs.drive_api import download_drive_media, DriveApiError
+from app.jobs.drive_api import download_drive_media, download_drive_reference, DriveApiError
+from app.pipeline.golden_v2_reference_companion import stage_reference_companions
 from app.pipeline.golden_v2_drive_intake import SourceIntakeBusyError
 from app.pipeline.golden_v2_source_preflight import register_source_preflight
 from app.pipeline.golden_v2_pricing import PRICE_VERSION, quote_duration
@@ -113,8 +114,13 @@ def run_quote_intake_pass(*, database, artifact_root, ceiling_cents,
                                               estimated_stage_cents=quote['estimated_stage_cents'],
                                               estimate_ceiling_cents=ceiling_cents)
                         job_dir = root/'jobs'/registered['job_id']
+                        reference_result = stage_reference_companions(
+                            job_dir=job_dir, job_id=registered['job_id'],
+                            source_sha=registered['source_sha256'],
+                            references=source.get('references'), fetch=download_drive_reference)
                         quote.update(job_id=registered['job_id'], source_sha256=registered['source_sha256'],
-                                     original_sha256=file_sha256(media), drive_source=source)
+                                     original_sha256=file_sha256(media), drive_source=source,
+                                     reference_intake=reference_result)
                         digest = store_immutable_bytes(job_dir/'trusted-quote.json', wire(quote).encode())
                         result = {**quote,'quote_sha256':digest,'approval_required':True}
                         state = 'COMPLETE'

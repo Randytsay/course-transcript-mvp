@@ -9,6 +9,9 @@ from urllib.parse import parse_qs, quote, urlsplit
 
 from app.jobs import drive_api as drive
 from app.jobs.source import MEDIA_EXTENSIONS
+from app.pipeline.golden_v2_reference_companion import (
+    REFERENCE_EXTENSIONS, _score, match_sibling_references,
+)
 
 _ID = r"[A-Za-z0-9_-]{10,200}"
 
@@ -105,11 +108,13 @@ def preview_drive_link(link: str, *, recursive: bool = False, max_files: int = 1
         source_path = _join(_folder_path(str(parents[0]), root_id), _name(target))
 
     files: dict[str, dict] = {}
+    media_parents: dict[str, str] = {}
+    sibling_references: dict[str, dict] = {}
     skipped = 0
     visited: set[str] = set()
     pages = entries = total = 0
 
-    def add(path: str, expected_id: str) -> None:
+    def add(path: str, expected_id: str, parent_id: str) -> None:
         nonlocal total
         metadata = drive.read_drive_media_metadata(path)
         if metadata["id"] != expected_id:
@@ -128,6 +133,15 @@ def preview_drive_link(link: str, *, recursive: bool = False, max_files: int = 1
         if len(files) >= max_files or total > max_bytes:
             raise drive.DriveApiError("Drive 批次超過檔案數或總大小限制；請縮小資料夾範圍")
         files[expected_id] = item
+        media_parents[expected_id] = parent_id
+
+    def remember_reference(item: dict, parent_id: str, path: str) -> None:
+        name, file_id = _name(item), str(item.get("id") or "")
+        if (PurePosixPath(name).suffix.lower() not in REFERENCE_EXTENSIONS
+                or str(item.get("mimeType", "")).startswith("application/vnd.google-apps.")):
+            return
+        sibling_references[file_id] = {"file_id": file_id, "name": name,
+                                       "parent_id": parent_id, "source_path": path}
 
     def visit(folder_id: str, path: str, depth: int) -> None:
         nonlocal skipped, pages, entries
@@ -172,8 +186,9 @@ def preview_drive_link(link: str, *, recursive: bool = False, max_files: int = 1
                         skipped += 1
                 elif (not str(item.get("mimeType", "")).startswith("application/vnd.google-apps.")
                       and PurePosixPath(name).suffix.lower() in MEDIA_EXTENSIONS):
-                    add(child_path, child_id)
+                    add(child_path, child_id, folder_id)
                 else:
+                    remember_reference(item, folder_id, child_path)
                     skipped += 1
             token = payload.get("nextPageToken")
             if not token:
@@ -185,7 +200,69 @@ def preview_drive_link(link: str, *, recursive: bool = False, max_files: int = 1
     if is_folder:
         visit(file_id, source_path, 0)
     else:
-        add(source_path, file_id)
+        # A direct media link still needs bounded GET-only sibling discovery.
+        parent_id = str(target['parents'][0])
+        parent_path = _folder_path(parent_id, root_id)
+        add(source_path, file_id, parent_id)
+        token = None
+        tokens: set[str] = set()
+        while True:
+            pages += 1
+            if pages > max_pages:
+                raise drive.DriveApiError("Drive 參考逐字稿掃描超過分頁限制")
+            params = {"q": f"'{drive._escape_query(parent_id)}' in parents and trashed = false",
+                      "pageSize": 200, "fields": "nextPageToken,incompleteSearch,files(id,name,mimeType,parents,trashed)",
+                      "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}
+            if token:
+                params['pageToken'] = token
+            payload = drive._api_json('/files', params)
+            children = payload.get('files')
+            if payload.get('incompleteSearch') or not isinstance(children, list):
+                raise drive.DriveApiError("Drive 參考逐字稿清單不完整")
+            for item in children:
+                entries += 1
+                if entries > max_entries or not isinstance(item, dict):
+                    raise drive.DriveApiError("Drive 參考逐字稿清單超過限制")
+                name = _name(item)
+                if (item.get('parents') != [parent_id]
+                        or not re.fullmatch(_ID, str(item.get('id') or ''))):
+                    raise drive.DriveApiError("Drive 參考逐字稿父目錄不一致")
+                remember_reference(item, parent_id, _join(parent_path, name))
+            token = payload.get('nextPageToken')
+            if not token:
+                break
+            if token in tokens or not isinstance(token, str):
+                raise drive.DriveApiError("Drive 參考逐字稿分頁無效")
+            tokens.add(token)
+
+    # Authenticate candidate metadata only for same-folder plausible matches;
+    # a mixed folder must never leak a different lesson's transcript into ASR.
+    candidate_ids = {ref['file_id'] for ref in sibling_references.values()
+                     if any(media_parents[media_id] == ref['parent_id']
+                            and _score(item['name'], ref['name']) > 0
+                            for media_id, item in files.items())}
+    verified = []
+    unusable = set()
+    for ref_id in sorted(candidate_ids):
+        ref = sibling_references[ref_id]
+        try:
+            metadata = drive.read_drive_reference_metadata(ref_id, ref['parent_id'])
+            if metadata['name'] != ref['name']:
+                raise drive.DriveApiError('參考逐字稿名稱在掃描期間變更')
+            verified.append({**ref, **metadata})
+        except drive.DriveApiError:
+            unusable.add(ref_id)
+    media_inputs = [{**item, 'parent_id': media_parents[file_id]}
+                    for file_id, item in files.items()]
+    matched = match_sibling_references(media_inputs, verified)
+    for item in media_inputs:
+        choice = matched.get(item['file_id'])
+        if any(media_parents[item['file_id']] == sibling_references[r]['parent_id']
+               and _score(item['name'], sibling_references[r]['name']) > 0
+               for r in unusable):
+            choice = {'status': 'UNAVAILABLE', 'files': []}
+        if choice:
+            files[item['file_id']]['references'] = choice
     identity = {"schema": "golden-v2-link-preview-v1", "target_id": file_id,
                 "recursive": recursive, "files": sorted(files.values(), key=lambda x: x["file_id"])}
     digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True,

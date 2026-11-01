@@ -8,7 +8,8 @@ import tempfile
 import threading
 from typing import Any, Callable
 
-from app.jobs.drive_api import download_drive_media
+from app.jobs.drive_api import download_drive_media, download_drive_reference
+from app.pipeline.golden_v2_reference_companion import stage_reference_companions
 from app.pipeline.golden_v2_source_preflight import register_source_preflight
 
 _INTAKE_LOCK = threading.Lock()
@@ -20,6 +21,7 @@ class SourceIntakeBusyError(RuntimeError):
 
 def intake_drive_source(
     *, source_path: str, artifact_root: Path, database: Path, mode: str,
+    references: dict | None = None,
     estimated_stage_cents: dict[str, int], estimate_ceiling_cents: int,
     download: Callable[..., dict[str, Any]] = download_drive_media,
     register: Callable[..., dict[str, Any]] = register_source_preflight,
@@ -46,6 +48,7 @@ def intake_drive_source(
                 raise SourceIntakeBusyError("another Golden V2 source intake is active") from exc
             return _intake_drive_source_locked(
                 source_path=source_path,
+                references=references,
                 artifact_root=artifact_root,
                 database=database,
                 mode=mode,
@@ -60,6 +63,7 @@ def intake_drive_source(
 
 def _intake_drive_source_locked(
     *, source_path: str, artifact_root: Path, database: Path, mode: str,
+    references: dict | None = None,
     estimated_stage_cents: dict[str, int], estimate_ceiling_cents: int,
     download: Callable[..., dict[str, Any]],
     register: Callable[..., dict[str, Any]],
@@ -103,7 +107,16 @@ def _intake_drive_source_locked(
             estimated_stage_cents=estimated_stage_cents,
             estimate_ceiling_cents=estimate_ceiling_cents,
         )
+        if references and references.get('status') == 'MATCHED':
+            reference_result = stage_reference_companions(
+                job_dir=root / 'jobs' / result['job_id'],
+                job_id=result['job_id'], source_sha=result['source_sha256'],
+                references=references, fetch=download_drive_reference)
+        else:
+            reference_result = {'status': references.get('status', 'NO_REFERENCE')
+                                if references else 'NO_REFERENCE'}
     return {
+        'reference_intake': reference_result,
         **result,
         "drive_observation_authenticated": True,
         "source_path": observation["source_path"],
