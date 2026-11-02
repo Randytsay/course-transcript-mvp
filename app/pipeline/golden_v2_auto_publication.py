@@ -19,6 +19,8 @@ from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.pipeline.golden_v2_auto_closeout import (_schema, _wire, _sha,
     _verify_grant_scope, _checked_delivery_state, finalize_auto_acceptance)
 from app.pipeline.golden_v2_delivery import DriveDeliveryGateway
+from app.pipeline.golden_v2_multipart_pilot import (
+    build_exact_id_multipart, verify_remote_exact, classify_http_outcome)
 from app.pipeline.golden_v2_runtime_services import signed_grant
 from app.providers.golden_v2_immutable import store_immutable_bytes
 
@@ -336,7 +338,16 @@ def publish_signed_auto_acceptance(*, root: Path, job_id: str,
                 if completed or (recovering and (not callable(getattr(gateway,'prove_never_created',None))
                         or gateway.prove_never_created(ident) is not True)):
                     raise V2Conflict('missing bound auto file has ambiguous history')
-                gateway.create_pending(ident,parent,plan['pending_name'],raw,job_id)
+                ext=Path(plan['name']).suffix
+                req=build_exact_id_multipart(
+                    file_id=ident,parent_id=parent,name=plan['pending_name'],
+                    media=raw,job_id=job_id,manifest_sha256=manifest_sha,
+                    expected_media_sha256=plan['sha256'],artifact_extension=ext,
+                    pending=True)
+                if hasattr(gateway,'upload_multipart'):
+                    gateway.upload_multipart(req)
+                else:
+                    gateway.create_pending(ident,parent,plan['pending_name'],raw,job_id)
                 remote=gateway.get(ident)
             if (not remote or remote.get('id')!=ident or remote.get('trashed') or remote.get('parents')!=[parent]
                     or (remote.get('appProperties') or {}).get('golden_v2_job')!=job_id

@@ -11,6 +11,7 @@ from app.providers.golden_v2_auto_gap_triage import inspect_subtitle_gaps
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--job-dir',type=Path,required=True)
+    parser.add_argument('--job-id')
     parser.add_argument('--source-sha',required=True)
     parser.add_argument('--srt',type=Path,required=True)
     args=parser.parse_args()
@@ -20,6 +21,8 @@ def main():
                          check=True,text=True,capture_output=True,timeout=30)
     result=inspect_subtitle_gaps(job_dir=args.job_dir,source_sha256=args.source_sha,
         duration_ms=round(float(probe.stdout.strip())*1000),srt_bytes=args.srt.read_bytes())
+    if args.job_id:
+        result['job_id']=args.job_id
     folder=args.job_dir/'golden-v2'
     output=folder/f"auto-gap-triage-{result['srt_sha256'][:20]}.json"
     data=json.dumps(result,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode()

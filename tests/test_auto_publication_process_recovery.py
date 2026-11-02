@@ -67,6 +67,45 @@ class PersistentDrive:
         with sqlite3.connect(self.path) as db:
             return db.execute('SELECT created FROM allocated_ids WHERE id=?',(ident,)).fetchone()==(0,)
 
+    def upload_multipart(self, req):
+        if self.crash_at == 'fourth' and req.metadata['id'] == 'allocated-4':
+            os._exit(31)
+        ident = req.metadata['id']
+        boundary = req.content_type.split('boundary=')[1].encode('ascii')
+        parts = req.body.split(b'--' + boundary)
+        part2 = parts[2]
+        header, raw_extracted = part2.split(b'\r\n\r\n', 1)
+        content = raw_extracted[:req.expected_size]
+        metadata = {
+            'id': ident,
+            'name': req.metadata['name'],
+            'parents': req.metadata['parents'],
+            'mimeType': req.metadata.get('mimeType'),
+            'appProperties': req.metadata.get('appProperties'),
+            'trashed': False,
+            'version': '7',
+            'size': str(req.expected_size),
+            'md5Checksum': req.expected_md5,
+        }
+        with sqlite3.connect(self.path) as db:
+            row = db.execute('SELECT created FROM allocated_ids WHERE id=?', (ident,)).fetchone()
+            if row is None:
+                raise V2Conflict('unreserved generated ID')
+            if row[0] == 1:
+                from app.pipeline.golden_v2_multipart_pilot import classify_http_outcome
+                existing = self.get(ident)
+                readback = self.readback(ident)
+                outcome = classify_http_outcome(status_code=409, request=req, remote=existing, readback=readback)
+                if not outcome.startswith('VERIFIED'):
+                    raise V2Conflict('remote 409 collision requires reconciliation: ' + outcome)
+                return
+            if db.execute('UPDATE allocated_ids SET created=1 WHERE id=? AND created=0', (ident,)).rowcount != 1:
+                raise V2Conflict('duplicate or unreserved generated ID')
+            db.execute('INSERT INTO create_attempts VALUES (?)', (ident,))
+            db.execute('INSERT INTO objects VALUES (?,?,?)', (ident, json.dumps(metadata, sort_keys=True), content))
+        if self.crash_at == 'created_timeout' and ident == 'allocated-1':
+            os._exit(35)
+
     def create_pending(self, ident, parent, name, content, job_id):
         if self.crash_at == 'fourth' and ident == 'allocated-4':
             os._exit(31)

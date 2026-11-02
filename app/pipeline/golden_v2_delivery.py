@@ -108,6 +108,23 @@ class DriveDeliveryGateway:
         if payload.get('nextPageToken'): raise V2Conflict('ambiguous destination listing')
         return payload['files']
 
+    def upload_multipart(self, request):
+        base='https://www.googleapis.com/upload/drive/v3/files'
+        headers={'Authorization':'Bearer '+drive_api._refresh_access_token(),
+                 'Content-Type':request.content_type}
+        response=self.http.request(request.method,base,params=request.params,data=request.body,
+                                   headers=headers,timeout=60,allow_redirects=False)
+        remote=self.get(request.metadata['id'])
+        readback=self.readback(request.metadata['id']) if remote is not None else None
+        from app.pipeline.golden_v2_multipart_pilot import classify_http_outcome
+        remote_dict=remote if isinstance(remote,dict) else None
+        readback_bytes=readback if isinstance(readback,bytes) else None
+        outcome=classify_http_outcome(status_code=response.status_code,request=request,
+                                      remote=remote_dict,readback=readback_bytes)
+        if not outcome.startswith('VERIFIED'):
+            raise V2Conflict('Drive multipart upload requires reconciliation: '+outcome)
+        return response
+
     def create_pending(self,file_id,parent,name,content,job_id):
         # Metadata intent is persisted before this POST. A lost response is
         # recovered by GET of this exact pre-generated ID, never a new POST ID.

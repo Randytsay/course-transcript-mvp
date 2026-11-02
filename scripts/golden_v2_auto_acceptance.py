@@ -54,9 +54,9 @@ def main():
         raw=json.loads(Path(args.acoustic_review_json).read_text(),
                        object_pairs_hook=_unique_json_object,
                        parse_float=_finite_float,parse_constant=_reject_constant)
-        if raw.get('job_id') != args.job_id or raw.get('source_sha256') != args.source_sha:
+        if (raw.get('job_id') and raw.get('job_id') != args.job_id) or raw.get('source_sha256') != args.source_sha:
             parser.error('acoustic review provenance mismatch')
-        review=raw.get('review_items')
+        review=raw.get('review_items') if 'review_items' in raw else raw.get('gaps')
     def optional(path):
         return Path(path).read_bytes() if path else None
     result=evaluate_auto_acceptance(
