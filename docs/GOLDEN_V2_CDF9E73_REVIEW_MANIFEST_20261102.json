@@ -6,6 +6,8 @@
     "app/providers/golden_v2_auto_acceptance.py": "896bb543df2083c9ddd9ab0bccc6a96cbf814db446f80bd99275e4ed685e5f6b",
     "app/providers/golden_v2_auto_gap_triage.py": "936aab0781f591159c6c663d6739cefe36a1077ddcb999cd1eab9338ea4cd0a8",
     "docs/GOLDEN_V2_AUTO_PUBLICATION_RECOVERY.md": "53529139707eaafed9eb041b0eafe5f24fc2c11e29ca379327b3d1695490ccae",
+    "scripts/golden_v2_auto_acceptance.py": "af463084f8710c3575209d0bbe48c45c598d272a71eb943465b856fca38fbd2f",
+    "scripts/golden_v2_auto_gap_triage.py": "5579ecd262fca15a88e8ccda89eab047a40ed9728e60c5cef7e083ecf7fc5456",
     "tests/test_auto_drive_gateway_evidence.py": "9b6fac440958b3c341789adbf9dd2857560723091ab35148081a0cf9162f7210",
     "tests/test_auto_publication_process_recovery.py": "13c862e749e5b2c872c956098d3025298942d3592a1780d7c37e0e7e3960df1c",
     "tests/test_auto_publication_review_regressions.py": "e3beb787f923c60842df51991fb395c55500e9187f490549bdc9499ed00c052f",

@@ -15,6 +15,9 @@ from pathlib import Path
 from app.providers.golden_v2_auto_acceptance import (
     evaluate_auto_acceptance, render_human_review_advisory,
 )
+from app.providers.golden_v2_auto_gap_triage import (
+    _finite_float, _reject_constant, _unique_json_object,
+)
 
 
 def _sha_stream(path: Path) -> str:
@@ -48,7 +51,9 @@ def main():
         parser.error('canonical source SHA mismatch')
     review=None
     if args.acoustic_review_json:
-        raw=json.loads(Path(args.acoustic_review_json).read_text())
+        raw=json.loads(Path(args.acoustic_review_json).read_text(),
+                       object_pairs_hook=_unique_json_object,
+                       parse_float=_finite_float,parse_constant=_reject_constant)
         if raw.get('job_id') != args.job_id or raw.get('source_sha256') != args.source_sha:
             parser.error('acoustic review provenance mismatch')
         review=raw.get('review_items')
@@ -61,7 +66,7 @@ def main():
         reference_txt_bytes=optional(args.reference_txt),
         original_srt_bytes=optional(args.original_srt),
         acoustic_review_items=review,chirp_stage=args.chirp_stage)
-    raw_json=json.dumps(result,ensure_ascii=False,sort_keys=True,indent=2).encode()
+    raw_json=json.dumps(result,ensure_ascii=False,sort_keys=True,indent=2,allow_nan=False).encode()
     report=render_human_review_advisory(result,lesson_title=args.title).encode()
     for path,payload in ((args.output_json,raw_json),(args.output_report,report)):
         # Writer can only create brand-new files and never mutates source assets.

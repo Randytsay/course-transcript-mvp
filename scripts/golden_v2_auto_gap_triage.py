@@ -22,7 +22,7 @@ def main():
         duration_ms=round(float(probe.stdout.strip())*1000),srt_bytes=args.srt.read_bytes())
     folder=args.job_dir/'golden-v2'
     output=folder/f"auto-gap-triage-{result['srt_sha256'][:20]}.json"
-    data=json.dumps(result,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode()
+    data=json.dumps(result,ensure_ascii=False,sort_keys=True,separators=(',',':'),allow_nan=False).encode()
     if output.exists():
         if output.is_symlink() or output.read_bytes()!=data:
             parser.error('existing triage differs; cannot overwrite')

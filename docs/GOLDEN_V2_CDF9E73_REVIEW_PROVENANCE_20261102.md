@@ -1,6 +1,6 @@
 # Golden V2 deployed guarded-source reconstruction for independent review
 
-**Do not treat this new Git commit as the original cdf9e73 commit.** It is a fresh Git review artifact rebuilt by copying 15 specific code/test/documentation paths from the already deployed source tree at /opt/course-transcript-v2-chat/releases/cdf9e73dccd3a2b2c28d43c158a04b6f1d814f76/. Each copied file's SHA-256 was compared byte-for-byte with that read-only source. Exact hashes are in GOLDEN_V2_CDF9E73_REVIEW_MANIFEST_20261102.json.
+**Do not treat this new Git commit as the original cdf9e73 commit.** It is a fresh Git review artifact rebuilt by copying 17 specific code/test/documentation paths from the already deployed source tree at /opt/course-transcript-v2-chat/releases/cdf9e73dccd3a2b2c28d43c158a04b6f1d814f76/. Each copied file's SHA-256 was compared byte-for-byte with that read-only source. Exact hashes are in GOLDEN_V2_CDF9E73_REVIEW_MANIFEST_20261102.json.
 
 The reviewed parent is PR #164, SHA a18fd13186e73add4ef1c03aa8fdb5beb5cd25a5. The running Docker OCI revision label was observed as a18fd13 while the active release directory was named cdf9e73. This mismatch requires an operator's exact-image/rootless-byte attestation. Reconstructing a new Git commit cannot restore historical ancestry or constitute post-hoc production authorization.
 
