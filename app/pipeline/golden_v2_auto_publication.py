@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import os
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -183,7 +184,12 @@ def publish_signed_auto_acceptance(*, root: Path, job_id: str,
     # protect against them.  Keep the real gateway disabled until a protocol
     # with enforceable preconditions has been verified end to end.  Injected
     # synthetic gateways are solely for isolated tests.
-    if gateway is None or isinstance(gateway,DriveDeliveryGateway):
+    if gateway is None:
+        if os.environ.get('COURSE_TRANSCRIPT_V2_ENABLE_MULTIPART_PUBLICATION') == '1':
+            gateway = DriveDeliveryGateway()
+        else:
+            raise V2Conflict('auto publication to Drive is disabled pending concurrency-safe reconciliation')
+    elif isinstance(gateway, DriveDeliveryGateway) and os.environ.get('COURSE_TRANSCRIPT_V2_ENABLE_MULTIPART_PUBLICATION') != '1':
         raise V2Conflict('auto publication to Drive is disabled pending concurrency-safe reconciliation')
     parent=None
     def check_source(file_id, source_version):
