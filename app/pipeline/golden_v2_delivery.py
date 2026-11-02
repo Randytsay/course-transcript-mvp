@@ -97,10 +97,13 @@ class DriveDeliveryGateway:
         return response.content if params and params.get('alt')=='media' else response.json()
 
     def get(self,file_id):
-        return self.request('GET','files/'+file_id,params={'fields':'id,name,parents,size,md5Checksum,version,trashed,appProperties'})
+        return self.request('GET','files/'+file_id,params={'fields':'id,name,parents,size,md5Checksum,version,trashed,appProperties,mimeType'})
 
     def generate_id(self):
         return self.request('GET','files/generateIds',params={'count':1,'space':'drive','type':'files'})['ids'][0]
+
+    def prove_never_created(self, file_id: str) -> bool:
+        return self.get(file_id) is None
 
     def named(self,parent,name):
         query="'"+drive_api._escape_query(parent)+"' in parents and name = '"+drive_api._escape_query(name)+"' and trashed = false"
