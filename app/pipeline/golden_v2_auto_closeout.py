@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -17,7 +18,7 @@ from app.providers.golden_v2_auto_acceptance import (SCHEMA, TIER, evaluate_auto
 
 
 def _wire(value):
-    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode()
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), ensure_ascii=False, allow_nan=False).encode()
 
 
 def _sha(data):
@@ -168,10 +169,37 @@ def prepare_auto_acceptance(*, root: Path, job_id: str, result: dict,
             'original_golden_state_unchanged':True}
 
 
+def _verify_grant_scope(manifest, owner_grant, grant_verify):
+    required={
+        'job_id':manifest['job_id'], 'manifest_sha256':manifest['manifest_sha256'],
+        'source_sha256':manifest['source_sha256'], 'quality_tier':TIER,
+        'output_names':manifest['output_names'], 'approve_auto_delivery':True,
+    }
+    if (not isinstance(owner_grant, dict) or not callable(grant_verify)
+            or any(owner_grant.get(k)!=v for k,v in required.items())
+            or not str(owner_grant.get('actor') or '').strip()
+            or not str(owner_grant.get('reference') or '').strip()
+            or grant_verify(owner_grant) is not True):
+        raise V2Conflict('source-version-bound signed owner delivery grant invalid')
+
+
+def _checked_delivery_state(db, manifest):
+    job_id=manifest['job_id']; digest=manifest['manifest_sha256']
+    row=db.execute('SELECT * FROM v2_auto_acceptance_deliveries WHERE job_id=?',(job_id,)).fetchone()
+    job=db.execute('SELECT * FROM v2_jobs WHERE id=?',(job_id,)).fetchone()
+    if (row is None or row['manifest_sha']!=digest or
+            row['manifest_json']!=_wire(manifest).decode() or
+            job is None or job['revision']!=manifest['golden_revision'] or
+            job['source_sha']!=manifest['source_sha256'] or
+            job['status']!=manifest['golden_status_unchanged']):
+        raise V2Conflict('auto-delivery state changed')
+    return row, job
+
+
 def finalize_auto_acceptance(*, root: Path, manifest: dict,
                              remote_files: list[dict],
                              owner_grant: dict, grant_verify,
-                             source_version_verify, readback_verify) -> dict:
+                             source_version_verify, readback_verify, _db=None) -> dict:
     """Close on exact remote readback; never rewrites original Golden status.
 
     The trusted caller must verify source Drive version/MD5 under the same
@@ -189,18 +217,8 @@ def finalize_auto_acceptance(*, root: Path, manifest: dict,
             canonical.get('human_listening_attested') is not False or
             canonical.get('golden_qa_pass') is not False):
         raise V2Conflict('forged auto delivery manifest')
-    required={
-        'job_id':job_id,'manifest_sha256':digest,
-        'source_sha256':manifest['source_sha256'],
-        'quality_tier':TIER,'output_names':manifest['output_names'],
-        'approve_auto_delivery':True,
-    }
-    if (any(owner_grant.get(k)!=v for k,v in required.items())
-            or not str(owner_grant.get('actor') or '').strip()
-            or not str(owner_grant.get('reference') or '').strip()
-            or grant_verify(owner_grant) is not True
-            or source_version_verify(manifest['source_drive_id'],
-                                     manifest['source_drive_version']) is not True):
+    _verify_grant_scope(manifest, owner_grant, grant_verify)
+    if source_version_verify(manifest['source_drive_id'], manifest['source_drive_version']) is not True:
         raise V2Conflict('source-version-bound signed owner delivery grant invalid')
     expected=dict(zip(manifest['output_names'],[manifest['srt_sha256'],manifest['txt_sha256']]))
     for extra in manifest.get('extra_artifacts',[]):
@@ -211,17 +229,17 @@ def finalize_auto_acceptance(*, root: Path, manifest: dict,
     for item in remote_files:
         if not readback_verify(item['name'],item.get('file_id'),expected[item['name']]):
             raise V2Conflict('Drive SHA or source parent mismatch')
+    # A source revision discovered during the readbacks must not receive a
+    # delivery receipt. This is a last observation, not an atomic Drive lock.
+    if source_version_verify(manifest['source_drive_id'], manifest['source_drive_version']) is not True:
+        raise V2Conflict('Drive source changed during readback')
     ledger=GoldenV2Ledger.open_existing(root/'ledger.sqlite')
-    with ledger._tx() as db:
+    with (ledger._tx() if _db is None else nullcontext(_db)) as db:
         _schema(db)
-        row=db.execute('SELECT * FROM v2_auto_acceptance_deliveries WHERE job_id=?',(job_id,)).fetchone()
-        job=db.execute('SELECT * FROM v2_jobs WHERE id=?',(job_id,)).fetchone()
-        if (row is None or row['manifest_sha']!=digest or
-                row['manifest_json']!=_wire(manifest).decode() or
-                job is None or job['revision']!=manifest['golden_revision'] or
-                job['source_sha']!=manifest['source_sha256'] or
-                job['status']!=manifest['golden_status_unchanged']):
-            raise V2Conflict('auto-delivery state changed')
+        if (_db is None and db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='v2_auto_publication_fences'").fetchone()
+                and db.execute('SELECT 1 FROM v2_auto_publication_fences WHERE job_id=?',(job_id,)).fetchone()):
+            raise V2Conflict('previous auto publication requires reconciliation')
+        row,job=_checked_delivery_state(db,manifest)
         receipt={'schema':'golden-v2-auto-delivery-receipt-v1',
                  'quality_tier':TIER,'state':'AUTO_DELIVERED',
                  'job_id':job_id,'manifest_sha256':digest,

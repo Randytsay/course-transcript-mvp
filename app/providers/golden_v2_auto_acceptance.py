@@ -5,6 +5,7 @@ speech was exhaustively recognized or mutates the strict Golden PASS gate.
 """
 from __future__ import annotations
 
+from bisect import bisect_left
 from difflib import SequenceMatcher
 from hashlib import sha256
 import json
@@ -53,6 +54,97 @@ def _text(cue: dict) -> str:
     return str(cue.get("corrected_text") or cue.get("text") or "")
 
 
+def _nonspeech_probes_valid(item: dict, start: int, end: int) -> bool:
+    if 'reason' in item and item['reason'] != 'local_segmented_audio_evidence':
+        return False
+    probes=item.get('probes')
+    if not isinstance(probes,list) or not probes:
+        return False
+    if 'slice_count' in item and (type(item['slice_count']) is not int
+                                  or item['slice_count'] != len(probes)):
+        return False
+    cursor=start
+    for probe in probes:
+        if not isinstance(probe,dict):
+            return False
+        pstart,pend=probe.get('start_ms'),probe.get('end_ms')
+        if (type(pstart) is not int or type(pend) is not int or pstart!=cursor
+                or not start<=pstart<pend<=end
+                or probe.get('disposition')!='NONSPEECH_CONFIRMED'
+                or ('reason' in probe and probe['reason'] not in ('non_speech_evidence', 'local_segmented_audio_evidence'))
+                or ('acoustic_disposition' in probe and
+                    probe['acoustic_disposition'] != probe['disposition'])):
+            return False
+        volume=probe.get('max_volume_dbfs')
+        vad=probe.get('vad')
+        # Finite plausible dBFS only; reject malformed measurements even if
+        # another field also claims non-speech. FFmpeg's digital-silence floor
+        # is -91 dBFS, so -200 leaves ample headroom for other implementations.
+        if volume is not None and (type(volume) not in (int, float) or not -200 <= volume <= 0):
+            return False
+        if vad is not None and not _vad_nonspeech_evidence_consistent(vad, pend-pstart):
+            return False
+        # PCM resampling/downmix can move the peak slightly; it cannot explain
+        # an RMS tens of dB above the original peak.
+        if vad is not None and volume is not None and vad['rms_dbfs'] > volume + 1:
+            return False
+        if not ((volume is not None and volume<=-65)
+                or (vad is not None and vad['robust_non_speech'] is True)):
+            return False
+        cursor=pend
+    return cursor==end
+
+
+def _vad_nonspeech_evidence_consistent(vad: Any, duration_ms: int) -> bool:
+    """Recompute VAD from rounded producer measurements and frame counts.
+
+    Sidecar thresholds may be stricter, never looser than producer defaults.
+    RMS is rounded to 0.01 dB; a threshold-straddling value is not proof.
+    """
+    if (not isinstance(vad, dict) or vad.get('engine') != 'webrtcvad'
+            or type(vad.get('sample_rate_hz')) is not int or vad['sample_rate_hz'] != 16000
+            or type(vad.get('frame_ms')) is not int or vad['frame_ms'] != 30
+            or type(vad.get('frame_count')) is not int
+            or not 10 <= vad['frame_count'] <= (duration_ms + 29)//30 + 1
+            or type(vad.get('robust_non_speech')) is not bool
+            or type(vad.get('robust_speech')) is not bool or vad['robust_speech']):
+        return False
+    thresholds=vad.get('thresholds')
+    if not isinstance(thresholds,dict):
+        return False
+    limits=(('mode0_max',0,0.15),('mode3_max',0,0.08),('rms_max_dbfs',-120,-35))
+    if any(type(thresholds.get(k)) not in (int,float) or not low <= thresholds[k] <= high
+           for k,low,high in limits):
+        return False
+    speech_limits=(('mode0_speech_min',0,1),('mode3_speech_min',0,1),
+                   ('rms_speech_min_dbfs',-120,0))
+    if any(type(thresholds.get(k)) not in (int,float) or not low <= thresholds[k] <= high
+           for k,low,high in speech_limits):
+        return False
+    count=vad['frame_count']
+    ratios=[]
+    for key in ('mode0_speech_ratio','mode3_speech_ratio'):
+        value=vad.get(key)
+        if type(value) not in (int,float) or not 0 <= value <= 1:
+            return False
+        hits=round(value*count)
+        if round(hits/count,4) != value:
+            return False
+        ratios.append(hits/count)
+    rms=vad.get('rms_dbfs')
+    if type(rms) not in (int,float) or not -120 <= rms <= 0:
+        return False
+    derived=(ratios[0] < thresholds['mode0_max'] and ratios[1] < thresholds['mode3_max']
+             and rms + 0.005 <= thresholds['rms_max_dbfs'])
+    if (ratios[0] >= thresholds['mode0_speech_min']
+            and ratios[1] >= thresholds['mode3_speech_min']
+            and rms - 0.005 >= thresholds['rms_speech_min_dbfs']):
+        return False
+    if vad['robust_non_speech']:
+        return derived
+    return not derived
+
+
 def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
                              source_audio_sha_verified: bool,
                              source_duration_ms: int,
@@ -76,7 +168,8 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
         failures.append("invalid_source_sha")
     if not source_audio_sha_verified:
         failures.append("unverified_source_audio_sha")
-    if type(source_duration_ms) is not int or not 1000 <= source_duration_ms <= 24*3600*1000:
+    valid_duration=type(source_duration_ms) is int and 1000 <= source_duration_ms <= 24*3600*1000
+    if not valid_duration:
         failures.append("unverified_source_duration")
     if not srt_bytes or len(srt_bytes) > 20_000_000 or not txt_bytes or len(txt_bytes) > 20_000_000:
         failures.append("missing_or_oversized_subtitle_artifacts")
@@ -89,7 +182,7 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
             failures.append("txt_does_not_match_srt_in_order")
     except UnicodeError:
         failures.append("invalid_utf8_txt")
-    if cues and 1000 <= source_duration_ms and cues[-1]["end_ms"] > source_duration_ms + 1000:
+    if cues and valid_duration and cues[-1]["end_ms"] > source_duration_ms + 1000:
         failures.append("subtitles_extend_past_source_audio")
     # Long silent/speech-uncertain intervals are report candidates, NOT proof
     # of actual missing speech. Never use these to invent words.
@@ -101,24 +194,72 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
                 windows.append({"start_ms":cursor,"end_ms":cue["start_ms"],
                                 "following_cue_index":i+1})
             cursor=max(cursor,cue["end_ms"])
-        if source_duration_ms-cursor >= 3000:
+        if valid_duration and source_duration_ms-cursor >= 3000:
             windows.append({"start_ms":cursor,"end_ms":source_duration_ms,
                             "following_cue_index":None})
     acoustic=[]
-    for item in acoustic_review_items or []:
+    if acoustic_review_items is not None and not isinstance(acoustic_review_items, list):
+        failures.append('invalid_acoustic_review_items')
+    for item in acoustic_review_items if isinstance(acoustic_review_items, list) else []:
+        if not isinstance(item, dict):
+            failures.append('invalid_acoustic_review_items')
+            continue
+        if 'index' in item and (type(item['index']) is not int or item['index'] < 0):
+            failures.append('invalid_acoustic_review_index')
+            continue
         start=item.get("gap_start_ms",item.get("start_ms"))
         end=item.get("gap_end_ms",item.get("end_ms"))
-        if type(start) is not int or type(end) is not int or not 0 <= start < end <= source_duration_ms:
+        if (not valid_duration or type(start) is not int or type(end) is not int or not 0 <= start < end <= source_duration_ms
+                or any(name in item and (type(item[name]) is not int or item[name] != value)
+                       for name,value in (("start_ms",start),("gap_start_ms",start),
+                                          ("end_ms",end),("gap_end_ms",end)))):
             failures.append("invalid_acoustic_review_interval")
             continue
         disposition=item.get("disposition",item.get("acoustic_disposition","REVIEW"))
-        if disposition not in ("NONSPEECH_CONFIRMED","SPEECH_CONFIRMED","REVIEW"):
+        invalid_disposition = (disposition not in ("NONSPEECH_CONFIRMED","SPEECH_CONFIRMED","REVIEW")
+            or any(name in item and item[name] != disposition
+                   for name in ('disposition','acoustic_disposition')))
+        if invalid_disposition:
             failures.append("invalid_acoustic_disposition")
-            continue
+            disposition = 'REVIEW'
+        invalid_evidence = disposition == "NONSPEECH_CONFIRMED" and not _nonspeech_probes_valid(item,start,end)
+        missing_sidecar = item.get('reason')=='sidecar_inventory_missing'
+        if invalid_evidence or missing_sidecar:
+            disposition = "REVIEW"
         acoustic.append({"index":item.get("index"),"start_ms":start,"end_ms":end,
                          "disposition":disposition,
-                         "decision":("LOCAL_NONSPEECH_EVIDENCE" if disposition=="NONSPEECH_CONFIRMED"
+                         "decision":("SIDECAR_INVENTORY_MISSING" if missing_sidecar else
+                                     "INVALID_ACOUSTIC_DISPOSITION" if invalid_disposition else
+                                     "INVALID_NONSPEECH_EVIDENCE" if invalid_evidence else
+                                     "LOCAL_NONSPEECH_EVIDENCE" if disposition=="NONSPEECH_CONFIRMED"
                                      else "UNRESOLVED_NO_HUMAN_ATTESTATION")})
+    # Consolidate duplicate coordinates conservatively: uncertain or conflicting
+    # evidence always wins over non-speech, regardless of input order.
+    grouped={}
+    for item in acoustic:
+        key=(item['start_ms'],item['end_ms'])
+        previous=grouped.get(key)
+        if previous is None:
+            grouped[key]=item
+        elif previous['disposition'] != item['disposition'] or previous['decision'] != item['decision']:
+            decisions={previous['decision'],item['decision']}
+            grouped[key]={**previous,'disposition':'REVIEW',
+                          'decision':('SIDECAR_INVENTORY_MISSING' if 'SIDECAR_INVENTORY_MISSING' in decisions
+                                      else 'INVALID_NONSPEECH_EVIDENCE' if 'INVALID_NONSPEECH_EVIDENCE' in decisions
+                                      else 'CONFLICTING_ACOUSTIC_EVIDENCE')}
+    acoustic=list(grouped.values())
+    pending=sorted((x['start_ms'],x['end_ms']) for x in acoustic
+                   if x['disposition']!='NONSPEECH_CONFIRMED')
+    starts=[start for start,_ in pending]
+    max_ends=[]
+    for _,end in pending:
+        max_ends.append(max(end,max_ends[-1] if max_ends else end))
+    for item in acoustic:
+        if item['disposition']=='NONSPEECH_CONFIRMED':
+            pos=bisect_left(starts,item['end_ms'])
+            if pos and max_ends[pos-1]>item['start_ms']:
+                item['disposition']='REVIEW'
+                item['decision']='OVERLAPPING_UNRESOLVED_EVIDENCE'
     original_diffs = []
     if original_srt_bytes is not None:
         old, old_failures = _check_cues(original_srt_bytes)
@@ -155,6 +296,12 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
                 if x['disposition']=='NONSPEECH_CONFIRMED'}
     open_windows=[x for x in windows if (x['start_ms'],x['end_ms']) not in non_speech]
     unresolved_acoustic=[x for x in acoustic if x['disposition']!='NONSPEECH_CONFIRMED']
+    classified={(x['start_ms'],x['end_ms']) for x in acoustic
+                if x['decision'] not in ('INVALID_NONSPEECH_EVIDENCE','SIDECAR_INVENTORY_MISSING')}
+    missing_inventory={(x['start_ms'],x['end_ms']) for x in acoustic
+                       if x['decision']=='SIDECAR_INVENTORY_MISSING'}
+    unclassified=[x for x in windows if (x['start_ms'],x['end_ms']) not in classified]
+    open_intervals={(x['start_ms'],x['end_ms']) for x in unresolved_acoustic + unclassified}
     # Text content may be complete-looking even if an acoustic region is omitted.
     # Those uncertainty types are always disclosed, not silently resolved.
     blockers=sorted(set(failures))
@@ -172,15 +319,19 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
         "checks":{"srt_structure":"PASS" if not cue_failures else "FAIL",
                   "srt_txt_ordered_match":"FAIL" if "txt_does_not_match_srt_in_order" in blockers else "PASS",
                   "source_audio_sha":"PASS" if source_audio_sha_verified else "FAIL",
-                  "subtitle_timebase":"FAIL" if "subtitles_extend_past_source_audio" in blockers else "PASS"},
+                  "subtitle_timebase":"FAIL" if not valid_duration or "subtitles_extend_past_source_audio" in blockers else "PASS"},
         "artifact_shas":{"srt_sha256":_sha(srt_bytes),"txt_sha256":_sha(txt_bytes)},
         "subtitle_cue_count":len(cues),"subtitle_last_end_ms":cues[-1]["end_ms"] if cues else None,
         "subtitle_gaps_over_3s_count":len(windows),
+        "subtitle_gap_reporting_min_ms":3000,
         "subtitle_gaps_over_3s":windows,
         "acoustic_review_items":acoustic,
         "acoustic_nonspeech_confirmed_count":len(non_speech),
-        "acoustic_open_item_count":len(unresolved_acoustic),
-        "acoustic_triage_status":"LOCAL_ONLY" if acoustic_review_items is not None else "NOT_RUN",
+        "acoustic_unclassified_gap_count":len(unclassified),
+        "acoustic_missing_sidecar_inventory_count":len(missing_inventory),
+        "acoustic_open_item_count":len(open_intervals),
+        "acoustic_triage_status":("NOT_RUN" if acoustic_review_items is None else
+                                   "PARTIAL" if unclassified or missing_inventory or 'invalid_acoustic_review_items' in blockers else "LOCAL_ONLY"),
         "reference_txt_comparison":reference_match,
         "original_srt_disagreements":original_diffs,
         "technical_blockers":blockers,
@@ -211,6 +362,13 @@ def render_human_review_advisory(result: dict, *, lesson_title: str) -> str:
              f"- SRT 段落：{result['subtitle_cue_count']}",
              f"- 3 秒以上字幕空檔：{result['subtitle_gaps_over_3s_count']}",
              f"- 聲學待核對區間：{result.get('acoustic_open_item_count',len(result['acoustic_review_items']))}",
+             f"- 未分類字幕空檔：{result.get('acoustic_unclassified_gap_count','未知')}",
+             f"- 聲學分流狀態：{result.get('acoustic_triage_status','未知')}",
+             f"- 字幕空檔報告門檻：{result.get('subtitle_gap_reporting_min_ms', 3000)} ms（含等於門檻）",
+             (f"- 聲學側車門檻：{result['acoustic_triage_gap_min_ms']} ms（含等於門檻）；"
+              f"較短的字幕空檔有 {result['acoustic_triage_excluded_short_gap_count']} 段未納入聲學分流，並非已確認無語音。"
+              if result.get('acoustic_triage_gap_min_ms') is not None else
+              '- 聲學側車未執行；字幕空檔並非已確認無語音。'),
              f"- 已有聲學非語音證據可略過：{result.get('acoustic_nonspeech_confirmed_count',0)}",
              f"- 舊版與輸出文字差異：{len(result['original_srt_disagreements'])}",
              f"- Gemini/Chirp 比對狀態：{result.get('semantic_status','NOT_RUN_OR_NOT_ATTESTED')}",

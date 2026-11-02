@@ -52,7 +52,7 @@ class AutoRouteTests(unittest.TestCase):
         self.assertEqual(status.status_code,200)
         self.assertEqual(status.json()['deliveries'],[])
 
-    def test_prepare_authorize_publish_and_readback_without_listening(self):
+    def test_prepare_authorize_but_publish_remains_disabled(self):
         with patch.dict(os.environ,{'COURSE_TRANSCRIPT_V2_AUTO_DELIVERY_API_ENABLED':'true'}):
             with patch('app.golden_v2_auto_routes.subprocess.run',return_value=SimpleNamespace(stdout='3.000')):
                 start=self.client.post(self.url+'/prepare',json=self.body(),headers=self.headers)
@@ -65,16 +65,16 @@ class AutoRouteTests(unittest.TestCase):
                     json={'manifest_sha256':manifest_sha,'revision':self.ledger.status(self.job)['revision'],
                           'review_reference':'approved source-bound auto delivery','confirm':True})
             self.assertEqual(approved.status_code,200,approved.text)
-            with patch('app.pipeline.golden_v2_auto_publication.DriveDeliveryGateway',return_value=self.drive):
-                published=self.client.post(self.url+'/publish',headers=self.headers,
-                    json={'manifest_sha256':manifest_sha,'confirm':True})
-            self.assertEqual(published.status_code,200,published.text)
-            self.assertEqual(published.json()['state'],'AUTO_DELIVERED')
-            self.assertFalse(published.json()['golden_qa_pass'])
-            self.assertEqual(self.drive.generated,4)
+            # The owner route may prepare and authorize but the real Drive
+            # path must stay disabled, even when the feature flag is on.
+            published=self.client.post(self.url+'/publish',headers=self.headers,
+                json={'manifest_sha256':manifest_sha,'confirm':True})
+            self.assertEqual(published.status_code,409,published.text)
+            self.assertEqual(self.drive.generated,0)
+            self.assertEqual(len(self.drive.files),1)
             self.assertEqual(self.ledger.status(self.job)['status'],'PROCESSING')
             result=self.client.get(self.url+'/status',headers={'Authorization':'Bearer '+self.read})
-            self.assertEqual(result.json()['deliveries'][0]['state'],'AUTO_DELIVERED')
+            self.assertEqual(result.json()['deliveries'][0]['state'],'PREPARED')
 
     def test_reference_srt_with_empty_cue_does_not_block_auto_close(self):
         (self.jobdir/'golden-v2'/'broken-original.srt').write_text(

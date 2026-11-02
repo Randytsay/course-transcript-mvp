@@ -116,8 +116,9 @@ def prepare_auto(job_id: str, body: AutoPrepare,authorization: str | None=Header
         chirp_stage=next(s['state'] for s in state['stages'] if s['name']=='chirp_independent')
         # Use optional bounded provider-free acoustic sidecar only when it is
         # exact source/SRT/timebase-bound. Missing sidecar stays NOT_RUN.
-        triage=load_bound_triage(job_dir=job,source_sha256=state['source_sha'],
-            srt_bytes=srt.read_bytes(),duration_ms=milliseconds)
+        loaded=load_bound_triage(job_dir=job,source_sha256=state['source_sha'],
+            srt_bytes=srt.read_bytes(),duration_ms=milliseconds,include_source_sha256=True)
+        triage, triage_source_sha = loaded if loaded else (None, None)
         result=evaluate_auto_acceptance(job_id=job_id,source_sha256=state['source_sha'],
                source_audio_sha_verified=True,source_duration_ms=milliseconds,
                srt_bytes=srt.read_bytes(),txt_bytes=txt.read_bytes(),
@@ -135,8 +136,11 @@ def prepare_auto(job_id: str, body: AutoPrepare,authorization: str | None=Header
             result['semantic_status']='NOT_RUN_OR_NOT_ATTESTED'
             result['semantic_review_items']=[]
         if triage:
-            from app.pipeline.golden_v2_auto_closeout import _sha as auto_sha
-            result['acoustic_triage_sha256']=auto_sha(_wire(triage))
+            result['acoustic_triage_sha256']=triage_source_sha
+            result['acoustic_triage_sha256_format']='sha256 of exact sidecar file bytes'
+            result['acoustic_triage_gap_min_ms']=triage['gap_min_ms']
+            result['acoustic_triage_excluded_short_gap_count']=triage['inventory_excluded_short_gap_count']
+            result['acoustic_triage_scope']='subtitle-uncovered gaps >= acoustic_triage_gap_min_ms; shorter gaps excluded, not classified'
         if result['status']!=TIER:
             return {'job_id':job_id,'status':result['status'],
                     'technical_blockers':result['technical_blockers'],

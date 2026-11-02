@@ -1,0 +1,24 @@
+{
+  "files": {
+    "app/golden_v2_auto_routes.py": "ffbfdc4809c8b8225687a8501bd2db677a24ffd2d940ab500a0c567b2226e6a5",
+    "app/pipeline/golden_v2_auto_closeout.py": "d02f599d1ab093234affd99a0dc1edd66bb24151d50f25eb395dd7e93e72db34",
+    "app/pipeline/golden_v2_auto_publication.py": "9acc869ed8d70efe103a4e8871b070d26da0cf8ec15dba3680ce5af88419d0f2",
+    "app/providers/golden_v2_auto_acceptance.py": "896bb543df2083c9ddd9ab0bccc6a96cbf814db446f80bd99275e4ed685e5f6b",
+    "app/providers/golden_v2_auto_gap_triage.py": "936aab0781f591159c6c663d6739cefe36a1077ddcb999cd1eab9338ea4cd0a8",
+    "docs/GOLDEN_V2_AUTO_PUBLICATION_RECOVERY.md": "53529139707eaafed9eb041b0eafe5f24fc2c11e29ca379327b3d1695490ccae",
+    "tests/test_auto_drive_gateway_evidence.py": "9b6fac440958b3c341789adbf9dd2857560723091ab35148081a0cf9162f7210",
+    "tests/test_auto_publication_process_recovery.py": "13c862e749e5b2c872c956098d3025298942d3592a1780d7c37e0e7e3960df1c",
+    "tests/test_auto_publication_review_regressions.py": "e3beb787f923c60842df51991fb395c55500e9187f490549bdc9499ed00c052f",
+    "tests/test_golden_v2_acoustic_adversarial_regressions.py": "a67f056a5ec8ddfe5c1342b9b72a9ad6475feba9a793a1eb2ffd1c9d411a1909",
+    "tests/test_golden_v2_acoustic_hardening.py": "5044212c9f67ec90090a19597e6f0d7af6e752bbc9a1567cb7fbadf517b57fd6",
+    "tests/test_golden_v2_auto_acceptance.py": "6b4c7352ee678c6e049b32b334cab97f3eafff0c2997089a16f632b20e3f819a",
+    "tests/test_golden_v2_auto_gap_triage.py": "b0d5b4e79a43ab28f85fbe31421e3f703a93a822d58bc3daee98e91013ec675d",
+    "tests/test_golden_v2_auto_publication.py": "319fd6e0f3ec345c22cdd9776b16433ad217b96ea367a120018e777fe714b685",
+    "tests/test_golden_v2_auto_routes.py": "e340f8db5cc43dff7fb8e058d99b9b9af09b8c0fbf5aa46cb38b38e52d29e968"
+  },
+  "is_original_git_commit": false,
+  "observed_release_directory_sha": "cdf9e73dccd3a2b2c28d43c158a04b6f1d814f76",
+  "production_deployment_authorized": false,
+  "review_parent": "a18fd13186e73add4ef1c03aa8fdb5beb5cd25a5",
+  "schema": "golden-v2-deployed-source-reconstruction-v1"
+}

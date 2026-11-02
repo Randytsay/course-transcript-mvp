@@ -34,6 +34,107 @@ class AutoAcceptanceTests(unittest.TestCase):
         self.assertIn('00:00:03.000',render_human_review_advisory(x,lesson_title='測試'))
         self.assertEqual(x['artifact_shas']['srt_sha256'],hashlib.sha256(self.srt).hexdigest())
 
+    def test_absent_triage_reports_unclassified_gap_without_claiming_pass(self):
+        x=evaluate_auto_acceptance(**(self.params|{'acoustic_review_items':None}))
+        self.assertEqual(x['status'],TIER)
+        self.assertFalse(x['formal_golden_pass'])
+        self.assertEqual(x['acoustic_triage_status'],'NOT_RUN')
+        self.assertIn('acoustic_unclassified_gap_count',x)
+        self.assertEqual(x['acoustic_unclassified_gap_count'],1)
+        self.assertEqual(x['acoustic_open_item_count'],1)
+        report=render_human_review_advisory(x,lesson_title='測試')
+        self.assertIn('未分類字幕空檔：1',report)
+        self.assertIn('聲學待核對區間：1',report)
+
+    def test_no_gap_does_not_imply_acoustic_triage_or_golden_pass(self):
+        srt=('1\n00:00:00,000 --> 00:00:05,000\n清淨心\n\n'
+             '2\n00:00:05,000 --> 00:00:10,000\n菩提種子\n').encode()
+        x=evaluate_auto_acceptance(**(self.params|{'srt_bytes':srt,'acoustic_review_items':None}))
+        self.assertEqual(x['status'],TIER)
+        self.assertEqual(x['subtitle_gaps_over_3s_count'],0)
+        self.assertEqual(x['acoustic_unclassified_gap_count'],0)
+        self.assertEqual(x['acoustic_triage_status'],'NOT_RUN')
+        self.assertFalse(x['formal_golden_pass'])
+        self.assertIn('聲學分流狀態：NOT_RUN',render_human_review_advisory(x,lesson_title='測試'))
+
+    def test_empty_triage_inventory_is_partial_when_a_gap_exists(self):
+        x=evaluate_auto_acceptance(**(self.params|{'acoustic_review_items':[]}))
+        self.assertEqual(x['acoustic_triage_status'],'PARTIAL')
+        self.assertEqual(x['acoustic_unclassified_gap_count'],1)
+        self.assertEqual(x['acoustic_open_item_count'],1)
+        self.assertFalse(x['formal_golden_pass'])
+
+    def test_nonspeech_without_probe_evidence_remains_unclassified(self):
+        items=[{'start_ms':3000,'end_ms':7000,'disposition':'NONSPEECH_CONFIRMED'}]
+        x=evaluate_auto_acceptance(**(self.params|{'acoustic_review_items':items}))
+        self.assertEqual(x['status'],TIER)
+        self.assertEqual(x['acoustic_nonspeech_confirmed_count'],0)
+        self.assertEqual(x['acoustic_unclassified_gap_count'],1)
+        self.assertEqual(x['acoustic_open_item_count'],1)
+        self.assertFalse(x['formal_golden_pass'])
+
+    def test_invalid_nonspeech_outside_subtitle_gaps_remains_unresolved(self):
+        srt=('1\n00:00:00,000 --> 00:00:10,000\n清淨心\n菩提種子\n').encode()
+        items=[{'start_ms':2000,'end_ms':2500,'disposition':'NONSPEECH_CONFIRMED'}]
+        x=evaluate_auto_acceptance(**(self.params|{'srt_bytes':srt,'acoustic_review_items':items,
+            'original_srt_bytes':None,'external_provider_reconciled':True}))
+        self.assertEqual(x['acoustic_open_item_count'],1)
+        self.assertEqual(x['acoustic_review_items'][0]['disposition'],'REVIEW')
+        self.assertTrue(x['human_review_advisory']['recommended'])
+
+    def test_evaluator_rejects_conflicting_coordinate_aliases(self):
+        items=[{'start_ms':3000,'end_ms':7000,'gap_start_ms':2000,
+                'gap_end_ms':7000,'disposition':'REVIEW'}]
+        x=evaluate_auto_acceptance(**(self.params|{'acoustic_review_items':items}))
+        self.assertIn('invalid_acoustic_review_interval',x['technical_blockers'])
+        self.assertEqual(x['acoustic_triage_status'],'PARTIAL')
+
+    def test_duplicate_pending_intervals_are_not_double_counted(self):
+        item={'start_ms':2000,'end_ms':2500,'disposition':'REVIEW'}
+        x=evaluate_auto_acceptance(**(self.params|{'acoustic_review_items':[item,item]}))
+        self.assertEqual(len(x['acoustic_review_items']),1)
+        self.assertEqual(x['acoustic_open_item_count'],2)  # one pending + one SRT gap
+
+    def test_conflicting_evidence_keeps_gap_open_in_report(self):
+        item={'start_ms':3000,'end_ms':7000,'disposition':'NONSPEECH_CONFIRMED',
+              'probes':[{'start_ms':3000,'end_ms':7000,'disposition':'NONSPEECH_CONFIRMED','max_volume_dbfs':-100}]}
+        speech={'start_ms':3000,'end_ms':7000,'disposition':'SPEECH_CONFIRMED'}
+        x=evaluate_auto_acceptance(**(self.params|{'acoustic_review_items':[item,speech],
+             'external_provider_reconciled':True,'original_srt_bytes':None}))
+        self.assertEqual(x['acoustic_nonspeech_confirmed_count'],0)
+        self.assertEqual(x['acoustic_open_item_count'],1)
+        self.assertTrue(x['human_review_advisory']['recommended'])
+        self.assertIn('00:00:03.000–00:00:07.000（4.0s）',render_human_review_advisory(x,lesson_title='x'))
+
+    def test_overlapping_pending_prevents_nonspeech_gap_dismissal(self):
+        item={'start_ms':3000,'end_ms':7000,'disposition':'NONSPEECH_CONFIRMED',
+              'probes':[{'start_ms':3000,'end_ms':7000,'disposition':'NONSPEECH_CONFIRMED','max_volume_dbfs':-100}]}
+        speech={'start_ms':3500,'end_ms':4500,'disposition':'SPEECH_CONFIRMED'}
+        x=evaluate_auto_acceptance(**(self.params|{'acoustic_review_items':[item,speech]}))
+        self.assertEqual(x['acoustic_nonspeech_confirmed_count'],0)
+        self.assertIn('00:00:03.000–00:00:07.000（4.0s）',render_human_review_advisory(x,lesson_title='x'))
+
+    def test_invalid_or_conflicting_disposition_retains_known_interval(self):
+        for item in [
+            {'start_ms':2000,'end_ms':2500,'disposition':'NOT_VALID'},
+            {'start_ms':2000,'end_ms':2500,'disposition':'NONSPEECH_CONFIRMED',
+             'acoustic_disposition':'SPEECH_CONFIRMED',
+             'probes':[{'start_ms':2000,'end_ms':2500,'disposition':'NONSPEECH_CONFIRMED','max_volume_dbfs':-100}]}]:
+            with self.subTest(item=item):
+                x=evaluate_auto_acceptance(**(self.params|{'acoustic_review_items':[item]}))
+                self.assertEqual(x['acoustic_review_items'][0]['disposition'],'REVIEW')
+                self.assertEqual(x['acoustic_nonspeech_confirmed_count'],0)
+                self.assertIn('invalid_acoustic_disposition',x['technical_blockers'])
+
+    def test_contradictory_probe_evidence_cannot_certify_nonspeech(self):
+        item={'start_ms':3000,'end_ms':7000,'disposition':'NONSPEECH_CONFIRMED',
+              'probes':[{'start_ms':3000,'end_ms':7000,'disposition':'NONSPEECH_CONFIRMED',
+                         'max_volume_dbfs':-100,
+                         'vad':{'robust_non_speech':True,'robust_speech':True}}]}
+        x=evaluate_auto_acceptance(**(self.params|{'acoustic_review_items':[item]}))
+        self.assertEqual(x['acoustic_nonspeech_confirmed_count'],0)
+        self.assertEqual(x['acoustic_review_items'][0]['disposition'],'REVIEW')
+
     def test_mismatched_srt_txt_is_technical_failure(self):
         x=evaluate_auto_acceptance(**(self.params|{'txt_bytes':b'mismatch'}))
         self.assertEqual(x['status'],'AUTO_BLOCKED_TECHNICAL')

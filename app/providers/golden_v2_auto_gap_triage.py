@@ -7,13 +7,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from app.jobs.golden_v2_ledger import V2Conflict
 from app.providers.golden_v2_acoustic_qa import _probe_nonspeech
-from app.providers.golden_v2_auto_acceptance import _check_cues
+from app.providers.golden_v2_auto_acceptance import _check_cues, _nonspeech_probes_valid
 
 SCHEMA='golden-v2-auto-gap-triage-v1'
+
+
+def _unique_json_object(pairs):
+    result={}
+    for key,value in pairs:
+        if key in result:
+            raise ValueError('duplicate JSON key')
+        result[key]=value
+    return result
 
 
 def _sha_file(file: Path) -> str:
@@ -22,6 +32,17 @@ def _sha_file(file: Path) -> str:
         for block in iter(lambda:inp.read(1024*1024),b''):
             checksum.update(block)
     return checksum.hexdigest()
+
+
+def _finite_float(text):
+    value=float(text)
+    if not math.isfinite(value):
+        raise ValueError('non-finite JSON number')
+    return value
+
+
+def _reject_constant(text):
+    raise ValueError('non-finite JSON constant')
 
 
 def inspect_subtitle_gaps(*, job_dir: Path, source_sha256: str,
@@ -63,7 +84,8 @@ def inspect_subtitle_gaps(*, job_dir: Path, source_sha256: str,
             checks.append(_probe_nonspeech(Path(job_dir),cursor,next_stop))
             cursor=next_stop;slices+=1
         dispositions=[v['disposition'] for v in checks]
-        if dispositions and all(v=='NONSPEECH_CONFIRMED' for v in dispositions):
+        if (dispositions and all(v=='NONSPEECH_CONFIRMED' for v in dispositions)
+                and _nonspeech_probes_valid({'probes':checks},start,end)):
             disposition='NONSPEECH_CONFIRMED'
         elif 'SPEECH_CONFIRMED' in dispositions:
             disposition='SPEECH_CONFIRMED'
@@ -87,7 +109,7 @@ def inspect_subtitle_gaps(*, job_dir: Path, source_sha256: str,
 
 
 def load_bound_triage(*, job_dir: Path, source_sha256: str, srt_bytes: bytes,
-                      duration_ms: int) -> dict | None:
+                      duration_ms: int, include_source_sha256: bool = False):
     """Only accept exact source/SRT/timebase matches; unknown = no classification."""
     digest=hashlib.sha256(srt_bytes).hexdigest()
     path=Path(job_dir)/'golden-v2'/f'auto-gap-triage-{digest[:20]}.json'
@@ -95,26 +117,74 @@ def load_bound_triage(*, job_dir: Path, source_sha256: str, srt_bytes: bytes,
         return None
     if path.is_symlink() or path.stat().st_size>4_000_000:
         raise V2Conflict('unsafe triage sidecar')
-    report=json.loads(path.read_bytes())
+    try:
+        raw=path.read_bytes()
+        report=json.loads(raw, object_pairs_hook=_unique_json_object,
+                          parse_float=_finite_float, parse_constant=_reject_constant)
+    except (ValueError, UnicodeError, OSError, RecursionError) as exc:
+        raise V2Conflict('invalid acoustic triage sidecar') from exc
+    if (not isinstance(report,dict) or not isinstance(report.get('gaps'),list)
+            or type(report.get('total_gaps')) is not int):
+        raise V2Conflict('invalid acoustic triage inventory')
     if (report.get('schema')!=SCHEMA
             or report.get('source_sha256')!=source_sha256
             or report.get('srt_sha256')!=digest
             or report.get('duration_ms')!=duration_ms
             or report.get('total_gaps')!=len(report.get('gaps',[]))):
         raise V2Conflict('stale acoustic triage cannot be used for this source')
+    # Reconstruct the inventory from the actual SRT, not the sidecar's counts.
+    minimum=report.get('gap_min_ms')
+    cues, errors=_check_cues(srt_bytes)
+    if (type(minimum) is not int or not 1000<=minimum<=60000 or errors or not cues
+            or cues[-1]['end_ms']>duration_ms+250 or not isinstance(report['gaps'],list)):
+        raise V2Conflict('invalid acoustic triage inventory')
+    expected=set(); cursor=0; excluded_short=0
+    for cue in cues:
+        if cue['start_ms']-cursor>=minimum:
+            expected.add((cursor,cue['start_ms']))
+        elif cue['start_ms']>cursor:
+            excluded_short+=1
+        cursor=max(cursor,cue['end_ms'])
+    if duration_ms-cursor>=minimum:
+        expected.add((cursor,duration_ms))
+    elif duration_ms>cursor:
+        excluded_short+=1
+    seen=set()
+    expected_indexes={bounds:index for index,bounds in enumerate(sorted(expected))}
     for gap in report['gaps']:
+        if not isinstance(gap,dict):
+            raise V2Conflict('invalid acoustic triage gap')
+        start,end=gap.get('start_ms'),gap.get('end_ms')
+        if (type(start) is not int or type(end) is not int or (start,end) not in expected
+                or ('index' in gap and (type(gap['index']) is not int
+                                        or gap['index'] != expected_indexes[(start,end)]))
+                or any(name in gap and (type(gap[name]) is not int or gap[name] != value)
+                       for name,value in (('gap_start_ms',start),('gap_end_ms',end)))
+                or (start,end) in seen or ('acoustic_disposition' in gap and
+                    gap['acoustic_disposition'] != gap.get('disposition'))
+                or gap.get('disposition') not in
+                ('NONSPEECH_CONFIRMED','SPEECH_CONFIRMED','REVIEW')):
+            raise V2Conflict('acoustic triage gap does not match subtitle inventory')
+        seen.add((start,end))
         if gap.get('disposition')=='NONSPEECH_CONFIRMED':
-            probes=gap.get('probes') or []
-            if (not probes or any(v.get('disposition')!='NONSPEECH_CONFIRMED'
-                    for v in probes)
-                    or any(type(v.get('start_ms')) is not int or
-                           type(v.get('end_ms')) is not int for v in probes)
-                    or probes[0]['start_ms']!=gap['start_ms']
-                    or probes[-1]['end_ms']!=gap['end_ms']
-                    or any(a['end_ms']!=b['start_ms'] for a,b in zip(probes,probes[1:]))
-                    or any(not (isinstance(v.get('max_volume_dbfs'),(int,float))
-                                    and v['max_volume_dbfs']<=-65
-                                    or (v.get('vad') or {}).get('robust_non_speech') is True)
-                           for v in probes)):
+            if not _nonspeech_probes_valid(gap,start,end):
                 raise V2Conflict('non-speech claimed without contiguous audio probe evidence')
-    return report
+    # Preserve omitted inventory as explicit unresolved items, including gaps
+    # shorter than the acceptance report's separate fixed 3-second threshold.
+    missing=expected-seen
+    report['sidecar_reported_gap_count']=len(report['gaps'])
+    report['inventory_expected_count']=len(expected)
+    report['inventory_missing_count']=len(missing)
+    report['inventory_excluded_short_gap_count']=excluded_short
+    report['gaps'] = report['gaps'] + [
+        {'start_ms':start,'end_ms':end,'disposition':'REVIEW',
+         'reason':'sidecar_inventory_missing'} for start,end in sorted(missing)]
+    report['total_gaps']=len(report['gaps'])
+    for disposition,key in (('NONSPEECH_CONFIRMED','nonspeech_confirmed_count'),
+                            ('SPEECH_CONFIRMED','speech_confirmed_count'),
+                            ('REVIEW','review_count')):
+        report[key]=sum(gap['disposition']==disposition for gap in report['gaps'])
+    # Sidecar assertions cannot attest a human listening or a Golden gate.
+    report['human_listening_attested']=False
+    report['golden_qa_pass']=False
+    return (report, hashlib.sha256(raw).hexdigest()) if include_source_sha256 else report
