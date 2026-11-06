@@ -75,3 +75,13 @@ AGY 不是預設主責。Hermes 的舊 #170 報告是證據來源，不是需要
 - 三個背景服務的真實 Compose config label 是 **`cdf9e73.../docker-compose.yml`**，不是 `cdf9e73.../deploy/golden-v2-chat-compose.yml`；API 的 Compose 則位於舊版 `82e0cd45.../deploy` 且包含數個歷史 overlays。**同一 Compose project 由不同配置建立的容器混合運行**。
 - 正式部署腳本 `/usr/local/sbin/golden-v2-chat-deploy` 已唯讀確認含 `rm -f current; ln -s ...` 的非原子 symlink 切換，且 `docker compose up -d ...` 只列三個背景服務、未列 API。這不能當成修改 Production 的授權。
 - `AGY-LOCAL-002` 已派工在 [Issue #173](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6680703079)：需本機權限的正式 Ledger／備份 **唯讀** 對帳。ChatGPT 受控帳號直接讀取 `ledger.sqlite` 遇 `PermissionError`，不能自行提權。完成前 #160 G2–G10 仍 OPEN；正式部署 **NO-GO**。
+
+## 8. AGY-LOCAL-002（2026-11-06）唯讀 Ledger 與還原空間驗收
+
+- ChatGPT 已於 [Issue #173 留下 CHANGES_REQUESTED](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6681245715)，**不是 COMPLETE**。AGY 的唯讀盤點與先前 Ledger 快照有重大差異，需先補證，不得直接恢復付費 Worker、重送 Operation 或修改 Ledger。
+- 現有正式 Ledger 僅由 AGY 使用本機既有權限進行查詢；其報告：`journal_mode=DELETE`、`integrity_check=ok`、外鍵違規 0；20221217 rev 5，**16 local Chirp DONE / 78¢**；但 #160 舊基線為 rev 4，**34 externally reported SUCCEEDED / 136¢**。兩份並非已完成對帳，雲端實際帳單仍 UNKNOWN。查明時需分清 Operations／Windows／來源 SHA／不同時點資料庫，避免將結果臆測成 18 筆遺失。
+- AGY 報告自動資料夾政策仍 `enabled=0`、`v2_auto_acceptance_deliveries` 1 筆 AUTO_DELIVERED、`v2_ai_limited_deliveries` 5 筆 DELIVERED 及 1 筆 PREPARED。上述資料來自其特權讀取，ChatGPT 未能用現有權限獨立重查；AI-limited DELIVERED 不等於正式 Golden PASS。
+- ChatGPT 透過獨立、唯讀 `statvfs` 實測 `/` 的使用者可用空間 **12,047,904,768 bytes（約 11.22 GiB）**，使用率 **92.21%**；AGY 回報既存備份 `jobs.tar.gz` 大小 **12,184,091,570 bytes（約 11.35 GiB）**。現有磁碟不可在原地做完整解壓冷還原；未驗證解壓後實際容量需求。若要進一步演練，必須先規劃獨立有足夠容量與隔離權限的目標，並取得明確授權。
+- **備份校驗範圍：**AGY 已回報既存 `ledger.sqlite` SHA 與 manifest 相符；`jobs.tar.gz` 的 SHA 僅從 manifest 讀取，該次 **未重新計算或驗證**。此前腳本/DB smoke check 並非容器端到端冷開機演練。
+- **多步查詢的一致性：**即使 SQLite 使用 DELETE journal 與 `mode=ro/query_only`，如未以單一顯式讀取 transaction 包住數次 SELECT，就不能保證跨查詢皆為同一個邏輯快照。請 AGY 在修訂報告中指明，而非僅根據沒有 WAL/SHM 檔宣稱完整快照。
+- 下一步為 **同一工單 `AGY-LOCAL-002 v2`** 補證，僅允許已核准的唯讀 VPS 查詢；詳見 #173，**未額外授權新的 VPS 變更或付費請求**。
