@@ -55,7 +55,10 @@ class ChirpSnapshotComparisonTests(unittest.TestCase):
         )
         a = inspect_database(current, self.job)
         b = inspect_database(base, self.job)
-        report = compare_snapshots(a, {"PR159": b})
+        report = compare_snapshots(
+            a, {"PR159": b},
+            historical_claim_count=34, historical_claim_cents=136,
+        )
         self.assertEqual(report["current"]["operations"], 16)
         self.assertEqual(report["current"]["known_actual_cents"], 78)
         self.assertEqual(report["baselines"]["PR159"]["operations"], 34)
@@ -66,6 +69,7 @@ class ChirpSnapshotComparisonTests(unittest.TestCase):
         self.assertEqual(diff["known_cents_delta_current_minus_baseline"], -58)
         self.assertEqual(diff["changed_actual_cents_on_shared_name_count"], 14)
         self.assertEqual(report["status"], "NO_GO")
+        self.assertEqual(report["historical_external_claim"]["operations"], 34)
         self.assertFalse(report["cloud_billing_reconciled"])
         self.assertFalse(report["provider_operations_reconciled"])
         self.assertFalse(report["paid_or_delivery_authorized"])
@@ -83,6 +87,7 @@ class ChirpSnapshotComparisonTests(unittest.TestCase):
         report = compare_snapshots(a, {"before": a})
         self.assertIn("CURRENT_OPERATION_IDENTITIES_OR_COSTS_UNKNOWN",
                       report["unresolved"])
+        self.assertIsNone(report["historical_external_claim"])
         self.assertEqual(report["status"], "NO_GO")
 
     def test_mismatched_sources_and_stage_cost_are_blockers(self):
