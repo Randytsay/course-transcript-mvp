@@ -120,13 +120,13 @@ def prepare_limited_manifest(
             triage.get("total_acoustic_gaps") != len(triage.get("all_acoustic_gaps", []))):
         raise V2Conflict("QA/triage does not match source SRT and job")
     # Unknown gaps remain explicit; never call them PASS or silence.
+    # Preserve original disposition without in-memory mutation so that
+    # manifest open_items, classification counts, and triage_sha256 remain
+    # 100% faithful to the immutable triage sidecar evidence.
     classifications = {}
     for gap in triage["all_acoustic_gaps"]:
         kind = gap.get("acoustic_disposition")
-        if kind == "REVIEW_REQUIRED":
-            kind = "REVIEW"
-            gap["acoustic_disposition"] = "REVIEW"
-        if kind not in {"SPEECH_CONFIRMED", "NONSPEECH_CONFIRMED", "REVIEW"}:
+        if kind not in {"SPEECH_CONFIRMED", "NONSPEECH_CONFIRMED", "REVIEW", "REVIEW_REQUIRED"}:
             raise V2Conflict("unknown acoustic classification")
         classifications[kind] = classifications.get(kind, 0) + 1
     manifest = {
@@ -148,7 +148,7 @@ def prepare_limited_manifest(
              "disposition": g["acoustic_disposition"],
              "classification": g["classification"]}
             for g in triage["all_acoustic_gaps"]
-            if g["acoustic_disposition"] == "REVIEW" or
+            if g["acoustic_disposition"] in {"REVIEW", "REVIEW_REQUIRED"} or
             (g["acoustic_disposition"] == "SPEECH_CONFIRMED" and
              g["classification"] != "ALREADY_HAS_SRT_TEXT_CHECK_SEMANTIC")
         ],

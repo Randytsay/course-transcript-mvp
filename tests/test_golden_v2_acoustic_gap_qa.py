@@ -1,15 +1,19 @@
-"""Deterministic acoustic gap closure, text QA, and tier preservation tests.
+"""Deterministic acoustic gap QA classification, text QA, and tier preservation tests.
 
-Enforces Issue #169 work packages:
-1. Long audio speech-without-subtitle intervals distinguishing SPEECH_CONFIRMED,
-   NONSPEECH_CONFIRMED, and REVIEW_REQUIRED.
-2. Text-only reference must NEVER count as acoustic truth or grant Golden PASS.
-3. Strict preservation of AUTO_ACCEPTED_WITH_REVIEW distinct from Golden PASS
-   and AUTO_DELIVERED.
-4. Zero paid provider calls (offline synthetic audio and evidence only).
+SCOPE & SYSTEM BOUNDARY:
+- COMPLETED: Deterministic offline QA classification rules for long audio gaps
+  (SPEECH_CONFIRMED, NONSPEECH_CONFIRMED, REVIEW_REQUIRED), strict rejection of
+  unearned Golden PASS based on text reference matching, and isolation of the
+  AUTO_ACCEPTED_WITH_REVIEW machine closure tier from Golden PASS and AUTO_DELIVERED.
+- UNFINISHED / SEPARATE TRACK: This test suite uses synthetic audio bytes and triage
+  sidecars. It does NOT implement live ASR speech recovery, sound-gap remediation,
+  or missing word reconstruction for Canary 250503 (e.g. 43:20.160–44:30.080 and
+  2:21:39.320–2:23:08.360) or 20221217. Actual live speech-gap remediation remains
+  separately open under Issue #160 (Gates G2/G8).
 """
 import hashlib
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -145,7 +149,7 @@ class DeterministicAcousticGapQATests(unittest.TestCase):
         self.assertFalse(result["formal_golden_pass"])
 
     def test_long_gap_review_required_recognized_without_technical_blocker(self):
-        """REVIEW_REQUIRED disposition is recognized as advisory review, not a fatal crash."""
+        """REVIEW_REQUIRED disposition is recognized as advisory review, retaining original evidence."""
         gap_item = {
             "index": 0,
             "start_ms": 20_000,
@@ -175,6 +179,11 @@ class DeterministicAcousticGapQATests(unittest.TestCase):
         self.assertTrue(result["human_review_advisory"]["recommended"])
         self.assertEqual(result["acoustic_open_item_count"], 1)
         self.assertFalse(result["formal_golden_pass"])
+
+        # Preserves REVIEW_REQUIRED disposition in acoustic review items
+        self.assertEqual(result["acoustic_review_items"][0]["disposition"], "REVIEW_REQUIRED")
+        report = render_human_review_advisory(result, lesson_title="測試長空窗")
+        self.assertIn("REVIEW_REQUIRED；仍待音訊核對", report)
 
     def test_text_only_reference_never_counts_as_acoustic_truth(self):
         """Text reference matching must never dismiss speech or certify completeness."""
@@ -373,6 +382,98 @@ class DeterministicAcousticGapQATests(unittest.TestCase):
         self.assertEqual(loaded["total_gaps"], 1)
         self.assertEqual(loaded["review_count"], 1)
         self.assertFalse(loaded["golden_qa_pass"])
+
+    def test_prepare_limited_manifest_preserves_review_required_provenance(self):
+        """prepare_limited_manifest retains REVIEW_REQUIRED without destructive mutation."""
+        from app.pipeline.golden_v2_ai_limited_closeout import prepare_limited_manifest
+        from app.jobs.golden_v2_ledger import STAGES
+        job_id = "v2p_" + "b" * 32
+        job_dir = self.root / "jobs" / job_id
+        job_dir.mkdir(parents=True)
+        assets = job_dir / "golden-v2"
+        assets.mkdir()
+        (job_dir / "normalized.flac").write_bytes(self.audio_bytes)
+        (job_dir / "source-preflight.json").write_text(json.dumps({
+            "source_sha256": self.source_sha,
+            "drive_observation": {"file_id": "f999", "version": "12",
+                                  "size_bytes": len(self.audio_bytes), "downloaded_md5": "unit-md5"},
+            "drive_source_path": "gdrive:lecture/source.wav",
+        }))
+        srt_file = assets / "review.srt"
+        srt_file.write_text("1\n00:00:00,000 --> 00:00:01,000\n佛法\n\n"
+                            "2\n00:00:01,100 --> 00:00:02,000\n修行\n")
+        txt_file = assets / "review.txt"
+        txt_file.write_text("佛法\n修行\n")
+
+        triage_dict = {
+            "job_id": job_id,
+            "srt_sha256": hashlib.sha256(srt_file.read_bytes()).hexdigest(),
+            "total_acoustic_gaps": 2,
+            "all_acoustic_gaps": [
+                {"start_ms": 2000, "end_ms": 5000, "acoustic_disposition": "REVIEW_REQUIRED",
+                 "classification": "NO_SRT_TEXT_LONG_GAP"},
+                {"start_ms": 5000, "end_ms": 7000, "acoustic_disposition": "NONSPEECH_CONFIRMED",
+                 "classification": "NO_SRT_TEXT_SHORT_GAP"},
+            ],
+        }
+        triage_raw = json.dumps(triage_dict, indent=2).encode("utf-8")
+        triage_file = assets / "triage.json"
+        triage_file.write_bytes(triage_raw)
+
+        # Set up stages in ledger
+        ledger_path = self.root / "ledger.sqlite"
+        ledger = GoldenV2Ledger(ledger_path)
+        with sqlite3.connect(ledger_path) as db:
+            db.execute(
+                "INSERT INTO v2_jobs(id,source_sha,mode,revision,approval_reference,"
+                "approved_cents,estimated_cents,status,created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (job_id, self.source_sha, "FLASH_CHIRP", 3, "approved", 100, 100,
+                 "NEEDS_REVIEW", "2026-10-25T00:00:00+00:00")
+            )
+            for ix, name in enumerate(STAGES):
+                state = "REVIEW_REQUIRED" if name in ("chirp_independent", "gemini_primary") else "PENDING"
+                db.execute("INSERT INTO v2_stages(job_id,ord,name,state,estimate_cents,"
+                           "actual_cents,updated_at) VALUES(?,?,?,?,?,?,?)",
+                           (job_id, ix, name, state, 0, 0, "2026-10-25T00:00:00+00:00"))
+            db.execute(
+                "INSERT INTO v2_chirp_operations "
+                "(job_id,window_id,source_sha,clip_sha,gcs_uri,start_ms,end_ms,"
+                "status,operation_name,request_id,output_uri,estimated_cents,"
+                "purpose,result_sha,actual_cents,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (job_id, "win0", self.source_sha, "b" * 64, "gs://test/audio", 0, 3000,
+                 "DONE", "operation-123", "req01", "gs://test/out", 1,
+                 "BASE", "c" * 64, 1, "2026-10-25T00:00:00+00:00")
+            )
+
+        manifest = prepare_limited_manifest(
+            root=self.root,
+            job_id=job_id,
+            srt_path=srt_file,
+            txt_path=txt_file,
+            triage_path=triage_file,
+            remote_names=("review_AI校對_含待複核.srt", "review_AI校對_含待複核.txt"),
+        )
+
+        # 1. Triage SHA256 matches untouched raw triage bytes
+        self.assertEqual(manifest["triage_sha256"], hashlib.sha256(triage_raw).hexdigest())
+
+        # 2. Classification counts record REVIEW_REQUIRED separately
+        self.assertEqual(manifest["acoustic_classification_counts"], {
+            "REVIEW_REQUIRED": 1,
+            "NONSPEECH_CONFIRMED": 1,
+        })
+
+        # 3. open_items preserves the original REVIEW_REQUIRED disposition
+        self.assertEqual(len(manifest["open_items"]), 1)
+        self.assertEqual(manifest["open_items"][0]["disposition"], "REVIEW_REQUIRED")
+        self.assertEqual(manifest["open_items"][0]["classification"], "NO_SRT_TEXT_LONG_GAP")
+        self.assertEqual(manifest["open_items"][0]["start_ms"], 2000)
+        self.assertEqual(manifest["open_items"][0]["end_ms"], 5000)
+
+        # 4. Underlying triage file was NOT mutated
+        self.assertEqual(triage_file.read_bytes(), triage_raw)
 
 
 if __name__ == "__main__":

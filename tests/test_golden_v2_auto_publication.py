@@ -1,6 +1,7 @@
 """Four-asset fail-closed publication and receipt tests (no Drive network)."""
 import hashlib
 import json
+import os
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -93,6 +94,91 @@ class AutoPublisherTests(unittest.TestCase):
                     gateway=gateway)
         self.assertEqual(set(self.drive.files),{'source-id'})
         self.assertEqual(self.drive.generated,0)
+
+    def test_real_drive_gateway_disabled_by_default_when_gateway_is_none(self):
+        """Default-OFF feature flag blocks gateway=None before Drive initialization."""
+        with patch.dict('os.environ', {}, clear=False):
+            os.environ.pop('COURSE_TRANSCRIPT_V2_ENABLE_MULTIPART_PUBLICATION', None)
+            with patch('app.pipeline.golden_v2_auto_publication.signed_grant', sign):
+                with self.assertRaisesRegex(V2Conflict, 'auto publication to Drive is disabled pending concurrency-safe reconciliation'):
+                    publish_signed_auto_acceptance(
+                        root=self.root, job_id=self.job,
+                        manifest_sha=self.manifest['manifest_sha256'], lock_root=self.root,
+                        gateway=None,
+                    )
+
+    def test_real_drive_gateway_disabled_when_flag_not_one(self):
+        """Feature flag values other than '1' strictly fail-closed on real gateway instance."""
+        from app.pipeline.golden_v2_delivery import DriveDeliveryGateway
+        gateway = DriveDeliveryGateway.__new__(DriveDeliveryGateway)
+        for val in ('0', 'false', 'disabled', ''):
+            with patch.dict('os.environ', {'COURSE_TRANSCRIPT_V2_ENABLE_MULTIPART_PUBLICATION': val}):
+                with patch('app.pipeline.golden_v2_auto_publication.signed_grant', sign):
+                    with self.assertRaisesRegex(V2Conflict, 'auto publication to Drive is disabled pending concurrency-safe reconciliation'):
+                        publish_signed_auto_acceptance(
+                            root=self.root, job_id=self.job,
+                            manifest_sha=self.manifest['manifest_sha256'], lock_root=self.root,
+                            gateway=gateway,
+                        )
+
+    def test_real_drive_gateway_instantiated_when_flag_enabled_and_gateway_none(self):
+        """When flag=1 and gateway=None, real DriveDeliveryGateway is instantiated."""
+        from app.pipeline.golden_v2_delivery import DriveDeliveryGateway
+        with patch.dict('os.environ', {'COURSE_TRANSCRIPT_V2_ENABLE_MULTIPART_PUBLICATION': '1'}):
+            with patch('app.pipeline.golden_v2_auto_publication.DriveDeliveryGateway') as mock_gateway_cls:
+                mock_inst = DriveDeliveryGateway.__new__(DriveDeliveryGateway)
+                for name in ('get', 'named', 'generate_id', 'create_pending', 'readback', 'promote'):
+                    setattr(mock_inst, name, getattr(self.drive, name))
+                def fake_upload(req):
+                    ident = req.metadata['id']
+                    parent = req.metadata['parents'][0]
+                    self.drive.files[ident] = {
+                        'id': ident, 'name': req.metadata['name'], 'parents': [parent],
+                        'appProperties': {'golden_v2_job': self.job}, 'trashed': False,
+                    }
+                    boundary = req.content_type.split('boundary=')[1].encode('ascii')
+                    parts = req.body.split(b'--' + boundary)
+                    part2 = parts[2]
+                    _, raw_extracted = part2.split(b'\r\n\r\n', 1)
+                    self.drive.data[ident] = raw_extracted[:req.expected_size]
+                setattr(mock_inst, 'upload_multipart', fake_upload)
+                mock_gateway_cls.return_value = mock_inst
+                with patch('app.pipeline.golden_v2_auto_publication.signed_grant', sign):
+                    res = publish_signed_auto_acceptance(
+                        root=self.root, job_id=self.job,
+                        manifest_sha=self.manifest['manifest_sha256'], lock_root=self.root,
+                        gateway=None,
+                    )
+                mock_gateway_cls.assert_called_once()
+                self.assertEqual(res['state'], 'AUTO_DELIVERED')
+
+    def test_real_drive_gateway_allowed_past_barrier_when_flag_enabled(self):
+        """When flag=1, DriveDeliveryGateway bypasses disabled barrier and executes."""
+        from app.pipeline.golden_v2_delivery import DriveDeliveryGateway
+        gateway = DriveDeliveryGateway.__new__(DriveDeliveryGateway)
+        for name in ('get', 'named', 'generate_id', 'create_pending', 'readback', 'promote'):
+            setattr(gateway, name, getattr(self.drive, name))
+        def fake_upload(req):
+            ident = req.metadata['id']
+            parent = req.metadata['parents'][0]
+            self.drive.files[ident] = {
+                'id': ident, 'name': req.metadata['name'], 'parents': [parent],
+                'appProperties': {'golden_v2_job': self.job}, 'trashed': False,
+            }
+            boundary = req.content_type.split('boundary=')[1].encode('ascii')
+            parts = req.body.split(b'--' + boundary)
+            part2 = parts[2]
+            _, raw_extracted = part2.split(b'\r\n\r\n', 1)
+            self.drive.data[ident] = raw_extracted[:req.expected_size]
+        setattr(gateway, 'upload_multipart', fake_upload)
+        with patch.dict('os.environ', {'COURSE_TRANSCRIPT_V2_ENABLE_MULTIPART_PUBLICATION': '1'}):
+            with patch('app.pipeline.golden_v2_auto_publication.signed_grant', sign):
+                res = publish_signed_auto_acceptance(
+                    root=self.root, job_id=self.job,
+                    manifest_sha=self.manifest['manifest_sha256'], lock_root=self.root,
+                    gateway=gateway,
+                )
+            self.assertEqual(res['state'], 'AUTO_DELIVERED')
 
     def test_repeated_generated_id_is_rejected_before_remote_writes(self):
         self.drive.generate_id=lambda: 'allocated-1'

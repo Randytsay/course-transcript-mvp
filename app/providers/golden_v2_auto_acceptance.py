@@ -222,8 +222,6 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
         if invalid_disposition:
             failures.append("invalid_acoustic_disposition")
             disposition = 'REVIEW'
-        elif disposition == 'REVIEW_REQUIRED':
-            disposition = 'REVIEW'
         invalid_evidence = disposition == "NONSPEECH_CONFIRMED" and not _nonspeech_probes_valid(item,start,end)
         missing_sidecar = item.get('reason')=='sidecar_inventory_missing'
         if invalid_evidence or missing_sidecar:
