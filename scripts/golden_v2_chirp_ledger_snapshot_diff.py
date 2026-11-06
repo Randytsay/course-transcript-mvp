@@ -112,6 +112,8 @@ def inspect_snapshot(path: Path, job_id: str, *, label: str) -> tuple[dict, set[
 
 
 def compare_snapshots(current_path: Path, previous_path: Path, job_id: str) -> dict:
+    if Path(current_path).absolute() == Path(previous_path).absolute():
+        raise EvidenceUnavailable("current and previous database paths must be distinct")
     current, current_names = inspect_snapshot(current_path, job_id, label="current")
     previous, previous_names = inspect_snapshot(previous_path, job_id, label="previous")
     source_sha_match = current.pop("source_sha_internal") == previous.pop("source_sha_internal")
