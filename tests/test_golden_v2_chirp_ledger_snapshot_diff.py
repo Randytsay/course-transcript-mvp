@@ -105,6 +105,11 @@ class ChirpLedgerSnapshotDiffTests(unittest.TestCase):
         with self.assertRaises(EvidenceUnavailable):
             inspect_snapshot(self.current, JOB, label='sidecar')
 
+    def test_same_db_cannot_be_used_as_its_own_historical_evidence(self):
+        make_db(self.current)
+        with self.assertRaises(EvidenceUnavailable):
+            compare_snapshots(self.current, self.current, JOB)
+
     def test_job_id_invalid_refuses(self):
         make_db(self.current)
         with self.assertRaises(EvidenceUnavailable):
