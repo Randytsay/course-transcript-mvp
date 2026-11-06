@@ -27,6 +27,11 @@ def inspect_database(path: Path, job_id: str) -> dict:
     path = Path(path)
     if path.is_symlink() or not path.is_file():
         raise ValueError("database must be an existing regular non-symlink file")
+    # Fail closed on sidecars instead of risk creating/altering WAL shared-memory
+    # artifacts while auditing a live database. Use separate operator-approved
+    # snapshot tooling for WAL-mode sources; never pretend this is a cold restore.
+    if Path(str(path) + "-wal").exists() or Path(str(path) + "-shm").exists():
+        raise ValueError("WAL/SHM sidecars require a separate audited snapshot procedure")
     # SQLite mode=ro avoids accidental file creation. An explicit BEGIN gives a
     # consistent *per-database* multi-query view, not an across-file snapshot.
     with closing(sqlite3.connect(
@@ -276,6 +281,10 @@ def main() -> int:
     if not snapshots:
         parser.error("at least one historical baseline required")
     try:
+        # Never compare a live DB to itself under a second filename or alias.
+        current_identity = args.current.resolve(strict=True)
+        if any(path.resolve(strict=True) == current_identity for path in snapshots.values()):
+            raise ValueError("current and historical baselines cannot be the same file")
         current = inspect_database(args.current, args.job_id)
         historical = {
             name: inspect_database(path, args.job_id)
