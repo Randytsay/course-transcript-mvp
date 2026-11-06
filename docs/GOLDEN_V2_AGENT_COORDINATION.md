@@ -85,3 +85,11 @@ AGY 不是預設主責。Hermes 的舊 #170 報告是證據來源，不是需要
 - **備份校驗範圍：**AGY 已回報既存 `ledger.sqlite` SHA 與 manifest 相符；`jobs.tar.gz` 的 SHA 僅從 manifest 讀取，該次 **未重新計算或驗證**。此前腳本/DB smoke check 並非容器端到端冷開機演練。
 - **多步查詢的一致性：**即使 SQLite 使用 DELETE journal 與 `mode=ro/query_only`，如未以單一顯式讀取 transaction 包住數次 SELECT，就不能保證跨查詢皆為同一個邏輯快照。請 AGY 在修訂報告中指明，而非僅根據沒有 WAL/SHM 檔宣稱完整快照。
 - 下一步為 **同一工單 `AGY-LOCAL-002 v2`** 補證，僅允許已核准的唯讀 VPS 查詢；詳見 #173，**未額外授權新的 VPS 變更或付費請求**。
+
+## 9. Ledger 離線對帳工具唯一版本（2026-11-06）
+
+- **主要開發 PR：[#174](https://github.com/Randytsay/course-transcript-mvp/pull/174)**（直接以 `main` 為基礎的 Draft）。提供 `scripts/golden_v2_compare_chirp_ledger_snapshots.py`、合成測試與唯讀操作手冊，供 `AGY-LOCAL-002 v2` 經既有權限執行。ChatGPT 已增加身份缺失／重複、來源不一致、負數與未知費用時的 fail-closed 比對；**8 個合成測試已獨立通過**。
+- [#175](https://github.com/Randytsay/course-transcript-mvp/pull/175) 為並行發現的同類工具，已由 ChatGPT **關閉且未合併**，避免兩套程式及不同欄位格式同時發給 AGY。勿執行 #175。
+- 在 [Issue #173](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6688038317) 已留下單一 AGY 執行指引；僅允許在既有特權唯讀權限下讀取正式 SQLite 與 PR159／PR158 既存備份。AGY 的下一個回覆仍是 **`RESULT AGY-LOCAL-002 v2`**，不是新 Issue 或新任務。
+- 工具所產生的 34/136 與 16/78 差額只是**不同 SQLite 快照的操作證據**，可能無法對應歷史外部 LRO；即使集合相同也**不能**替代 GCP Cloud Billing／LRO 查核、備份冷還原、Owner 授權或正式 Golden PASS。
+- #174 CI、PR HEAD 與 AGY 回報為動態資料，查詢時以 GitHub 最新事實為準，不要依賴本節的建立日期或暫存 SHA。
