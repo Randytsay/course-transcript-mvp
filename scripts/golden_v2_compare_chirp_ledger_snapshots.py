@@ -69,6 +69,7 @@ def inspect_database(path: Path, job_id: str) -> dict:
             name_duplicates = 0
             names_missing = 0
             unknown_costs = 0
+            invalid_costs = 0
             total_known = 0
             mismatched_source = 0
             missing_result = 0
@@ -84,8 +85,10 @@ def inspect_database(path: Path, job_id: str) -> dict:
                 cents = row["actual_cents"]
                 if cents is None:
                     unknown_costs += 1
+                elif type(cents) is not int or cents < 0:
+                    invalid_costs += 1
                 else:
-                    total_known += int(cents)
+                    total_known += cents
                 if row["window_id"] in window_ids:
                     duplicate_windows += 1
                 window_ids.add(row["window_id"])
@@ -108,6 +111,7 @@ def inspect_database(path: Path, job_id: str) -> dict:
                 "status_counts": dict(sorted(status_counts.items(), key=lambda x: str(x[0]))),
                 "known_actual_cents": total_known,
                 "unknown_actual_cents_count": unknown_costs,
+                "invalid_actual_cents_count": invalid_costs,
                 "missing_operation_names": names_missing,
                 "duplicate_operation_names": name_duplicates,
                 "duplicate_window_ids": duplicate_windows,
@@ -156,7 +160,8 @@ def compare_snapshots(
             reasons.append("EXTERNAL_HISTORICAL_CLAIM_NOT_PROVIDED")
         elif (current["operations"] != historical_claim_count
               or current["known_actual_cents"] != historical_claim_cents
-              or current["unknown_actual_cents_count"]):
+              or current["unknown_actual_cents_count"]
+              or current["invalid_actual_cents_count"]):
             reasons.append("HISTORICAL_EXTERNAL_CLAIM_NOT_RECONCILED")
         if current["missing_result_sha"]:
             reasons.append("CURRENT_RESULT_EVIDENCE_MISSING")
@@ -165,12 +170,14 @@ def compare_snapshots(
         if (current["missing_operation_names"]
                 or current["duplicate_operation_names"]
                 or current["duplicate_window_ids"]
-                or current["unknown_actual_cents_count"]):
+                or current["unknown_actual_cents_count"]
+                or current["invalid_actual_cents_count"]):
             reasons.append("CURRENT_OPERATION_IDENTITIES_OR_COSTS_UNKNOWN")
         stage = current["chirp_stage"]
         if stage is None:
             reasons.append("CURRENT_CHIRP_STAGE_MISSING")
         elif (not current["unknown_actual_cents_count"]
+              and not current["invalid_actual_cents_count"]
               and stage["actual_cents"] is not None
               and stage["actual_cents"] != current["known_actual_cents"]):
             reasons.append("CURRENT_STAGE_COST_DIFFERS_FROM_OPERATIONS")
@@ -181,29 +188,60 @@ def compare_snapshots(
             reasons.append("BASELINE_NOT_COMPARABLE")
             continue
         same_source = current["_job_source_sha"] == past["_job_source_sha"]
+        identities_complete = same_source and not any((
+            current["missing_operation_names"], current["duplicate_operation_names"],
+            current["duplicate_window_ids"], current["operation_source_sha_mismatch"],
+            past["missing_operation_names"], past["duplicate_operation_names"],
+            past["duplicate_window_ids"], past["operation_source_sha_mismatch"],
+        ))
+        costs_complete = not any((
+            current["unknown_actual_cents_count"], current["invalid_actual_cents_count"],
+            past["unknown_actual_cents_count"], past["invalid_actual_cents_count"],
+        ))
         cur = current["_operations_by_name"]
         old = past["_operations_by_name"]
-        common = cur.keys() & old.keys()
-        changed_actual = sum(cur[k][0] != old[k][0] for k in common)
-        changed_result = sum(cur[k][1] != old[k][1] for k in common)
+        common = cur.keys() & old.keys() if identities_complete else set()
         comparison = {
-            "comparison": "SAME_JOB_SOURCE" if same_source else "SOURCE_MISMATCH",
+            "comparison": (
+                "SOURCE_MISMATCH" if not same_source else
+                "SAME_JOB_SOURCE" if identities_complete else "INCOMPLETE_IDENTITIES"
+            ),
             "same_source_sha": same_source,
-            "same_operation_name_count": len(common),
-            "only_current_operation_name_count": len(cur.keys() - old.keys()),
-            "only_baseline_operation_name_count": len(old.keys() - cur.keys()),
-            "changed_actual_cents_on_shared_name_count": changed_actual,
-            "changed_result_sha_on_shared_name_count": changed_result,
-            "known_cents_delta_current_minus_baseline":
-                current["known_actual_cents"] - past["known_actual_cents"],
+            "identifiers_comparable": identities_complete,
+            # Do not advertise exact set differences when IDs are missing,
+            # duplicated, attached to another source, or otherwise ambiguous.
+            "same_operation_name_count": len(common) if identities_complete else None,
+            "only_current_operation_name_count": (
+                len(cur.keys() - old.keys()) if identities_complete else None
+            ),
+            "only_baseline_operation_name_count": (
+                len(old.keys() - cur.keys()) if identities_complete else None
+            ),
+            "changed_actual_cents_on_shared_name_count": (
+                sum(cur[k][0] != old[k][0] for k in common)
+                if identities_complete and costs_complete else None
+            ),
+            "changed_result_sha_on_shared_name_count": (
+                sum(cur[k][1] != old[k][1] for k in common)
+                if identities_complete else None
+            ),
+            "known_cents_delta_current_minus_baseline": (
+                current["known_actual_cents"] - past["known_actual_cents"]
+                if costs_complete else None
+            ),
             "job_revision_delta_current_minus_baseline":
                 current["job_revision"] - past["job_revision"],
         }
         report["baseline_differences"][label] = comparison
         if not same_source:
             reasons.append("BASELINE_JOB_SOURCE_MISMATCH")
-        if (comparison["only_baseline_operation_name_count"]
-                or comparison["changed_actual_cents_on_shared_name_count"]
+        if not identities_complete:
+            reasons.append("BASELINE_OPERATION_IDENTITIES_NOT_COMPARABLE")
+        if not costs_complete:
+            reasons.append("BASELINE_COST_UNKNOWN")
+        if identities_complete and (
+                comparison["only_baseline_operation_name_count"]
+                or (comparison["changed_actual_cents_on_shared_name_count"] or 0)
                 or comparison["changed_result_sha_on_shared_name_count"]):
             reasons.append("HISTORICAL_OPERATION_EVIDENCE_DIFFERS")
     report["unresolved"] = sorted(set(reasons + ["EXTERNAL_LRO_AND_BILLING_UNVERIFIED"]))
