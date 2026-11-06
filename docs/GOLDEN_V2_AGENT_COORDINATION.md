@@ -101,3 +101,10 @@ AGY 不是預設主責。Hermes 的舊 #170 報告是證據來源，不是需要
 - 舊 PR #159、#166、#167、#168、#171 有些已 **closed without merging**；#172 仍 Draft，必須核對 ancestry/commit inclusion，不能因 PR 關閉就認為相關程式已部署或已遺失。
 - 上次獨立 VPS `statvfs`：可用空間回升至 21,373,751,296 bytes（約 19.90 GiB，使用率 86.19%），但**尚未驗證備份展開需求、冷還原目標與備份完整性**。切勿因空間增加直接操作備份。
 - **下一個必須收到的 AGY 交付仍是 `RESULT AGY-LOCAL-002 v2`**。ChatGPT 同步推進本機不需特權的 DEV/CI 工作。每次 AGY 任務必須有新的 #173 TASK 且符合現有授權；每個正式/付費/Drive gate 仍需 Owner 個別核准。
+
+## 11. PR 堆疊提交關係獨立驗證（2026-11-07）
+
+- ChatGPT 直接以 GitHub `compare_commits(base=<PR head>,head=PR172 head)` 查核：已關閉但未合併的 PR #159、#161、#162、#163、#164、#166、#167、#168、#171 的**最新 HEAD 均是 PR #172 HEAD 的祖先**（behind=0；PR172 比各自多 3–20 個 commits）。因此關閉 PR 不代表這些提交已消失；但也**不代表已合併 main 或已在正式環境執行**。
+- PR #172 HEAD 為 `bc4fa5ade4a65235d5c84d105717608a7537bb72c`。GitHub `compare_commits(base=main,head=PR172 HEAD)` 顯示 **diverged：PR172 方向 ahead 332、behind 26，變更檔案達 GitHub 比較輸出的 300 筆上限**（不能把 300 當精確總檔數）。**禁止直接把 #172 視作可合併 main 的正式 Release**。
+- 下一個由 ChatGPT 負責的工程作業：對 #172 與 main 做有限範圍的 provenance / 檔案級差異、危險部署設定／簽章／DB migration 的審查；在全新隔離 DEV branch 將必要 Golden V2 修正**整理成可驗證、可回退的最小發布單元**，先跑全部 CI/合成負測試，再製作 exact SHA 的部署計畫。此項是 GitHub 端工作，不必要求 AGY 在 VPS 本機進行開發。
+- AGY-LOCAL-002 v2 對帳、冷還原、GCP Billing、Owner 付費／Drive／部署核准仍是**分別獨立的 NO-GO 門檻**。此 git ancestry 驗證不會提升 #160 G2–G10 狀態。
