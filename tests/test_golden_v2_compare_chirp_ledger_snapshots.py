@@ -131,5 +131,53 @@ class ChirpSnapshotComparisonTests(unittest.TestCase):
         self.assertFalse((self.root / "safe.sqlite-shm").exists())
 
 
+    def test_missing_identity_never_claims_exact_operation_set_deltas(self):
+        current = inspect_database(self.build(
+            "current_missing_id", count=2, costs=[2, 2], missing_name=True
+        ), self.job)
+        previous = inspect_database(self.build(
+            "older_complete", count=4, costs=[2] * 4
+        ), self.job)
+        report = compare_snapshots(current, {"older": previous})
+        diff = report["baseline_differences"]["older"]
+        self.assertFalse(diff["identifiers_comparable"])
+        self.assertEqual(diff["comparison"], "INCOMPLETE_IDENTITIES")
+        self.assertIsNone(diff["only_baseline_operation_name_count"])
+        self.assertIsNone(diff["same_operation_name_count"])
+        self.assertIn("BASELINE_OPERATION_IDENTITIES_NOT_COMPARABLE",
+                      report["unresolved"])
+
+    def test_unknown_actual_cost_never_becomes_fake_delta(self):
+        current = inspect_database(self.build(
+            "current_unknown_cost", count=2, costs=[None, 2]
+        ), self.job)
+        previous = inspect_database(self.build(
+            "older_cost_known", count=2, costs=[1, 2]
+        ), self.job)
+        report = compare_snapshots(current, {"older": previous},
+                                   historical_claim_count=34,
+                                   historical_claim_cents=136)
+        diff = report["baseline_differences"]["older"]
+        self.assertIsNone(diff["known_cents_delta_current_minus_baseline"])
+        self.assertIsNone(diff["changed_actual_cents_on_shared_name_count"])
+        self.assertIn("BASELINE_COST_UNKNOWN", report["unresolved"])
+        self.assertFalse(report["cloud_billing_reconciled"])
+
+    def test_negative_cost_is_not_summed_as_real_spend(self):
+        current = inspect_database(self.build(
+            "bad_cost", count=2, costs=[-2, 4]
+        ), self.job)
+        previous = inspect_database(self.build(
+            "older_valid", count=2, costs=[2, 4]
+        ), self.job)
+        self.assertEqual(current["invalid_actual_cents_count"], 1)
+        self.assertEqual(current["known_actual_cents"], 4)
+        report = compare_snapshots(current, {"older": previous})
+        self.assertIsNone(
+            report["baseline_differences"]["older"]["known_cents_delta_current_minus_baseline"]
+        )
+        self.assertIn("BASELINE_COST_UNKNOWN", report["unresolved"])
+
+
 if __name__ == "__main__":
     unittest.main()
