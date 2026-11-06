@@ -30,7 +30,9 @@ python3 scripts/golden_v2_compare_chirp_ledger_snapshots.py \
 - 只讀取指定 Job 的狀態、Chirp stage、Operation 身分、來源 SHA 與已存成本。對比當前與各備份的共有／僅舊版／僅當前 Operation **數量**。
 - 比對相同 Operation 的金額和 result SHA 是否改變；不輸出真實 Operation 名稱、雲端 URI、音檔內容、token、路徑或完整 source SHA。
 - 不允許缺失 Operation name、未知成本、重複 window、來源不一致等情況被自動認定為「零費用」。
-- **防誤判**：只要任一快照的 Operation 名稱缺失／重複、window 重複或來源 SHA 不一致，便輸出 `identifiers_comparable=false`，交集與差集的精確數字改為 `null`；只要有費用缺漏或負數，費用差額也回傳 `null`。不能把不完整資料推算成「少了 18 筆」。
+- 若兩個 Job 都缺少來源 SHA，**相同的空值不代表同一份來源音檔**；工具會輸出 `SOURCE_IDENTITY_UNKNOWN`，共同 Operation 的精確交集／差集及金額差額皆為 `null`。若不同來源 SHA，即使費用都有紀錄也不能計算具可比性的跨來源金額差額。
+- 若有 Operation 缺少結果 SHA，不可假設結果雜湊沒有漂移；`changed_result_sha_on_shared_name_count=null`，須保留待補證狀態。
+- **防誤判**：只要任一快照的 Job 來源 SHA 缺失／不是有效 64 位十六進位 SHA、Operation 名稱缺失／重複、window 重複或來源 SHA 不一致，便輸出 `identifiers_comparable=false`，交集與差集的精確數字改為 `null`；只要有費用缺漏或負數，費用差額也回傳 `null`。不能把不完整資料推算成「少了 18 筆」。
 - 歷史的 34/136 必須透過 CLI 的兩個 historical-claim 參數**針對該 Job 明確輸入**，否則保持未提供；該數值是待驗證的**外部回報**，而非某份 DB 保證具有 34 筆；沒有相應快照時，結果應為 `UNRECONCILED`。
 - 永遠輸出 `NO_GO`、`cloud_billing_reconciled=false`、`paid_or_delivery_authorized=false`，預期返回碼 2 是安全阻擋，**不是運行失敗或准許修復**。
 - 對正式 DB 的 transaction 是**該資料庫內**一致性，不代表不同日期 DB 與雲端服務具有跨系統原子快照；即使全部操作共有，仍需獨立驗證 GCP LRO、計費與不可變來源錄音。
