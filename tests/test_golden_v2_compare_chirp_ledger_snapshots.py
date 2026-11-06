@@ -110,6 +110,39 @@ class ChirpSnapshotComparisonTests(unittest.TestCase):
         self.assertIn("BASELINE_JOB_SOURCE_MISMATCH", report["unresolved"])
         self.assertIn("CURRENT_STAGE_COST_DIFFERS_FROM_OPERATIONS",
                       report["unresolved"])
+        self.assertIsNone(
+            report["baseline_differences"]["old"]["known_cents_delta_current_minus_baseline"]
+        )
+
+    def test_blank_job_sha_cannot_validate_same_source_or_cost_deltas(self):
+        current = inspect_database(self.build(
+            "no_sha_current", count=2, costs=[2, 3], sha=""
+        ), self.job)
+        old = inspect_database(self.build(
+            "no_sha_old", count=2, costs=[4, 4], sha=""
+        ), self.job)
+        self.assertFalse(current["job_source_identity_usable"])
+        report = compare_snapshots(current, {"old": old})
+        diff = report["baseline_differences"]["old"]
+        self.assertEqual(diff["comparison"], "SOURCE_IDENTITY_UNKNOWN")
+        self.assertFalse(diff["identifiers_comparable"])
+        self.assertIsNone(diff["same_operation_name_count"])
+        self.assertIsNone(diff["known_cents_delta_current_minus_baseline"])
+        self.assertIn("CURRENT_JOB_SOURCE_IDENTITY_UNKNOWN", report["unresolved"])
+        self.assertIn("BASELINE_JOB_SOURCE_IDENTITY_UNKNOWN", report["unresolved"])
+
+    def test_missing_result_sha_hides_hash_drift_comparison(self):
+        path = self.build("missing_result", count=2, costs=[2, 2])
+        with sqlite3.connect(path) as db:
+            db.execute("UPDATE v2_chirp_operations SET result_sha=NULL WHERE window_id='w0'")
+        current = inspect_database(path, self.job)
+        old = inspect_database(self.build("known_result", count=2, costs=[2, 2]), self.job)
+        report = compare_snapshots(current, {"old": old})
+        self.assertEqual(current["missing_result_sha"], 1)
+        self.assertIsNone(
+            report["baseline_differences"]["old"]["changed_result_sha_on_shared_name_count"]
+        )
+        self.assertIn("CURRENT_RESULT_EVIDENCE_MISSING", report["unresolved"])
 
     def test_missing_legacy_schema_is_unknown_not_fake_zero(self):
         path = self.root / "early.sqlite"
