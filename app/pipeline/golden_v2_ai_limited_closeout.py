@@ -123,6 +123,9 @@ def prepare_limited_manifest(
     classifications = {}
     for gap in triage["all_acoustic_gaps"]:
         kind = gap.get("acoustic_disposition")
+        if kind == "REVIEW_REQUIRED":
+            kind = "REVIEW"
+            gap["acoustic_disposition"] = "REVIEW"
         if kind not in {"SPEECH_CONFIRMED", "NONSPEECH_CONFIRMED", "REVIEW"}:
             raise V2Conflict("unknown acoustic classification")
         classifications[kind] = classifications.get(kind, 0) + 1

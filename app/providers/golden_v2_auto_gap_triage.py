@@ -163,7 +163,7 @@ def load_bound_triage(*, job_dir: Path, source_sha256: str, srt_bytes: bytes,
                 or (start,end) in seen or ('acoustic_disposition' in gap and
                     gap['acoustic_disposition'] != gap.get('disposition'))
                 or gap.get('disposition') not in
-                ('NONSPEECH_CONFIRMED','SPEECH_CONFIRMED','REVIEW')):
+                ('NONSPEECH_CONFIRMED','SPEECH_CONFIRMED','REVIEW','REVIEW_REQUIRED')):
             raise V2Conflict('acoustic triage gap does not match subtitle inventory')
         seen.add((start,end))
         if gap.get('disposition')=='NONSPEECH_CONFIRMED':
@@ -181,9 +181,9 @@ def load_bound_triage(*, job_dir: Path, source_sha256: str, srt_bytes: bytes,
          'reason':'sidecar_inventory_missing'} for start,end in sorted(missing)]
     report['total_gaps']=len(report['gaps'])
     for disposition,key in (('NONSPEECH_CONFIRMED','nonspeech_confirmed_count'),
-                            ('SPEECH_CONFIRMED','speech_confirmed_count'),
-                            ('REVIEW','review_count')):
+                            ('SPEECH_CONFIRMED','speech_confirmed_count')):
         report[key]=sum(gap['disposition']==disposition for gap in report['gaps'])
+    report['review_count']=sum(gap['disposition'] in ('REVIEW','REVIEW_REQUIRED') for gap in report['gaps'])
     # Sidecar assertions cannot attest a human listening or a Golden gate.
     report['human_listening_attested']=False
     report['golden_qa_pass']=False
