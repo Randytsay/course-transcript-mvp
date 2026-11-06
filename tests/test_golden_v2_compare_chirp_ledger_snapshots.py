@@ -1,12 +1,17 @@
 """Offline tests for read-only, source-bound historical Chirp ledger comparison."""
 import os
+import contextlib
+import io
+import json
+import sys
+from unittest.mock import patch
 from pathlib import Path
 import sqlite3
 import tempfile
 import unittest
 
 from scripts.golden_v2_compare_chirp_ledger_snapshots import (
-    compare_snapshots, inspect_database,
+    compare_snapshots, inspect_database, main,
 )
 
 
@@ -138,6 +143,20 @@ class ChirpSnapshotComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "WAL/SHM sidecars"):
             inspect_database(path, self.job)
         self.assertEqual(sidecar.read_bytes(), b"fixture-no-live-sqlite")
+
+    def test_cli_rejects_same_db_for_current_and_historical_baseline(self):
+        path = self.build("same_file", count=1, costs=[4])
+        args = ["reconcile", "--current", str(path),
+                "--baseline", "PR159=" + str(path),
+                "--job-id", self.job]
+        captured = io.StringIO()
+        with patch.object(sys, "argv", args), contextlib.redirect_stdout(captured):
+            rc = main()
+        self.assertEqual(rc, 2)
+        redacted = json.loads(captured.getvalue())
+        self.assertEqual(redacted["status"], "NO_GO")
+        self.assertFalse(redacted["paid_or_delivery_authorized"])
+        self.assertNotIn(str(path), captured.getvalue())
 
     def test_missing_identity_never_claims_exact_operation_set_deltas(self):
         current = inspect_database(self.build(
