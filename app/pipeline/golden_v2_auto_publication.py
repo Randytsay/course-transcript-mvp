@@ -105,6 +105,18 @@ def _publication_fence(ledger, manifest):
                    (job_id,manifest['manifest_sha256']))
 
 
+
+def _has_authoritative_never_created_proof(gateway, file_id: str) -> bool:
+    """Allow a missing bound ID only with durable, authoritative non-creation proof.
+
+    Google Drive's GET 404 is ambiguous. In particular, enabling multipart
+    publication never authorizes replay of an uncertain POST, even with the
+    same pre-generated ID. The proof hook exists for isolated synthetic tests.
+    """
+    prove = getattr(gateway, 'prove_never_created', None)
+    return callable(prove) and prove(file_id) is True
+
+
 def read_auto_proposal(root: Path, job_id: str, digest: str) -> dict:
     if (not re.fullmatch(r'v2p_[0-9a-f]{32}',job_id)
             or not re.fullmatch(r'[0-9a-f]{64}',digest)):
@@ -269,10 +281,8 @@ def publish_signed_auto_acceptance(*, root: Path, job_id: str,
                     observed=gateway.readback(plan['file_id'])
                     if not isinstance(observed,bytes) or _sha(observed)!=digest:
                         raise V2Conflict('Drive file content ambiguous or modified')
-                elif completed or (binding is not None and (
-                        (callable(getattr(gateway,'prove_never_created',None)) and getattr(gateway,'prove_never_created')(plan['file_id']) is not True)
-                        or (not callable(getattr(gateway,'prove_never_created',None)) and (not hasattr(gateway,'upload_multipart') or os.environ.get('COURSE_TRANSCRIPT_V2_ENABLE_MULTIPART_PUBLICATION') != '1'))
-                )):
+                elif completed or (binding is not None and
+                        not _has_authoritative_never_created_proof(gateway, plan['file_id'])):
                     raise V2Conflict('missing bound auto file has ambiguous history')
             elif completed:
                 raise V2Conflict('completed auto intent missing')
@@ -342,10 +352,8 @@ def publish_signed_auto_acceptance(*, root: Path, job_id: str,
                 # Recheck at the point of use: an object inspected above may
                 # have disappeared since reconciliation. A 404 is not evidence
                 # of non-creation, even when an earlier GET succeeded.
-                if completed or (recovering and (
-                        (callable(getattr(gateway,'prove_never_created',None)) and getattr(gateway,'prove_never_created')(ident) is not True)
-                        or (not callable(getattr(gateway,'prove_never_created',None)) and (not hasattr(gateway,'upload_multipart') or os.environ.get('COURSE_TRANSCRIPT_V2_ENABLE_MULTIPART_PUBLICATION') != '1'))
-                )):
+                if completed or (recovering and
+                        not _has_authoritative_never_created_proof(gateway, ident)):
                     raise V2Conflict('missing bound auto file has ambiguous history')
                 ext=Path(plan['name']).suffix
                 req=build_exact_id_multipart(
