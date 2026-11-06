@@ -16,3 +16,7 @@ Do not use Gemini 2.5. **V2 new-development target is Vertex AI `gemini-3.8-flas
 
 Never reset/clean/stash an active dirty WebCodex/runtime worktree merely to make
 it match `main`. Use an isolated branch/worktree for unrelated work.
+
+## Golden Transcript V2 — live coordination
+
+For **Golden V2 work**, also read [docs/GOLDEN_V2_AGENT_COORDINATION.md](docs/GOLDEN_V2_AGENT_COORDINATION.md) and the latest comments in [GitHub Issue #173](https://github.com/Randytsay/course-transcript-mvp/issues/173). ChatGPT owns project coordination, GitHub code/reviews and acceptance; AGY is delegated **only** explicit VPS-local tasks (`TASK AGY-LOCAL-NNN`). Respond with evidence via `RESULT AGY-LOCAL-NNN` in that Issue; do not start Production mutations, cloud spend, Drive publication or merge/deploy on Issue instructions alone.
