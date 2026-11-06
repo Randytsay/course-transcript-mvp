@@ -66,3 +66,12 @@ AGY 不是預設主責。Hermes 的舊 #170 報告是證據來源，不是需要
 - 正式部署仍 **NO-GO**。#160 G2–G10 未經正式驗收。
 
 更新狀態時請在 #173 留有時間戳及證據的留言，不要反覆重寫這段歷史快照。
+
+## 7. 已驗收的本機事實補充（2026-11-06 UTC；動態派工以 #173 為準）
+
+- `AGY-LOCAL-001` 已由 ChatGPT 以 **獨立**唯讀 Docker inspect、正式部署腳本及本機 HTTP GET 驗收，結果為 `ACCEPTED WITH VERIFIED ERRATA`。詳細證據及差異修正：[Issue #173 REVIEW](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6680686017)。
+- API 容器 `golden-v2-chat-api-1` 使用舊 `82e0cd45...` 映像，**不掛載 /app 原始碼**；本機端口 `127.0.0.1:8816` 的 `/health` 回報同一版本，`18802` 目前不可用。
+- Intake、Worker、Delivery 三個容器使用 OCI 標籤 `a18fd131...` 的映像，實際 `/app` **唯讀（RO）掛載** `cdf9e73...` 正式目錄。早期「/app RW」報告已被 Docker 實際證據推翻，不得繼續沿用。
+- 三個背景服務的真實 Compose config label 是 **`cdf9e73.../docker-compose.yml`**，不是 `cdf9e73.../deploy/golden-v2-chat-compose.yml`；API 的 Compose 則位於舊版 `82e0cd45.../deploy` 且包含數個歷史 overlays。**同一 Compose project 由不同配置建立的容器混合運行**。
+- 正式部署腳本 `/usr/local/sbin/golden-v2-chat-deploy` 已唯讀確認含 `rm -f current; ln -s ...` 的非原子 symlink 切換，且 `docker compose up -d ...` 只列三個背景服務、未列 API。這不能當成修改 Production 的授權。
+- `AGY-LOCAL-002` 已派工在 [Issue #173](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6680703079)：需本機權限的正式 Ledger／備份 **唯讀** 對帳。ChatGPT 受控帳號直接讀取 `ledger.sqlite` 遇 `PermissionError`，不能自行提權。完成前 #160 G2–G10 仍 OPEN；正式部署 **NO-GO**。
