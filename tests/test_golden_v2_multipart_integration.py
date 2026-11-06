@@ -122,5 +122,47 @@ class MultipartIntegrationTests(publication_fixtures.AutoPublisherTests):
             ])
 
 
+    def test_recovered_missing_id_does_not_repost_with_real_drive_flag(self):
+        """A missing bound ID is ambiguous even when multipart is enabled.
+
+        This synthetic gateway deliberately has multipart support but NO
+        authoritative deleted/never-created history (like real Google Drive).
+        A lost upload response must leave the persistent fence intact.
+        """
+        class NoHistoryGateway:
+            def __init__(self, backing):
+                self.backing = backing
+                self.upload_attempts = 0
+
+            def __getattr__(self, name):
+                if name == 'prove_never_created':
+                    raise AttributeError(name)
+                return getattr(self.backing, name)
+
+            def upload_multipart(self, request):
+                self.upload_attempts += 1
+                if self.upload_attempts == 1:
+                    raise TimeoutError('simulated ambiguous first POST')
+                return self.backing.upload_multipart(request)
+
+        self.drive = NoHistoryGateway(PersistentDrive(
+            self.root / 'no-history-drive.sqlite', self.flac))
+        with patch.dict('os.environ',
+                        {'COURSE_TRANSCRIPT_V2_ENABLE_MULTIPART_PUBLICATION': '1'}):
+            with self.assertRaises(TimeoutError):
+                self.publish()
+            self.assertEqual(self.drive.upload_attempts, 1)
+            with sqlite3.connect(self.root / 'ledger.sqlite') as db:
+                fence = db.execute(
+                    'SELECT binding_json FROM v2_auto_publication_fences WHERE job_id=?',
+                    (self.job,)).fetchone()
+            self.assertIsNotNone(fence)
+            self.assertIsNotNone(fence[0])
+            with self.assertRaisesRegex(V2Conflict, 'ambiguous history'):
+                self.publish()
+            self.assertEqual(self.drive.upload_attempts, 1)
+        self.assertIsNone(self.drive.backing.get('allocated-1'))
+
+
 if __name__ == '__main__':
     unittest.main()
