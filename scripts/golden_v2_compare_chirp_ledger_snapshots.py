@@ -123,22 +123,25 @@ def inspect_database(path: Path, job_id: str) -> dict:
 
 def compare_snapshots(
     current: dict, baselines: dict[str, dict],
-    *, historical_claim_count: int = 34, historical_claim_cents: int = 136,
+    *, historical_claim_count: int | None = None,
+    historical_claim_cents: int | None = None,
 ) -> dict:
     """Compare source-bound DB rows without conflating old claims or cloud billing."""
     def public_view(row: dict) -> dict:
         return {k: v for k, v in row.items() if not k.startswith("_")}
 
+    if (historical_claim_count is None) != (historical_claim_cents is None):
+        raise ValueError("historical count and cost must be supplied together")
     report = {
         "schema": "golden-v2-chirp-ledger-snapshot-compare-v1",
         "current": public_view(current),
         "baselines": {name: public_view(value) for name, value in baselines.items()},
         "baseline_differences": {},
-        "historical_external_claim": {
-            "operations": historical_claim_count,
-            "cents": historical_claim_cents,
-            "basis": "unverified historical report, not validated provider billing",
-        },
+        "historical_external_claim": (
+            {"operations": historical_claim_count, "cents": historical_claim_cents,
+             "basis": "unverified historical report, not validated provider billing"}
+            if historical_claim_count is not None else None
+        ),
         "cloud_billing_reconciled": False,
         "provider_operations_reconciled": False,
         "golden_qa_pass": False,
@@ -149,10 +152,14 @@ def compare_snapshots(
     if current.get("status") != "INSPECTED":
         reasons.append("CURRENT_LEDGER_NOT_INSPECTED")
     else:
-        if (current["operations"] != historical_claim_count
-                or current["known_actual_cents"] != historical_claim_cents
-                or current["unknown_actual_cents_count"]):
+        if historical_claim_count is None:
+            reasons.append("EXTERNAL_HISTORICAL_CLAIM_NOT_PROVIDED")
+        elif (current["operations"] != historical_claim_count
+              or current["known_actual_cents"] != historical_claim_cents
+              or current["unknown_actual_cents_count"]):
             reasons.append("HISTORICAL_EXTERNAL_CLAIM_NOT_RECONCILED")
+        if current["missing_result_sha"]:
+            reasons.append("CURRENT_RESULT_EVIDENCE_MISSING")
         if current["operation_source_sha_mismatch"]:
             reasons.append("CURRENT_OPERATION_SOURCE_MISMATCH")
         if (current["missing_operation_names"]
@@ -212,9 +219,16 @@ def main() -> int:
         help="Existing historical SQLite file; repeat for PR158 and PR159",
     )
     parser.add_argument("--job-id", required=True)
+    parser.add_argument("--historical-claim-count", type=int)
+    parser.add_argument("--historical-claim-cents", type=int)
     args = parser.parse_args()
     if not JOB_RE.fullmatch(args.job_id):
         parser.error("invalid V2 job identifier")
+    if (args.historical_claim_count is None) != (args.historical_claim_cents is None):
+        parser.error("supply both historical claim count and cost, or neither")
+    if (args.historical_claim_count is not None
+            and (args.historical_claim_count < 0 or args.historical_claim_cents < 0)):
+        parser.error("historical claim values must be nonnegative")
     snapshots = {}
     for item in args.baseline:
         label, sep, path = item.partition("=")
@@ -229,7 +243,11 @@ def main() -> int:
             name: inspect_database(path, args.job_id)
             for name, path in snapshots.items()
         }
-        result = compare_snapshots(current, historical)
+        result = compare_snapshots(
+            current, historical,
+            historical_claim_count=args.historical_claim_count,
+            historical_claim_cents=args.historical_claim_cents,
+        )
     except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
         # Never print exception messages, SQLite paths or query contents.
         print(json.dumps({
