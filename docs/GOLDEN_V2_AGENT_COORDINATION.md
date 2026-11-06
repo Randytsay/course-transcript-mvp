@@ -108,3 +108,9 @@ AGY 不是預設主責。Hermes 的舊 #170 報告是證據來源，不是需要
 - PR #172 HEAD 為 `bc4fa5ade4a65235d5c84d105717608a7537bb72c`。GitHub `compare_commits(base=main,head=PR172 HEAD)` 顯示 **diverged：PR172 方向 ahead 332、behind 26，變更檔案達 GitHub 比較輸出的 300 筆上限**（不能把 300 當精確總檔數）。**禁止直接把 #172 視作可合併 main 的正式 Release**。
 - 下一個由 ChatGPT 負責的工程作業：對 #172 與 main 做有限範圍的 provenance / 檔案級差異、危險部署設定／簽章／DB migration 的審查；在全新隔離 DEV branch 將必要 Golden V2 修正**整理成可驗證、可回退的最小發布單元**，先跑全部 CI/合成負測試，再製作 exact SHA 的部署計畫。此項是 GitHub 端工作，不必要求 AGY 在 VPS 本機進行開發。
 - AGY-LOCAL-002 v2 對帳、冷還原、GCP Billing、Owner 付費／Drive／部署核准仍是**分別獨立的 NO-GO 門檻**。此 git ancestry 驗證不會提升 #160 G2–G10 狀態。
+
+## 12. 安全依賴與 #172 發布範圍再稽核（2026-11-07 UTC）
+
+- [PR #179](https://github.com/Randytsay/course-transcript-mvp/pull/179) 已**合併 main**（merge `c101598d4db8a7830b7247e0a0c1d442cc9dfb43`）；原 exact-head `eff1fe5c317a7fc804cd858fecac419e59bc47b2` 的 CI `42260542705` 和 Release Compose `42260542694` 均 **SUCCESS**。安全追蹤 [#177](https://github.com/Randytsay/course-transcript-mvp/issues/177) 已關閉。獨立讀取 main `frontend/package.json` 與 `frontend/package-lock.json`，兩者的 root dependency 均為 `next: 16.4.5`（分別 blob `5b7897414f18d082bb424cbd701e25f010eab37f` 與 `52c5c54fd022c5f1ecb5063ed32a556179b7fd70`）。**僅表示 main frontend 安全依賴已修復且 PR CI 通過，不代表正式 Golden V2 已部署。**
+- 再比較 `main` 與 PR #172 HEAD `bc4fa5ade4a65235d5c84d105717608a7537bb72c`：目前 `diverged`、ahead=332、behind=27；GitHub compare API 僅返回最多 300 筆檔案，其中**至少 197 筆**路徑涉及部署／腳本／Golden V2／CI 等敏感範圍（篩選規則屬粗略風險分類，非精確檔案總數）。包括 `.github/workflows/ci.yml`、`docker-compose.yml`、`docker-compose.release.yml`、`deploy/golden-v2-chat-compose.yml`、`deploy/golden-v2-paid-compose.yml`、`app/jobs/golden_v2_ledger.py` 與多個付費／交付模組。
+- **結論：**PR #172 的全量合併風險已由可核查檔案級證據確認，必須先做**最小化 release extraction**；需要對已修補 main frontend 依賴與 #172 的舊 CI/config 分支做衝突檢查。不能以 #172 舊 CI green 代替「新 main + 提取變更」的 exact-head CI。這是 GitHub/DEV 風險稽核，不涉及正式容器、SQLite、雲端 API 或 Drive。
