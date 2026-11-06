@@ -93,3 +93,11 @@ AGY 不是預設主責。Hermes 的舊 #170 報告是證據來源，不是需要
 - 在 [Issue #173](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6688038317) 已留下單一 AGY 執行指引；僅允許在既有特權唯讀權限下讀取正式 SQLite 與 PR159／PR158 既存備份。AGY 的下一個回覆仍是 **`RESULT AGY-LOCAL-002 v2`**，不是新 Issue 或新任務。
 - 工具所產生的 34/136 與 16/78 差額只是**不同 SQLite 快照的操作證據**，可能無法對應歷史外部 LRO；即使集合相同也**不能**替代 GCP Cloud Billing／LRO 查核、備份冷還原、Owner 授權或正式 Golden PASS。
 - #174 CI、PR HEAD 與 AGY 回報為動態資料，查詢時以 GitHub 最新事實為準，不要依賴本節的建立日期或暫存 SHA。
+
+## 10. ChatGPT 全程接手至正式上線（2026-11-07）
+
+- **正式上線總計畫**：[`docs/GOLDEN_V2_GO_LIVE_MASTER_PLAN.md`](GOLDEN_V2_GO_LIVE_MASTER_PLAN.md)，包含 P0–P7 八個階段、G2–G10 acceptance、責任分工、停損／回滾，以及 Owner Gate A（deploy）、B（Ledger）、C（paid inference）、D（Drive write）四種獨立明確授權。此接手安排**不**代表已批准任何正式操作。
+- [PR #174](https://github.com/Randytsay/course-transcript-mvp/pull/174) **已合併 main**，merge SHA `7da1a06197b113789f38291128053b5e8efeaf12`，原 exact-head CI 與 Release Compose 全部 SUCCESS；比對工具已在 `main/scripts/golden_v2_compare_chirp_ledger_snapshots.py`，不要沿用第 9 節 Draft 快照描述。
+- 舊 PR #159、#166、#167、#168、#171 有些已 **closed without merging**；#172 仍 Draft，必須核對 ancestry/commit inclusion，不能因 PR 關閉就認為相關程式已部署或已遺失。
+- 上次獨立 VPS `statvfs`：可用空間回升至 21,373,751,296 bytes（約 19.90 GiB，使用率 86.19%），但**尚未驗證備份展開需求、冷還原目標與備份完整性**。切勿因空間增加直接操作備份。
+- **下一個必須收到的 AGY 交付仍是 `RESULT AGY-LOCAL-002 v2`**。ChatGPT 同步推進本機不需特權的 DEV/CI 工作。每次 AGY 任務必須有新的 #173 TASK 且符合現有授權；每個正式/付費/Drive gate 仍需 Owner 個別核准。
