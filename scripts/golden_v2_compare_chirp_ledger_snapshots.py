@@ -122,6 +122,10 @@ def inspect_database(path: Path, job_id: str) -> dict:
                 "duplicate_window_ids": duplicate_windows,
                 "missing_result_sha": missing_result,
                 "operation_source_sha_mismatch": mismatched_source,
+                "job_source_identity_usable": (
+                    isinstance(job["source_sha"], str)
+                    and re.fullmatch(r"[0-9a-f]{64}", job["source_sha"]) is not None
+                ),
                 # Internal-only fields stripped by report(), not serialized.
                 "_job_source_sha": job["source_sha"],
                 "_operations_by_name": by_name,
@@ -168,6 +172,8 @@ def compare_snapshots(
               or current["unknown_actual_cents_count"]
               or current["invalid_actual_cents_count"]):
             reasons.append("HISTORICAL_EXTERNAL_CLAIM_NOT_RECONCILED")
+        if not current["job_source_identity_usable"]:
+            reasons.append("CURRENT_JOB_SOURCE_IDENTITY_UNKNOWN")
         if current["missing_result_sha"]:
             reasons.append("CURRENT_RESULT_EVIDENCE_MISSING")
         if current["operation_source_sha_mismatch"]:
@@ -192,8 +198,10 @@ def compare_snapshots(
             report["baseline_differences"][label] = {"comparison": "NOT_COMPARABLE"}
             reasons.append("BASELINE_NOT_COMPARABLE")
             continue
+        source_bound = (current["job_source_identity_usable"]
+                        and past["job_source_identity_usable"])
         same_source = current["_job_source_sha"] == past["_job_source_sha"]
-        identities_complete = same_source and not any((
+        identities_complete = source_bound and same_source and not any((
             current["missing_operation_names"], current["duplicate_operation_names"],
             current["duplicate_window_ids"], current["operation_source_sha_mismatch"],
             past["missing_operation_names"], past["duplicate_operation_names"],
@@ -203,11 +211,15 @@ def compare_snapshots(
             current["unknown_actual_cents_count"], current["invalid_actual_cents_count"],
             past["unknown_actual_cents_count"], past["invalid_actual_cents_count"],
         ))
+        result_evidence_complete = not (
+            current["missing_result_sha"] or past["missing_result_sha"]
+        )
         cur = current["_operations_by_name"]
         old = past["_operations_by_name"]
         common = cur.keys() & old.keys() if identities_complete else set()
         comparison = {
             "comparison": (
+                "SOURCE_IDENTITY_UNKNOWN" if not source_bound else
                 "SOURCE_MISMATCH" if not same_source else
                 "SAME_JOB_SOURCE" if identities_complete else "INCOMPLETE_IDENTITIES"
             ),
@@ -228,17 +240,19 @@ def compare_snapshots(
             ),
             "changed_result_sha_on_shared_name_count": (
                 sum(cur[k][1] != old[k][1] for k in common)
-                if identities_complete else None
+                if identities_complete and result_evidence_complete else None
             ),
             "known_cents_delta_current_minus_baseline": (
                 current["known_actual_cents"] - past["known_actual_cents"]
-                if costs_complete else None
+                if identities_complete and costs_complete else None
             ),
             "job_revision_delta_current_minus_baseline":
                 current["job_revision"] - past["job_revision"],
         }
         report["baseline_differences"][label] = comparison
-        if not same_source:
+        if not source_bound:
+            reasons.append("BASELINE_JOB_SOURCE_IDENTITY_UNKNOWN")
+        elif not same_source:
             reasons.append("BASELINE_JOB_SOURCE_MISMATCH")
         if not identities_complete:
             reasons.append("BASELINE_OPERATION_IDENTITIES_NOT_COMPARABLE")
