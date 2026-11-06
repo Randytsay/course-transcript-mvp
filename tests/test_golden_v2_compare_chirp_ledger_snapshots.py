@@ -131,6 +131,14 @@ class ChirpSnapshotComparisonTests(unittest.TestCase):
         self.assertFalse((self.root / "safe.sqlite-shm").exists())
 
 
+    def test_live_wal_sidecar_is_rejected_before_read(self):
+        path = self.build("has_wal", count=1, costs=[4])
+        sidecar = Path(str(path) + "-wal")
+        sidecar.write_bytes(b"fixture-no-live-sqlite")
+        with self.assertRaisesRegex(ValueError, "WAL/SHM sidecars"):
+            inspect_database(path, self.job)
+        self.assertEqual(sidecar.read_bytes(), b"fixture-no-live-sqlite")
+
     def test_missing_identity_never_claims_exact_operation_set_deltas(self):
         current = inspect_database(self.build(
             "current_missing_id", count=2, costs=[2, 2], missing_name=True
