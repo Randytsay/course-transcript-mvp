@@ -2,11 +2,16 @@
 from __future__ import annotations
 
 import hashlib
+import contextlib
+import io
+import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from scripts.golden_v2_release_drift_audit import audit_release
+from scripts.golden_v2_release_drift_audit import audit_release, main
 
 
 class GoldenV2ReleaseDriftAuditTests(unittest.TestCase):
@@ -90,6 +95,19 @@ class GoldenV2ReleaseDriftAuditTests(unittest.TestCase):
         self.assertFalse(result["production_modified"])
         self.assertIn("INVALID_RECONSTRUCTION_MANIFEST",
                       {entry["code"] for entry in result["findings"]})
+
+    def test_cli_incomplete_evidence_exits_nonzero_never_deploy_go(self):
+        manifest_path = self.root / "manifest.json"
+        manifest_path.write_text(json.dumps(self.manifest), encoding="utf-8")
+        args = ["release_audit", "--release-dir", str(self.release),
+                "--manifest", str(manifest_path)]
+        captured = io.StringIO()
+        with patch.object(sys, "argv", args), contextlib.redirect_stdout(captured):
+            code = main()
+        self.assertEqual(code, 2)
+        report = json.loads(captured.getvalue())
+        self.assertEqual(report["status"], "INCOMPLETE_EVIDENCE")
+        self.assertFalse(report["deployment_authorized"])
 
     def test_content_tamper_and_symlink_are_rejected(self):
         self.source.write_bytes(b"changed")
