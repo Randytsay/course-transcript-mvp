@@ -48,3 +48,36 @@ python3 scripts/golden_v2_offline_srt_timeline_qa.py \
 4. Only with valid Golden QA and separate owner-authorized Drive publication grant may it create files in the source folder. Avoid overwriting the existing `_含待複核` outputs.
 
 Refs: [Issue #160](https://github.com/Randytsay/course-transcript-mvp/issues/160), [read-only AGY inventory](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6681086336), [Master plan](GOLDEN_V2_GO_LIVE_MASTER_PLAN.md).
+
+## 2026-11-07 AGY-LOCAL-004 subsequent evidence and review-only manifest
+
+- [AGY-LOCAL-004 result](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6706738290) was accepted for **local inventory only** in [REVIEW #173](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6706803619). `chirp-merged.json` is reported to contain **29,769** source-bound words and about **92.8% time coverage**. These are operator-reported counts, not an independent re-read of the protected source by this PR.
+- **Exact three major SRT gaps** are 410.20s + 183.52s + 161.26s = **754.98 seconds**. Separately, AGY proposed padded human listening windows totaling about **837 seconds**. The two numbers refer to **different scopes**, must never be substituted for one another.
+- **Critical exception:** AGY also cites a provider-raw word at **1,942.840 seconds**, inside the SRT cue 420→421 gap (**1,789.920–1,973.440 seconds**). This means one cannot simply assert every provider payload is empty throughout that full visible gap. The manifest explicitly flags `PROVIDER_ANCHOR_WITHIN_SRT_GAP` if any source-bound word overlaps a gap, so the contradiction is not hidden.
+- `chirp-merged.json` may have coverage gaps despite audible waveform energy: acoustic peak and RMS activity **do not establish which words were spoken**. Neither interpolation nor re-timing is authorized by waveform energy alone.
+
+### Review interval manifest from the existing SRT (zero cloud calls)
+
+```bash
+python3 scripts/golden_v2_offline_srt_timeline_qa.py \
+  --srt "./261031_AI校對_含待複核.srt" \
+  --reference-txt "./261031_AI校對_含待複核.txt" \
+  --audio-duration-ms 10517199 \
+  --review-intervals-output "./261031_audio_review_intervals_PRIVATE.json"
+```
+
+The output contains for each **SRT gap ≥8 seconds**: exact start/end and duration, cue indices, **separately padded** ±3s suggested listening window, and `provider_evidence_state=PROVIDER_WORD_EVIDENCE_NOT_SUPPLIED` by default. The caller must not misinterpret omission of private timing words as zero recognition. The original TXT/SRT are never modified, no clip is extracted and the program always returns **exit 2** (no Golden PASS).
+
+If a properly authorized operator later has metadata-only provider word bounds available **locally**, the optional input JSON is:
+```json
+{
+  "schema": "golden-v2-source-bound-word-timing-evidence-v1",
+  "source_sha256": "<the exact preverified normalized audio SHA-256>",
+  "complete_source_word_inventory": false,
+  "words": [{"start_ms": 1000, "end_ms": 1100}]
+}
+```
+
+Set `complete_source_word_inventory=true` **only** if the operator independently verified that the word metadata includes the complete existing provider artifact for this precise source. This flag is an operator assertion, not independently cryptographic proof of speech coverage. Supply `--expected-source-sha` and `--provider-words-json` together. A mismatched SHA or invalid time range fails closed. Even a complete inventory with zero words produces `EVIDENCE_MISSING_NO_PROVIDER_WORD_ANCHOR`, **not** proof that the audio was silent or license to invent timestamps.
+
+**No actual audio alignment, human acoustic listening, billable model call, Production mutation or Drive upload has been authorized/performed by this documentation or PR.**
