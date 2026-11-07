@@ -20,7 +20,7 @@ python3 scripts/golden_v2_release_drift_audit.py \
 
 This verifies the manifest's **17 named paths**, not every file in the live container image, and compares reported release identities. It never executes `docker`, `git`, a database write, a model call or a Drive operation. Optional `--docker-inspect-json` accepts a local JSON array from an authorized operator; only `Name`, `Config.Labels`, and `Mounts` are examined. **Never publish raw Docker inspect JSON, container environment values, tokens or secrets in GitHub.**
 
-The tool returns `NO_GO` on a specific identity/file/mount blocker or `INCOMPLETE_EVIDENCE` when original commit provenance, restore or other observations remain unverified. A read-only source bind is a blocker too. A manifest that is not a JSON object is rejected. The tool never repairs the observed drift. **It never returns a deployment GO.**
+The tool returns `NO_GO` on a specific identity/file/mount blocker or `INCOMPLETE_EVIDENCE` when original commit provenance, restore or other observations remain unverified. A read-only source bind is a blocker too. A manifest that is not a JSON object is rejected. The tool never repairs the observed drift. **It never returns a deployment GO. **Its CLI exits with status 2 for BOTH `NO_GO` and `INCOMPLETE_EVIDENCE`**, so automated release pipelines cannot interpret incomplete evidence as a successful deployment gate; machine-readable JSON distinguishes the reason.**
 
 ## Separate required engineering (not delivered by this PR)
 
