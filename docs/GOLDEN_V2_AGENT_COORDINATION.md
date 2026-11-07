@@ -114,3 +114,16 @@ AGY 不是預設主責。Hermes 的舊 #170 報告是證據來源，不是需要
 - [PR #179](https://github.com/Randytsay/course-transcript-mvp/pull/179) 已**合併 main**（merge `c101598d4db8a7830b7247e0a0c1d442cc9dfb43`）；原 exact-head `eff1fe5c317a7fc804cd858fecac419e59bc47b2` 的 CI `42260542705` 和 Release Compose `42260542694` 均 **SUCCESS**。安全追蹤 [#177](https://github.com/Randytsay/course-transcript-mvp/issues/177) 已關閉。獨立讀取 main `frontend/package.json` 與 `frontend/package-lock.json`，兩者的 root dependency 均為 `next: 16.4.5`（分別 blob `5b7897414f18d082bb424cbd701e25f010eab37f` 與 `52c5c54fd022c5f1ecb5063ed32a556179b7fd70`）。**僅表示 main frontend 安全依賴已修復且 PR CI 通過，不代表正式 Golden V2 已部署。**
 - 再比較 `main` 與 PR #172 HEAD `bc4fa5ade4a65235d5c84d105717608a7537bb72c`：目前 `diverged`、ahead=332、behind=27；GitHub compare API 僅返回最多 300 筆檔案，其中**至少 197 筆**路徑涉及部署／腳本／Golden V2／CI 等敏感範圍（篩選規則屬粗略風險分類，非精確檔案總數）。包括 `.github/workflows/ci.yml`、`docker-compose.yml`、`docker-compose.release.yml`、`deploy/golden-v2-chat-compose.yml`、`deploy/golden-v2-paid-compose.yml`、`app/jobs/golden_v2_ledger.py` 與多個付費／交付模組。
 - **結論：**PR #172 的全量合併風險已由可核查檔案級證據確認，必須先做**最小化 release extraction**；需要對已修補 main frontend 依賴與 #172 的舊 CI/config 分支做衝突檢查。不能以 #172 舊 CI green 代替「新 main + 提取變更」的 exact-head CI。這是 GitHub/DEV 風險稽核，不涉及正式容器、SQLite、雲端 API 或 Drive。
+
+## 13. #172 最小發布提取：四個高風險路徑存在性／內容稽核（2026-11-07 UTC）
+
+本次以 GitHub contents API 直接對比 `main` 與 #172 HEAD `bc4fa5ade4a65235d5c84d105717608a7537bb72c`，只讀，未合併、未部署：
+
+| 路徑 | main | #172 HEAD | 提取前必做 |
+| --- | --- | --- | --- |
+| `app/jobs/golden_v2_ledger.py` | **不存在（404）** | blob `fb9b8f3e0f54cdbed94a8a5b349df9a046d0ea3d` | 追溯其 migration／schema／API 呼叫依賴；不能只 cherry-pick 單檔 |
+| `deploy/golden-v2-chat-compose.yml` | **不存在（404）** | blob `3de6dbb033359744b9975961780d26d20269e905` | 查明現有 Production 使用哪個 Compose，不能以 main 缺檔推斷服務不存在 |
+| `docker-compose.release.yml` | blob `f39258c899effe4f1a581ebf57caac6a57740a71` | blob `ce650bf0e14646218ae91963e4500e2d099c4028` | 審查 service/image/mount/ports/env 差異，防止舊 release 配置覆蓋新 main |
+| `.github/workflows/ci.yml` | blob `3e3845336775567a624b1e445e2ed0b9cb1dbae5` | blob `340d34f5031a6e21f0b65fcccfd8f114ddafbdac` | 保留 main 最新 Next 16.4.5 安全檢查；PR 舊 workflow 不得直接覆蓋 |
+
+**風險結論：** #172 並非「main 上已存在功能的少量修正」，而是包含 main 尚無的核心 Ledger 模組與部署設定；因此必須先建立**檔案及資料庫 schema 依賴圖**，用新 DEV 分支分層提取、加入負測試與 exact-head CI，再決定最小 Release。對 #172 HEAD 的 GitHub workflow-runs 查詢回傳**空集合**；不能據此斷言沒有歷史測試（可能是 branch 或 workflow 查詢限制），但本次**沒有**可直接對應此 HEAD 的 CI 證據，標記 `EXACT_HEAD_CI_UNKNOWN`。這項審核不改變 AGY-LOCAL-002 v2、#160 G2–G10 或 Production NO-GO。
