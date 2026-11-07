@@ -45,13 +45,18 @@ class ReviewIntervalTests(unittest.TestCase):
         self.assertEqual(b["srt_gap_ms"], 161260)
         self.assertEqual(a["review_start"], "00:29:46,920")
         self.assertEqual(a["review_end"], "00:32:56,440")
+        self.assertEqual(a["review_start_ms"], 1_786_920)
+        self.assertEqual(a["review_end_ms"], 1_976_440)
+        self.assertEqual(a["review_duration_ms"], 189_520)
         self.assertEqual(a["provider_word_anchor_count"], 1)
         self.assertEqual(a["provider_evidence_state"],
                          "PROVIDER_ANCHOR_WITHIN_SRT_GAP")
         self.assertEqual(b["provider_evidence_state"],
                          "EVIDENCE_MISSING_NO_PROVIDER_WORD_ANCHOR")
         self.assertEqual(result["total_srt_gap_ms"], 344780)
+        self.assertEqual(sum(i["review_duration_ms"] for i in result["intervals"]), 356780)
         self.assertFalse(result["interpolation_performed"])
+        self.assertTrue(all(i["review_duration_ms"] == i["review_end_ms"] - i["review_start_ms"] for i in result["intervals"]))
         self.assertFalse(result["golden_qa_pass"])
         self.assertFalse(result["publication_authorized"])
 
