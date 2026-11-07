@@ -87,3 +87,15 @@
 | Gate D Drive | 指定原始資料夾、指定新檔 manifest、新建不覆寫、讀回驗 SHA，附正式 QA/人工覆聽標記 | 可稽核且能防止覆寫原檔/錯標 PASS | 先給本地候選輸出、暫不寫回 Drive |
 
 **工作習慣**：ChatGPT 在等待 Owner 答案的同時仍可推進其他獨立 DEV/CI/唯讀項目；排程監控不得以 Owner 沒回覆為由關閉 G2–G10 或自動跳過授權。
+
+## 7. AGY-LOCAL-002 v2 驗收結果與下一關（2026-11-07）
+
+**正式驗收連結：**[REVIEW #173](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6703907296)、[G4 註記 #160](https://github.com/Randytsay/course-transcript-mvp/issues/160#issuecomment-6703910394)。此節取代第 5 節建立當時「仍等 AGY-LOCAL-002 v2」的暫時說明；第 5 節保留作稽核歷史。
+
+- **AGY-LOCAL-002 v2：ACCEPTED（限本機唯讀調查完成）**。AGY 回報的 current、PR159、PR158 SQLite 具有相同來源識別；三份均有 16 筆 Chirp DONE／78¢，操作名稱完全交集、沒有差集、共享結果 SHA 和已知費用均無差異；不同的是 Job revision 4 → 5、Chirp stage RUNNING → REVIEW_REQUIRED。跨 DB 只是逐一穩定讀取，沒有雲端跨系統原子快照。
+- 這些屬**AGY 既有 sudo 權限的本機報告**；ChatGPT 仍無法直接開啟受保護的 Production SQLite，已獨立查核比對器來源與交易／NO-GO 行為，但尚無雙方獨立 DB 重跑。歷史的 34 筆／136¢ 仍是**未證實的外部回報**，不能稱有 18 筆已確定遺失、也不能以 16／78 當整個 Google Cloud 費用帳單。
+- **G4 尚未關閉**：需要 Owner 另行選擇是否授權 AGY 對 *同一來源音訊* 進行有既存 IAM 權限的**唯讀 GCP LRO status/list 與計費／匯出收據核對**。任何 Cloud Billing/BigQuery 查詢的潛在費用和讀取範圍應在執行前確認；若權限不足、缺少帳單明細或會觸發未知成本，應回報 BLOCKED，不能自行增權或呼叫付費模型。雲端 GET 不代表已被授權、也不代表必然零費用。
+- 2026/10/29 已有一次**檔案及 SQLite 層級**備份解壓驗證 PASS（Issue #160），但完整 Docker/API/Worker 冷啟動還原仍 UNKNOWN。11/7 重新唯讀測得 root available 21,504,757,760 bytes（約 20.03 GiB、86.11% 使用），較 AGY 所引過時的 11.22 GiB 高，但單憑可用容量不足以保證隔離式完整冷還原可行。
+- 正式服務仍舊版 API `82e0cd45...`、付費 Worker 停止／心跳過期、`paid_execution=false`、`drive_publication=false`。**G2–G10 OPEN，Golden V2 Production NO-GO**。不得因本機 16 筆 PASS 啟動 Chirp 重送、直接 settle／覆蓋 Ledger、繞過人體覆聽、將 AI-limited 當 Golden PASS 或 Drive 正式發布。
+
+**下一個需要 Owner 的選擇題（推薦 A）：** A＝核准指定來源與時間範圍的 GCP Operation/Billing **唯讀核對**（既有權限，先確認潛在費用；禁止新推論／POST）; B＝繼續離線開發/人耳 QA，G4 維持 BLOCKED；C＝暫停此課程雲端核帳與付費處理。不同方案均**不**含部署、Ledger 寫入、付費 Worker、Drive 寫入等授權。
