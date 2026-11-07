@@ -99,3 +99,18 @@
 - 正式服務仍舊版 API `82e0cd45...`、付費 Worker 停止／心跳過期、`paid_execution=false`、`drive_publication=false`。**G2–G10 OPEN，Golden V2 Production NO-GO**。不得因本機 16 筆 PASS 啟動 Chirp 重送、直接 settle／覆蓋 Ledger、繞過人體覆聽、將 AI-limited 當 Golden PASS 或 Drive 正式發布。
 
 **下一個需要 Owner 的選擇題（推薦 A）：** A＝核准指定來源與時間範圍的 GCP Operation/Billing **唯讀核對**（既有權限，先確認潛在費用；禁止新推論／POST）; B＝繼續離線開發/人耳 QA，G4 維持 BLOCKED；C＝暫停此課程雲端核帳與付費處理。不同方案均**不**含部署、Ledger 寫入、付費 Worker、Drive 寫入等授權。
+
+## 8. AGY-LOCAL-003：雲端作業部分驗收（2026-11-07）
+
+- 正式 [AGY 回報](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6704072555) 與 [ChatGPT REVIEW](https://github.com/Randytsay/course-transcript-mvp/issues/173#issuecomment-6704234214)；主驗收 [#160 註記](https://github.com/Randytsay/course-transcript-mvp/issues/160#issuecomment-6704237738)。判定 **ACCEPTED_PARTIAL**，不是 G4 PASS。
+- AGY 在既有 IAM 下回報以 Speech-to-Text V2 `operations.get` 核對 20221217 **16/16 已記錄 Operations：HTTP 200、done=true、無 error**；這只證明已知 16 筆雲端運算完成，未證明完整 Output/Receipt SHA、所有曾發送的 Operations 或實際每筆帳單金額。API 結果由 AGY 在受限 VPS 執行，ChatGPT 未重新實際呼叫 GCP，也未取得敏感原始 ID/Response。
+- `operations.list` 受核准限額只能讀兩頁／共 40 筆，只有六筆與本 Job 已知 16 筆交集，回應仍有 `nextPageToken`。報告所稱「無其他來源綁定」僅限這 40 筆，且 31+3 筆其他 Job 分類的可重現綁定方法尚待 AGY 以既有本機紀錄補說明。歷史 **34 SUCCEEDED／136¢ 仍 UNRECONCILED**，不能解讀成查明 18 筆不存在。
+- Cloud Billing 權限與費用未經證明，**BigQuery billing query 沒執行**。需分清 Cloud Billing Reports Console 的現有報表（可能提供日期、專案、服務/SKU 分組的彙總）與 BigQuery SQL（可能按查詢資料量付費）；前者即使能看，也通常不足以唯一映射每個 LRO。官方參考：[Billing Reports](https://docs.cloud.google.com/billing/docs/how-to/reports)、[Speech V2 List operations](https://docs.cloud.google.com/speech-to-text/docs/reference/rest/v2/projects.locations.operations/list)。
+- AGY-LOCAL-003 正式完成其**受限的部分任務**；只需依既有本機紀錄釐清預檢權限測試請求是否包含在總數 18 內，以及 40 筆來源分類的證據，不再自動發新 GCP 呼叫。正式環境 Paid/Drive 仍關閉、G2–G10 OPEN／NO-GO。
+
+**新的 Owner 選擇題（未得到任何新授權）**：
+A（推薦）：**授權使用現有的 Cloud Billing Reports 畫面唯讀檢查** 2026-10-26 起相關日期／專案／Speech SKU 帳務，禁止啟動 BigQuery SQL、匯出設定或 IAM 調整；若無法以現有帳號存取則 BLOCKED。原因：可先無付費分析查詢風險地了解計費彙總與既有歷史聲明是否矛盾，但不是 LRO 級帳單證明。
+B：**僅核准額外限量的 Speech V2 歷史 Operations.list 查閱**（範圍、最大頁數、費用在執行前再次書面確認），增加對外部是否另有作業的覆蓋率，但雲端費用帳單仍 UNKNOWN。
+C：**不新增任何雲端讀取**，先開發 G2/G3、音訊真人覆聽資料與 G5 DEV 釋出護欄，G4 明確 BLOCKED。
+
+無論採哪個選項，都**不授權**任何模型辨識請求、重送、Ledger 訂正、Worker 啟動、部署、Drive 寫入、IAM 擴權或付費 BigQuery SQL。
