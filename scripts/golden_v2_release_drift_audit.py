@@ -163,7 +163,9 @@ def main() -> int:
                           "deployment_authorized": False}))
         return 2
     print(json.dumps(result, ensure_ascii=False, sort_keys=True, indent=2))
-    return 2 if result["status"] == "NO_GO" else 0
+    # A diagnostic report is never an affirmative deployment gate. Even when
+    # source bytes match, original Git provenance and cold restore remain UNKNOWN.
+    return 2
 
 
 if __name__ == "__main__":
