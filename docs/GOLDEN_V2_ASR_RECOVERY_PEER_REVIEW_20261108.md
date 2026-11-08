@@ -326,4 +326,81 @@ git -C /path/to/your/existing/checkout rev-parse HEAD
 
 ---
 
-**當前總判定：POC-0 尚未執行；POC-1 / POC-2 尚未授權實測。** 文件僅是可被批判與驗證的技術提案。審查者應先找出原始 Chirp 是否已有可恢復的文字，再決定是否值得下載模型或重新花費 Speech API 成本。
+**當前總判定（2026-11-08 更新）：獨立同儕審查與 POC-0（本機唯讀 `webrtcvad` 幀級別語音掃描與因果對帳）已完成，詳見下方第 11 節；Golden V2 仍維持 PRODUCTION NO-GO。**
+
+---
+
+## 11. 獨立同儕審查結論與 POC-0 實測結果（2026-11-08 已完成）
+
+> **執行邊界聲明**：本節由獨立審查 Agent 在 Owner 明確選擇「選項 A + C」後完成。全程 **0 雲端/付費呼叫、0 模型下載、0 Production 容器或 SQLite 修改、0 Drive 寫入、無公開私密講課原文**。
+
+### 11.1 關鍵根因漏洞與程式碼真相（Fact Check & Root Cause Discovery）
+
+1. **為何 2026-10-31 的 225 個聲學缺口全部被判為 `REVIEW`、且未產出 Standard Batch Repair Plan？（雙重程式 Bug）**
+   - **Bug A（`main` 缺少 `"robust_speech"` 回傳欄位）**：`main` 分支的 `app/providers/chirp_completeness_gate.py:_vad_assessment()` 僅回傳 `"robust_non_speech"`，**未回傳 `"robust_speech"`**。而 V2 的 `app/providers/golden_v2_acoustic_qa.py:_probe_nonspeech()` 卻檢查 `vad.get("robust_speech") is True`。在舊版 `_vad_assessment` 下，`speech` 恆為 `False`，導致所有非靜音區間 100% 落入 `disposition="REVIEW"`（`reason="audio_character_uncertain"`）。
+   - **Bug B（30 秒切片平均死區 + 整段缺口塞爆 600 秒修補預算）**：
+     - 即使在 `feat/golden-v2-integration-qa-issue169` 補上 `robust_speech`（要求 30s 切片整體 `mode0_ratio >= 0.45` 且 `mode3_ratio >= 0.20`），只要 30s 內老師講話 6 秒、停頓或寫黑板 24 秒（佔比 ~20%），就會同時不滿足 `robust_non_speech (< 0.15)` 與 `robust_speech (>= 0.45)`，掉進 **`0.15 ~ 0.45` 的死區（`REVIEW`）**。
+     - 更嚴重的是，當 `inspect_v2_acoustic()` 對 `SPEECH_CONFIRMED` 的長缺口（`clip_01` 410.20s + `clip_03` 183.52s + `clip_04` 161.26s = **754.98s**）規劃 Standard Batch 修補窗時，它把**整段缺口（含內部近一半的停頓靜音）**直接切入 `max_repair_total_ms = 600,000 ms (600s)` 單輪預算，導致當場觸發 `truncated_by_cap = True`（`manual_review_required = True`）。
+     - **解法**：在 `_vad_assessment()` 輸出 30ms 幀級別聚合的**連續語音子區間（`speech_segments_ms`）**與 `active_speech_ms`、`max_rolling_1s_mode3_ratio`。只要切片內含連續有效語音（`active_speech_ms >= 1500` 且 `max_rolling_1s_mode3_ratio >= 0.60` 且 `rms_dbfs >= -38.0`）即確認為語音；且修補規劃器只包裹實際語音子區間（八段合計僅 **410.31 秒 < 600 秒上限**），單輪即可 100% 涵蓋所有漏字區間！
+
+2. **`1,942,840 ms`（`1942.840s`）證據矛盾正式結案（算術筆誤 vs Cue #421 真實座標）**
+   - 核對 `AGY-LOCAL-004`（Comment `#6706738290` Phase 3）與 `AGY-LOCAL-005`（Comment `#6709882350`）：
+   - `chunk-0002` 從 `1,780,000 ms` 開始，其內部唯一的孤立詞 `"佛的說"` 實際位於 **`1,973,440 – 1,974,020 ms`**（580ms），這正是交付版 SRT 的 **Cue #421（`00:32:53,440 --> 00:32:54,020`）**！
+   - 其前為 `clip_03`（`1,789,920 → 1,973,440 ms`，長 `183.52s`），其後為 `clip_04`（`1,974,020 → 2,135,280 ms`，長 `161.26s`）。
+   - `AGY-LOCAL-004` 作者在文字敘述中誤將 `1,781.40s + 161.44s = 1,942.84s` 寫入報告，後被 PR #181 寫成合成測試 fixture。**在八個精確 SRT Gap 內部，確實皆為 0 個 provider word anchors**，兩份報告並無底層資料衝突。
+
+3. **V2 JSON Parser 行為澄清**
+   - V2 的 `_parse_words()` 與 `_provider_entries()` 對缺少 `"words"` 陣列的非空 `alternatives[0]` 會直接拋出 `V2Conflict("Speech word timing evidence missing")` 並轉為 `REVIEW_REQUIRED`，不會靜默丟字。2026-10-31 的三大長缺口（剛好位於 `chunk-0000→0001` 900s 邊界與 `chunk-0001→0002` 1790s 邊界）屬於 Chirp 3 在 **15 分鐘長窗 + `DYNAMIC_BATCHING` + `enable_word_time_offsets=True`** 下的 provider 區段漏辨識（C3），加上下游對齊器將未錨定文字（Cue #212 的 656 字、Cue #420 的 60 字）坍縮進前導字幕（C4）。
+
+---
+
+### 11.2 POC-0 實測報告：本機 `webrtcvad` 八段精確缺口掃描結果
+
+使用本機 `.venv` 已安裝之 `webrtcvad-wheels 2.0.14.post1`（ARM64 原生編譯，零網路下載），對已驗證 SHA-256 的 8 個隔離 WAV（扣除前後 ±3,000ms padding，僅掃描精確 `840,140 ms` 缺口）進行 30ms 幀級別掃描（Hysteresis：合併間隔 ≤ 600ms 之語音幀，保留長度 ≥ 450ms 且幀能量 > -45 dBFS 之連續語音段）：
+
+| Clip ID | 對應 Cues | 精確缺口秒數 | 整體 RMS (dBFS) | Mode 0 / Mode 3 佔比 | 最大 1s 滾動 Mode 3 | 連續語音段數 (≥450ms) | **有效人聲總秒數 (佔比)** | 舊 30s 切片 (`Speech`/`死區`/`Non`) | **修正後處置分類** |
+|---|---|---:|---:|---|---:|---:|---|---|---|
+| **`clip_01`** | 212 → 213 | **410.20 s** | `-26.74` | `0.5525` / `0.4349` | `1.000` | **87 段** | **215.52 s (52.5%)** | `11 / 3 / 0` | 🔴 **`SPEECH_CONFIRMED`（C3+C4：含 215.5s 講課，對應 Cue #212 坍縮之 656 字）** |
+| **`clip_02`** | 213 → 214 | **20.52 s** | `-29.08` | `0.5205` / `0.3333` | `0.909` | **6 段** | **8.16 s (39.8%)** | `1 / 0 / 0` | 🔴 **`SPEECH_CONFIRMED`（C3：含 8.16s 人聲）** |
+| **`clip_03`** | 420 → 421 | **183.52 s** | `-27.23` | `0.6220` / `0.4061` | `1.000` | **45 段** | **98.28 s (53.6%)** | `7 / 0 / 0` | 🔴 **`SPEECH_CONFIRMED`（C3+C4：含 98.3s 講課，對應 Cue #420 坍縮之 60 字）** |
+| **`clip_04`** | 421 → 422 | **161.26 s** | `-27.84` | `0.6000` / `0.3485` | `1.000` | **43 段** | **79.29 s (49.2%)** | `6 / 0 / 0` | 🔴 **`SPEECH_CONFIRMED`（C3：含 79.3s 講課）** |
+| **`clip_05`** | 511 → 512 | **16.72 s** | `-37.89` | `0.1921` / `0.0413` | `0.273` | 1 極短段 | **0.45 s (2.7%)** | `0 / 1 / 0` | 🟢 **`NONSPEECH_CONFIRMED`（C5：講課停頓／環境微音，`m3<0.05` 且 `rms<=-35dBFS`）** |
+| **`clip_06`** | 1701 → 1702 | **17.00 s** | `-41.23` | `0.0071` / `0.0053` | `0.091` | **0 段** | **0.00 s (0.0%)** | `0 / 0 / 1` | 🟢 **`NONSPEECH_CONFIRMED`（C5：純靜音／停頓，0 人聲）** |
+| **`clip_07`** | 2156 → 2157 | **8.96 s** | `-41.27` | `0.0168` / `0.0000` | `0.000` | **0 段** | **0.00 s (0.0%)** | `0 / 0 / 1` | 🟢 **`NONSPEECH_CONFIRMED`（C5：純靜音／停頓，0 人聲）** |
+| **`clip_08`** | 2870 → 2871 | **21.96 s** | `-34.59` | `0.5423` / `0.2842` | `0.939` | **4 段** | **9.06 s (41.3%)** | `1 / 0 / 0` | 🔴 **`SPEECH_CONFIRMED`（C3：課程尾聲含 9.06s 人聲）** |
+| **總計** | 8 處缺口 | **840.14 s** | — | — | — | **186 段** | **410.76 s (48.9%)** | **4 切片曾卡死區** | **5 段確認人聲（410.31s 語音需修補）、3 段確認非語音停頓（42.68s 免修補）** |
+
+#### 非敏感機器可讀 POC-0 結果摘要（JSON）
+
+~~~json
+{
+  "schema": "golden-v2-asr-recovery-peer-review-v1",
+  "date": "2026-11-08",
+  "job_id": "v2p_6c8bfcd842315946abbac8d257f0bb70",
+  "source_sha": "8afc970062db3b5eb186daf11f84ab43d84e513ca9442b09c7ea74f34b4fa247",
+  "scope": "POC-0 read-only clip SHA verification + frame-level WebRTC VAD classification",
+  "clip_shas_verified": true,
+  "gap_count": 8,
+  "classified_count": 8,
+  "speech_confirmed_clips": ["clip_01", "clip_02", "clip_03", "clip_04", "clip_08"],
+  "nonspeech_confirmed_clips": ["clip_05", "clip_06", "clip_07"],
+  "total_gap_duration_ms": 840140,
+  "active_speech_duration_ms": 410310,
+  "provenance_conflict_1942840ms": "RESOLVED_ARITHMETIC_TYPO_REAL_ANCHOR_AT_1973440MS_CUE_421",
+  "model_calls": 0,
+  "network_requests": 0,
+  "production_writes": 0,
+  "drive_writes": 0,
+  "verdict": "PASS_POC0_READY_FOR_BOUNDED_REPAIR"
+}
+~~~
+
+---
+
+### 11.3 技術棧決策與後續 Agent 統一施工規範（Stack Decision & Action Plan）
+
+1. **禁止在正式 VPS（2 vCPU `aarch64`、可用磁碟 20 GiB、Swap 已用 3.5/4 GiB）安裝大型 PyTorch / FunASR / ModelScope / WhisperX 依賴棧**，避免磁碟耗盡與 OOM。
+2. **第一優先路徑（零新模型依賴）**：
+   - 使用已內建於 `.venv` 的 `webrtcvad` 增強版 `_vad_assessment()`（消除 30s 切片死區並回傳 `speech_segments_ms`）+ 子區間打包修補規劃（將 `clip_01`、`clip_02`、`clip_03`、`clip_04`、`clip_08` 內含的 410.31s 實際人聲合併為 ≤ 12 個緊湊 Standard Batch 窗口，總長 < 600s 上限，雲端預估費用僅 **~18–22¢**，在單資料夾 $6.00 上限內且可取得原生 `chirp_3` 權威時間戳）。
+3. **第二優先路徑（若需零雲端費用之本地離線對齊）**：
+   - 若針對已知校對文字（如 Cue #212 的 656 字、Cue #420 的 60 字）做無雲端費用的本地聲學對齊，應採用單一輕量 ONNX 模型（如 `MahmoudAshraf97/ctc-forced-aligner` ONNX 或 `k2-fsa/sherpa-onnx` Int8 單一中文模型 ~230 MB），並將產出標記為獨立 `timing_authority`，不得偽裝為 `chirp_3` 原生時間戳。
