@@ -7,6 +7,7 @@ is STILL NOT an automated Golden QA approval or publication authorization.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
 import json
 import re
 from pathlib import Path
@@ -127,6 +128,8 @@ def validate_review(candidate: dict, template: dict) -> dict:
                  "audio_alignment_verified", "human_listening_complete"):
         if candidate.get(gate) is not False:
             raise ValueError("human review may not preapprove release")
+    if candidate.get("review_status") != "AWAITING_HUMAN_REVIEW":
+        raise ValueError("untrusted input may not assert a completed review status")
     records = candidate.get("records")
     expected = template["records"]
     if not isinstance(records, list) or len(records) != len(expected):
@@ -151,7 +154,10 @@ def validate_review(candidate: dict, template: dict) -> dict:
             if (entry.get("source_audio_listened") is not False
                 or entry.get("reviewer_id") is not None
                 or entry.get("reviewed_at_utc") is not None
-                or entry.get("speech_anchor_ranges_ms") != []):
+                or entry.get("speech_anchor_ranges_ms") != []
+                or entry.get("transcript_evidence_sha256") is not None
+                or entry.get("observation_private_reference") is not None
+                or entry.get("review_notes") is not None):
                 raise ValueError("unreviewed item has fabricated review evidence")
             open_count += 1
             continue
@@ -161,6 +167,12 @@ def validate_review(candidate: dict, template: dict) -> dict:
                 or not re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", time)
                 or entry.get("source_audio_listened") is not True):
             raise ValueError("reviewer identity, UTC time and actual listening required")
+        try:
+            parsed_time = datetime.strptime(time, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+        except ValueError as exc:
+            raise ValueError("invalid reviewer UTC timestamp") from exc
+        if parsed_time.year < 2020:
+            raise ValueError("review timestamp predates allowed evidence window")
         reviewed_count += 1
         spans = entry.get("speech_anchor_ranges_ms")
         if not isinstance(spans, list) or len(spans) > 1000:
