@@ -137,10 +137,13 @@ class ReviewedNonspeechAndRevalidatedDeliveryTests(unittest.TestCase):
                     {"word": "父", "start_ms": 6100, "end_ms": 6500},
                 ],
             }
-            with patch("app.providers.golden_v2_acoustic_qa.duration_seconds", return_value=6.5), \
-                 patch("app.providers.golden_v2_acoustic_qa._vad_assessment", return_value={"robust_non_speech": False, "robust_speech": False}), \
-                 patch("app.providers.golden_v2_acoustic_qa._peak_db", return_value=-20.0), \
-                 patch("app.providers.golden_v2_acoustic_qa._audible", return_value=True):
+            # Patch the function's captured globals: other tests may reload modules.
+            with patch.dict(inspect_v2_acoustic.__globals__, {
+                "duration_seconds": lambda _: 6.5,
+                "_vad_assessment": lambda *_: {"robust_non_speech": False, "robust_speech": False},
+                "_peak_db": lambda *_: -20.0,
+                "_audible": lambda *_: True,
+            }):
                 qa = inspect_v2_acoustic(job_dir=folder, merged=merged)
             self.assertEqual(qa["status"], "PASS")
             self.assertEqual(qa["blocker_count"], 0)

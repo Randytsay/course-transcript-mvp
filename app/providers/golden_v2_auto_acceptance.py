@@ -178,7 +178,11 @@ def evaluate_auto_acceptance(*, job_id: str, source_sha256: str,
     transcript = "\n".join(_text(c) for c in cues) + "\n" if cues else ""
     try:
         supplied = txt_bytes.decode("utf-8-sig").replace("\r\n", "\n")
-        if supplied != transcript:
+        # SRT is segmented by cue while the owner-facing TXT uses *natural
+        # paragraphs*. Requiring identical newlines rejected valid deliverables.
+        # Compare all visible characters in order; whitespace is presentation
+        # only, never a license to add/change/delete spoken characters.
+        if "".join(supplied.split()) != "".join(transcript.split()):
             failures.append("txt_does_not_match_srt_in_order")
     except UnicodeError:
         failures.append("invalid_utf8_txt")

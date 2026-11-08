@@ -36,10 +36,20 @@ class ModelConfigurationTests(unittest.TestCase):
                 content,
                 f"active model drifted in {relative}",
             )
-            self.assertTrue(
-                "gemini-3.7-flash" in content or "Gemini 3.7 Flash" in content,
-                f"Gemini 3.7 marker missing in {relative}",
-            )
+            # The Golden V2 text-correction pair intentionally migrated to
+            # 3.8; the V1/other runtime paths retain their 3.7 markers until
+            # their independent provider and pricing gates are reviewed.
+            if relative in ("app/providers/correct_text.py",
+                            "app/providers/correct_text_cascade.py"):
+                self.assertTrue(
+                    "gemini-3.8-flash" in content or "Gemini 3.8 Flash" in content,
+                    f"Gemini 3.8 text-correction marker missing in {relative}",
+                )
+            else:
+                self.assertTrue(
+                    "gemini-3.7-flash" in content or "Gemini 3.7 Flash" in content,
+                    f"Gemini 3.7 legacy marker missing in {relative}",
+                )
 
     def test_proxy_keeps_legacy_aliases_but_all_resolve_to_gemini_37(self) -> None:
         content = (ROOT / "deploy/vertex-openai-proxy/litellm-config.yaml").read_text(

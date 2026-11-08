@@ -135,6 +135,27 @@ class AutoAcceptanceTests(unittest.TestCase):
         self.assertEqual(x['acoustic_nonspeech_confirmed_count'],0)
         self.assertEqual(x['acoustic_review_items'][0]['disposition'],'REVIEW')
 
+    def test_natural_paragraph_transcript_matches_source_cues(self):
+        # Subtitle line breaks are not natural transcript paragraph breaks.
+        for txt in ("清淨心菩提種子\n", "清淨心\n\n菩提種子\n",
+                    "清淨心　菩提種子\n"):
+            with self.subTest(txt=txt):
+                result = evaluate_auto_acceptance(
+                    **(self.params | {"txt_bytes": txt.encode("utf-8")}))
+                self.assertTrue(result["can_close_without_human"])
+                self.assertFalse(result["formal_golden_pass"])
+                self.assertNotIn("txt_does_not_match_srt_in_order",
+                                 result["technical_blockers"])
+
+    def test_natural_paragraph_policy_keeps_lexical_changes_blocked(self):
+        for txt in ("清淨心\n菩提佛子\n", "清淨心菩提種子多一字\n"):
+            with self.subTest(txt=txt):
+                result = evaluate_auto_acceptance(
+                    **(self.params | {"txt_bytes": txt.encode("utf-8")}))
+                self.assertIn("txt_does_not_match_srt_in_order",
+                              result["technical_blockers"])
+                self.assertFalse(result["can_close_without_human"])
+
     def test_mismatched_srt_txt_is_technical_failure(self):
         x=evaluate_auto_acceptance(**(self.params|{'txt_bytes':b'mismatch'}))
         self.assertEqual(x['status'],'AUTO_BLOCKED_TECHNICAL')
