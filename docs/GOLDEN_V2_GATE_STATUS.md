@@ -1,9 +1,14 @@
 # Golden Transcript V2 — 驗收 Gate 狀態追蹤
 
-建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
-執行進度：**僅設計與驗收文件已入 GitHub；尚未開始 P0–P8 的工程驗收**。
+建立日期：2026-10-11　｜　最新更新：**2026-11-08**　｜　規格版本：`V2.0-design-1`  
+當前總狀態：**2026-10-31 實音重辨識與自然分句修復已交付 Drive（AGY-LOCAL-007/008 PASS；#160 G1 已通過）**
 
-規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)
+> **[!IMPORTANT] 給所有 AI Agent 的導航指引（2026-11-08）**
+> 1. **最新權威上線計畫與 Gate 定義（G1–G10）**：請優先讀取 [`docs/GOLDEN_V2_GO_LIVE_MASTER_PLAN.md`](GOLDEN_V2_GO_LIVE_MASTER_PLAN.md)、[`docs/GOLDEN_V2_AGENT_COORDINATION.md`](GOLDEN_V2_AGENT_COORDINATION.md)、[Issue #160](https://github.com/Randytsay/course-transcript-mvp/issues/160) 與 [Issue #173](https://github.com/Randytsay/course-transcript-mvp/issues/173)。
+> 2. **2026-10-31 實音重辨識、時間軸修復與自然分句交付完成（`AGY-LOCAL-007` / `AGY-LOCAL-008`）**：詳見 [`docs/GOLDEN_V2_ASR_RECOVERY_PEER_REVIEW_20261108.md`](GOLDEN_V2_ASR_RECOVERY_PEER_REVIEW_20261108.md)（第 11–12 節）與 [Issue #173](https://github.com/Randytsay/course-transcript-mvp/issues/173)。已完成 22 個 VAD 子視窗同步 `chirp_3` 重辨識（計費 `815.0s` / `US$0.2173`），修正 `CLOCK_SLIP_RUN_REANCHOR` / `JITTER_RUN_REANCHOR` 壓縮正常後綴之問題，並將 167 段自然段落逐字稿（`.txt`）與單段 `<= 22` 字、自然標點分句零拆詞字幕檔（`.srt`）交付回來源 Google Drive 目錄（`14YfBNRbSsXaUcdEhy5GaSmOJLDHDjL55`）及 VPS 任務目錄。
+> 3. **PR 清理與 Runtime 同步狀態（2026-11-08）**：所有舊過渡 PR（`#146, #153, #172, #180, #181, #182`）均已關閉，核心修復與文件已由 PR `#183` 合併入 `main`，且正式環境 `/opt/course-transcript-v2-chat/current` 已同步更新 `chirp_completeness_gate.py`、`golden_v2_chirp_window_repair.py` 與 `golden_v2_render.py`。
+
+規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[上線總計畫](GOLDEN_V2_GO_LIVE_MASTER_PLAN.md)
 
 > 此文件是會隨 PR/驗收更新的狀態登記簿。**只有提交機器／人工可核對的 evidence link、commit、測試報告與操作者資訊後，才能把某一 Gate 設為 PASS。** 「文件已提交」不代表其他工程 Gate 已 PASS。禁止憑對話主觀印象標已完成。
 
