@@ -21,8 +21,8 @@ class LocalGapTriageTests(unittest.TestCase):
                   '2\n00:00:10,000 --> 00:00:12,000\n結束\n').encode()
 
     def _inspect(self, disposition):
-        with patch('app.providers.golden_v2_auto_gap_triage._probe_nonspeech',
-                   side_effect=lambda job,start,end:{'disposition':disposition,'start_ms':start,'end_ms':end,'max_volume_dbfs':-120.0}):
+        # Patch the imported function's globals even when other tests reload modules.
+        with patch.dict(inspect_subtitle_gaps.__globals__, {"_probe_nonspeech": lambda job,start,end:{'disposition':disposition,'start_ms':start,'end_ms':end,'max_volume_dbfs':-120.0}}):
             return inspect_subtitle_gaps(job_dir=self.job,source_sha256=self.sha,
                         duration_ms=12000,srt_bytes=self.srt,slice_ms=3000)
 
@@ -53,8 +53,8 @@ class LocalGapTriageTests(unittest.TestCase):
 
     def test_mixed_slices_are_not_claimed_silent(self):
         state=iter(['NONSPEECH_CONFIRMED','REVIEW','NONSPEECH_CONFIRMED'])
-        with patch('app.providers.golden_v2_auto_gap_triage._probe_nonspeech',
-                   side_effect=lambda job,start,end:{'disposition':next(state),'start_ms':start,'end_ms':end,'max_volume_dbfs':-120.0}):
+        # Patch the imported function's globals even when other tests reload modules.
+        with patch.dict(inspect_subtitle_gaps.__globals__, {"_probe_nonspeech": lambda job,start,end:{'disposition':next(state),'start_ms':start,'end_ms':end,'max_volume_dbfs':-120.0}}):
             triage=inspect_subtitle_gaps(job_dir=self.job,source_sha256=self.sha,
                         duration_ms=12000,srt_bytes=self.srt,slice_ms=3000)
         self.assertEqual(triage['review_count'],1)
@@ -182,8 +182,8 @@ class LocalGapTriageTests(unittest.TestCase):
     def test_short_gap_missing_from_partial_sidecar_stays_open(self):
         self.srt=('1\n00:00:00,000 --> 00:00:02,000\n開始\n\n'
                   '2\n00:00:04,000 --> 00:00:06,000\n結束\n').encode()
-        with patch('app.providers.golden_v2_auto_gap_triage._probe_nonspeech',
-                   side_effect=lambda job,start,end:{'disposition':'REVIEW','start_ms':start,'end_ms':end}):
+        # Patch the imported function's globals even when other tests reload modules.
+        with patch.dict(inspect_subtitle_gaps.__globals__, {"_probe_nonspeech": lambda job,start,end:{'disposition':'REVIEW','start_ms':start,'end_ms':end}}):
             triage=inspect_subtitle_gaps(job_dir=self.job,source_sha256=self.sha,
                 duration_ms=6000,srt_bytes=self.srt,min_gap_ms=1000)
         triage['gaps']=[];triage['total_gaps']=0
