@@ -45,8 +45,6 @@ def _split_chinese(text: str, *, target: int = 8, maximum: int = 14) -> list[str
         at = max(ranked)[1]
         parts.append(text[:at].strip())
         text = text[at:].lstrip()
-    if _visible("".join(parts)) == _visible(text):
-        raise AssertionError("unreachable: split must consume text")
     return [part for part in parts if part]
 
 
