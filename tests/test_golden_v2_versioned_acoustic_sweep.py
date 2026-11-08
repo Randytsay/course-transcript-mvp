@@ -72,11 +72,13 @@ class AcousticSweepTests(unittest.TestCase):
             return {"robust_non_speech": False, "robust_speech": True}
         def volume(_, start, end):
             return -80.0 if non_speech_fn is None or non_speech_fn(start, end) else -15.0
-        with patch("app.providers.golden_v2_acoustic_qa.duration_seconds",
-                   return_value=duration_ms / 1000), patch(
-                   "app.providers.golden_v2_acoustic_qa._vad_assessment", side_effect=vad), patch(
-                   "app.providers.golden_v2_acoustic_qa._peak_db", side_effect=volume), patch(
-                   "app.providers.golden_v2_acoustic_qa._audible", return_value=True):
+        # Some integration tests reload provider modules. Patch the globals
+        # of the actual function under test, not a separately reimported module.
+        with patch.dict(inspect_v2_acoustic.__globals__, {
+            "duration_seconds": lambda _: duration_ms / 1000,
+            "_vad_assessment": vad, "_peak_db": volume,
+            "_audible": lambda *_: True,
+        }):
             return inspect_v2_acoustic(job_dir=self.folder, merged=merged, **kwargs)
 
     def test_more_than_sixteen_gaps_all_inspected_and_silent(self):
@@ -109,12 +111,12 @@ class AcousticSweepTests(unittest.TestCase):
                  {"word": "父", "start_ms": 6100, "end_ms": 6500}]
         merged = {"source_sha": self.sha, "duration_ms": 6500,
                   "timing_authority": "chirp_3", "words": words}
-        with patch("app.providers.golden_v2_acoustic_qa.duration_seconds",
-                   return_value=6.5), patch(
-                   "app.providers.golden_v2_acoustic_qa._vad_assessment",
-                   return_value={"robust_non_speech": False, "robust_speech": False}), patch(
-                   "app.providers.golden_v2_acoustic_qa._peak_db", return_value=-20), patch(
-                   "app.providers.golden_v2_acoustic_qa._audible", return_value=True):
+        with patch.dict(inspect_v2_acoustic.__globals__, {
+            "duration_seconds": lambda _: 6.5,
+            "_vad_assessment": lambda *_: {"robust_non_speech": False, "robust_speech": False},
+            "_peak_db": lambda *_: -20,
+            "_audible": lambda *_: True,
+        }):
             qa = inspect_v2_acoustic(job_dir=self.folder, merged=merged)
         self.assertEqual(qa["status"], "REVIEW")
         self.assertEqual(qa["uncertain_count"], 1)
@@ -139,10 +141,12 @@ class AcousticSweepTests(unittest.TestCase):
                 }
             return {"robust_non_speech": True, "robust_speech": False, "speech_segments_ms": []}
 
-        with patch("app.providers.golden_v2_acoustic_qa.duration_seconds", return_value=161.0), \
-             patch("app.providers.golden_v2_acoustic_qa._vad_assessment", side_effect=vad_with_segments), \
-             patch("app.providers.golden_v2_acoustic_qa._peak_db", return_value=-18.0), \
-             patch("app.providers.golden_v2_acoustic_qa._audible", return_value=True):
+        with patch.dict(inspect_v2_acoustic.__globals__, {
+            "duration_seconds": lambda _: 161.0,
+            "_vad_assessment": vad_with_segments,
+            "_peak_db": lambda *_: -18.0,
+            "_audible": lambda *_: True,
+        }):
             qa = inspect_v2_acoustic(job_dir=self.folder, merged=merged)
         self.assertEqual(qa["status"], "REVIEW")
         intervals = qa["repair_plan"]["intervals"]
