@@ -158,5 +158,23 @@ class AcousticSweepTests(unittest.TestCase):
         self.assertEqual(intervals[1]["target_intervals"][0]["end_ms"], 150000)
 
 
+    def test_fallback_subwindows_include_context_inside_hard_52s_cap(self):
+        # A VAD positive result without word-level speech_segments_ms uses
+        # the fallback splitter. It must not silently add 5s to each 52s clip.
+        words = [{"word": "先", "start_ms": 0, "end_ms": 1000},
+                 {"word": "後", "start_ms": 160000, "end_ms": 161000}]
+        qa = self.sweep(
+            words, 161000, max_repair_window_ms=52000,
+            non_speech_fn=lambda *_: False,
+        )
+        self.assertEqual(qa["status"], "REVIEW")
+        clips = qa["repair_plan"]["intervals"]
+        self.assertGreaterEqual(len(clips), 4)
+        self.assertTrue(all(0 < c["end_ms"] - c["start_ms"] <= 52000
+                            for c in clips))
+        self.assertEqual(clips[0]["target_intervals"][0]["start_ms"], 1200)
+        self.assertFalse(qa["repair_plan"]["truncated"])
+
+
 if __name__ == "__main__":
     unittest.main()
