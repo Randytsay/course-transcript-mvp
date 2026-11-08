@@ -60,6 +60,7 @@ class ChirpV2Gateway:
         self.operation_prefixes = (self.operation_prefix,) + (
             (f'projects/{project_number}/locations/{location}/operations/',)
             if project_number is not None else ())
+        self._completed_ops: dict[str, Any] = {}
 
     def _request(self, row: dict[str, Any]) -> Any:
         if self.request_factory is not None:
@@ -158,12 +159,18 @@ class ChirpV2Gateway:
         if (row.get("status") != "SUBMITTED" or not isinstance(name, str)
                 or not name.startswith(self.operation_prefixes)):
             raise V2Conflict("Chirp recovery must have saved Speech operation ID")
-        op = self.speech.transport.operations_client.get_operation(name)
+        try:
+            op = self.speech.transport.operations_client.get_operation(name)
+        except Exception as exc:
+            if type(exc).__name__ == "ResourceExhausted":
+                return {"status": "PENDING"}
+            raise
         error = getattr(op, "error", None)
         if int(getattr(error, "code", 0) or 0):
             raise V2Conflict("persisted Chirp operation ended in provider error")
         if not bool(getattr(op, "done", False)):
             return {"status": "PENDING"}
+        self._completed_ops[name] = op
         self._validate_file_response(op, row["gcs_uri"])
         bucket = self.storage.bucket(bucket_name)
         results = [blob for blob in bucket.list_blobs(prefix=prefix)
@@ -198,7 +205,7 @@ class ChirpV2Gateway:
         name = row.get('operation_name')
         if not isinstance(name, str) or not name.startswith(self.operation_prefixes):
             raise V2Conflict('saved Speech operation required for billing')
-        operation = self.speech.transport.operations_client.get_operation(name)
+        operation = self._completed_ops.get(name) or self.speech.transport.operations_client.get_operation(name)
         if not operation.done:
             raise V2Conflict('completed Speech billing metadata required')
         self._validate_file_response(operation, row['gcs_uri'])

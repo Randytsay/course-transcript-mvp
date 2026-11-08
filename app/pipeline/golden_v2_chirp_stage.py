@@ -107,6 +107,8 @@ def plan_approved_chirp(
     if not callable(estimate_window_cents) or not 0 < max_window_seconds <= 1200:
         raise V2Conflict("Chirp cost estimator and <=20-minute windows required")
     manifest_path = job_dir / "golden-v2" / "source-lineage.json"
+    if not manifest_path.is_file() and (job_dir / "source-lineage.json").is_file():
+        _immutable(manifest_path, (job_dir / "source-lineage.json").read_bytes())
     try:
         lineage = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
@@ -195,6 +197,9 @@ def _parse_words(raw_bytes: bytes, window: dict[str, Any]) -> list[dict[str, Any
         raise V2Conflict("Speech V2 result list missing")
     words: list[dict[str, Any]] = []
     for result_index, result in enumerate(payload["results"]):
+        if (isinstance(result, dict) and "alternatives" not in result
+                and set(result) <= {"languageCode", "resultEndOffset"}):
+            continue  # provider found no speech in this result chunk
         alts = result.get("alternatives") if isinstance(result, dict) else None
         if not isinstance(alts, list):
             raise V2Conflict("Speech recognition alternatives missing")
@@ -285,7 +290,7 @@ def recover_chirp_window(
         raise V2Conflict("verified Chirp cost reconciliation is required")
     try:
         words = _parse_words(content, row)
-        if not words:
+        if not words and row.get("purpose") != "REPAIR":
             # Silence can be valid, but only an independent VAD may approve it.
             raise V2Conflict("empty Chirp result requires independent acoustic/VAD review")
     except V2Conflict as exc:
@@ -398,10 +403,7 @@ def reconcile_reviewed_chirp_window(
         known_timing_defect = str(exc) in {
             "Speech word offsets out of source window",
             "Speech word offsets overlap in source window",
-        } or (
-            row.get("purpose") == "REPAIR"
-            and str(exc) == "missing word end has no same-time successor"
-        )
+        } or str(exc) == "missing word end has no same-time successor"
         if not known_timing_defect:
             return "REVIEW_REQUIRED"
         from app.pipeline.golden_v2_chirp_window_repair import (
@@ -450,7 +452,7 @@ def reconcile_reviewed_chirp_window(
         # The normalizer may shift clocks, but never invent/lose word text.
         # Full acoustic QA at finish_approved_chirp is still mandatory.
         words = repair.words
-    if not words:
+    if not words and row.get("purpose") != "REPAIR":
         return "REVIEW_REQUIRED"
     normalizations = [
         {"word": item["word"], "start_ms": item["start_ms"],
@@ -640,6 +642,8 @@ def finish_approved_chirp(
             raise V2Conflict("persisted repair target evidence is invalid") from exc
         if not targets:
             raise V2Conflict("repair operation has no approved target interval")
+        if not records[row["window_id"]]:
+            continue  # provider found no speech: keep verified base text
         def targeted(word: dict[str, Any]) -> bool:
             midpoint = (word["start_ms"] + word["end_ms"]) / 2
             return any(target["start_ms"] <= midpoint < target["end_ms"] for target in targets)
