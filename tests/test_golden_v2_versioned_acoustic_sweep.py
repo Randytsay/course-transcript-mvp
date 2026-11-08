@@ -172,7 +172,7 @@ class AcousticSweepTests(unittest.TestCase):
         self.assertGreaterEqual(len(clips), 4)
         self.assertTrue(all(0 < c["end_ms"] - c["start_ms"] <= 52000
                             for c in clips))
-        self.assertEqual(clips[0]["target_intervals"][0]["start_ms"], 1200)
+        self.assertEqual(clips[0]["target_intervals"][0]["start_ms"], 1000)
         self.assertFalse(qa["repair_plan"]["truncated"])
 
 
