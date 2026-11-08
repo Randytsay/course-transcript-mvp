@@ -276,14 +276,17 @@ def inspect_v2_acoustic(
                 break
             continue
         cursor = gap["start_ms"]
+        # Reserve the actual context INSIDE the request duration cap.
+        # The old fallback used a full 52s target + 2x2.5s context, silently
+        # producing 57s clips. Small configured caps retain >=1s target.
+        context_ms = min(2500, max(0, (max_repair_window_ms - 1000) // 2))
+        target_span_ms = max_repair_window_ms - 2 * context_ms
         while cursor < gap["end_ms"]:
             if len(repair_intervals) >= max_repair_intervals:
                 break
-            # Leave room for 2.5 seconds of audio context on both sides while
-            # staying inside the bounded subwindow ceiling (default 52s).
-            target_end = min(gap["end_ms"], cursor + max_repair_window_ms)
-            start = max(0, cursor - 2500)
-            end = min(duration, target_end + 2500)
+            target_end = min(gap["end_ms"], cursor + target_span_ms)
+            start = max(0, cursor - context_ms)
+            end = min(duration, target_end + context_ms)
             if total + end - start > max_repair_total_ms:
                 break
             repair_intervals.append({
