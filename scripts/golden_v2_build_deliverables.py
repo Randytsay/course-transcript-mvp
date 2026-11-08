@@ -17,7 +17,7 @@ import jieba
 from diff_match_patch import diff_match_patch
 
 PUNCT = set("，。、；：？！「」『』（）《》〈〉…—,.;:?!\"'()[]<>-~ \t\r\n　‧·")
-CLAUSE_END = set("，。、；：？！,.;:?!")
+CLAUSE_END = set("，。；：？！,.;:?!")
 MAX_CUE = 22
 MIN_INSERT = 8
 MAX_CHAR_MS = 300
@@ -176,92 +176,96 @@ def render_txt(tokens):
     return text.strip() + "\n"
 
 
-def split_long(chars):
-    """Split a clause (list of content-token indices) into <=MAX_CUE chunks
-    on jieba word boundaries."""
-    text = "".join(t for t, _ in chars)
-    pieces, pos = [], 0
+def split_clause_balanced(chars: list, max_len: int = MAX_CUE) -> list[list]:
+    """Split an over-long clause evenly at jieba word boundaries into <=max_len chunks."""
+    text = "".join(t[0] for t in chars)
+    if len(text) <= max_len:
+        return [chars]
+    words, pos = [], 0
     for w in jieba.cut(text):
-        pieces.append((pos, pos + len(w)))
-        pos += len(w)
-    n_chunks = -(-len(text) // MAX_CUE)
+        w_len = len(w)
+        words.append(chars[pos:pos + w_len])
+        pos += w_len
+    n_chunks = -(-len(text) // max_len)
     target = len(text) / n_chunks
-    chunks, start, cur = [], 0, 0
-    for a, b in pieces:
-        if b - start > MAX_CUE or (cur and (a - start) >= target and b - start > target):
-            chunks.append((start, a))
-            start = a
-        cur = 1
-    chunks.append((start, len(text)))
+    chunks, cur_chunk, cur_len = [], [], 0
+    for w in words:
+        w_len = len(w)
+        if cur_chunk and (cur_len + w_len > max_len or (cur_len >= target and cur_len + w_len > target + 2)):
+            chunks.append(cur_chunk)
+            cur_chunk = [w]
+            cur_len = w_len
+        else:
+            cur_chunk.append(w)
+            cur_len += w_len
+    if cur_chunk:
+        chunks.append(cur_chunk)
     out = []
-    for a, b in chunks:
-        while b - a > MAX_CUE:  # single over-long word, hard limit
-            out.append(chars[a:a + MAX_CUE])
-            a += MAX_CUE
-        out.append(chars[a:b])
+    for chk in chunks:
+        flat = [c for w in chk for c in w]
+        while len(flat) > max_len:
+            out.append(flat[:max_len])
+            flat = flat[max_len:]
+        if flat:
+            out.append(flat)
     return out
 
 
-def build_cues(tokens):
-    clauses, cur = [], []     # clause: list of (char, (start, end))
+def build_cues(tokens: list) -> list[list]:
+    """Group tokens into natural clause-based cues.
+
+    1. Bounded by clause punctuation (，。；：？！\\n). Serial commas (、) remain inline.
+    2. Over-long clauses (> 22 chars) are split evenly at word boundaries.
+    3. Tiny fragments (<= 2 chars) are merged into neighbors if <= 18 chars total.
+    """
+    raw_clauses, cur = [], []
     for t in tokens:
         ch = t[0]
-        if t[3]:
-            cur.append((ch, (t[1], t[2])))
+        if t[3]:  # content
+            cur.append(t)
         elif ch == "\n" or ch in CLAUSE_END:
             if cur:
-                clauses.append((cur, ch == "\n" or ch in "。？！.?!"))
+                is_end = (ch == "\n" or ch in "。？！.?!")
+                raw_clauses.append((cur, is_end))
                 cur = []
-            elif ch == "\n" and clauses:
-                clauses[-1] = (clauses[-1][0], True)
     if cur:
-        clauses.append((cur, True))
+        raw_clauses.append((cur, True))
 
-    cues, cur_cue = [], []
+    units = []
+    for cl, is_end in raw_clauses:
+        sub = split_clause_balanced(cl, MAX_CUE)
+        for i, s in enumerate(sub):
+            units.append([s, is_end if i == len(sub) - 1 else False])
 
-    def flush():
-        nonlocal cur_cue
-        if cur_cue:
-            cues.append([char for w in cur_cue for char in w])
-            cur_cue = []
+    # Merge very short introductory/connective fragments (len <= 2) into neighbor
+    merged_units = []
+    i = 0
+    while i < len(units):
+        cur_u, cur_end = units[i]
+        cur_len = len(cur_u)
+        if cur_len <= 2 and i + 1 < len(units) and not cur_end:
+            nxt_u, nxt_end = units[i + 1]
+            gap = nxt_u[0][1] - cur_u[-1][2]
+            if cur_len + len(nxt_u) <= 18 and gap < 800:
+                merged_units.append([cur_u + nxt_u, nxt_end])
+                i += 2
+                continue
+        merged_units.append([cur_u, cur_end])
+        i += 1
 
-    for cur_clause, is_hard in clauses:
-        text = "".join(t[0] for t in cur_clause)
-        words = []
-        pos = 0
-        for w in jieba.cut(text):
-            w_len = len(w)
-            words.append(cur_clause[pos:pos+w_len])
-            pos += w_len
-
-        for w in words:
-            w_len = len(w)
-            cur_len = sum(len(x) for x in cur_cue)
-            gap = (w[0][1][0] - cur_cue[-1][-1][1][1]) if cur_cue else 0
-            if cur_cue and (cur_len + w_len > MAX_CUE or gap > 2000):
-                flush()
-            if w_len > MAX_CUE:
-                flush()
-                for k in range(0, w_len, MAX_CUE):
-                    cues.append(w[k:k+MAX_CUE])
-            else:
-                cur_cue.append(w)
-        if is_hard:
-            flush()
-    flush()
-    return cues
+    return [u[0] for u in merged_units]
 
 
-def ts(ms):
+def ts(ms: int) -> str:
     h, rem = divmod(int(ms), 3_600_000)
     m, rem = divmod(rem, 60_000)
     s, ms = divmod(rem, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
 
-def render_srt(cues):
+def render_srt(cues: list[list]) -> str:
     out = []
-    spans = [(g[0][1][0], g[-1][1][1]) for g in cues]
+    spans = [(g[0][1], g[-1][2]) for g in cues]
     for n, g in enumerate(cues, 1):
         start, end = spans[n - 1]
         nxt = spans[n][0] if n < len(spans) else end + 800
@@ -269,7 +273,7 @@ def render_srt(cues):
         end = min(end, max(nxt, start + 1)) if nxt > start else end
         if end - start > 7000:
             end = start + min(max(len(g) * 350, 2000), 7000)
-        out.append(f"{n}\n{ts(start)} --> {ts(end)}\n{''.join(c for c, _ in g)}\n")
+        out.append(f"{n}\n{ts(start)} --> {ts(end)}\n{''.join(c[0] for c in g)}\n")
     return "\n".join(out)
 
 
