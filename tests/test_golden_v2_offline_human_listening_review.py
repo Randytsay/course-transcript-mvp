@@ -100,6 +100,29 @@ class HumanListeningReviewTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_review(forged, self.template)
 
+    def test_reject_forged_status_unreviewed_evidence_and_invalid_utc(self):
+        forged = copy.deepcopy(self.template)
+        forged["review_status"] = "HUMAN_ANNOTATIONS_COMPLETE_NEEDS_QA"
+        with self.assertRaises(ValueError):
+            validate_review(forged, self.template)
+        forged = copy.deepcopy(self.template)
+        forged["records"][0]["transcript_evidence_sha256"] = "f" * 64
+        with self.assertRaises(ValueError):
+            validate_review(forged, self.template)
+        forged = copy.deepcopy(self.template)
+        forged["records"][0]["review_notes"] = "pretend listened"
+        with self.assertRaises(ValueError):
+            validate_review(forged, self.template)
+        forged = copy.deepcopy(self.template)
+        forged["records"][0].update(
+            speech_judgement="UNCERTAIN",
+            reviewer_id="reviewer",
+            source_audio_listened=True,
+            reviewed_at_utc="2026-99-99T99:99:99Z",
+        )
+        with self.assertRaises(ValueError):
+            validate_review(forged, self.template)
+
     def test_reject_ungrounded_word_ranges(self):
         doc = copy.deepcopy(self.template)
         row = doc["records"][0]
