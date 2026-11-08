@@ -230,10 +230,21 @@ def main() -> int:
             provisional_retiming=not args.no_provisional_retiming,
         )
         # This command never changes its original TXT/SRT/production files.
-        args.candidate_output.write_text(rendered, encoding="utf-8")
-        args.manifest_output.write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8")
+        # Exclusive creation prevents a race from replacing a file that appeared
+        # after the earlier path check (including symlink destinations).
+        created_candidate = False
+        try:
+            with args.candidate_output.open("x", encoding="utf-8") as stream:
+                created_candidate = True
+                stream.write(rendered)
+            with args.manifest_output.open("x", encoding="utf-8") as stream:
+                stream.write(json.dumps(meta, ensure_ascii=False, indent=2) + "\n")
+        except BaseException:
+            # Do not leave a misleading half-delivered draft if the second
+            # create fails. Only unlink the candidate created by this run.
+            if created_candidate:
+                args.candidate_output.unlink(missing_ok=True)
+            raise
     except (OSError, ValueError, UnicodeError, RuntimeError) as exc:
         print(json.dumps({"status":"BLOCKED_INVALID_INPUT",
                           "error_type":type(exc).__name__,
