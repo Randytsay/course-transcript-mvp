@@ -964,7 +964,8 @@ class LearningStore:
         if len(text) < 2:
             raise ValueError("Search query must contain at least two characters")
         cap = max(1, min(limit, 100))
-        pattern = f"%{text.replace('%', '\\%').replace('_', '\\_')}%"
+        escaped = text.replace("%", r"\%").replace("_", r"\_")
+        pattern = f"%{escaped}%"
         with closing(self.connect()) as connection:
             segment_rows = connection.execute(
                 """
