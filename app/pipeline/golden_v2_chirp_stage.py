@@ -406,6 +406,12 @@ def reconcile_reviewed_chirp_window(
         } or str(exc) == "missing word end has no same-time successor"
         if not known_timing_defect:
             return "REVIEW_REQUIRED"
+        if (str(exc) == "missing word end has no same-time successor"
+                and row.get("purpose") != "REPAIR"):
+            # A base-window word with no provider end and no successor has
+            # no upper acoustic boundary. Only bounded supplemental REPAIR
+            # chunks may receive this provisional, review-only timestamp.
+            return "REVIEW_REQUIRED"
         from app.pipeline.golden_v2_chirp_window_repair import (
             _offset_ms as safe_offset_ms, repair_window,
         )
