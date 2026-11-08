@@ -55,7 +55,7 @@ def test_build_cues_strict_max_length_and_no_midword_splits():
     cues = build_cues(tokens)
     assert len(cues) > 1
     for cue in cues:
-        cue_text = "".join(c for c, _ in cue)
+        cue_text = "".join(c[0] for c in cue)
         assert len(cue_text) <= MAX_CUE
         # Compound terms should not be split across edge unless term itself > 22
         assert not cue_text.endswith("財")
@@ -66,8 +66,8 @@ def test_build_cues_strict_max_length_and_no_midword_splits():
 
 def test_render_srt_structure():
     cues = [
-        [("第", (1000, 1300)), ("一", (1300, 1600)), ("句", (1600, 2000))],
-        [("第", (2500, 2800)), ("二", (2800, 3100)), ("句", (3100, 3500))],
+        [["第", 1000, 1300, True], ["一", 1300, 1600, True], ["句", 1600, 2000, True]],
+        [["第", 2500, 2800, True], ["二", 2800, 3100, True], ["句", 3100, 3500, True]],
     ]
     srt = render_srt(cues)
     lines = [l.strip() for l in srt.strip().split("\n") if l.strip()]
