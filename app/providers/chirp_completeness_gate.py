@@ -255,7 +255,7 @@ def pack_speech_subwindows(
     bounds_end_ms: int,
     context_ms: int = 2_500,
     merge_gap_ms: int = 8_000,
-    max_window_ms: int = 180_000,
+    max_window_ms: int = 52_000,
 ) -> list[dict[str, int]]:
     """Coalesce frame-level speech segments into bounded repair windows.
 
