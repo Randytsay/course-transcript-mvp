@@ -109,7 +109,7 @@ class HumanListeningReviewTests(unittest.TestCase):
             reviewer_id="a",
             reviewed_at_utc="2026-11-08T12:34:56Z",
             transcript_evidence_sha256="f" * 64,
-            speech_anchor_ranges_ms=[{"start_ms": 0, "end_ms": 5000}],
+            speech_anchor_ranges_ms=[{"start_ms": -100, "end_ms": 5000}],
         )
         with self.assertRaises(ValueError):
             validate_review(doc, self.template)
