@@ -91,6 +91,65 @@ class ExecutorTests(unittest.TestCase):
         result = self.run_pass(paid_services=lambda _: self.fail('unknown outcome cannot dispatch'))
         self.assertEqual(result['outcomes'], [])
 
+    def test_bounded_standard_repair_hook_uses_trusted_factory_only_with_qa_sha(self):
+        # Provider-free integration at the live paid-executor dispatch boundary.
+        with patch.object(dispatch, 'execute_approved_primary_stage',
+                          autospec=True, side_effect=self.complete):
+            self.run_pass()
+        self.ledger.claim_next(self.fixture.job, worker_id='prior-chirp')
+        sha = 'd' * 64
+        repair_context = {
+            'storage_client': object(), 'bucket_name': 'private-test',
+            'object_prefix': 'test-repair', 'standard_gateway': object(),
+            'estimate_window_cents': lambda _: 2,
+            'approving_actor': 'test-owner',
+            'approval_reference': 'signed-test-grant',
+            'max_intervals': 4, 'max_total_ms': 60000,
+        }
+        with patch.object(executor, 'run_chirp_recovery_pass',
+                          return_value={
+                              'job_id': self.fixture.job,
+                              'action': 'STANDARD_REPAIR_APPROVAL_REQUIRED',
+                              'acoustic_qa_sha256': sha,
+                          }) as recovery, patch.object(
+                              executor, 'auto_execute_chirp_standard_repair',
+                              return_value={'action': 'AUTO_STANDARD_REPAIR_SUBMITTED',
+                                            'provider_submissions': 1},
+                          ) as auto:
+            result = self.run_pass(
+                paid_services=lambda _: self.fail('must not resubmit primary'),
+                recovery_services=lambda _: {
+                    'gateway': object(), 'cost_accountant': lambda _: 2},
+                repair_services=lambda _: repair_context)
+        self.assertEqual(recovery.call_count, 1)
+        self.assertEqual(auto.call_count, 1)
+        self.assertEqual(auto.call_args.kwargs['acoustic_qa_sha256'], sha)
+        self.assertEqual(auto.call_args.kwargs['approval_reference'], 'signed-test-grant')
+        self.assertEqual(result['outcomes'][0]['action'],
+                         'AUTO_STANDARD_REPAIR_SUBMITTED')
+
+    def test_standard_repair_refuses_missing_source_bound_qa_and_service(self):
+        with patch.object(dispatch, 'execute_approved_primary_stage',
+                          autospec=True, side_effect=self.complete):
+            self.run_pass()
+        self.ledger.claim_next(self.fixture.job, worker_id='prior-chirp')
+        with patch.object(executor, 'run_chirp_recovery_pass',
+                          return_value={
+                              'job_id': self.fixture.job,
+                              'action': 'STANDARD_REPAIR_APPROVAL_REQUIRED',
+                          }), patch.object(
+                              executor, 'auto_execute_chirp_standard_repair',
+                          ) as auto:
+            result = self.run_pass(
+                paid_services=lambda _: self.fail('must not repeat primary'),
+                recovery_services=lambda _: {
+                    'gateway': object(), 'cost_accountant': lambda _: 2},
+                repair_services=lambda _: self.fail(
+                    'no repair service without a verified acoustic digest'))
+        auto.assert_not_called()
+        self.assertEqual(result['outcomes'][0]['action'],
+                         'STANDARD_REPAIR_APPROVAL_REQUIRED')
+
     def test_chirp_recovery_uses_saved_operation_path_and_not_submit(self):
         with patch.object(dispatch, 'execute_approved_primary_stage', autospec=True, side_effect=self.complete): self.run_pass()
         self.ledger.claim_next(self.fixture.job, worker_id='prior-chirp')
