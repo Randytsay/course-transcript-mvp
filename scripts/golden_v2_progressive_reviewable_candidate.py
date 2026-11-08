@@ -105,7 +105,10 @@ def create_reviewable_candidate(
         gap = following_start - c.end_ms
         density = len(_visible(c.text)) * 1000 / (c.end_ms - c.start_ms)
         changed = False
-        if provisional_retiming and gap >= _GAP_MS and density > _TEXT_CPS_FOR_RETIME:
+        if provisional_retiming and gap >= _GAP_MS and (
+                density > _TEXT_CPS_FOR_RETIME
+                or (len(_visible(c.text)) >= 8 and c.end_ms - c.start_ms < 800)
+        ):
             count = len(_visible(c.text))
             # Very large collapsed text gets review-friendly provisional times
             # across the whole gap; medium blocks use a 30-s cap. Short text
@@ -127,7 +130,10 @@ def create_reviewable_candidate(
                 if pieces:
                     result.extend(pieces)
                     approximations.append({
-                        "source_cue_before": c.index,
+                        "source_cue_before": next(
+                            (original.index for original in source
+                             if original.start_ms == c.start_ms),
+                            c.index),
                         "start_ms": c.start_ms,
                         "end_ms": estimated_end,
                         "method": "PROVISIONAL_UNIFORM_TIME_NOT_ACOUSTIC",
@@ -145,7 +151,7 @@ def create_reviewable_candidate(
                 result.append({
                     "start_ms": allocated_end,
                     "end_ms": following_start,
-                    "text": _REVIEW_MARKER.format(index=len(original_gaps)),
+                    "text": _REVIEW_MARKER.format(index=0),
                     "provenance": "REVIEW_PLACEHOLDER_NOT_SPOKEN",
                 })
     # Source cue indices used for placeholders must align with actual gaps.
