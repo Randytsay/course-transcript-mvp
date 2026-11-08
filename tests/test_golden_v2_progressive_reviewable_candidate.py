@@ -94,6 +94,27 @@ class ProgressiveCandidateTests(unittest.TestCase):
                 self.assertEqual(main(), 2)  # no overwrite
             self.assertIn("甲",source.read_text(encoding="utf-8"))
 
+    def test_manifest_collision_never_leaves_partial_candidate(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            src = root / "original.srt"
+            src.write_text(block(1, "00:00:00,000", "00:00:01,000", "甲"),
+                           encoding="utf-8")
+            out = root / "candidate.srt"
+            manifest = root / "manifest.json"
+            # A dangling symlink is not an existing file under Path.exists().
+            # Exclusive creation must reject it rather than follow it.
+            target = root / "unexpected.json"
+            manifest.symlink_to(target)
+            args = ["candidate", "--srt", str(src),
+                    "--candidate-output", str(out),
+                    "--manifest-output", str(manifest)]
+            with patch("sys.argv", args), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(), 2)
+            self.assertFalse(out.exists())
+            self.assertFalse(target.exists())
+            self.assertTrue(manifest.is_symlink())
+
     def test_source_text_mismatch_and_overlap_fail_closed(self):
         src = block(1,"00:00:00,000","00:00:01,000","甲")
         with self.assertRaises(ValueError):
