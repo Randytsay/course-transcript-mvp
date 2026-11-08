@@ -50,7 +50,8 @@ class GeminiModelPolicyTests(unittest.TestCase):
             self.assertNotIn("gemini-2.5", source)
 
     def test_legacy_generate_config_does_not_pass_disallowed_sampler_fields(self) -> None:
-        for file in ("correct_text_legacy_hardened.py", "correct_text_cascade.py"):
+        for file in ("correct_text.py", "correct_text_legacy_hardened.py",
+                     "correct_text_cascade.py"):
             tree = ast.parse((PROVIDERS / file).read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
