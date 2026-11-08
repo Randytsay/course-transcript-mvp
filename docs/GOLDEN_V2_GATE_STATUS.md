@@ -1,9 +1,14 @@
 # Golden Transcript V2 — 驗收 Gate 狀態追蹤
 
-建立日期：2026-10-11　｜　規格版本：`V2.0-design-1`  
-執行進度：**僅設計與驗收文件已入 GitHub；尚未開始 P0–P8 的工程驗收**。
+建立日期：2026-10-11　｜　最新更新：**2026-11-08**　｜　規格版本：`V2.0-design-1`  
+當前總狀態：**PRODUCTION NO-GO（#160 G1 已通過；G2–G10 OPEN；2026-10-31 POC-0 已完成）**
 
-規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)
+> **[!IMPORTANT] 給所有 AI Agent 的導航指引（2026-11-08）**
+> 1. **最新權威上線計畫與 Gate 定義（G1–G10）**：請優先讀取 [`docs/GOLDEN_V2_GO_LIVE_MASTER_PLAN.md`](GOLDEN_V2_GO_LIVE_MASTER_PLAN.md)、[`docs/GOLDEN_V2_AGENT_COORDINATION.md`](GOLDEN_V2_AGENT_COORDINATION.md)、[Issue #160](https://github.com/Randytsay/course-transcript-mvp/issues/160) 與 [Issue #173](https://github.com/Randytsay/course-transcript-mvp/issues/173)。
+> 2. **2026-10-31 聲學缺口 POC-0 實測與根因定案**：請讀 PR #182 之 `docs/GOLDEN_V2_ASR_RECOVERY_PEER_REVIEW_20261108.md`（第 11 節）。已證實 `_vad_assessment()` 缺少 `"robust_speech"` 與 30 秒切片平均死區（`0.15..0.45`）為阻斷 Standard Batch Repair 的直接程式根因；八段缺口經本機 `webrtcvad` 幀級別驗證，確認 5 段含 `410.31s` 真實人聲（`clip_01, 02, 03, 04, 08`）、3 段為無語音停頓（`clip_05, 06, 07` 共 `42.68s`），且 `1,942,840 ms` 證據矛盾已確認為算術筆誤（真實孤立詞為 `1,973,440 ms` Cue #421）。
+> 3. **PR 清理狀態（2026-11-08）**：過時或衝突之舊分支 PR（`#146`、`#153`）及已被 `#180` 乾淨提取取代之 superstack PR（`#172`）均已關閉（保留底層 git 分支備查）。請勿嘗試直接合併 `feat/golden-v2-integration-qa-issue169` 大分支，一律以 `main` 為基底提取最小可驗證 PR。
+
+規格：[架構](GOLDEN_V2_ARCHITECTURE_PLAN.md)｜[開發順序與驗收矩陣](GOLDEN_V2_ACCEPTANCE_AND_ROADMAP.md)｜[上線總計畫](GOLDEN_V2_GO_LIVE_MASTER_PLAN.md)
 
 > 此文件是會隨 PR/驗收更新的狀態登記簿。**只有提交機器／人工可核對的 evidence link、commit、測試報告與操作者資訊後，才能把某一 Gate 設為 PASS。** 「文件已提交」不代表其他工程 Gate 已 PASS。禁止憑對話主觀印象標已完成。
 

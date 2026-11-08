@@ -86,6 +86,225 @@ def _audible(job_dir: Path, start_ms: int, end_ms: int) -> bool | None:
     return float(match.group(1)) > threshold
 
 
+def _assess_pcm_vad(
+    pcm: bytes,
+    *,
+    sample_rate: int = 16_000,
+    frame_ms: int = 30,
+    start_ms: int = 0,
+) -> dict[str, Any] | None:
+    """Evaluate raw s16le mono PCM bytes with dual-mode WebRTC VAD + hysteresis.
+
+    In addition to whole-slice occupancy ratios, this computes contiguous
+    frame-level speech segments (`speech_segments_ms`), `active_speech_ms`, and
+    `max_rolling_1s_mode3_ratio` so that a 30-second probe window containing a
+    real spoken sentence followed by blackboard silence does not fall into the
+    `0.15 <= mode0_ratio < 0.45` dead-zone.
+    """
+    try:
+        import webrtcvad
+    except ImportError:
+        return None
+
+    frame_bytes = sample_rate * frame_ms // 1000 * 2
+    frame_count = len(pcm) // frame_bytes
+    if frame_count < 10:
+        return None
+    pcm = pcm[: frame_count * frame_bytes]
+    try:
+        vad0 = webrtcvad.Vad(0)
+        vad3 = webrtcvad.Vad(3)
+        speech0 = 0
+        speech3 = 0
+        f3_flags: list[int] = []
+        frame_rms_db: list[float] = []
+        for index in range(frame_count):
+            frame = pcm[index * frame_bytes : (index + 1) * frame_bytes]
+            s0 = int(vad0.is_speech(frame, sample_rate))
+            s3 = int(vad3.is_speech(frame, sample_rate))
+            speech0 += s0
+            speech3 += s3
+            f3_flags.append(s3)
+            frame_samples = array("h")
+            frame_samples.frombytes(frame)
+            if sys.byteorder != "little":
+                frame_samples.byteswap()
+            f_msq = sum(int(x) * int(x) for x in frame_samples) / len(frame_samples)
+            f_rms = math.sqrt(f_msq)
+            frame_rms_db.append(20 * math.log10(f_rms / 32768) if f_rms > 0 else -120.0)
+    except Exception:
+        return None
+
+    samples = array("h")
+    samples.frombytes(pcm)
+    if sys.byteorder != "little":
+        samples.byteswap()
+    if not samples:
+        return None
+    mean_square = sum(int(sample) * int(sample) for sample in samples) / len(samples)
+    rms = math.sqrt(mean_square)
+    rms_dbfs = 20 * math.log10(rms / 32768) if rms > 0 else -120.0
+
+    # Hysteresis speech segment extraction: bridge short pauses <= 600ms
+    # (20 frames) and retain contiguous runs >= 450ms (15 frames).
+    frame_energy_floor = float(os.environ.get("CHIRP_VAD_FRAME_RMS_FLOOR_DBFS", "-45"))
+    active = [
+        1 if (f3_flags[i] and frame_rms_db[i] > frame_energy_floor) else 0
+        for i in range(frame_count)
+    ]
+    bridge_frames = max(1, 600 // frame_ms)
+    min_seg_frames = max(1, 450 // frame_ms)
+    last_on = -999_999
+    for i, val in enumerate(active):
+        if val:
+            if 0 < i - last_on <= bridge_frames:
+                for k in range(last_on + 1, i):
+                    active[k] = 1
+            last_on = i
+    speech_segments_ms: list[dict[str, int]] = []
+    in_seg = False
+    seg_start_idx = 0
+    for i, val in enumerate(active):
+        if val and not in_seg:
+            in_seg = True
+            seg_start_idx = i
+        elif not val and in_seg:
+            in_seg = False
+            if i - seg_start_idx >= min_seg_frames:
+                speech_segments_ms.append(
+                    {
+                        "start_ms": start_ms + seg_start_idx * frame_ms,
+                        "end_ms": start_ms + i * frame_ms,
+                    }
+                )
+    if in_seg and (frame_count - seg_start_idx) >= min_seg_frames:
+        speech_segments_ms.append(
+            {
+                "start_ms": start_ms + seg_start_idx * frame_ms,
+                "end_ms": start_ms + frame_count * frame_ms,
+            }
+        )
+    active_speech_ms = sum(seg["end_ms"] - seg["start_ms"] for seg in speech_segments_ms)
+    win_frames = min(max(1, 1000 // frame_ms), frame_count)
+    max_rolling_1s_m3 = (
+        max(
+            sum(f3_flags[i : i + win_frames]) / win_frames
+            for i in range(frame_count - win_frames + 1)
+        )
+        if frame_count >= win_frames
+        else 0.0
+    )
+
+    mode0_ratio = speech0 / frame_count
+    mode3_ratio = speech3 / frame_count
+    mode0_max = float(os.environ.get("CHIRP_VAD_NONSPEECH_MODE0_MAX", "0.15"))
+    mode3_max = float(os.environ.get("CHIRP_VAD_NONSPEECH_MODE3_MAX", "0.08"))
+    rms_max_dbfs = float(os.environ.get("CHIRP_VAD_NONSPEECH_RMS_MAX_DBFS", "-35"))
+    robust_non_speech = (
+        (mode0_ratio < mode0_max and mode3_ratio < mode3_max and rms_dbfs <= rms_max_dbfs)
+        or (mode3_ratio < 0.05 and active_speech_ms < 600 and rms_dbfs <= rms_max_dbfs)
+    )
+    mode0_speech_min = float(os.environ.get("CHIRP_VAD_SPEECH_MODE0_MIN", "0.45"))
+    mode3_speech_min = float(os.environ.get("CHIRP_VAD_SPEECH_MODE3_MIN", "0.20"))
+    rms_speech_min_dbfs = float(os.environ.get("CHIRP_VAD_SPEECH_RMS_MIN_DBFS", "-35"))
+    min_active_speech_ms = int(os.environ.get("CHIRP_VAD_ACTIVE_SPEECH_MIN_MS", "1500"))
+    min_rolling_1s_m3 = float(os.environ.get("CHIRP_VAD_ROLLING_1S_MODE3_MIN", "0.60"))
+    robust_speech = not robust_non_speech and (
+        (
+            mode0_ratio >= mode0_speech_min
+            and mode3_ratio >= mode3_speech_min
+            and rms_dbfs >= rms_speech_min_dbfs
+        )
+        or (
+            active_speech_ms >= min_active_speech_ms
+            and max_rolling_1s_m3 >= min_rolling_1s_m3
+            and rms_dbfs >= (rms_speech_min_dbfs - 3.0)
+        )
+    )
+    return {
+        "engine": "webrtcvad",
+        "sample_rate_hz": sample_rate,
+        "frame_ms": frame_ms,
+        "frame_count": frame_count,
+        "mode0_speech_ratio": round(mode0_ratio, 4),
+        "mode3_speech_ratio": round(mode3_ratio, 4),
+        "rms_dbfs": round(rms_dbfs, 2),
+        "active_speech_ms": active_speech_ms,
+        "speech_segment_count": len(speech_segments_ms),
+        "max_rolling_1s_mode3_ratio": round(max_rolling_1s_m3, 4),
+        "speech_segments_ms": speech_segments_ms,
+        "thresholds": {
+            "mode0_max": mode0_max,
+            "mode3_max": mode3_max,
+            "rms_max_dbfs": rms_max_dbfs,
+            "mode0_speech_min": mode0_speech_min,
+            "mode3_speech_min": mode3_speech_min,
+            "rms_speech_min_dbfs": rms_speech_min_dbfs,
+            "min_active_speech_ms": min_active_speech_ms,
+            "min_rolling_1s_m3": min_rolling_1s_m3,
+        },
+        "robust_non_speech": robust_non_speech,
+        "robust_speech": robust_speech,
+    }
+
+
+def pack_speech_subwindows(
+    speech_segments_ms: list[dict[str, int]],
+    *,
+    bounds_start_ms: int,
+    bounds_end_ms: int,
+    context_ms: int = 2_500,
+    merge_gap_ms: int = 8_000,
+    max_window_ms: int = 180_000,
+) -> list[dict[str, int]]:
+    """Coalesce frame-level speech segments into bounded repair windows.
+
+    Excludes long internal silent stretches inside multi-minute gaps so that a
+    410-second gap with 215 seconds of speech does not waste repair budget on
+    silence or trigger premature 600-second round truncation.
+    """
+    if bounds_end_ms <= bounds_start_ms or not speech_segments_ms:
+        return []
+    ordered = sorted(
+        (
+            max(bounds_start_ms, int(seg["start_ms"])),
+            min(bounds_end_ms, int(seg["end_ms"])),
+        )
+        for seg in speech_segments_ms
+        if int(seg.get("end_ms", 0)) > int(seg.get("start_ms", 0))
+    )
+    ordered = [(s, e) for s, e in ordered if e > s]
+    if not ordered:
+        return []
+    coalesced: list[tuple[int, int]] = []
+    for s, e in ordered:
+        if coalesced and s - coalesced[-1][1] <= merge_gap_ms:
+            coalesced[-1] = (coalesced[-1][0], max(coalesced[-1][1], e))
+        else:
+            coalesced.append((s, e))
+    windows: list[dict[str, int]] = []
+    for target_s, target_e in coalesced:
+        cursor = target_s
+        while cursor < target_e:
+            sub_e = min(target_e, cursor + max_window_ms)
+            win_s = max(0, bounds_start_ms, cursor - context_ms)
+            win_e = min(bounds_end_ms, sub_e + context_ms)
+            if windows and win_s <= windows[-1]["end_ms"] and (win_e - windows[-1]["start_ms"]) <= max_window_ms + 2 * context_ms:
+                windows[-1]["end_ms"] = max(windows[-1]["end_ms"], win_e)
+                windows[-1]["target_end_ms"] = max(windows[-1]["target_end_ms"], sub_e)
+            else:
+                windows.append(
+                    {
+                        "start_ms": win_s,
+                        "end_ms": win_e,
+                        "target_start_ms": cursor,
+                        "target_end_ms": sub_e,
+                    }
+                )
+            cursor = sub_e
+    return windows
+
+
 def _vad_assessment(job_dir: Path, start_ms: int, end_ms: int) -> dict[str, Any] | None:
     """Return conservative local speech evidence for an audible subtitle gap.
 
@@ -101,7 +320,7 @@ def _vad_assessment(job_dir: Path, start_ms: int, end_ms: int) -> dict[str, Any]
     if not source.is_file():
         return None
     try:
-        import webrtcvad
+        import webrtcvad  # noqa: F401
     except ImportError:
         return None
 
@@ -115,65 +334,17 @@ def _vad_assessment(job_dir: Path, start_ms: int, end_ms: int) -> dict[str, Any]
         ],
         capture_output=True,
         check=False,
-        timeout=180,
+        timeout=30,
     )
     if result.returncode != 0 or not result.stdout:
         return None
 
-    frame_ms = 30
-    sample_rate = 16_000
-    frame_bytes = sample_rate * frame_ms // 1000 * 2
-    frame_count = len(result.stdout) // frame_bytes
-    if frame_count < 10:
-        return None
-    pcm = result.stdout[: frame_count * frame_bytes]
-    try:
-        vad0 = webrtcvad.Vad(0)
-        vad3 = webrtcvad.Vad(3)
-        speech0 = 0
-        speech3 = 0
-        for index in range(frame_count):
-            frame = pcm[index * frame_bytes : (index + 1) * frame_bytes]
-            speech0 += int(vad0.is_speech(frame, sample_rate))
-            speech3 += int(vad3.is_speech(frame, sample_rate))
-    except Exception:
-        return None
-
-    samples = array("h")
-    samples.frombytes(pcm)
-    if sys.byteorder != "little":
-        samples.byteswap()
-    if not samples:
-        return None
-    mean_square = sum(int(sample) * int(sample) for sample in samples) / len(samples)
-    rms = math.sqrt(mean_square)
-    rms_dbfs = 20 * math.log10(rms / 32768) if rms > 0 else -120.0
-
-    mode0_ratio = speech0 / frame_count
-    mode3_ratio = speech3 / frame_count
-    mode0_max = float(os.environ.get("CHIRP_VAD_NONSPEECH_MODE0_MAX", "0.15"))
-    mode3_max = float(os.environ.get("CHIRP_VAD_NONSPEECH_MODE3_MAX", "0.08"))
-    rms_max_dbfs = float(os.environ.get("CHIRP_VAD_NONSPEECH_RMS_MAX_DBFS", "-35"))
-    robust_non_speech = (
-        mode0_ratio < mode0_max
-        and mode3_ratio < mode3_max
-        and rms_dbfs <= rms_max_dbfs
+    return _assess_pcm_vad(
+        result.stdout,
+        sample_rate=16_000,
+        frame_ms=30,
+        start_ms=start_ms,
     )
-    return {
-        "engine": "webrtcvad",
-        "sample_rate_hz": sample_rate,
-        "frame_ms": frame_ms,
-        "frame_count": frame_count,
-        "mode0_speech_ratio": round(mode0_ratio, 4),
-        "mode3_speech_ratio": round(mode3_ratio, 4),
-        "rms_dbfs": round(rms_dbfs, 2),
-        "thresholds": {
-            "mode0_max": mode0_max,
-            "mode3_max": mode3_max,
-            "rms_max_dbfs": rms_max_dbfs,
-        },
-        "robust_non_speech": robust_non_speech,
-    }
 
 
 def _verified_nonlexical_windows(job_dir: Path) -> list[dict[str, int]]:
