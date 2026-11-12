@@ -59,6 +59,27 @@ class _FakeVad:
 
 
 class TestChirpVadDeadzoneAndSubsliceRepair(unittest.TestCase):
+    def test_final_subwindows_include_context_within_hard_cap(self) -> None:
+        windows = pack_speech_subwindows(
+            [{"start_ms": 10_000, "end_ms": 62_000}],
+            bounds_start_ms=0, bounds_end_ms=80_000,
+            context_ms=2_500, max_window_ms=52_000,
+        )
+        self.assertGreaterEqual(len(windows), 2)
+        self.assertEqual(windows[0]["start_ms"], 7_500)
+        self.assertEqual(windows[-1]["end_ms"], 64_500)
+        self.assertEqual(windows[0]["target_start_ms"], 10_000)
+        self.assertEqual(windows[-1]["target_end_ms"], 62_000)
+        self.assertTrue(all(0 < w["end_ms"] - w["start_ms"] <= 52_000 for w in windows))
+
+    def test_repair_context_cannot_consume_entire_window(self) -> None:
+        with self.assertRaises(ValueError):
+            pack_speech_subwindows(
+                [{"start_ms": 1_000, "end_ms": 2_000}],
+                bounds_start_ms=0, bounds_end_ms=4_000,
+                context_ms=26_000, max_window_ms=52_000,
+            )
+
     def test_pause_diluted_30s_slice_rescued_from_deadzone(self) -> None:
         """A 30s window with 6s of clear speech (20% occupancy) must be robust_speech=True."""
         # 6 seconds of speech out of 30 seconds (aligned to 30ms frame boundaries)

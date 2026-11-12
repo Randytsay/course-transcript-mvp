@@ -56,7 +56,7 @@ class QuoteRequest(LinkPreviewRequest):
 def request_quote(body: QuoteRequest, authorization: str | None = Header(default=None)):
     database, actor, _ = _authorized_write_database(authorization)
     try:
-        preview = preview_drive_link(body.link, recursive=body.recursive)
+        preview = preview_drive_link(body.link, recursive=body.recursive, mp3_only=body.mp3_only)
         if preview['preview_sha256'] != body.preview_sha256:
             raise V2Conflict('Drive preview changed; refresh before quoting')
         return enqueue_quote(database=database, preview=preview, file_id=body.file_id, actor=actor,retry_failed=body.retry_failed)

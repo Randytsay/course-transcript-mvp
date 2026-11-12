@@ -76,6 +76,40 @@ class DiscoveryTests(unittest.TestCase):
         self.assertFalse(result['drive_mutation_started'])
         self.assertEqual(result['preview_sha256'], preview_drive_link(LINK)['preview_sha256'])
         self.assertEqual(len([p for p, _ in self.calls if p == '/files']), 4)
+        self.assertNotEqual(result['preview_sha256'],
+                            preview_drive_link(LINK, mp3_only=True)['preview_sha256'])
+
+    def test_mp3_only_excludes_oversized_video_without_bypassing_limits(self):
+        video = {'id': 'bigvideo0123456789', 'name': '第一課.mp4',
+                 'mimeType': 'video/mp4', 'parents': [FOLDER]}
+        self.items[video['id']] = video
+        for page in self.pages:
+            page['files'].append(video)
+
+        def meta(source_path):
+            if source_path.endswith('.mp4'):
+                return {'id': video['id'], 'version': '2', 'name': video['name'],
+                        'size_bytes': 3 * 1024**3, 'md5_checksum': 'f' * 32}
+            return {'id': FILE, 'version': '7', 'name': SOURCE['name'],
+                    'size_bytes': 50, 'md5_checksum': 'a' * 32}
+        with patch('app.jobs.drive_api.read_drive_media_metadata', side_effect=meta):
+            with self.assertRaises(DriveApiError):
+                preview_drive_link(LINK)
+            selected = preview_drive_link(LINK, mp3_only=True)
+        self.assertEqual(selected['files'], [SOURCE])
+        self.assertEqual(selected['media_selection'], 'mp3_only')
+        self.assertEqual(selected['total_bytes'], 50)
+        self.assertEqual(len(selected['preview_sha256']), 64)
+        self.assertFalse(selected['download_started'])
+        self.assertFalse(selected['provider_calls_started'])
+        self.assertFalse(selected['drive_mutation_started'])
+        with self.assertRaises(ValueError):
+            preview_drive_link(LINK, mp3_only='yes')
+
+    def test_mp3_only_rejects_direct_video_link(self):
+        self.items[FILE]['name'] = '第一課.mp4'
+        with self.assertRaises(ValueError):
+            preview_drive_link(f'https://drive.google.com/file/d/{FILE}/view', mp3_only=True)
 
     def test_root_alias_uses_authenticated_root_id(self):
         with patch('app.jobs.drive_api._root_folder_id', return_value='root'):

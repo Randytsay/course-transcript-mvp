@@ -78,11 +78,13 @@ def _join(parent: str, name: str) -> str:
     return parent + name if parent == drive._root_path() else parent + "/" + name
 
 
-def preview_drive_link(link: str, *, recursive: bool = False, max_files: int = 100,
+def preview_drive_link(link: str, *, recursive: bool = False, mp3_only: bool = False,
+                       max_files: int = 100,
                        max_bytes: int = 10 * 1024**3, max_depth: int = 5,
                        max_entries: int = 2000, max_pages: int = 100,
                        max_file_bytes: int = 2 * 1024**3) -> dict:
-    if (type(recursive) is not bool or any(type(n) is not int or n <= 0 for n in
+    if (type(recursive) is not bool or type(mp3_only) is not bool
+            or any(type(n) is not int or n <= 0 for n in
             (max_files, max_bytes, max_entries, max_pages, max_file_bytes)) or type(max_depth) is not int or max_depth < 0):
         raise ValueError("Invalid discovery limits")
     file_id, kind = parse_drive_link(link)
@@ -186,7 +188,10 @@ def preview_drive_link(link: str, *, recursive: bool = False, max_files: int = 1
                         skipped += 1
                 elif (not str(item.get("mimeType", "")).startswith("application/vnd.google-apps.")
                       and PurePosixPath(name).suffix.lower() in MEDIA_EXTENSIONS):
-                    add(child_path, child_id, folder_id)
+                    if mp3_only and PurePosixPath(name).suffix.lower() != ".mp3":
+                        skipped += 1
+                    else:
+                        add(child_path, child_id, folder_id)
                 else:
                     remember_reference(item, folder_id, child_path)
                     skipped += 1
@@ -200,6 +205,8 @@ def preview_drive_link(link: str, *, recursive: bool = False, max_files: int = 1
     if is_folder:
         visit(file_id, source_path, 0)
     else:
+        if mp3_only and PurePosixPath(source_path).suffix.lower() != ".mp3":
+            raise ValueError("MP3-only selection requires an MP3 file or folder")
         # A direct media link still needs bounded GET-only sibling discovery.
         parent_id = str(target['parents'][0])
         parent_path = _folder_path(parent_id, root_id)
@@ -265,6 +272,10 @@ def preview_drive_link(link: str, *, recursive: bool = False, max_files: int = 1
             files[item['file_id']]['references'] = choice
     identity = {"schema": "golden-v2-link-preview-v1", "target_id": file_id,
                 "recursive": recursive, "files": sorted(files.values(), key=lambda x: x["file_id"])}
+    # Selection is part of the signed preview identity: the submitter cannot
+    # switch between all media and MP3-only using the same approval digest.
+    if mp3_only:
+        identity["media_selection"] = "mp3_only"
     digest = hashlib.sha256(json.dumps(identity, ensure_ascii=False, sort_keys=True,
                                       separators=(",", ":")).encode()).hexdigest()
     return {**identity, "preview_sha256": digest, "source_path": source_path,

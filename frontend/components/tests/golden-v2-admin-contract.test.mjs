@@ -136,6 +136,9 @@ import { parseLinkPreview, parseLinkBatch } from "../../lib/golden-v2-admin-cont
 test("Drive link contract rejects foreign hosts, resource keys and ambiguous IDs", () => {
   const link = "https://drive.google.com/drive/folders/folder0123456789";
   assert.deepEqual(parseLinkPreview({ link, recursive: false }), { link, recursive: false });
+  assert.deepEqual(parseLinkPreview({ link, recursive: false, mp3_only: true }),
+    { link, recursive: false, mp3_only: true });
+  assert.equal(parseLinkPreview({ link, recursive: false, mp3_only: "true" }), null);
   for (const value of [link.replace("drive.google.com", "drive.google.com.evil.test"), link + "#x", link + "?resourcekey=secret",
     "https://drive.google.com/open?id=file0123456789&id=other0123456789", link + "\n"]) {
     assert.equal(parseLinkPreview({ link: value, recursive: false }), null);
@@ -149,6 +152,8 @@ test("batch contract requires explicit complete per-file estimates and confirmat
     mode: "FLASH_CHIRP", preview_sha256: "a".repeat(64), confirm: true,
     estimated_stage_cents_by_file: { file0123456789: Object.fromEntries(GOLDEN_V2_STAGES.map((s) => [s, 0])) } };
   assert.deepEqual(parseLinkBatch(valid), valid);
+  assert.deepEqual(parseLinkBatch({ ...valid, mp3_only: true }), { ...valid, mp3_only: true });
+  assert.equal(parseLinkBatch({ ...valid, mp3_only: "true" }), null);
   assert.equal(parseLinkBatch({ ...valid, confirm: false }), null);
   assert.equal(parseLinkBatch({ ...valid, estimated_stage_cents_by_file: {} }), null);
   assert.equal(parseLinkBatch({ ...valid, estimated_stage_cents_by_file: { file0123456789: {} } }), null);

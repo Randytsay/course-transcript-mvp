@@ -262,7 +262,12 @@ def pack_speech_subwindows(
     Excludes long internal silent stretches inside multi-minute gaps so that a
     410-second gap with 215 seconds of speech does not waste repair budget on
     silence or trigger premature 600-second round truncation.
+
+    max_window_ms is the final clip limit, INCLUDING both context margins.
     """
+    if (type(max_window_ms) is not int or type(context_ms) is not int
+            or max_window_ms <= 0 or context_ms < 0 or 2 * context_ms >= max_window_ms):
+        raise ValueError("repair window must fit both context margins")
     if bounds_end_ms <= bounds_start_ms or not speech_segments_ms:
         return []
     ordered = sorted(
@@ -283,13 +288,14 @@ def pack_speech_subwindows(
         else:
             coalesced.append((s, e))
     windows: list[dict[str, int]] = []
+    speech_budget_ms = max_window_ms - 2 * context_ms
     for target_s, target_e in coalesced:
         cursor = target_s
         while cursor < target_e:
-            sub_e = min(target_e, cursor + max_window_ms)
+            sub_e = min(target_e, cursor + speech_budget_ms)
             win_s = max(0, bounds_start_ms, cursor - context_ms)
             win_e = min(bounds_end_ms, sub_e + context_ms)
-            if windows and win_s <= windows[-1]["end_ms"] and (win_e - windows[-1]["start_ms"]) <= max_window_ms + 2 * context_ms:
+            if windows and win_s <= windows[-1]["end_ms"] and (win_e - windows[-1]["start_ms"]) <= max_window_ms:
                 windows[-1]["end_ms"] = max(windows[-1]["end_ms"], win_e)
                 windows[-1]["target_end_ms"] = max(windows[-1]["target_end_ms"], sub_e)
             else:

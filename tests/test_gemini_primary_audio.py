@@ -140,8 +140,11 @@ class GoldenPrimaryAudioTests(unittest.TestCase):
                 part_factory=lambda u, m: (u, m),
                 max_output_tokens=8192, thinking_level="LOW")
         config = client.models.generate_content.call_args.kwargs["config"]
-        self.assertEqual(config, {"max_output_tokens": 8192, "temperature": 0,
+        self.assertEqual(config, {"max_output_tokens": 8192,
                                  "thinking_config": {"thinking_level": "LOW"}})
+        self.assertNotIn("temperature", config)
+        self.assertNotIn("top_p", config)
+        self.assertNotIn("top_k", config)
         self.assertEqual(record["identity"]["generation_config"], config)
 
     def test_assembly_rejects_truncated_window_despite_complete_stamp(self) -> None:

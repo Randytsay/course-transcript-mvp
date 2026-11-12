@@ -110,5 +110,10 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
                 # claim/raw barrier remains; the next cycle cannot re-claim it.
                 outcomes.append({'job_id': job_id, 'action': 'JOB_REQUIRES_RECONCILIATION',
                                  'error_type':type(exc).__name__})
+        # Stage dispatch may submit a billable request or return before that
+        # boundary. Use nullable boolean + separate evidence status, never
+        # a truthy string that downstream dashboards mistake for True.
         return {'action': 'PAID_EXECUTOR_CYCLE_COMPLETE', 'outcomes': outcomes,
-                'provider_calls_started': 'CHECK_IMMUTABLE_STAGE_AUDITS', 'drive_mutation_started': False}
+                'provider_calls_started': None,
+                'provider_call_audit_status': 'UNKNOWN_REQUIRES_IMMUTABLE_STAGE_AUDITS',
+                'drive_mutation_started': False}

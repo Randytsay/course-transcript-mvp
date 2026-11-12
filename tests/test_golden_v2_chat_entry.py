@@ -124,14 +124,15 @@ class ChatEntryTests(unittest.TestCase):
 
     def test_preview_is_the_existing_authenticated_drive_path(self):
         with patch('app.golden_v2_routes.preview_drive_link', return_value={'files': [], 'provider_calls_started': False}) as preview:
-            result = self.client.post('/api/v1/golden-v2/link-preview', json={'link':'https://drive.google.com/drive/folders/folder0123456789','recursive':False}, headers=self.headers)
+            result = self.client.post('/api/v1/golden-v2/link-preview', json={'link':'https://drive.google.com/drive/folders/folder0123456789','recursive':False,'mp3_only':True}, headers=self.headers)
         self.assertEqual(result.status_code, 200)
-        preview.assert_called_once()
+        preview.assert_called_once_with('https://drive.google.com/drive/folders/folder0123456789',
+                                        recursive=False, mp3_only=True)
 
     def test_quote_uses_write_token_fresh_preview_and_no_caller_prices(self):
         source = dict(file_id='drive-file-12345',version='7',source_path='gdrive:folder/a.MP3',
                       name='a.MP3',size_bytes=3,md5_checksum='abc')
-        body = dict(link='https://drive.google.com/drive/folders/folder0123456789',
+        body = dict(link='https://drive.google.com/drive/folders/folder0123456789',mp3_only=True,
                     file_id=source['file_id'],preview_sha256='b'*64,confirm=True)
         with patch('app.golden_v2_chat_api.preview_drive_link',return_value={'files':[source],'preview_sha256':'b'*64}):
             read_attempt=self.client.post('/api/v1/golden-v2/quotes',json=body,headers=self.headers)
