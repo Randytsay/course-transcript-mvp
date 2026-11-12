@@ -75,9 +75,9 @@ class DiscoveryTests(unittest.TestCase):
         self.assertFalse(result['provider_calls_started'])
         self.assertFalse(result['drive_mutation_started'])
         self.assertEqual(result['preview_sha256'], preview_drive_link(LINK)['preview_sha256'])
+        self.assertEqual(len([p for p, _ in self.calls if p == '/files']), 4)
         self.assertNotEqual(result['preview_sha256'],
                             preview_drive_link(LINK, mp3_only=True)['preview_sha256'])
-        self.assertEqual(len([p for p, _ in self.calls if p == '/files']), 4)
 
     def test_mp3_only_excludes_oversized_video_without_bypassing_limits(self):
         video = {'id': 'bigvideo0123456789', 'name': '第一課.mp4',
