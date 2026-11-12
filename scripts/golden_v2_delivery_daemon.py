@@ -41,13 +41,15 @@ def main():
     try:
         while not stop.is_set():
             if args.enable_publication:
-                ledger = GoldenV2Ledger.open_existing(args.artifact_root / 'ledger.sqlite')
+                ledger = None
                 for grant in sorted((args.artifact_root/'jobs').glob('*/owner-publish-grant.json'))[:100]:
                     if stop.is_set(): break
                     if (grant.parent/'golden-v2/drive-delivery.json').is_file(): continue
                     fingerprint = (0, 0)
                     try:
                         job_id = grant.parent.name
+                        if ledger is None:
+                            ledger = GoldenV2Ledger.open_existing(args.artifact_root / 'ledger.sqlite')
                         state = ledger.status(job_id)
                         reason = publication_gate(state)
                         if reason:
