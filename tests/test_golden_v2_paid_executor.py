@@ -12,6 +12,12 @@ from app.jobs.golden_v2_ledger import V2Conflict
 
 
 class ExecutorTests(unittest.TestCase):
+    def test_paid_cycle_telemetry_does_not_report_truthy_string_as_call(self):
+        result = self.run_pass(paid_services=lambda _: {})
+        self.assertIsNone(result["provider_calls_started"])
+        self.assertEqual(result["provider_call_audit_status"],
+                         "UNKNOWN_REQUIRES_IMMUTABLE_STAGE_AUDITS")
+
     def setUp(self):
         self.fixture = fixture.DriveRevisionTests(); self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)

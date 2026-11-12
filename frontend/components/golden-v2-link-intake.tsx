@@ -25,6 +25,7 @@ async function call(path: string, body?: unknown) {
 export default function GoldenV2LinkIntake() {
   const [link, setLink] = useState("");
   const [recursive, setRecursive] = useState(false);
+  const [mp3Only, setMp3Only] = useState(false);
   const [mode, setMode] = useState<GoldenV2Mode>("FLASH_CHIRP");
   const [preview, setPreview] = useState<Preview | null>(null);
   const [costs, setCosts] = useState<Record<string, Record<string, string>>>({});
@@ -54,7 +55,7 @@ export default function GoldenV2LinkIntake() {
   function resetPreview() { setPreview(null); setConfirmed(false); setCosts({}); }
   async function discover(event: FormEvent) {
     event.preventDefault();
-    const body = parseLinkPreview({ link, recursive });
+    const body = parseLinkPreview({ link, recursive, mp3_only: mp3Only });
     if (!body) { setError("請貼上一般 Google Drive 檔案或資料夾連結。"); return; }
     resetPreview(); setBusy(true); setError("");
     try { setPreview(await call("link-preview", body)); }
@@ -68,7 +69,7 @@ export default function GoldenV2LinkIntake() {
       Object.fromEntries(GOLDEN_V2_STAGES.map((stage) => [stage,
         costs[file.file_id]?.[stage]?.trim() ? Number(costs[file.file_id][stage]) : NaN])),
     ]));
-    const body = parseLinkBatch({ link, recursive, mode, preview_sha256: preview.preview_sha256,
+    const body = parseLinkBatch({ link, recursive, mp3_only: mp3Only, mode, preview_sha256: preview.preview_sha256,
       estimated_stage_cents_by_file: estimates, confirm: confirmed });
     if (!body) { setError("請填妥每檔各階段估價並確認來源。未知費用請保留空白，待查核後再建立。"); return; }
     setBusy(true); setError("");
@@ -89,6 +90,8 @@ export default function GoldenV2LinkIntake() {
         onChange={(event) => { setLink(event.target.value); resetPreview(); }} /></label>
       <label className={styles.confirmRow}><input type="checkbox" checked={recursive} disabled={busy}
         onChange={(event) => { setRecursive(event.target.checked); resetPreview(); }} /><span>包含子資料夾（最多五層）</span></label>
+      <label className={styles.confirmRow}><input type="checkbox" checked={mp3Only} disabled={busy}
+        onChange={(event) => { setMp3Only(event.target.checked); resetPreview(); }} /><span>只處理 MP3（略過同資料夾的 MP4 等影音檔）</span></label>
       <button className={styles.refreshButton} disabled={busy}>{busy ? "處理中…" : "唯讀預覽影音檔"}</button>
     </form>
     {error && <p className={styles.feedbackError} role="alert">{error}</p>}

@@ -315,6 +315,7 @@ class LinkPreviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     link: str = Field(min_length=20, max_length=2048)
     recursive: StrictBool = False
+    mp3_only: StrictBool = False
 
 
 class LinkBatchRequest(LinkPreviewRequest):
@@ -329,7 +330,7 @@ def link_preview(body: LinkPreviewRequest, authorization: str | None = Header(de
     """Status-token-only Drive GET listing. No media or ledger writes."""
     _authorized_database(authorization)
     try:
-        return preview_drive_link(body.link, recursive=body.recursive)
+        return preview_drive_link(body.link, recursive=body.recursive, mp3_only=body.mp3_only)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail="Invalid or unsupported Drive link") from exc
     except DriveApiError as exc:
@@ -340,7 +341,7 @@ def link_preview(body: LinkPreviewRequest, authorization: str | None = Header(de
 def create_link_batch(body: LinkBatchRequest, authorization: str | None = Header(default=None)) -> dict:
     database, actor, ceiling = _authorized_write_database(authorization)
     try:
-        preview = preview_drive_link(body.link, recursive=body.recursive)
+        preview = preview_drive_link(body.link, recursive=body.recursive, mp3_only=body.mp3_only)
         if preview["preview_sha256"] != body.preview_sha256:
             raise V2Conflict("Drive preview changed; refresh before submitting")
         return enqueue_link_batch(

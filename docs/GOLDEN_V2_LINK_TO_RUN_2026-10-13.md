@@ -14,6 +14,11 @@ chat that V2 remains Gemini 3.8 audio primary plus Chirp 3 timing.
   explicitly unsupported. Defaults: 100 media files, 2 GiB/file, 10 GiB total,
   five descendant levels, 2,000 entries and 100 pages. Limit/incomplete-search
   failures reject the preview, rather than silently accepting a partial list.
+  New optional strict boolean `mp3_only=true` filters out MP4/other media
+  **before** metadata/size preflight. The default remains all media. Selection
+  is hashed into `preview_sha256` and must match `link-batches` and `quotes`
+  requests; existing source files are neither modified nor silently deduplicated.
+  The web console exposes this as an opt-in checkbox.
 - `POST /api/v1/golden-v2/link-batches`: separate write token; explicit confirmed
   preview SHA, mode and exact per-file/per-stage estimates. Re-lists Drive
   before SQLite transaction. A changed preview returns conflict. It persists

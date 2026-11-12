@@ -117,7 +117,7 @@ export function formatUsdCents(value: number | null | undefined): string {
 }
 
 
-export type LinkPreviewInput = { link: string; recursive: boolean };
+export type LinkPreviewInput = { link: string; recursive: boolean; mp3_only?: boolean };
 export type LinkBatchInput = LinkPreviewInput & {
   preview_sha256: string;
   mode: GoldenV2Mode;
@@ -128,8 +128,9 @@ export type LinkBatchInput = LinkPreviewInput & {
 export function parseLinkPreview(value: unknown): LinkPreviewInput | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const body = value as Record<string, unknown>;
-  if (Object.keys(body).sort().join(",") !== "link,recursive"
+  if (!["link,recursive", "link,mp3_only,recursive"].includes(Object.keys(body).sort().join(","))
       || typeof body.link !== "string" || typeof body.recursive !== "boolean"
+      || ("mp3_only" in body && typeof body.mp3_only !== "boolean")
       || body.link.length > 2048 || /[\u0000-\u001f\u007f]/.test(body.link)) return null;
   try {
     const url = new URL(body.link.trim());
@@ -142,14 +143,18 @@ export function parseLinkPreview(value: unknown): LinkPreviewInput | null {
         && !(url.pathname === "/open" && url.searchParams.getAll("id").length === 1
           && new RegExp(`^${id}$`).test(url.searchParams.get("id") ?? ""))) return null;
   } catch { return null; }
-  return { link: body.link.trim(), recursive: body.recursive };
+  return { link: body.link.trim(), recursive: body.recursive,
+    ...("mp3_only" in body ? { mp3_only: body.mp3_only as boolean } : {}) };
 }
 
 export function parseLinkBatch(value: unknown): LinkBatchInput | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const body = value as Record<string, unknown>;
-  if (Object.keys(body).sort().join(",") !== "confirm,estimated_stage_cents_by_file,link,mode,preview_sha256,recursive") return null;
-  const preview = parseLinkPreview({ link: body.link, recursive: body.recursive });
+  if (!["confirm,estimated_stage_cents_by_file,link,mode,preview_sha256,recursive",
+        "confirm,estimated_stage_cents_by_file,link,mode,mp3_only,preview_sha256,recursive"
+       ].includes(Object.keys(body).sort().join(","))) return null;
+  const preview = parseLinkPreview({ link: body.link, recursive: body.recursive,
+    ...("mp3_only" in body ? { mp3_only: body.mp3_only } : {}) });
   if (!preview || body.confirm !== true || typeof body.preview_sha256 !== "string"
       || !/^[0-9a-f]{64}$/.test(body.preview_sha256)
       || !["FLASH_CHIRP", "SMART_2PLUS", "QUALITY_3WAY"].includes(String(body.mode))) return null;

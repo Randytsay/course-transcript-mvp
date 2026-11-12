@@ -258,7 +258,9 @@ def run_window(
     effort = "LOW" if thinking_level is None else thinking_level
     if type(output_limit) is not int or not 1 <= output_limit <= 16384 or effort != "LOW":
         raise PrimaryTranscriptError("bounded output tokens and LOW thinking required")
-    generation_config = {"temperature": 0, "max_output_tokens": output_limit,
+    # Gemini 3.8 primary audio does not accept legacy sampling overrides.
+    # Identity is intentionally versioned by the full config; never rewrite old audits.
+    generation_config = {"max_output_tokens": output_limit,
                          "thinking_config": {"thinking_level": effort}}
     identity = {
         "model": MODEL, "prompt_version": PROMPT_VERSION,
