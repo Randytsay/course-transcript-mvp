@@ -482,13 +482,12 @@ class GoldenV2Ledger:
             unresolved = [row for row in rows if row["ord"] < target["ord"]
                         and row["state"] not in {"COMPLETE", "SKIPPED"}]
             if unresolved:
-                # A partial compare is the one local stage whose preceding
-                # Gemini stage legitimately stays REVIEW_REQUIRED: the refused
-                # windows were rescued, not completed. Reclaim is allowed only
-                # when that rescue is recorded and Chirp is complete.
+                # In verified partial mode the Gemini stage stays held.
+                # Every downstream *local-only* stage is recoverable after
+                # the same recorded rescue and completed Chirp evidence.
                 by_name = {row["name"]: row for row in rows}
                 partial_ok = (
-                    stage == "compare"
+                    stage in {"compare", "adjudication", "golden_qa"}
                     and len(unresolved) == 1
                     and unresolved[0]["name"] == "gemini_primary"
                     and unresolved[0]["state"] == "REVIEW_REQUIRED"

@@ -43,12 +43,17 @@ def run_v2_worker_pass(
         return {"action": "LEDGER_NOT_READY", "jobs_seen": 0, "outcomes": []}
     try:
         ledger = GoldenV2Ledger.open_existing(database)
-        # A job held at NEEDS_REVIEW must be seen too: the local pass does
-        # not advance it, it only returns the BLOCKED outcome and attaches
-        # the read-only auto-rescue eligibility outcome for the paid hook.
+        # Reserve capacity for actionable local stages. REVIEW-held jobs
+        # are scanned separately so a backlog cannot starve active work.
+        active_quota = max(1, max_jobs - max(1, max_jobs // 4))
         jobs = list_v2_active_jobs(
-            database, limit=max_jobs,
-            statuses=("QUEUED", "PROCESSING", "NEEDS_REVIEW"))
+            database, limit=active_quota,
+            statuses=("QUEUED", "PROCESSING"))
+        remaining = max_jobs - len(jobs)
+        if remaining:
+            jobs += list_v2_active_jobs(
+                database, limit=remaining,
+                statuses=("NEEDS_REVIEW",), newest_first=True)
     except (OSError, sqlite3.Error) as exc:
         return {"action": "LEDGER_UNAVAILABLE", "reason": str(exc),
                 "jobs_seen": 0, "outcomes": []}

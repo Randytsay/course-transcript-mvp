@@ -74,6 +74,7 @@ _ACTIVE_JOB_STATUSES = ("QUEUED", "PROCESSING")
 def list_v2_active_jobs(
     database: Path, *, limit: int = 100,
     statuses: tuple[str, ...] = _ACTIVE_JOB_STATUSES,
+    newest_first: bool = False,
 ) -> list[dict[str, str]]:
     """Read active job identities for local workers without migrating SQLite.
 
@@ -88,12 +89,15 @@ def list_v2_active_jobs(
     if (not statuses or any(not isinstance(item, str) or not item.strip()
                             for item in statuses)):
         raise ValueError("invalid active-job statuses")
+    if type(newest_first) is not bool:
+        raise ValueError("invalid active-job ordering")
     placeholders = ",".join("?" for _ in statuses)
+    ordering = "created_at DESC,id DESC" if newest_first else "created_at,id"
     with closing(_connection(database)) as db:
         db.execute("BEGIN")
         rows = db.execute(
             "SELECT id,status FROM v2_jobs WHERE status IN (" + placeholders + ") "
-            "ORDER BY created_at,id LIMIT ?",
+            f"ORDER BY {ordering} LIMIT ?",
             (*statuses, limit),
         ).fetchall()
         return [{"job_id": str(row["id"]), "status": str(row["status"])}

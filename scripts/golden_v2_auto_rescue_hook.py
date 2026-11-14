@@ -8,12 +8,14 @@ detached process. The hook itself never submits a provider request, never
 retries an unknown outcome, and never invents authorization: the spawned
 script re-verifies the signed owner grant, live Drive revision, pricing,
 budget and revision before claiming, exactly as an operator invocation
-would. A job is spawned at most three times with at least one hour between
-attempts; after that it stays NEEDS_REVIEW for the operator.
+would. An immutable launch intent is durably recorded before spawning.
+An ambiguous launch is NEVER automatically attempted again; the owner must
+reconcile whether a paid request started before authorizing any new attempt.
 """
 from __future__ import annotations
 
 import argparse
+import fcntl
 import json
 import os
 from datetime import datetime, timezone
@@ -27,6 +29,7 @@ import tempfile
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
+from app.jobs.golden_v2_read import list_v2_active_jobs
 from app.operations.runtime_heartbeat import write_service_heartbeat
 from app.pipeline.golden_v2_auto_rescue import inspect_auto_rescue_eligibility
 from app.pipeline.golden_v2_worker import run_v2_worker_pass
@@ -71,9 +74,54 @@ def _save_state(artifact_root: Path, jobs: dict[str, dict[str, object]]) -> None
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(tmp_name, path)
+        # Durability across host power loss requires the renamed directory
+        # entry to be fsynced too, not just the temporary file contents.
+        parent_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(parent_fd)
+        finally:
+            os.close(parent_fd)
     except BaseException:
         Path(tmp_name).unlink(missing_ok=True)
         raise
+
+
+def inspect_auto_rescue_candidates(
+    *, database: Path, artifact_root: Path, max_jobs: int = 100,
+) -> dict[str, object]:
+    # A genuinely read-only preview: no worker pass, no heartbeat, no
+    # staging, no source downloads, no provider clients and no ledger writes.
+    source_root = Path(artifact_root)
+    source_database = Path(database)
+    if source_root.is_symlink() or source_database.is_symlink():
+        raise V2Conflict("auto-rescue preview rejects symlinks")
+    root = source_root.resolve()
+    database = source_database.resolve()
+    if (not 1 <= max_jobs <= 1000
+            or database.parent != root or not database.is_file()):
+        raise V2Conflict("auto-rescue preview requires an existing isolated ledger")
+    ledger = GoldenV2Ledger.open_existing(database)
+    jobs = list_v2_active_jobs(
+        database, limit=max_jobs, statuses=("NEEDS_REVIEW",),
+        newest_first=True)
+    outcomes = []
+    for job in jobs:
+        job_id = job["job_id"]
+        job_dir = root / "jobs" / job_id
+        if (job_dir.is_symlink() or not job_dir.is_dir()
+                or job_dir.resolve().parent != (root / "jobs").resolve()):
+            eligibility = {"eligible": False, "reason": "JOB_DIR_INVALID"}
+        else:
+            eligibility = inspect_auto_rescue_eligibility(
+                ledger=ledger, job_id=job_id, job_dir=job_dir)
+        outcomes.append({"job_id": job_id, "eligibility": eligibility})
+    return {
+        "action": "AUTO_RESCUE_READ_ONLY_PREVIEW",
+        "jobs_seen": len(jobs), "outcomes": outcomes,
+        "provider_calls_started": False,
+        "drive_mutation_started": False,
+        "ledger_modified": False,
+    }
 
 
 def run_auto_rescue_hook_cycle(
@@ -98,6 +146,29 @@ def run_auto_rescue_hook_cycle(
         raise ValueError("hook cycle time must be timezone-aware")
     database = Path(database)
     artifact_root = Path(artifact_root)
+    # Cross-process lock covers the eligibility read, intent persistence and
+    # process spawn. Never depend on in-memory or PID-only idempotency.
+    lock_path = artifact_root / "auto-rescue-hook.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return {"action": "AUTO_RESCUE_HOOK_BUSY",
+                    "spawned": [], "deferred": []}
+        return _run_auto_rescue_hook_cycle_locked(
+            database=database, artifact_root=artifact_root,
+            rescue_script=rescue_script, max_attempts=max_attempts,
+            retry_interval_seconds=retry_interval_seconds,
+            max_jobs=max_jobs, moment=moment,
+        )
+
+
+def _run_auto_rescue_hook_cycle_locked(
+    *, database: Path, artifact_root: Path, rescue_script: Path,
+    max_attempts: int, retry_interval_seconds: int, max_jobs: int,
+    moment: datetime,
+) -> dict[str, object]:
     result = run_v2_worker_pass(
         database=database, artifact_root=artifact_root,
         worker_id="golden-v2-auto-rescue-hook", max_jobs=max_jobs,
@@ -125,6 +196,16 @@ def run_auto_rescue_hook_cycle(
             deferred.append({"job_id": job_id, "reason": "ATTEMPTS_EXHAUSTED",
                              "attempts": attempts})
             continue
+        # Even an old-format state record means a process may already have
+        # dispatched a billable request. A cooldown is not evidence that the
+        # previous request did NOT happen. A human must reconcile the grant,
+        # ledger and provider before another launch can ever be allowed.
+        if attempts:
+            deferred.append({"job_id": job_id,
+                             "reason": "PRIOR_LAUNCH_RECONCILIATION_REQUIRED",
+                             "phase": record.get("phase", "LEGACY_UNKNOWN"),
+                             "attempts": attempts})
+            continue
         last = record.get("last_attempt_at")
         if isinstance(last, str):
             try:
@@ -149,7 +230,18 @@ def run_auto_rescue_hook_cycle(
         log_dir = artifact_root / LOG_DIRNAME
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"{job_id}-{stamp}.log"
-        with log_path.open("wb") as log:
+        state[job_id] = {
+            "attempts": attempts + 1,
+            "last_attempt_at": moment.isoformat(),
+            "phase": "LAUNCH_INTENT_UNCERTAIN",
+            "revision": status["revision"],
+            "source_sha256": status["source_sha"],
+            "last_log": str(log_path),
+        }
+        # Durable intent FIRST; on a crash, fail closed instead of spawning a
+        # second process whose first Speech POST may already have been billed.
+        _save_state(artifact_root, state)
+        with log_path.open("xb") as log:
             process = subprocess.Popen(
                 [sys.executable, str(rescue_script),
                  "--root", str(artifact_root),
@@ -162,18 +254,13 @@ def run_auto_rescue_hook_cycle(
                 stdout=log, stderr=subprocess.STDOUT,
                 start_new_session=True, close_fds=True,
             )
-        state[job_id] = {
-            "attempts": attempts + 1,
-            "last_attempt_at": moment.isoformat(),
-            "last_pid": process.pid,
-            "last_log": str(log_path),
-        }
+        state[job_id]["phase"] = "PROCESS_LAUNCHED_RECONCILE_LEDGER"
+        state[job_id]["last_pid"] = process.pid
+        _save_state(artifact_root, state)
         changed = True
         spawned.append({"job_id": job_id, "pid": process.pid,
                         "log": str(log_path), "revision": status["revision"],
                         "cap_cents": status["approved_cents"]})
-    if changed:
-        _save_state(artifact_root, state)
     return {"action": "AUTO_RESCUE_HOOK_CYCLE_COMPLETE",
             "jobs_seen": result.get("jobs_seen"),
             "spawned": spawned, "deferred": deferred}
@@ -199,6 +286,10 @@ def main() -> int:
     parser.add_argument("--retry-interval-seconds", type=int,
                         default=DEFAULT_RETRY_INTERVAL_SECONDS)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="read-only eligibility scan; never spawns")
+    parser.add_argument("--enable-auto-rescue", action="store_true",
+                        help="opt in to the separately approved paid recovery worker")
     args = parser.parse_args()
     if not 1 <= args.poll_seconds <= 3600:
         parser.error("--poll-seconds must be between 1 and 3600")
@@ -208,6 +299,15 @@ def main() -> int:
         parser.error("--max-attempts must be between 1 and 10")
     if not 0 <= args.retry_interval_seconds <= 7 * 24 * 3600:
         parser.error("--retry-interval-seconds must be between 0 and 7 days")
+    if args.dry_run:
+        result = inspect_auto_rescue_candidates(
+            database=args.database, artifact_root=args.artifact_root,
+            max_jobs=args.max_jobs)
+        print(json.dumps(result, ensure_ascii=False, separators=(",", ":")),
+              flush=True)
+        return 0
+    if not args.enable_auto_rescue:
+        parser.error("auto-rescue is disabled by default; use --dry-run for inspection")
     rescue_script = Path(__file__).resolve().parent / "golden_v2_independent_rescue.py"
     if not rescue_script.is_file():
         parser.error("independent rescue script is missing")

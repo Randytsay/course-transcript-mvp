@@ -16,7 +16,7 @@ from typing import Any
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.providers.golden_v2_acoustic_qa import inspect_v2_acoustic
 from app.providers.golden_v2_audio_staging import file_sha256
-from app.providers.golden_v2_compare import compare_gemini_chirp
+from app.providers.golden_v2_compare import compare_gemini_chirp, _letters
 from app.providers.golden_v2_final_gate import validate_golden_v2
 from app.subtitles.golden_v2_render import render_golden_v2
 from app.providers.golden_v2_versioned_artifacts import resolve_versioned, write_versioned
@@ -510,23 +510,90 @@ def _build_comparison_report(
     is_partial = primary.get("schema") == PARTIAL_PRIMARY_SCHEMA
     chirp_first = primary.get("schema") == "golden-v2-chirp-first-reference-v1"
     if is_partial:
-        # Only the comparable scope enters the text diff: Chirp words inside
-        # refused windows have no Gemini counterpart, so they become bounded
-        # Chirp-authoritative review pieces instead of diff candidates.
+        # Compare each immutable Gemini STOP window against its own temporal
+        # Chirp slice. Never concatenate overlapping Gemini windows for the
+        # diff: that would duplicate the same spoken 10 seconds and can
+        # manufacture false omissions. Seam decisions still require audio.
         refused = primary.get("refused_windows") or []
-        if not isinstance(refused, list) or not refused:
-            raise V2Conflict("partial primary has no refused windows")
-        in_scope = [word for word in merged["words"]
-                    if not word_in_refused_span(word, refused)]
-        if not in_scope:
-            raise V2Conflict("partial primary comparison scope has no Chirp words")
-        report = compare_gemini_chirp(
-            primary_text, in_scope, source_sha256=claim["source_sha"])
+        stop_windows = primary.get("stop_windows") or []
+        seams = primary.get("unresolved_seams") or []
+        refused_only = primary.get("refused_only_windows") or []
+        if not refused or not stop_windows:
+            raise V2Conflict("partial primary has no source-bound windows")
+        all_words = merged["words"]
+        all_candidates = []
+        window_reports = []
+        full_chirp_offset = 0
+        chirp_char_start = []
+        for word in all_words:
+            chirp_char_start.append(full_chirp_offset)
+            full_chirp_offset += len(_letters(str(word.get("word", ""))))
+        gemini_char_offset = 0
+        for window in stop_windows:
+            start_ms = round(float(window["start_seconds"]) * 1000)
+            end_ms = round(float(window["end_seconds"]) * 1000)
+            in_scope = [(i, word) for i, word in enumerate(all_words)
+                        if start_ms <= word["start_ms"] < end_ms]
+            if not in_scope:
+                raise V2Conflict("STOP window has no matched Chirp time span")
+            window_report = compare_gemini_chirp(
+                window["text"], [word for _, word in in_scope],
+                source_sha256=claim["source_sha"],
+                word_indices=[index for index, _ in in_scope])
+            char_offset = chirp_char_start[in_scope[0][0]]
+            for candidate in window_report["candidates"]:
+                candidate["gemini_window_index"] = window["index"]
+                if candidate["chirp_char_range"] is not None:
+                    candidate["chirp_char_range"] = [
+                        char_offset + value for value in candidate["chirp_char_range"]]
+                if candidate["gemini_char_range"] is not None:
+                    candidate["gemini_char_range"] = [
+                        gemini_char_offset + value for value in candidate["gemini_char_range"]]
+                all_candidates.append(candidate)
+            gemini_char_offset += len(_letters(window["text"]))
+            window_reports.append(window_report)
         pieces, spans = refused_span_pieces(
-            words=merged["words"], refused_windows=refused,
+            words=all_words, refused_windows=refused_only,
             source_sha256=claim["source_sha"])
-        report["candidates"] = list(report["candidates"]) + pieces
-        report["pending_review_count"] = len(report["candidates"])
+        # Treat every overlap as an independent, bounded human audio-review
+        # candidate. Never infer where a Gemini window's 10-second tail begins
+        # in character offsets when the provider supplied no word times.
+        seam_windows = [
+            {"start_seconds": item["start_ms"] / 1000.0,
+             "end_seconds": item["end_ms"] / 1000.0}
+            for item in seams
+        ]
+        seam_pieces, _ = refused_span_pieces(
+            words=all_words, refused_windows=seam_windows,
+            source_sha256=claim["source_sha"])
+        for item in seam_pieces:
+            item.update({
+                "kind": "GEMINI_OVERLAP_SEAM_REVIEW",
+                "gemini_crosscheck": "unresolved_audio_overlap",
+                "chirp_authoritative": False,
+            })
+        all_candidates.extend(pieces)
+        all_candidates.extend(seam_pieces)
+        report = {
+            "kind": "golden_v2_primary_chirp_comparison",
+            "source_sha256": claim["source_sha"],
+            "acoustic_coverage": "NOT_DETERMINED_BY_TEXT_DIFF",
+            "exact_normalized_match": (
+                not all_candidates and
+                all(item["exact_normalized_match"] for item in window_reports)),
+            "similarity_ratio_not_accuracy": (
+                sum(item["similarity_ratio_not_accuracy"] for item in window_reports)
+                / len(window_reports)),
+            "pending_review_count": len(all_candidates),
+            "candidates": all_candidates,
+            "unaligned_long_spans": sum(
+                item["kind"] == "UNANCHORED_LONG_SPAN" for item in all_candidates),
+            "alignment_method": "source_bound_window_scoped_temporal_diff",
+            "chirp_timing_authority": True,
+            "auto_publish_authorized": False,
+            "unresolved_seam_reviews": seams,
+            "comparable_window_count": len(window_reports),
+        }
         coverage = partial_primary_coverage(primary)
     else:
         report = compare_gemini_chirp(
@@ -569,7 +636,9 @@ def _build_comparison_report(
             "partial_primary": True,
             "refused_windows": primary["refused_windows"],
             "comparison_scope_seconds": primary["comparison_scope_seconds"],
-            "comparison_scope": "GEMINI_TEXT_SPANS_ONLY",
+            "comparison_scope": "GEMINI_SUCCESS_WINDOWS_TIME_SCOPED",
+            "refused_only_windows": primary["refused_only_windows"],
+            "unresolved_seams": primary["unresolved_seams"],
             "partial_primary_evidence_sha256": primary["evidence_sha256"],
             "chirp_authoritative_spans": spans,
         })

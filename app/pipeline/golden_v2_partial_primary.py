@@ -142,18 +142,35 @@ def build_partial_primary(*, ledger: GoldenV2Ledger, job_id: str,
         raise V2Conflict("partial primary has no comparable Gemini text")
     records = _resolve_window_records(job_dir=job_dir, report=original)
     covered_indices: list[int] = []
+    stop_windows: list[dict[str, Any]] = []
     refused_windows: list[dict[str, Any]] = []
+    seam_reviews: list[dict[str, Any]] = []
     all_spans: list[tuple[int, int]] = []
     stop_spans: list[tuple[int, int]] = []
     refused_spans: list[tuple[int, int]] = []
     for index, (item, raw) in enumerate(records):
         span = _window_ms(item)
         all_spans.append(span)
+        if index and span[0] < all_spans[index-1][1]:
+            seam_reviews.append({
+                "between_windows": [index - 1, index],
+                "start_ms": span[0], "end_ms": all_spans[index-1][1],
+                "acoustic_review_required": True,
+            })
         if (raw.get("status") == "COMPLETE"
                 and raw.get("finish_reason") in {"STOP", "FINISH_REASON_STOP"}
                 and raw.get("text", "").strip()):
             covered_indices.append(index)
             stop_spans.append(span)
+            # Preserve each immutable STOP window separately; Gemini has no
+            # word-level timestamps to justify automatic seam trimming.
+            stop_windows.append({
+                "index": index,
+                "start_seconds": span[0] / 1000.0,
+                "end_seconds": span[1] / 1000.0,
+                "text": raw["text"].strip(),
+                "raw_audit_sha256": item["raw_audit_sha256"],
+            })
         elif (raw.get("status") == "REQUIRES_REVIEW" and not raw.get("text")
               and raw.get("raw_response", {}).get("prompt_feedback", {}).get("block_reason") == "SAFETY"):
             block = raw["raw_response"]["prompt_feedback"]["block_reason"]
@@ -169,14 +186,20 @@ def build_partial_primary(*, ledger: GoldenV2Ledger, job_id: str,
     if not covered_indices or not refused_windows:
         raise V2Conflict("partial primary needs at least one covered and one refused window")
     total = _union_spans(all_spans)
-    scope = _subtract_spans(total, _union_spans(refused_spans))
-    covered_ms = _span_ms(_union_spans([
-        (max(start, s), min(end, e))
-        for start, end in _union_spans(stop_spans)
-        for s, e in scope
-        if max(start, s) < min(end, e)
-    ]))
-    scope_ms = _span_ms(scope)
+    # If a STOP window overlaps a refused one, its verified text is still
+    # comparable in that shared 10-second interval. Only the remainder is
+    # Chirp-authoritative. Preserve both windows and explicitly review seam.
+    scope = _union_spans(stop_spans)
+    refused_only = _subtract_spans(_union_spans(refused_spans), scope)
+    refused_only_windows = [
+        {"start_seconds": start / 1000.0,
+         "end_seconds": end / 1000.0,
+         "block_reason": "SAFETY",
+         "index": -1}
+        for start, end in refused_only
+    ]
+    covered_ms = _span_ms(scope)
+    scope_ms = covered_ms
     if scope_ms <= 0 or covered_ms < 0:
         raise V2Conflict("partial primary comparison scope is empty")
     partial = {
@@ -186,10 +209,14 @@ def build_partial_primary(*, ledger: GoldenV2Ledger, job_id: str,
         "original_primary_evidence_sha256": primary["evidence_sha"],
         "assembled_text": text,
         "covered_window_indices": covered_indices,
+        "stop_windows": stop_windows,
         "refused_windows": refused_windows,
+        "refused_only_windows": refused_only_windows,
+        "unresolved_seams": seam_reviews,
         "window_evidence": original["window_evidence"],
         "total_span_seconds": _span_ms(total) / 1000.0,
         "refused_span_seconds": _span_ms(_union_spans(refused_spans)) / 1000.0,
+        "refused_only_span_seconds": _span_ms(refused_only) / 1000.0,
         "comparison_scope_seconds": scope_ms / 1000.0,
         "covered_span_seconds": covered_ms / 1000.0,
     }
@@ -217,7 +244,11 @@ def load_partial_primary(*, job_dir: Path, job_id: str, source_sha: str,
             or not isinstance(partial.get("assembled_text"), str)
             or not partial["assembled_text"].strip()
             or not isinstance(partial.get("refused_windows"), list)
-            or not partial["refused_windows"]):
+            or not partial["refused_windows"]
+            or not isinstance(partial.get("stop_windows"), list)
+            or not partial["stop_windows"]
+            or not isinstance(partial.get("unresolved_seams"), list)
+            or not isinstance(partial.get("refused_only_windows"), list)):
         raise V2Conflict("partial primary binding mismatch")
     return partial
 
@@ -267,12 +298,36 @@ def refused_span_pieces(
         indices = [i for i, word in enumerate(words)
                    if start_ms <= int(word["start_ms"]) < end_ms]
         if not indices:
+            # No Chirp word is not a certificate of silence. Preserve the
+            # entire unknown interval as bounded review-only candidates.
+            for piece_start in range(start_ms, end_ms, max_piece_ms):
+                piece_end = min(end_ms, piece_start + max_piece_ms)
+                candidates.append({
+                    "kind": "REFUSED_SPAN_WITHOUT_CHIRP_WORDS",
+                    "comparison_status": "REVIEW_REQUIRED",
+                    "chirp_char_range": None,
+                    "gemini_char_range": None,
+                    "chirp_normalized_excerpt": "",
+                    "gemini_normalized_excerpt": "",
+                    "source_time_start": piece_start,
+                    "source_time_end": piece_end,
+                    "source_time_unit": "milliseconds",
+                    "chirp_evidence_ids": [],
+                    "chirp_timing_evidence": None,
+                    "gemini_timing_evidence": None,
+                    "auto_replacement_allowed": False,
+                    "chirp_authoritative": False,
+                    "gemini_crosscheck": "absent_safety_refusal",
+                    "audio_review_required": True,
+                })
             continue
         pieces: list[list[int]] = []
         current: list[int] = []
         piece_start = None
         for index in indices:
             word = words[index]
+            if int(word["end_ms"]) - int(word["start_ms"]) > max_piece_ms:
+                raise V2Conflict("Chirp word exceeds bounded review window")
             if (current and piece_start is not None
                     and int(word["end_ms"]) - piece_start > max_piece_ms):
                 pieces.append(current)

@@ -58,7 +58,8 @@ _SOURCE_COUNTER = itertools.count()
 
 
 def build_held_job(root, ledger, *, block_reason="SAFETY", chirp_estimate=43,
-                   approved=343, gemini_estimate=300):
+                   approved=343, gemini_estimate=300,
+                   refused_window_index=2):
     """Build a NEEDS_REVIEW job held by a verified refusal, revision 2.
 
     Window texts are slices of the in-scope Chirp word letters so the
@@ -84,10 +85,16 @@ def build_held_job(root, ledger, *, block_reason="SAFETY", chirp_estimate=43,
     words = [{"word": CHARS[i % len(CHARS)], "start_ms": i * 5000,
               "end_ms": i * 5000 + 3000} for i in range(WORD_COUNT)]
     letters = "".join(word["word"] for word in words)
-    texts = [letters[0:540], letters[540:1076], ""]
+    texts = [
+        "".join(word["word"] for word in words
+                if int(start * 1000) <= word["start_ms"] < int(end * 1000))
+        if index != refused_window_index else ""
+        for index, (start, end, _) in enumerate(WINDOWS)
+    ]
     (job_dir / "gemini-primary").mkdir()
     evidence = []
-    for index, (start, end, kind) in enumerate(WINDOWS):
+    for index, (start, end, _) in enumerate(WINDOWS):
+        kind = "SAFETY" if index == refused_window_index else "STOP"
         identity = {"source_sha256": sha, "model": "gemini-3.8-flash",
                     "window": {"index": index, "start_seconds": start,
                                "end_seconds": end,
@@ -285,7 +292,7 @@ class AutoRescueHookTests(_AutoRescueCase):
         state = json.loads((self.root / "auto-rescue-hook-state.json").read_text())
         self.assertEqual(state["jobs"][fixture["job_id"]]["attempts"], 1)
 
-    def test_hook_cools_off_and_exhausts_attempts(self):
+    def test_hook_never_retries_uncertain_paid_launch_after_cooldown(self):
         fixture = self.held()
         marker = Path(self.temp.name) / "spawned-argv.jsonl"
         stub = self._stub(marker)
@@ -298,19 +305,18 @@ class AutoRescueHookTests(_AutoRescueCase):
                 now=start + timedelta(seconds=offset_seconds))
 
         self.assertEqual(len(cycle(0)["spawned"]), 1)
-        cooling = cycle(0)
-        self.assertEqual(cooling["spawned"], [])
-        self.assertEqual([item["reason"] for item in cooling["deferred"]],
-                         ["COOLING_OFF"])
-        self.assertEqual(len(cycle(3700)["spawned"]), 1)
-        self.assertEqual(len(cycle(7400)["spawned"]), 1)
-        exhausted = cycle(11100)
-        self.assertEqual(exhausted["spawned"], [])
-        self.assertEqual([item["reason"] for item in exhausted["deferred"]],
-                         ["ATTEMPTS_EXHAUSTED"])
+        for offset in (0, 3700, 7400, 11100):
+            held = cycle(offset)
+            self.assertEqual(held["spawned"], [])
+            self.assertEqual(
+                [item["reason"] for item in held["deferred"]],
+                ["PRIOR_LAUNCH_RECONCILIATION_REQUIRED"])
         state = json.loads((self.root / "auto-rescue-hook-state.json").read_text())
-        self.assertEqual(state["jobs"][fixture["job_id"]]["attempts"], 3)
-        self.assertEqual(len(self._spawned_argv(marker, expected=3)), 3)
+        self.assertEqual(state["jobs"][fixture["job_id"]]["attempts"], 1)
+        self.assertEqual(
+            state["jobs"][fixture["job_id"]]["phase"],
+            "PROCESS_LAUNCHED_RECONCILE_LEDGER")
+        self.assertEqual(len(self._spawned_argv(marker, expected=1)), 1)
 
     def test_hook_ignores_ineligible_jobs(self):
         self.held(block_reason="OTHER")
@@ -356,21 +362,27 @@ class PartialCompareTests(_AutoRescueCase):
         self.assertEqual(report["refused_windows"],
                          [{"index": 2, "start_seconds": 5380.0,
                            "end_seconds": 7702.464, "block_reason": "SAFETY"}])
-        self.assertEqual(report["comparison_scope_seconds"], 5380.0)
-        self.assertEqual(report["comparison_scope"], "GEMINI_TEXT_SPANS_ONLY")
-        self.assertEqual(report["pending_review_count"], EXPECTED_PIECES)
+        self.assertEqual(report["comparison_scope_seconds"], 5390.0)
+        self.assertEqual(report["comparison_scope"],
+                         "GEMINI_SUCCESS_WINDOWS_TIME_SCOPED")
+        self.assertEqual(report["pending_review_count"], EXPECTED_PIECES + 2)
+        self.assertEqual(report["comparable_window_count"], 2)
+        self.assertEqual(len(report["unresolved_seams"]), 2)
         self.assertEqual(report["alignment_health"]["status"], "PASS")
         self.assertEqual(report["alignment_health"]["primary_coverage_ratio"], 1.0)
         pieces = [item for item in report["candidates"]
                   if item["kind"] == "CHIRP_AUTHORITATIVE_REFUSED_SPAN"]
-        self.assertEqual(report["candidates"], pieces)
+        seam_candidates = [item for item in report["candidates"]
+                           if item["kind"] == "GEMINI_OVERLAP_SEAM_REVIEW"]
+        self.assertEqual(len(seam_candidates), 2)
         self.assertEqual(len(pieces), EXPECTED_PIECES)
+        self.assertFalse(report["exact_normalized_match"])
         self.assertTrue(all(item["comparison_status"] == "REVIEW_REQUIRED"
                             and item["chirp_authoritative"] is True
                             and item["gemini_crosscheck"] == "absent_safety_refusal"
                             and item["auto_replacement_allowed"] is False
                             for item in pieces))
-        self.assertEqual(pieces[0]["source_time_start"], 5_380_000)
+        self.assertEqual(pieces[0]["source_time_start"], 5_390_000)
         self.assertEqual(pieces[-1]["source_time_end"], 7_698_000)
         self.assertEqual(len(report["chirp_authoritative_spans"]), EXPECTED_PIECES)
         partial_path = (fixture["job_dir"] / "golden-v2"
@@ -393,6 +405,31 @@ class PartialCompareTests(_AutoRescueCase):
             hashlib.sha256((fixture["job_dir"] / "golden-v2"
                             / "primary-stage.json").read_bytes()).hexdigest(),
             fixture["report_sha"])
+
+    def test_middle_safety_refusal_keeps_later_successful_window(self):
+        fixture, _ = self.rescued(refused_window_index=1)
+        actions = run_ready_local(
+            ledger=self.ledger, job_id=fixture["job_id"],
+            job_dir=fixture["job_dir"])
+        self.assertEqual(
+            [item["action"] for item in actions],
+            ["COMPARISON_COMPLETE", "HUMAN_AUDIO_REVIEW_REQUIRED"])
+        report = json.loads(
+            (fixture["job_dir"] / "golden-v2" /
+             "engine-comparison.json").read_text())
+        partial = json.loads(
+            (fixture["job_dir"] / "golden-v2" /
+             "primary-stage-partial.json").read_text())
+        self.assertEqual(partial["covered_window_indices"], [0, 2])
+        self.assertEqual(report["comparable_window_count"], 2)
+        self.assertEqual(
+            report["comparison_scope"], "GEMINI_SUCCESS_WINDOWS_TIME_SCOPED")
+        self.assertGreater(report["comparison_scope_seconds"], 5000)
+        self.assertEqual(report["alignment_health"]["status"], "PASS")
+        self.assertEqual(report["unaligned_long_spans"], 0)
+        self.assertEqual(len(report["unresolved_seams"]), 2)
+        self.assertFalse(report["exact_normalized_match"])
+        self.assertFalse((fixture["job_dir"] / "golden-v2" / "final.srt").exists())
 
     def test_partial_compare_requires_recorded_rescue(self):
         fixture = self.held()
@@ -491,7 +528,7 @@ class AutoRescueEndToEndTests(_AutoRescueCase):
         report = json.loads((fixture["job_dir"] / "golden-v2"
                              / "engine-comparison.json").read_text())
         self.assertTrue(report["partial_primary"])
-        self.assertEqual(report["pending_review_count"], EXPECTED_PIECES)
+        self.assertEqual(report["pending_review_count"], EXPECTED_PIECES + 2)
         self.assertFalse((fixture["job_dir"] / "golden-v2" / "final.srt").exists())
         stages = {row["name"]: row
                   for row in self.ledger.status(fixture["job_id"])["stages"]}

@@ -1,0 +1,32 @@
+# Opt-in Golden V2 paid rescue overlay.
+# Not active in default Compose profiles. Do NOT enable until the full
+# runtime manifest/hash exception, owner grant, provider, and costs pass gates.
+# No original audio, docs, or existing stage is overwritten by this service.
+services:
+  golden-v2-auto-rescue:
+    profiles: [v2-auto-rescue]
+    image: course-transcript-v2-runtime:${V2_CHAT_RELEASE_SHA:?exact release required}
+    restart: unless-stopped
+    stop_grace_period: 60s
+    env_file:
+      - ${V2_CHAT_GRANT_ENV_FILE:-/opt/course-transcript-v2-chat/secrets/grant.env}
+    environment:
+      COURSE_TRANSCRIPT_V2_ARTIFACT_ROOT: /app/data/golden-v2
+      COURSE_TRANSCRIPT_V2_LEDGER_PATH: /app/data/golden-v2/ledger.sqlite
+      GOOGLE_APPLICATION_CREDENTIALS: /run/ai-runtime/gcp-sa.json
+      GOOGLE_CLOUD_PROJECT: xenon-chain-506409-c3
+      GOOGLE_CLOUD_PROJECT_NUMBER: '608343797618'
+      GCS_BUCKET: xenon-chain-506409-c3-golden-v2-smoke
+      RCLONE_CONFIG: /run/secrets/rclone.conf
+    volumes:
+      - ${V2_CHAT_DATA_DIR:-/opt/course-transcript-v2-chat/data}:/app/data
+      - /opt/course-transcript/secrets/ai-runtime:/run/ai-runtime:ro
+      - ${V2_CHAT_DRIVE_CONFIG:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
+    command:
+      - python
+      - scripts/golden_v2_auto_rescue_hook.py
+      - --database
+      - /app/data/golden-v2/ledger.sqlite
+      - --artifact-root
+      - /app/data/golden-v2
+      - --enable-auto-rescue
