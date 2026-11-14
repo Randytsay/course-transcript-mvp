@@ -1,5 +1,8 @@
 """Regression tests for source indices, claim recovery, and paid dispatch safety."""
 import hashlib
+import fcntl
+import os
+import time
 import json
 import threading
 import sqlite3
@@ -376,6 +379,71 @@ class RescueHookCrashSafetyTests(_AutoRescueCase):
                 again["deferred"][0]["reason"],
                 "PRIOR_LAUNCH_RECONCILIATION_REQUIRED")
             spawn.assert_called_once()
+
+    def test_normal_paid_executor_lock_defers_rescue_without_intent(self):
+        self.held()
+        stub = self._script()
+        fd = os.open(self.root / "paid-executor.lock",
+                     os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = run_auto_rescue_hook_cycle(
+                database=self.database, artifact_root=self.root,
+                rescue_script=stub, aggregate_cap_cents=1000,
+                now=datetime(2026, 11, 14, tzinfo=timezone.utc))
+            self.assertEqual(result["spawned"], [])
+            self.assertEqual(
+                [x["reason"] for x in result["deferred"]],
+                ["PAID_DISPATCH_BUSY"])
+            self.assertFalse(
+                (self.root / "auto-rescue-hook-state.json").exists())
+        finally:
+            os.close(fd)
+
+    def test_spawned_child_inherits_paid_executor_lock_until_release(self):
+        self.held()
+        mark = Path(self.temp.name) / "child-ready.txt"
+        stub = Path(self.temp.name) / "hold-shared-dispatch.py"
+        stub.write_text(
+            "import os,sys,time,pathlib\n"
+            "fd=int(sys.argv[sys.argv.index('--paid-dispatch-lock-fd')+1])\n"
+            "os.fstat(fd)\n"
+            f"pathlib.Path({str(mark)!r}).write_text('child-has-lock')\n"
+            "time.sleep(1.5)\n",
+            encoding="utf-8",
+        )
+        # Child code runs with no provider clients, network or credentials.
+        result = run_auto_rescue_hook_cycle(
+            database=self.database, artifact_root=self.root,
+            rescue_script=stub, aggregate_cap_cents=1000)
+        self.assertEqual(len(result["spawned"]), 1)
+        deadline = time.monotonic() + 3.0
+        while not mark.exists() and time.monotonic() < deadline:
+            time.sleep(.03)
+        self.assertTrue(mark.exists(), "detached child did not inherit FD")
+        fd = os.open(self.root / "paid-executor.lock", os.O_RDWR)
+        try:
+            with self.assertRaises(BlockingIOError):
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            held = run_paid_executor_pass(
+                database=self.database, artifact_root=self.root,
+                enabled=True, aggregate_cap_cents=1000,
+                paid_services=lambda _: {}, recovery_services=lambda _: {},
+                max_jobs=1)
+            self.assertEqual(held["action"], "PAID_EXECUTOR_BUSY")
+            # The child exits in <=1.5s; the inherited FD is then closed.
+            deadline = time.monotonic() + 4.0
+            acquired = False
+            while time.monotonic() < deadline:
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    acquired = True
+                    break
+                except BlockingIOError:
+                    time.sleep(.05)
+            self.assertTrue(acquired, "child failed to release paid lock")
+        finally:
+            os.close(fd)
 
     def test_concurrent_cycle_does_not_spawn_twice(self):
         self.held()

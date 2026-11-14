@@ -305,49 +305,65 @@ def _run_auto_rescue_hook_cycle_locked(
                 "reason": "PREVIOUS_HOOK_LAUNCH_RECONCILIATION_REQUIRED",
             })
             continue
-        budget_block = _global_paid_budget_gate(
-            database, aggregate_cap_cents)
-        if budget_block:
-            deferred.append({"job_id": job_id, "reason": budget_block,
-                             "aggregate_cap_cents": aggregate_cap_cents})
-            continue
-        stamp = moment.strftime("%Y%m%dT%H%M%SZ")
-        log_dir = artifact_root / LOG_DIRNAME
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_path = log_dir / f"{job_id}-{stamp}.log"
-        state[job_id] = {
-            "attempts": attempts + 1,
-            "last_attempt_at": moment.isoformat(),
-            "phase": "LAUNCH_INTENT_UNCERTAIN",
-            "revision": status["revision"],
-            "source_sha256": status["source_sha"],
-            "job_approved_cents": status["approved_cents"],
-            "aggregate_cap_cents": aggregate_cap_cents,
-            "last_log": str(log_path),
-        }
-        # Durable intent FIRST; on a crash, fail closed instead of spawning a
-        # second process whose first Speech POST may already have been billed.
-        _save_state(artifact_root, state)
-        with log_path.open("xb") as log:
-            process = subprocess.Popen(
-                [sys.executable, str(rescue_script),
-                 "--root", str(artifact_root),
-                 "--job-id", job_id,
-                 "--source-sha", str(status["source_sha"]),
-                 "--revision", str(status["revision"]),
-                 "--cap-cents", str(aggregate_cap_cents),
-                 "--reference", AUTO_RESCUE_REFERENCE,
-                 "--submit"],
-                stdout=log, stderr=subprocess.STDOUT,
-                start_new_session=True, close_fds=True,
-            )
-        state[job_id]["phase"] = "PROCESS_LAUNCHED_RECONCILE_LEDGER"
-        state[job_id]["last_pid"] = process.pid
-        _save_state(artifact_root, state)
-        spawned.append({"job_id": job_id, "pid": process.pid,
-                        "log": str(log_path), "revision": status["revision"],
-                        "cap_cents": aggregate_cap_cents,
-                        "approved_cents": status["approved_cents"]})
+        # Paid executor uses this EXACT lock for normal paid dispatch.
+        # Hold it across the preflight, durable intent, and process spawn.
+        # The child inherits this same locked open-file-description and
+        # releases it only after trusted claim/submission is safely recorded.
+        # Thus the normal paid executor cannot race with rescue preclaim.
+        paid_fd = os.open(
+            artifact_root / "paid-executor.lock",
+            os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(paid_fd, "a") as dispatch_lock:
+            try:
+                fcntl.flock(dispatch_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                deferred.append({"job_id": job_id, "reason": "PAID_DISPATCH_BUSY"})
+                continue
+            budget_block = _global_paid_budget_gate(
+                database, aggregate_cap_cents)
+            if budget_block:
+                deferred.append({"job_id": job_id, "reason": budget_block,
+                                 "aggregate_cap_cents": aggregate_cap_cents})
+                continue
+            stamp = moment.strftime("%Y%m%dT%H%M%SZ")
+            log_dir = artifact_root / LOG_DIRNAME
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / f"{job_id}-{stamp}.log"
+            state[job_id] = {
+                "attempts": attempts + 1,
+                "last_attempt_at": moment.isoformat(),
+                "phase": "LAUNCH_INTENT_UNCERTAIN",
+                "revision": status["revision"],
+                "source_sha256": status["source_sha"],
+                "job_approved_cents": status["approved_cents"],
+                "aggregate_cap_cents": aggregate_cap_cents,
+                "last_log": str(log_path),
+            }
+            # Durable intent FIRST; on a crash, fail closed instead of spawning a
+            # second process whose first Speech POST may already have been billed.
+            _save_state(artifact_root, state)
+            with log_path.open("xb") as log:
+                process = subprocess.Popen(
+                    [sys.executable, str(rescue_script),
+                     "--root", str(artifact_root),
+                     "--job-id", job_id,
+                     "--source-sha", str(status["source_sha"]),
+                     "--revision", str(status["revision"]),
+                     "--cap-cents", str(aggregate_cap_cents),
+                     "--reference", AUTO_RESCUE_REFERENCE,
+                     "--paid-dispatch-lock-fd", str(dispatch_lock.fileno()),
+                     "--submit"],
+                    stdout=log, stderr=subprocess.STDOUT,
+                    start_new_session=True, close_fds=True,
+                    pass_fds=(dispatch_lock.fileno(),),
+                )
+            state[job_id]["phase"] = "PROCESS_LAUNCHED_RECONCILE_LEDGER"
+            state[job_id]["last_pid"] = process.pid
+            _save_state(artifact_root, state)
+            spawned.append({"job_id": job_id, "pid": process.pid,
+                            "log": str(log_path), "revision": status["revision"],
+                            "cap_cents": aggregate_cap_cents,
+                            "approved_cents": status["approved_cents"]})
     return {"action": "AUTO_RESCUE_HOOK_CYCLE_COMPLETE",
             "jobs_seen": result.get("jobs_seen"),
             "spawned": spawned, "deferred": deferred}

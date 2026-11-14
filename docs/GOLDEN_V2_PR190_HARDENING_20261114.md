@@ -123,3 +123,55 @@ The 1000c job must be deferred without a launch record while the
 107 focused Golden V2 offline tests passed in a network-disabled,
 read-only-source container after this fix. This does not constitute
 a production provider or deployment acceptance.
+
+## Fourth Codex review: ordinary Paid Executor vs Auto Rescue race
+
+Codex review at 278b75e found a new preclaim concurrency risk:
+the auto-rescue hook used auto-rescue-hook.lock, whereas the normal
+Paid Executor used paid-executor.lock. A paid stage claimed between
+rescue's global preflight and the detached child claim could make the
+rescue fail after a durable launch intent, blocking future rescue
+attempts despite no rescue provider POST.
+
+### Safety fix
+
+- The hook now also acquires the SAME paid-executor.lock as the
+  regular Paid Executor BEFORE its preflight and intent.
+- If already held, the hook reports PAID_DISPATCH_BUSY without writing
+  a launch attempt.
+- On spawn, pass_fds transfers the identical locked file description
+  to the rescue process. Parent FD closure cannot release the lock
+  before child claim and provider submission status are persisted.
+- The child validates that any inherited descriptor refers to the
+  exact expected regular file (device/inode, no symlink). Standalone
+  operator rescue also acquires the Paid Executor lock.
+- The child closes the inherited lock only after source/owner verification,
+  CAS rescue claim, and the initial planned provider submission path;
+  GET-only recovery is unlocked before the long polling loop.
+- On failures before this point the process exits and the durable hook
+  intent remains fail-closed. The current fix prevents the normal paid
+  executor from racing the rescue preclaim; it does NOT bypass an
+  unresolved provider outcome or automatically relaunch it.
+
+### New offline validation
+
+- 109 targeted Golden V2 tests PASS in a network-disabled container.
+- Added tests: a running normal paid lock defers rescue without intent;
+  and a detached mock child inherits and retains the lock so the normal
+  paid executor returns PAID_EXECUTOR_BUSY until child exit.
+- No production service, paid provider, Drive original, or production
+  Ledger was used for these tests.
+
+### Separate isolated Compose audit
+
+Restricted report is on the VPS at:
+/srv/ai-workspace/projects/golden-v2-audit-20261114/GOLDEN_V2_COMPOSE_DIFF_AND_ROLLBACK_ACCEPTANCE_20261114.md
+
+- Five-service isolated patched-code import/start/health and
+  old-release rollback smoke test: PASS, staging fully cleaned.
+- This is NOT complete production-equivalent semantic rollback.
+- Source/live aggregate cap mismatch: 5000c in current Paid runtime
+  vs 1000c in checked-in Paid fragment.
+- Source/live delivery --lock-root path also differs.
+- Historic config-hash still unmatched; five-service reconstruction
+  must not be declared verified yet. Keep merge/deploy blocked.
