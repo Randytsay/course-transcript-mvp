@@ -68,6 +68,42 @@ def list_v2_status(database: Path, *, limit: int = 20) -> list[dict[str, Any]]:
         return [_snapshot(db, job) for job in jobs]
 
 
+def read_auto_rescue_snapshot(database: Path, *, job_id: str) -> dict[str, Any] | None:
+    """One strictly query-only SQLite snapshot for provider-free rescue preview.
+
+    Unlike GoldenV2Ledger.status/chirp_windows, this does not request a
+    BEGIN IMMEDIATE writer reservation. All paid-stage and resumption
+    observations are read in a single consistent SQLite snapshot.
+    """
+    with closing(_connection(database)) as db:
+        db.execute("BEGIN")
+        job = db.execute(
+            "SELECT id,source_sha,mode,status,revision,approved_cents "
+            "FROM v2_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        if job is None:
+            return None
+        stages = [dict(row) for row in db.execute(
+            "SELECT name,state,evidence_sha,actual_cents "
+            "FROM v2_stages WHERE job_id=? ORDER BY ord", (job_id,)
+        )]
+        chirp_count = db.execute(
+            "SELECT COUNT(*) FROM v2_chirp_operations WHERE job_id=?",
+            (job_id,)
+        ).fetchone()[0]
+        rescue = db.execute(
+            "SELECT 1 FROM v2_review_resumptions WHERE job_id=? "
+            "AND stage_name='chirp_independent' "
+            "AND reviewer='trusted-operator-independent-rescue' LIMIT 1",
+            (job_id,)
+        ).fetchone()
+        return {
+            **dict(job), "stages": stages,
+            "chirp_operation_count": int(chirp_count),
+            "independent_rescue_recorded": rescue is not None,
+        }
+
+
 _ACTIVE_JOB_STATUSES = ("QUEUED", "PROCESSING")
 
 

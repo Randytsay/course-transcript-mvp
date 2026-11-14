@@ -9,9 +9,11 @@ request itself, and an eligible outcome is not permission to charge.
 from __future__ import annotations
 
 from pathlib import Path
+import sqlite3
 from typing import Any
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
+from app.jobs.golden_v2_read import read_auto_rescue_snapshot
 from app.pipeline.golden_v2_primary_rescue import verify_primary_refusal
 
 ELIGIBLE_REASON = "VERIFIED_SAFETY_REFUSAL"
@@ -29,8 +31,10 @@ def inspect_auto_rescue_eligibility(
     """
     job_dir = Path(job_dir)
     try:
-        state = ledger.status(job_id)
-    except (V2Conflict, OSError, ValueError, KeyError) as exc:
+        state = read_auto_rescue_snapshot(ledger.database, job_id=job_id)
+        if state is None:
+            return {"eligible": False, "reason": "LEDGER_STATUS_UNAVAILABLE"}
+    except (V2Conflict, sqlite3.Error, OSError, ValueError, KeyError) as exc:
         return {"eligible": False, "reason": "LEDGER_STATUS_UNAVAILABLE",
                 "detail": str(exc)}
     stages = {row["name"]: row for row in state.get("stages", [])}
@@ -52,16 +56,12 @@ def inspect_auto_rescue_eligibility(
            and row["state"] != "PENDING" for row in state["stages"]):
         return {"eligible": False,
                 "reason": "RESCUE_STAGE_ALREADY_STARTED_OR_DOWNSTREAM_ACTIVE"}
-    try:
-        if ledger.independent_rescue_resumption(job_id) is not None:
-            return {"eligible": False,
-                    "reason": "EXISTING_RESCUE_RECONCILIATION_REQUIRED"}
-        if ledger.chirp_windows(job_id):
-            return {"eligible": False,
-                    "reason": "EXISTING_CHIRP_OPERATION_RECONCILE"}
-    except (V2Conflict, OSError, ValueError) as exc:
-        return {"eligible": False, "reason": "CHIRP_OPERATIONS_UNREADABLE",
-                "detail": str(exc)}
+    if state["independent_rescue_recorded"]:
+        return {"eligible": False,
+                "reason": "EXISTING_RESCUE_RECONCILIATION_REQUIRED"}
+    if state["chirp_operation_count"] > 0:
+        return {"eligible": False,
+                "reason": "EXISTING_CHIRP_OPERATION_RECONCILE"}
     if primary.get("evidence_sha") is None or primary.get("actual_cents") is None:
         return {"eligible": False, "reason": "PRIMARY_EVIDENCE_INCOMPLETE"}
     try:

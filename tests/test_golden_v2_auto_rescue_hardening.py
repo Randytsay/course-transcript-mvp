@@ -342,6 +342,36 @@ class RescueHookCrashSafetyTests(_AutoRescueCase):
         path.write_text("# launch is mocked; no provider call\n")
         return path
 
+    def test_eligibility_does_not_request_ledger_writer_transactions(self):
+        from app.pipeline.golden_v2_auto_rescue import inspect_auto_rescue_eligibility
+        fixture = self.held()
+        # A read-only preview must NEVER call methods that request
+        # BEGIN IMMEDIATE even when they happen to leave bytes unchanged.
+        with patch.object(self.ledger, "status",
+                          side_effect=AssertionError("writer-lock status")), \
+             patch.object(self.ledger, "chirp_windows",
+                          side_effect=AssertionError("writer-lock chirp")), \
+             patch.object(self.ledger, "independent_rescue_resumption",
+                          side_effect=AssertionError("writer-lock resumption")):
+            result = inspect_auto_rescue_eligibility(
+                ledger=self.ledger, job_id=fixture["job_id"],
+                job_dir=fixture["job_dir"])
+        self.assertTrue(result["eligible"], result)
+        self.assertEqual(result["reason"], "VERIFIED_SAFETY_REFUSAL")
+
+    def test_broken_resumption_table_fails_closed_in_read_only_preview(self):
+        from app.pipeline.golden_v2_auto_rescue import inspect_auto_rescue_eligibility
+        fixture = self.held()
+        # Deliberately damage a test-only copy: the scanner must not
+        # migrate a broken production table or claim billable eligibility.
+        with self.ledger._tx() as db:
+            db.execute("DROP TABLE v2_review_resumptions")
+        result = inspect_auto_rescue_eligibility(
+            ledger=self.ledger, job_id=fixture["job_id"],
+            job_dir=fixture["job_dir"])
+        self.assertFalse(result["eligible"])
+        self.assertEqual(result["reason"], "LEDGER_STATUS_UNAVAILABLE")
+
     def test_read_only_preview_does_not_touch_ledger_or_spawn(self):
         f = self.held()
         before = self.database.read_bytes()

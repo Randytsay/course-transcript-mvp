@@ -184,3 +184,37 @@ of the correct file cannot bypass a concurrent legitimate holder. The new
 negative regression mocks a locked regular Paid Executor while passing an
 unlocked descriptor of the same file; the script fails before initializing
 any paid provider. 110 focused offline Golden V2 tests passed.
+
+## Production read-only eligibility preview: writer-lock elimination
+
+A review of the new CLI dry-run identified unnecessary BEGIN IMMEDIATE
+SQLite lock acquisition through GoldenV2Ledger.status,
+chirp_windows and independent_rescue_resumption. Although the old
+implementation produced no persisted mutations, it requested a writer
+reservation while merely inspecting held jobs.
+
+- Added read_auto_rescue_snapshot in app/jobs/golden_v2_read.py.
+- It obtains all necessary job, stage, Chirp-operation and rescue
+  resumption evidence from ONE query_only, mode=ro SQLite transaction.
+- Auto-rescue eligibility now uses that source-bound snapshot rather
+  than the writer-reserving GoldenV2Ledger methods.
+- Malformed/unavailable schema fails closed with
+  LEDGER_STATUS_UNAVAILABLE; never attempts a migration.
+- Added two regressions verifying eligibility without writer methods
+  and fail-closed operation on a missing resumption table.
+- 112 targeted offline Golden V2 tests pass after this change.
+- On the existing production source mounted READ ONLY into a container
+  without internet or credentials, the command-line dry run selected
+  the exact interview job
+  v2p_e239b099713c592b9d3fba7f35af1059 as eligible with reason
+  VERIFIED_SAFETY_REFUSAL, approved 163c and primary actual 26c.
+  It started zero provider calls and wrote no Ledger data.
+- This READ-ONLY result is **eligibility evidence, not paid submission
+  authorization**. Live owner/pricing/source/operation reconciliation and
+  aggregate cap must still be approved independently.
+
+Additional restricted VPS artifacts document actual five-service
+once-only CLI and candidate-image-to-old-image rollback tests:
+ /srv/ai-workspace/projects/golden-v2-audit-20261114/
+These offline tests do not authorize production deployment, main merge
+or a paid Chirp operation.
