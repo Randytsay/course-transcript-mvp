@@ -1,0 +1,365 @@
+# Golden V2 PR #190: Auto-rescue hardening and deployment gate
+
+Status: CODE REVIEW / OFFLINE TEST ONLY. No production deployment or paid-provider dispatch is authorized by this document.
+
+## Baseline
+
+- Base PR: #190, commit 1ef99b4e4eb7cfcbf1ce9a4423b6c34bcf0663ea.
+- Gemini primary remains REVIEW_REQUIRED when a known SAFETY refusal occurs. Its original provider evidence is immutable.
+- Changes are limited to source-bound comparison, local orchestration, fail-closed launch controls, an opt-in Compose overlay and offline tests.
+
+## Fixes and invariants
+
+1. Original Chirp word indices remain canonical. A strict optional word-index mapping ensures comparison and adjudication use the same full-stream evidence IDs.
+2. Each successful Gemini window is compared only to its corresponding Chirp time interval. Overlapping Gemini responses are never treated as a clean single transcript. Every seam is a bounded GEMINI_OVERLAP_SEAM_REVIEW candidate, never an automatic correction.
+3. Refusal-only intervals exclude audio already covered by a successful Gemini window. Refused spans with no Chirp words are explicit review items, not confirmed silence.
+4. QUEUED/PROCESSING jobs retain reserved worker capacity. NEEDS_REVIEW jobs have a separate bounded newest-first scan.
+5. Verified partial-mode compare/adjudication/golden_qa claims may be recovered after a crash; original Gemini hold is never silently completed.
+6. Paid executor recognizes an already-RUNNING independent Chirp rescue with durable resumption evidence and polls previously submitted operations. It does not issue an ordinary submit on that branch.
+7. Auto-rescue hook uses a cross-process lock and fsynced durable launch intent before process startup. Ambiguous launches require operator reconciliation, rather than automatic retry after a cooldown.
+8. The CLI requires --enable-auto-rescue before any paid dispatch; --dry-run only reads eligibility. The new Compose overlay uses the inactive-by-default v2-auto-rescue profile.
+
+## Offline test evidence
+
+Network-disabled, read-only-source container tests against the existing runtime image:
+
+- 100 relevant Golden V2 unittest cases passed.
+- Covered refused middle windows, overlaps, word indices, empty Chirp spans, queue fairness, stale downstream claims, paid GET recovery, concurrent hook invocation, interrupted hook startup, and read-only preview.
+- Full repository unittest discovery exceeded the 100-second execution bound and must NOT be reported as passed. Re-run with targeted infrastructure or increase diagnostics before deployment.
+- Docker Compose parser validates the new overlay; without the optional profile the service is not active.
+
+## Mandatory release/owner gates
+
+- Recheck GitHub CI and Codex feedback at the exact updated head SHA before merge.
+- Historical Compose config-hash remains unmatched. Complete the five-service baseline verification, confirm image/command/env/mount/network/health/restart equivalence and document any signed alternative acceptance. The new overlay is not a replacement for the five-service Compose.
+- Prepare immutable backup and rehearse a rollback using an isolated test copy; do not disturb production SQLite, audio, source Docs, or paid provider operations.
+- Verify source identity, current owner grant, job-scoped and global caps, provider pricing and existing operation receipts before any paid submission.
+- A SUBMITTING/unknown provider outcome requires reconciliation; never issue a second Speech POST on uncertainty.
+- Unresolved acoustic coverage, overlap seams, word timing or names remain REVIEW_ONLY. Do not claim GOLDEN PASS from text matching alone.
+- Enable the paid hook and deploy only after the user separately approves the release.
+
+## Current scope
+
+Only the isolated VPS development checkout was changed. Production containers, live Ledger, existing approved job, paid APIs, source audio and original Google Docs were not touched.
+
+## Post-review hardening: Codex review of 6bd8238
+
+Codex's second review identified two additional defects. A regression test
+reproduced each failure before the code change:
+
+1. **Offset gate across missing Gemini windows**: a refused prefix shifts the
+   combined Chirp character positions, creating a false
+   systematic_reference_offset even when each successful Gemini window
+   aligns normally. Each successful window is now checked in its own local
+   character coordinate system *before* evidence candidates are rebased for
+   the report. Any genuine window-local systematic failure remains a BLOCKED
+   report, and whole-audio coverage remains independently checked. The
+   combined report includes window_alignment_health and
+   offset_scope=WINDOW_LOCAL; no aggregate offset heuristic is applied to
+   disjoint coordinate systems.
+2. **Job approval and global cap conflation**: the auto-rescue hook must now
+   receive an explicit independent --aggregate-cap-cents setting, not infer
+   a global budget from any single job's approved_cents. A read-only global
+   budget/unknown-paid preflight occurs *before* persisting launch intent.
+   The actual paid claim still rechecks source, authorization and the global
+   budget atomically. The opt-in overlay uses
+   V2_CHAT_AUTO_RESCUE_AGGREGATE_CAP_CENTS, failing closed with 0 if unset.
+
+A further regression test exposed an important unsafe retry: after a rescued
+Chirp has completed and downstream adjudication places the job into
+NEEDS_REVIEW again, the previous eligibility check could mark the held Gemini
+as eligible for a new rescue. The eligibility check now requires *every*
+downstream stage to be PENDING and no recorded independent rescue. Previous
+Chirp operations and outcome-unknown provider states remain hard blockers.
+
+The hook launches at most one new rescue per cycle, checks outstanding
+launches in its durable state before attempting another job, and allows a
+different job to proceed once the prior Chirp has evidence-bound COMPLETE
+status and the global paid budget still permits the new attempt. Unknown
+launches never automatically retry.
+
+### Validation of this revision
+
+- 106 focused Golden V2 tests passed in an offline network-disabled container
+  with source mounted read-only, no model credentials, no production Ledger.
+- New tests demonstrate:
+  - A 600+ character false cross-window offset is accepted only when
+    **window-local** comparisons pass.
+  - A real 600-character local offset still BLOCKS.
+  - Multiple approved jobs are checked against the aggregate cap without
+    consuming a paid attempt on predictable budget rejection.
+  - Missing global cap fails before any lock or intent is created.
+  - Already-rescued jobs cannot be reclassified as new paid candidates.
+  - Subsequent jobs remain blocked until the prior Chirp completes.
+- A default profile Compose config does not activate the rescue service;
+  opting into v2-auto-rescue only parses the service and is not deployment.
+- CI, Codex third review, historical five-service Compose reconstruction,
+  actual rollback rehearsal, and owner-deployment approval remain pending
+  at the moment this addendum was written.
+
+The historical job-scoped approval (for example 163 USD cents for the
+Liu Yunzhong recording) **does not create or authorize a separate global
+spending cap**. A deployment operator must provide an independently approved
+global cap without exceeding any per-job approved limit or initiating a
+second provider submission.
+
+## Codex third review: per-job approval ceiling preflight
+
+The 2bd5cba Codex review exposed one more predictable paid-claim
+failure: a job approval can exceed an independently configured
+aggregate cap even while the whole-ledger estimated exposure is
+within that cap. The trusted claim rejects approved_cents > cap_cents.
+
+Fixed: the rescue hook now checks the job's approved_cents against
+the explicit aggregate cap before writing any launch intent. It
+returns JOB_APPROVAL_EXCEEDS_AGGREGATE_CAP for the affected job
+without consuming an attempt or blocking another eligible job.
+
+Red/green regression: two held jobs, approvals 1000c and 343c,
+combined ledger exposure 686c, configured aggregate cap 800c.
+The 1000c job must be deferred without a launch record while the
+343c job may proceed in a mocked, isolated process-spawn test.
+
+107 focused Golden V2 offline tests passed in a network-disabled,
+read-only-source container after this fix. This does not constitute
+a production provider or deployment acceptance.
+
+## Fourth Codex review: ordinary Paid Executor vs Auto Rescue race
+
+Codex review at 278b75e found a new preclaim concurrency risk:
+the auto-rescue hook used auto-rescue-hook.lock, whereas the normal
+Paid Executor used paid-executor.lock. A paid stage claimed between
+rescue's global preflight and the detached child claim could make the
+rescue fail after a durable launch intent, blocking future rescue
+attempts despite no rescue provider POST.
+
+### Safety fix
+
+- The hook now also acquires the SAME paid-executor.lock as the
+  regular Paid Executor BEFORE its preflight and intent.
+- If already held, the hook reports PAID_DISPATCH_BUSY without writing
+  a launch attempt.
+- On spawn, pass_fds transfers the identical locked file description
+  to the rescue process. Parent FD closure cannot release the lock
+  before child claim and provider submission status are persisted.
+- The child validates that any inherited descriptor refers to the
+  exact expected regular file (device/inode, no symlink). Standalone
+  operator rescue also acquires the Paid Executor lock.
+- The child closes the inherited lock only after source/owner verification,
+  CAS rescue claim, and the initial planned provider submission path;
+  GET-only recovery is unlocked before the long polling loop.
+- On failures before this point the process exits and the durable hook
+  intent remains fail-closed. The current fix prevents the normal paid
+  executor from racing the rescue preclaim; it does NOT bypass an
+  unresolved provider outcome or automatically relaunch it.
+
+### New offline validation
+
+- 109 targeted Golden V2 tests PASS in a network-disabled container.
+- Added tests: a running normal paid lock defers rescue without intent;
+  and a detached mock child inherits and retains the lock so the normal
+  paid executor returns PAID_EXECUTOR_BUSY until child exit.
+- No production service, paid provider, Drive original, or production
+  Ledger was used for these tests.
+
+### Separate isolated Compose audit
+
+Restricted report is on the VPS at:
+/srv/ai-workspace/projects/golden-v2-audit-20261114/GOLDEN_V2_COMPOSE_DIFF_AND_ROLLBACK_ACCEPTANCE_20261114.md
+
+- Five-service isolated patched-code import/start/health and
+  old-release rollback smoke test: PASS, staging fully cleaned.
+- This is NOT complete production-equivalent semantic rollback.
+- Source/live aggregate cap mismatch: 5000c in current Paid runtime
+  vs 1000c in checked-in Paid fragment.
+- Source/live delivery --lock-root path also differs.
+- Historic config-hash still unmatched; five-service reconstruction
+  must not be declared verified yet. Keep merge/deploy blocked.
+
+### Additional inherited-FD spoofing defense
+
+The child additionally attempts a nonblocking flock on the inherited
+descriptor after verifying the correct device/inode. An unlocked descriptor
+of the correct file cannot bypass a concurrent legitimate holder. The new
+negative regression mocks a locked regular Paid Executor while passing an
+unlocked descriptor of the same file; the script fails before initializing
+any paid provider. 110 focused offline Golden V2 tests passed.
+
+## Production read-only eligibility preview: writer-lock elimination
+
+A review of the new CLI dry-run identified unnecessary BEGIN IMMEDIATE
+SQLite lock acquisition through GoldenV2Ledger.status,
+chirp_windows and independent_rescue_resumption. Although the old
+implementation produced no persisted mutations, it requested a writer
+reservation while merely inspecting held jobs.
+
+- Added read_auto_rescue_snapshot in app/jobs/golden_v2_read.py.
+- It obtains all necessary job, stage, Chirp-operation and rescue
+  resumption evidence from ONE query_only, mode=ro SQLite transaction.
+- Auto-rescue eligibility now uses that source-bound snapshot rather
+  than the writer-reserving GoldenV2Ledger methods.
+- Malformed/unavailable schema fails closed with
+  LEDGER_STATUS_UNAVAILABLE; never attempts a migration.
+- Added two regressions verifying eligibility without writer methods
+  and fail-closed operation on a missing resumption table.
+- 112 targeted offline Golden V2 tests pass after this change.
+- On the existing production source mounted READ ONLY into a container
+  without internet or credentials, the command-line dry run selected
+  the exact interview job
+  v2p_e239b099713c592b9d3fba7f35af1059 as eligible with reason
+  VERIFIED_SAFETY_REFUSAL, approved 163c and primary actual 26c.
+  It started zero provider calls and wrote no Ledger data.
+- This READ-ONLY result is **eligibility evidence, not paid submission
+  authorization**. Live owner/pricing/source/operation reconciliation and
+  aggregate cap must still be approved independently.
+
+Additional restricted VPS artifacts document actual five-service
+once-only CLI and candidate-image-to-old-image rollback tests:
+ /srv/ai-workspace/projects/golden-v2-audit-20261114/
+These offline tests do not authorize production deployment, main merge
+or a paid Chirp operation.
+
+## Final Codex review on 07672c5: rescued primary blocked both review entrypoints
+
+Codex found that the independent-rescue path could reach
+HUMAN_AUDIO_REVIEW_REQUIRED but could not export or submit a manual
+comparison review, because the immutable original Gemini primary remains
+REVIEW_REQUIRED. This was confirmed by three failing regression tests
+*before* the change (CLI bundle, authenticated GET, authenticated POST).
+
+Remedy:
+
+- Shared verified_partial_review_route verifies a FLASH_CHIRP job, held
+  Gemini primary, COMPLETED independent Chirp, COMPLETED comparison,
+  matching job/source/revision, and a recorded independent rescue.
+- The CLI bundle reader accepts that specific held primary as an
+  unresolved prior stage, while preserving the remaining predecessor
+  guards and binding all audio, comparison, Chirp and Gemini-refusal
+  evidence using the existing _bound_inputs validator.
+- Authenticated GET /review now exports the comparison audio-review
+  packet for that verified rescue, not the stale primary error packet.
+- Authenticated POST /review-adjudication skips only the evidenced
+  Gemini hold, and re-verifies the immutable comparison bundle before
+  revision/source-bound adjudication claim. No false audio receipt.
+- A human-acknowledged adjudication REVIEW_REQUIRED hold can be safely
+  resumed by the authenticated API as well as the CLI, after verifying
+  the prior immutable review hold artifact, source and revision.
+  No recognition stage is replayed.
+- Negative guards reject an unrecorded rescue, mismatched comparison
+  hash, and tampered previous review hold before a new claim.
+- Eight new focused tests demonstrate export, API GET/POST,
+  explicit unresolved review import and subsequent review hold
+  resumption. Synthetic audio remains test-only and does not represent
+  a real human listening receipt or Golden QA.
+- 249 relevant offline Golden V2 tests passed after the change in a
+  network-disabled test image; all code changes remain in the PR branch.
+
+Production roll-forward remains conditional on an exact five-service
+configuration diff, release safety gates, and explicit owner authorization.
+The changes above do not submit paid models or publish Drive artifacts.
+
+## Codex review at a769978: completed partial adjudication must show QA
+
+The authenticated GET /review handler previously prioritized the
+held Gemini primary even after the rescued job's adjudication had
+been completed. Calling inspect_review_bundle at that point would
+correctly refuse to manufacture a new review request, leaving the
+owner with a misleading 409 instead of the verified downstream
+comparison/Golden/acoustic evidence packet.
+
+- Limited the explicit ADJUDICATION_AUDIO_REVIEW path to comparison
+  COMPLETE with adjudication PENDING/REVIEW_REQUIRED.
+- Once comparison and adjudication are both COMPLETE, the original
+  Gemini REVIEW_REQUIRED state is no longer surfaced as the current
+  review entry; the existing downstream evidence route is used.
+- Added regressions for completed partial adjudication and completed
+  test-only Golden QA. The latter is explicitly BLOCKED, not a
+  synthetic publishable Golden PASS.
+- The earlier guards for partial adjudication PENDING, missing
+  independent rescue, tampered comparison and review hold remain.
+- Full relevant offline suite: 251 tests PASS. This does not
+  represent positive online provider/Drive publication or a
+  production deployment acceptance.
+
+## Codex finding: ordinary comparison schema compatibility
+
+The newer partial-window comparison added chirp_source_word_indices to
+EVERY candidate, including pre-rescue ordinary comparisons. Golden QA
+reconstructs the exact comparison report from immutable provider
+evidence and rejects any field-level drift. As a consequence, an
+existing non-rescued job with a disagreement could be stranded after
+upgrading if the already-persisted ordinary comparison lacked the new
+field.
+
+Fix:
+
+- For ordinary comparison calls without an explicit word_indices
+  argument, omit chirp_source_word_indices, preserving the old report
+  representation without mutating any persisted artifact.
+- For time-scoped partial-window comparisons with explicit source
+  indices, retain chirp_source_word_indices so the source-bound index
+  and Chirp evidence checks remain intact.
+- Red/green test confirmed the old failing case and the explicit
+  index mapping required by rescue.
+- A byte-identical old/new ordinary comparison check was executed
+  across the OLD 6999290b runtime image and the current PR source
+  with the exact same synthetic provider inputs. The canonical
+  SHA-256 matched (8bf319aa3f73e9dd7ea68bd0dc9cf8b01aef8d0a5541dfc9b46f5a7bdeeebb21).
+- 252 Golden V2 related offline tests PASS after the change.
+- No original media, provider calls, Drive writes, production Ledger
+  changes or Golden QA PASS were generated.
+
+## Latest Codex finding: source-verified local corrections in long refused spans
+
+The existing refused-span candidate generator deliberately produces
+human-review windows bounded to 120 seconds. A prior candidate
+correction required replacing the entire multiword span in one
+indivisible SRT token, violating the renderer's per-cue 6.5s/22-char
+limits. This made short local corrections impossible and unnecessarily
+stranded valid human reviews.
+
+Remedy:
+- Only CHIRP_AUTHORITATIVE_REFUSED_SPAN candidates allow a corrected
+  contiguous SUBSPAN, where every source-bound Chirp word evidence SHA
+  is a verified subset of the immutable candidate's original word set
+  and its exact word time is bounded by the reviewed candidate.
+- Ordinary comparisons still require EXACT candidate word evidence,
+  keeping their serialized representation and correction contract.
+- One reviewed refused candidate may carry multiple nonoverlapping,
+  separately source-hashed short replacements. The renderer still
+  rejects overlapping words and oversized single corrected tokens.
+- Human decisions, full 120s listened audio bounds, candidate SHA,
+  source SHA, revision and reviewer reference remain required.
+  No auto-human listening attestation or publication PASS is synthesized.
+- Added five red/green tests: short local edit within 120s candidate,
+  two disjoint edits under one candidate, rejection of out-of-range
+  and forged source hashes, and rejection of oversized/overlapping
+  replacements. 257 related offline Golden V2 tests PASS.
+- Remaining human audio-completeness requirements and Golden QA
+  gates are unchanged; no provider or Drive IO in these tests.
+
+## Latest Codex finding: renderable source corrections within overlap seams
+
+The overlap-seam review pieces may span 8s or more, exceeding the
+renderer 6.5s per corrected token. If Gemini and Chirp agree on a bad
+word in an overlap there may be no ordinary mismatch candidate;
+the seam review is the only valid source-bound correction authority.
+
+Fix:
+- Treat only explicit GEMINI_OVERLAP_SEAM_REVIEW candidates with
+  gemini_crosscheck=unresolved_audio_overlap and
+  chirp_authoritative=False as eligible for local Chirp-word
+  subspan edits, alongside the refused-span candidate kind.
+- For either rescue-specific candidate, every corrected Chirp word
+  must have a matching full-stream source-word SHA and be contained
+  in the original candidate's exact word hashes and time window.
+- Multiple nonoverlapping short word-level corrections can be
+  submitted against the same reviewed seam; ordinary (non-rescued)
+  comparisons still require their original single/exact correction.
+- A seam without Chirp word hashes remains uncorrectable and cannot
+  gain fabricated timestamps. Overlapping edits and oversized
+  corrected spans remain rejected by render_golden_v2.
+- Two new tests reproduce the 8-second seam and the no-word
+  fail-closed case. 259 relevant offline tests PASS.
+- There is no automated human listening assertion, no new model
+  call and no Golden QA or Drive-publishing authorization.

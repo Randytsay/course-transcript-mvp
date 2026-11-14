@@ -49,6 +49,7 @@ def _anchors(source: str, target: str, limit: int) -> list[tuple[int, int, int]]
 def compare_gemini_chirp(
     gemini_text: str, chirp_words: list[dict[str, Any]], *,
     max_characters: int = 12000, source_sha256: str | None = None,
+    word_indices: list[int] | None = None,
 ) -> dict[str, Any]:
     """Return review candidates with source_time_* as real Chirp milliseconds.
 
@@ -57,6 +58,17 @@ def compare_gemini_chirp(
     """
     if not gemini_text.strip() or not chirp_words or max_characters < 64:
         raise AlignmentNeedsReview("empty evidence or invalid comparison bound")
+    # A partial transcription may compare only some Chirp words. Evidence
+    # identities must still use indices from the *complete* source stream.
+    # Historical *ordinary* comparison artifacts omit the source-word index
+    # field entirely. Preserve that exact schema for QA byte equality.
+    explicit_source_indices = word_indices is not None
+    if word_indices is None:
+        word_indices = list(range(len(chirp_words)))
+    if (len(word_indices) != len(chirp_words)
+            or any(type(index) is not int or index < 0 for index in word_indices)
+            or any(a >= b for a, b in zip(word_indices, word_indices[1:]))):
+        raise AlignmentNeedsReview("invalid source-bound Chirp index mapping")
     source_chars: list[str] = []
     word_by_char: list[int] = []
     last_end = -1
@@ -84,7 +96,7 @@ def compare_gemini_chirp(
         right = word_by_char[a0] if a0 < len(word_by_char) else None
         evidence_ids = [
             hashlib.sha256((
-                f"{source_sha256 or ''}|{i}|{chirp_words[i]['word']}|"
+                f"{source_sha256 or ''}|{word_indices[i]}|{chirp_words[i]['word']}|"
                 f"{chirp_words[i]['start_ms']}|{chirp_words[i]['end_ms']}"
             ).encode()).hexdigest() for i in indices
         ]
@@ -101,6 +113,8 @@ def compare_gemini_chirp(
             "source_time_end": times["chirp_end_ms"] if times else None,
             "source_time_unit": "milliseconds",
             "chirp_evidence_ids": evidence_ids,
+            **({"chirp_source_word_indices": [word_indices[i] for i in indices]}
+               if explicit_source_indices else {}),
             "chirp_timing_evidence": times,
             "adjacent_chirp_context": {
                 "left_chirp_word_ms": chirp_words[left]["end_ms"] if left is not None else None,

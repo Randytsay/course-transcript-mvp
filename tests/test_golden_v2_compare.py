@@ -40,6 +40,25 @@ class ThreeEnginePreparationTests(unittest.TestCase):
         result = compare_gemini_chirp("復次文殊師利", WORDS)
         self.assertIn("GEMINI_POSSIBLE_OMISSION", {c["kind"] for c in result["candidates"]})
 
+    def test_existing_ordinary_candidate_schema_has_no_new_partial_index_field(self) -> None:
+        # The already-persisted ordinary comparison must reconstruct
+        # byte-identically at Golden QA. Explicit source-word mapping is
+        # reserved for rescued, time-scoped comparison windows.
+        normal = compare_gemini_chirp(
+            "復次文殊師利男生具有七寶", WORDS,
+            source_sha256="1"*64)
+        self.assertTrue(normal["candidates"])
+        for candidate in normal["candidates"]:
+            self.assertNotIn("chirp_source_word_indices", candidate)
+        mapped = compare_gemini_chirp(
+            "復次文殊師利男生具有七寶", WORDS,
+            source_sha256="1"*64,
+            word_indices=[100,101,102])
+        self.assertTrue(mapped["candidates"])
+        self.assertTrue(all(
+            "chirp_source_word_indices" in candidate
+            for candidate in mapped["candidates"]))
+
     def test_timestamps_must_be_monotonic_and_trustworthy(self) -> None:
         broken = [dict(WORDS[0]), {"word": "錯", "start_ms": 200, "end_ms": 500}]
         with self.assertRaises(AlignmentNeedsReview):

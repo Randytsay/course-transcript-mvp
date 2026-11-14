@@ -8,6 +8,7 @@ from typing import Any
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.jobs.golden_v2_read import list_v2_active_jobs
+from app.pipeline.golden_v2_auto_rescue import inspect_auto_rescue_eligibility
 from app.pipeline.golden_v2_coordinator import run_ready_local
 from app.pipeline.golden_v2_paid_readiness import inspect_paid_readiness
 
@@ -22,7 +23,10 @@ def run_v2_worker_pass(
 
     The worker never constructs a provider client, performs network IO, approves
     costs, or writes Drive/GCS. Provider and human-review stages remain queued
-    for a separately authorized executor or reviewer.
+    for a separately authorized executor or reviewer. For a job held at
+    NEEDS_REVIEW by a verified Gemini SAFETY refusal, the pass also attaches
+    a read-only auto-rescue eligibility outcome; the paid-side hook consumes
+    that outcome to invoke the existing operator rescue script.
     """
     if not isinstance(worker_id, str) or not worker_id.strip():
         raise ValueError("worker identity required")
@@ -39,7 +43,17 @@ def run_v2_worker_pass(
         return {"action": "LEDGER_NOT_READY", "jobs_seen": 0, "outcomes": []}
     try:
         ledger = GoldenV2Ledger.open_existing(database)
-        jobs = list_v2_active_jobs(database, limit=max_jobs)
+        # Reserve capacity for actionable local stages. REVIEW-held jobs
+        # are scanned separately so a backlog cannot starve active work.
+        active_quota = max(1, max_jobs - max(1, max_jobs // 4))
+        jobs = list_v2_active_jobs(
+            database, limit=active_quota,
+            statuses=("QUEUED", "PROCESSING"))
+        remaining = max_jobs - len(jobs)
+        if remaining:
+            jobs += list_v2_active_jobs(
+                database, limit=remaining,
+                statuses=("NEEDS_REVIEW",), newest_first=True)
     except (OSError, sqlite3.Error) as exc:
         return {"action": "LEDGER_UNAVAILABLE", "reason": str(exc),
                 "jobs_seen": 0, "outcomes": []}
@@ -70,6 +84,17 @@ def run_v2_worker_pass(
                     database=database, artifact_root=root, job_id=job_id,
                 )
                 item["paid_readiness"] = readiness
+            # A held Gemini primary stops the local coordinator at BLOCKED /
+            # NEEDS_REVIEW; that is the only steady state in which a verified
+            # refusal can reach the paid-side auto-rescue hook. The check is
+            # read-only and never starts a paid request from this pass.
+            last = local_outcomes[-1] if local_outcomes else {}
+            if (last.get("action") == "BLOCKED"
+                    and last.get("reason") == "NEEDS_REVIEW"
+                    and last.get("stage") == "gemini_primary"):
+                item["auto_rescue"] = inspect_auto_rescue_eligibility(
+                    ledger=ledger, job_id=job_id, job_dir=resolved,
+                )
             outcomes.append(item)
         except Exception as exc:
             outcomes.append({"job_id": job_id, "action": "JOB_REQUIRES_REVIEW",

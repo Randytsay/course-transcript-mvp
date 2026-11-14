@@ -68,15 +68,73 @@ def list_v2_status(database: Path, *, limit: int = 20) -> list[dict[str, Any]]:
         return [_snapshot(db, job) for job in jobs]
 
 
-def list_v2_active_jobs(database: Path, *, limit: int = 100) -> list[dict[str, str]]:
-    """Read active job identities for local workers without migrating SQLite."""
+def read_auto_rescue_snapshot(database: Path, *, job_id: str) -> dict[str, Any] | None:
+    """One strictly query-only SQLite snapshot for provider-free rescue preview.
+
+    Unlike GoldenV2Ledger.status/chirp_windows, this does not request a
+    BEGIN IMMEDIATE writer reservation. All paid-stage and resumption
+    observations are read in a single consistent SQLite snapshot.
+    """
+    with closing(_connection(database)) as db:
+        db.execute("BEGIN")
+        job = db.execute(
+            "SELECT id,source_sha,mode,status,revision,approved_cents "
+            "FROM v2_jobs WHERE id=?", (job_id,)
+        ).fetchone()
+        if job is None:
+            return None
+        stages = [dict(row) for row in db.execute(
+            "SELECT name,state,evidence_sha,actual_cents "
+            "FROM v2_stages WHERE job_id=? ORDER BY ord", (job_id,)
+        )]
+        chirp_count = db.execute(
+            "SELECT COUNT(*) FROM v2_chirp_operations WHERE job_id=?",
+            (job_id,)
+        ).fetchone()[0]
+        rescue = db.execute(
+            "SELECT 1 FROM v2_review_resumptions WHERE job_id=? "
+            "AND stage_name='chirp_independent' "
+            "AND reviewer='trusted-operator-independent-rescue' LIMIT 1",
+            (job_id,)
+        ).fetchone()
+        return {
+            **dict(job), "stages": stages,
+            "chirp_operation_count": int(chirp_count),
+            "independent_rescue_recorded": rescue is not None,
+        }
+
+
+_ACTIVE_JOB_STATUSES = ("QUEUED", "PROCESSING")
+
+
+def list_v2_active_jobs(
+    database: Path, *, limit: int = 100,
+    statuses: tuple[str, ...] = _ACTIVE_JOB_STATUSES,
+    newest_first: bool = False,
+) -> list[dict[str, str]]:
+    """Read active job identities for local workers without migrating SQLite.
+
+    The default statuses are the ones a worker may advance. Callers that
+    also need to see jobs held for review (for example the auto-rescue
+    hook, which only attaches a read-only eligibility outcome to them) pass
+    NEEDS_REVIEW explicitly; the paid executor keeps the default so a held
+    paid stage is never re-claimed by it.
+    """
     if not 1 <= limit <= 1000:
         raise ValueError("invalid active-job query limit")
+    if (not statuses or any(not isinstance(item, str) or not item.strip()
+                            for item in statuses)):
+        raise ValueError("invalid active-job statuses")
+    if type(newest_first) is not bool:
+        raise ValueError("invalid active-job ordering")
+    placeholders = ",".join("?" for _ in statuses)
+    ordering = "created_at DESC,id DESC" if newest_first else "created_at,id"
     with closing(_connection(database)) as db:
         db.execute("BEGIN")
         rows = db.execute(
-            "SELECT id,status FROM v2_jobs WHERE status IN ('QUEUED','PROCESSING') "
-            "ORDER BY created_at,id LIMIT ?", (limit,),
+            "SELECT id,status FROM v2_jobs WHERE status IN (" + placeholders + ") "
+            f"ORDER BY {ordering} LIMIT ?",
+            (*statuses, limit),
         ).fetchall()
         return [{"job_id": str(row["id"]), "status": str(row["status"])}
                 for row in rows]

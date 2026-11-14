@@ -1,5 +1,8 @@
 """Exact-source operator rescue; one submission, then saved-operation recovery."""
 import argparse
+import fcntl
+import os
+import stat
 import json
 from pathlib import Path
 import sys
@@ -24,12 +27,43 @@ def main():
     parser.add_argument('--source-sha', required=True)
     parser.add_argument('--revision', type=int, required=True)
     parser.add_argument('--cap-cents', type=int, required=True)
+    parser.add_argument(
+        '--paid-dispatch-lock-fd', type=int, default=None,
+        help='inherited locked FD from the auto-rescue hook; cannot be a different file')
     parser.add_argument('--reference', required=True)
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument('--submit', action='store_true')
     mode.add_argument('--resume-planned', action='store_true')
     args = parser.parse_args()
     root = args.root.resolve()
+    # Coordinate standalone operator rescue and automated hook launches
+    # with the ordinary Paid Executor. When invoked from the hook, the
+    # inherited fd keeps the SAME kernel flock alive across process spawn.
+    lock_path = root/'paid-executor.lock'
+    if args.paid_dispatch_lock_fd is not None:
+        fd = args.paid_dispatch_lock_fd
+        if fd < 0 or lock_path.is_symlink():
+            raise V2Conflict('invalid inherited paid dispatch lock')
+        got = os.fstat(fd)
+        expected = lock_path.stat()
+        if (not stat.S_ISREG(got.st_mode)
+                or (got.st_ino, got.st_dev) != (expected.st_ino, expected.st_dev)):
+            raise V2Conflict('inherited dispatch fd does not match paid executor lock')
+        # File identity alone is not proof that the caller actually holds
+        # the paid dispatch lock. Re-acquiring on an already-locked shared
+        # open-file-description succeeds; a spoofed, unlocked fd cannot
+        # race a different process holding the real lock.
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise V2Conflict('PAID_DISPATCH_BUSY') from exc
+    else:
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            os.close(fd)
+            raise V2Conflict('PAID_DISPATCH_BUSY') from exc
     ledger = GoldenV2Ledger.open_existing(root/'ledger.sqlite')
     job_dir = root/'jobs'/args.job_id
     if job_dir.resolve().parent != root/'jobs' or job_dir.is_symlink():
@@ -84,6 +118,10 @@ def main():
                                    job_dir=job_dir, **options)
             submit_planned_chirp(ledger=ledger, claim=claim, gateway=gateway)
             print(json.dumps(dict(action='SUBMITTED_ONCE', operations=len(rows))), flush=True)
+    # Release only after the durable claim and provider operation status have
+    # been recorded, or immediately for GET-only recovery. If any step raises,
+    # OS process termination closes fd; the hook intent stays fail-closed.
+    os.close(fd)
     stop = Event()
     signal.signal(signal.SIGTERM, lambda *_: stop.set())
     signal.signal(signal.SIGINT, lambda *_: stop.set())
