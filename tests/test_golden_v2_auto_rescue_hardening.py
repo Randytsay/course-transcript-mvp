@@ -266,6 +266,33 @@ class AggregateBudgetRegressionTests(_AutoRescueCase):
             result["reason"],
             "RESCUE_STAGE_ALREADY_STARTED_OR_DOWNSTREAM_ACTIVE")
 
+    def test_job_approval_over_global_cap_is_deferred_without_launch_intent(self):
+        # Total exposure 2*343c = 686c fits within the global 800c
+        # ceiling; only the first job has an approval (1000c) larger than
+        # the global ceiling and is guaranteed to fail the trusted claim.
+        excessive = self.held(approved=1000)
+        allowed = self.held(approved=343)
+        stub = Path(self.temp.name) / "fake_rescue.py"
+        stub.write_text("# launch is mocked; no provider call\n")
+        with patch("scripts.golden_v2_auto_rescue_hook.subprocess.Popen",
+                   return_value=SimpleNamespace(pid=2468)) as spawn:
+            result = run_auto_rescue_hook_cycle(
+                database=self.database, artifact_root=self.root,
+                rescue_script=stub, aggregate_cap_cents=800)
+        self.assertEqual(len(result["spawned"]), 1, result)
+        self.assertEqual(result["spawned"][0]["job_id"], allowed["job_id"])
+        self.assertEqual(result["spawned"][0]["cap_cents"], 800)
+        self.assertIn({
+            "job_id": excessive["job_id"],
+            "reason": "JOB_APPROVAL_EXCEEDS_AGGREGATE_CAP",
+            "approved_cents": 1000,
+            "aggregate_cap_cents": 800,
+        }, result["deferred"])
+        self.assertEqual(spawn.call_count, 1)
+        state = json.loads((self.root / "auto-rescue-hook-state.json").read_text())
+        self.assertNotIn(excessive["job_id"], state["jobs"])
+        self.assertEqual(state["jobs"][allowed["job_id"]]["attempts"], 1)
+
     def test_later_job_can_start_only_after_prior_chirp_is_complete(self):
         first = self.held()
         second = self.held()

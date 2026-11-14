@@ -240,10 +240,6 @@ def _run_auto_rescue_hook_cycle_locked(
         if not outcome.get("eligible"):
             continue
         job_id = item["job_id"]
-        if spawned:
-            deferred.append({"job_id": job_id,
-                             "reason": "RESCUE_ALREADY_LAUNCHED_THIS_CYCLE"})
-            continue
         record = state.get(job_id) or {"attempts": 0}
         attempts = record.get("attempts", 0)
         if not isinstance(attempts, int) or attempts < 0:
@@ -281,6 +277,27 @@ def _run_auto_rescue_hook_cycle_locked(
             deferred.append({"job_id": job_id, "reason": "NO_LONGER_ELIGIBLE",
                              "detail": fresh.get("reason")})
             continue
+        status = ledger.status(job_id)
+        if (type(status.get("approved_cents")) is not int
+                or status["approved_cents"] <= 0):
+            deferred.append({"job_id": job_id,
+                             "reason": "JOB_APPROVAL_MISSING"})
+            continue
+        # claim_independent_rescue checks this same constraint inside the
+        # atomic paid claim. Reject it BEFORE persisting the launch intent,
+        # otherwise a predictable failed claim blocks other valid jobs.
+        if status["approved_cents"] > aggregate_cap_cents:
+            deferred.append({
+                "job_id": job_id,
+                "reason": "JOB_APPROVAL_EXCEEDS_AGGREGATE_CAP",
+                "approved_cents": status["approved_cents"],
+                "aggregate_cap_cents": aggregate_cap_cents,
+            })
+            continue
+        if spawned:
+            deferred.append({"job_id": job_id,
+                             "reason": "RESCUE_ALREADY_LAUNCHED_THIS_CYCLE"})
+            continue
         if _prior_hook_dispatch_unresolved(
                 ledger=ledger, state=state, exclude_job_id=job_id):
             deferred.append({
@@ -293,12 +310,6 @@ def _run_auto_rescue_hook_cycle_locked(
         if budget_block:
             deferred.append({"job_id": job_id, "reason": budget_block,
                              "aggregate_cap_cents": aggregate_cap_cents})
-            continue
-        status = ledger.status(job_id)
-        if (type(status.get("approved_cents")) is not int
-                or status["approved_cents"] <= 0):
-            deferred.append({"job_id": job_id,
-                             "reason": "JOB_APPROVAL_MISSING"})
             continue
         stamp = moment.strftime("%Y%m%dT%H%M%SZ")
         log_dir = artifact_root / LOG_DIRNAME

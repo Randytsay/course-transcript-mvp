@@ -102,3 +102,24 @@ Liu Yunzhong recording) **does not create or authorize a separate global
 spending cap**. A deployment operator must provide an independently approved
 global cap without exceeding any per-job approved limit or initiating a
 second provider submission.
+
+## Codex third review: per-job approval ceiling preflight
+
+The 2bd5cba Codex review exposed one more predictable paid-claim
+failure: a job approval can exceed an independently configured
+aggregate cap even while the whole-ledger estimated exposure is
+within that cap. The trusted claim rejects approved_cents > cap_cents.
+
+Fixed: the rescue hook now checks the job's approved_cents against
+the explicit aggregate cap before writing any launch intent. It
+returns JOB_APPROVAL_EXCEEDS_AGGREGATE_CAP for the affected job
+without consuming an attempt or blocking another eligible job.
+
+Red/green regression: two held jobs, approvals 1000c and 343c,
+combined ledger exposure 686c, configured aggregate cap 800c.
+The 1000c job must be deferred without a launch record while the
+343c job may proceed in a mocked, isolated process-spawn test.
+
+107 focused Golden V2 offline tests passed in a network-disabled,
+read-only-source container after this fix. This does not constitute
+a production provider or deployment acceptance.
