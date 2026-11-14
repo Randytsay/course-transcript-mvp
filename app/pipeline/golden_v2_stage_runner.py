@@ -21,6 +21,10 @@ from app.providers.golden_v2_final_gate import validate_golden_v2
 from app.subtitles.golden_v2_render import render_golden_v2
 from app.providers.golden_v2_versioned_artifacts import resolve_versioned, write_versioned
 from app.pipeline.golden_v2_alignment_health import assess_alignment_health
+from app.pipeline.golden_v2_partial_primary import (
+    PARTIAL_PRIMARY_SCHEMA, build_partial_primary, partial_primary_coverage,
+    refused_span_pieces, word_in_refused_span,
+)
 from app.pipeline.golden_v2_review_evidence import require_real_review_evidence
 from app.pipeline.golden_v2_chirp_first_reference import read_chirp_first_reference
 from app.pipeline.golden_v2_reference_companion import reference_comparison_hint
@@ -155,6 +159,26 @@ def _bound_inputs(*, ledger: GoldenV2Ledger, claim: dict[str, Any],
         primary_filename = (
             f"primary-stage-reviewed-{stages['gemini_primary']['evidence_sha']}.json"
         )
+    if (primary_filename == "primary-stage.json"
+            and original_data.get("ready_for_chirp") is False):
+        # Partial primary: the held Gemini stage never completes, but its
+        # STOP windows are comparable evidence once a verified SAFETY refusal
+        # has been rescued to Chirp. The derivative is SHA-bound to the
+        # original report; the original stays REVIEW_REQUIRED and untouched.
+        if stages["gemini_primary"]["state"] != "REVIEW_REQUIRED":
+            raise V2Conflict("held primary cannot enter comparison without review")
+        partial = build_partial_primary(
+            ledger=ledger, job_id=claim["job_id"], job_dir=job_dir)
+        merged = _checked_stage_artifact(
+            job_dir=job_dir, filename="chirp-merged.json",
+            stage=stages["chirp_independent"], claim=claim, raw_digest=True)
+        text = partial["assembled_text"]
+        if (merged.get("schema") != "golden-v2-chirp-merged-v1"
+                or merged.get("timing_authority") != "chirp_3"
+                or not isinstance(merged.get("words"), list)
+                or not isinstance(text, str) or not text.strip()):
+            raise V2Conflict("partial primary and Chirp evidence required")
+        return text, merged, stages, partial
     primary = _checked_stage_artifact(
         job_dir=job_dir, filename=primary_filename,
         stage=stages["gemini_primary"], claim=claim)
@@ -483,15 +507,37 @@ def _build_comparison_report(
     stage wrote. The gate is re-applied here deliberately: QA must not accept
     a comparison that the compare stage would now refuse.
     """
-    report = compare_gemini_chirp(
-        primary_text, merged["words"], source_sha256=claim["source_sha"])
+    is_partial = primary.get("schema") == PARTIAL_PRIMARY_SCHEMA
     chirp_first = primary.get("schema") == "golden-v2-chirp-first-reference-v1"
+    if is_partial:
+        # Only the comparable scope enters the text diff: Chirp words inside
+        # refused windows have no Gemini counterpart, so they become bounded
+        # Chirp-authoritative review pieces instead of diff candidates.
+        refused = primary.get("refused_windows") or []
+        if not isinstance(refused, list) or not refused:
+            raise V2Conflict("partial primary has no refused windows")
+        in_scope = [word for word in merged["words"]
+                    if not word_in_refused_span(word, refused)]
+        if not in_scope:
+            raise V2Conflict("partial primary comparison scope has no Chirp words")
+        report = compare_gemini_chirp(
+            primary_text, in_scope, source_sha256=claim["source_sha"])
+        pieces, spans = refused_span_pieces(
+            words=merged["words"], refused_windows=refused,
+            source_sha256=claim["source_sha"])
+        report["candidates"] = list(report["candidates"]) + pieces
+        report["pending_review_count"] = len(report["candidates"])
+        coverage = partial_primary_coverage(primary)
+    else:
+        report = compare_gemini_chirp(
+            primary_text, merged["words"], source_sha256=claim["source_sha"])
+        coverage = (
+            primary["reference_timeline_extent_ratio"] if chirp_first else
+            _primary_coverage_ratio(primary, merged.get("duration_ms")))
     alignment = assess_alignment_health(
         candidates=report.get("candidates") or [],
         comparison=report,
-        primary_coverage_ratio=(
-            primary["reference_timeline_extent_ratio"] if chirp_first else
-            _primary_coverage_ratio(primary, merged.get("duration_ms"))),
+        primary_coverage_ratio=coverage,
         duration_ms=merged.get("duration_ms"),
     )
     report["alignment_health"] = alignment
@@ -516,6 +562,17 @@ def _build_comparison_report(
         "reference_is_acoustic_evidence": False,
         "chirp_evidence_sha256": stages["chirp_independent"]["evidence_sha"],
     })
+    if is_partial:
+        # The 0.98 coverage gate above applied to the comparison scope only;
+        # say so in the report, and mark which spans only Chirp can vouch for.
+        report.update({
+            "partial_primary": True,
+            "refused_windows": primary["refused_windows"],
+            "comparison_scope_seconds": primary["comparison_scope_seconds"],
+            "comparison_scope": "GEMINI_TEXT_SPANS_ONLY",
+            "partial_primary_evidence_sha256": primary["evidence_sha256"],
+            "chirp_authoritative_spans": spans,
+        })
     hint = reference_comparison_hint(
         job_dir=job_dir, job_id=claim['job_id'], source_sha=claim['source_sha'],
         chirp_words=merged['words'])

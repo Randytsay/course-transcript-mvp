@@ -68,15 +68,33 @@ def list_v2_status(database: Path, *, limit: int = 20) -> list[dict[str, Any]]:
         return [_snapshot(db, job) for job in jobs]
 
 
-def list_v2_active_jobs(database: Path, *, limit: int = 100) -> list[dict[str, str]]:
-    """Read active job identities for local workers without migrating SQLite."""
+_ACTIVE_JOB_STATUSES = ("QUEUED", "PROCESSING")
+
+
+def list_v2_active_jobs(
+    database: Path, *, limit: int = 100,
+    statuses: tuple[str, ...] = _ACTIVE_JOB_STATUSES,
+) -> list[dict[str, str]]:
+    """Read active job identities for local workers without migrating SQLite.
+
+    The default statuses are the ones a worker may advance. Callers that
+    also need to see jobs held for review (for example the auto-rescue
+    hook, which only attaches a read-only eligibility outcome to them) pass
+    NEEDS_REVIEW explicitly; the paid executor keeps the default so a held
+    paid stage is never re-claimed by it.
+    """
     if not 1 <= limit <= 1000:
         raise ValueError("invalid active-job query limit")
+    if (not statuses or any(not isinstance(item, str) or not item.strip()
+                            for item in statuses)):
+        raise ValueError("invalid active-job statuses")
+    placeholders = ",".join("?" for _ in statuses)
     with closing(_connection(database)) as db:
         db.execute("BEGIN")
         rows = db.execute(
-            "SELECT id,status FROM v2_jobs WHERE status IN ('QUEUED','PROCESSING') "
-            "ORDER BY created_at,id LIMIT ?", (limit,),
+            "SELECT id,status FROM v2_jobs WHERE status IN (" + placeholders + ") "
+            "ORDER BY created_at,id LIMIT ?",
+            (*statuses, limit),
         ).fetchall()
         return [{"job_id": str(row["id"]), "status": str(row["status"])}
                 for row in rows]

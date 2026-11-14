@@ -16,6 +16,20 @@ from app.pipeline.golden_v2_stage_runner import (
 )
 
 
+def _partial_mode_available(
+    *, ledger: GoldenV2Ledger, job_id: str, state: dict[str, Any],
+) -> bool:
+    """True when a held primary may be routed around, never completed.
+
+    The comparison itself re-verifies the refusal and the partial derivative;
+    this only decides whether the coordinator may pass the held stage.
+    """
+    stages = {row["name"]: row for row in state["stages"]}
+    if stages.get("chirp_independent", {}).get("state") != "COMPLETE":
+        return False
+    return ledger.independent_rescue_resumption(job_id) is not None
+
+
 def advance_local(
     *, ledger: GoldenV2Ledger, job_id: str, job_dir: Path,
     worker_id: str = "golden-v2-local", minimum_recovery_age_seconds: int = 300,
@@ -32,6 +46,21 @@ def advance_local(
     if pending is None:
         return {"job_id": job_id, "status": state["status"],
                 "action": "AWAITING_FINAL_REVIEW"}
+    # The held Gemini stage never completes, so the pending pointer would
+    # otherwise stop here forever even after Chirp is done. In partial mode
+    # the pointer routes around it, never through it, and every downstream
+    # guard below (comparison review hold, adjudication human review) applies
+    # exactly as it does on the normal route. Every other held primary
+    # keeps the existing blocker.
+    if (pending["name"] == "gemini_primary"
+            and pending["state"] == "REVIEW_REQUIRED"
+            and _partial_mode_available(ledger=ledger, job_id=job_id, state=state)):
+        pending = next((row for row in stages
+                        if row["name"] != "gemini_primary"
+                        and row["state"] not in {"COMPLETE", "SKIPPED"}), None)
+        if pending is None:
+            return {"job_id": job_id, "status": state["status"],
+                    "action": "AWAITING_FINAL_REVIEW"}
     stage = pending["name"]
     if state["status"] not in {"QUEUED", "PROCESSING"}:
         return {"job_id": job_id, "stage": stage,
