@@ -280,3 +280,31 @@ comparison/Golden/acoustic evidence packet.
 - Full relevant offline suite: 251 tests PASS. This does not
   represent positive online provider/Drive publication or a
   production deployment acceptance.
+
+## Codex finding: ordinary comparison schema compatibility
+
+The newer partial-window comparison added chirp_source_word_indices to
+EVERY candidate, including pre-rescue ordinary comparisons. Golden QA
+reconstructs the exact comparison report from immutable provider
+evidence and rejects any field-level drift. As a consequence, an
+existing non-rescued job with a disagreement could be stranded after
+upgrading if the already-persisted ordinary comparison lacked the new
+field.
+
+Fix:
+
+- For ordinary comparison calls without an explicit word_indices
+  argument, omit chirp_source_word_indices, preserving the old report
+  representation without mutating any persisted artifact.
+- For time-scoped partial-window comparisons with explicit source
+  indices, retain chirp_source_word_indices so the source-bound index
+  and Chirp evidence checks remain intact.
+- Red/green test confirmed the old failing case and the explicit
+  index mapping required by rescue.
+- A byte-identical old/new ordinary comparison check was executed
+  across the OLD 6999290b runtime image and the current PR source
+  with the exact same synthetic provider inputs. The canonical
+  SHA-256 matched (8bf319aa3f73e9dd7ea68bd0dc9cf8b01aef8d0a5541dfc9b46f5a7bdeeebb21).
+- 252 Golden V2 related offline tests PASS after the change.
+- No original media, provider calls, Drive writes, production Ledger
+  changes or Golden QA PASS were generated.

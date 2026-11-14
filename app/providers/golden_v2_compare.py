@@ -60,6 +60,9 @@ def compare_gemini_chirp(
         raise AlignmentNeedsReview("empty evidence or invalid comparison bound")
     # A partial transcription may compare only some Chirp words. Evidence
     # identities must still use indices from the *complete* source stream.
+    # Historical *ordinary* comparison artifacts omit the source-word index
+    # field entirely. Preserve that exact schema for QA byte equality.
+    explicit_source_indices = word_indices is not None
     if word_indices is None:
         word_indices = list(range(len(chirp_words)))
     if (len(word_indices) != len(chirp_words)
@@ -110,7 +113,8 @@ def compare_gemini_chirp(
             "source_time_end": times["chirp_end_ms"] if times else None,
             "source_time_unit": "milliseconds",
             "chirp_evidence_ids": evidence_ids,
-            "chirp_source_word_indices": [word_indices[i] for i in indices],
+            **({"chirp_source_word_indices": [word_indices[i] for i in indices]}
+               if explicit_source_indices else {}),
             "chirp_timing_evidence": times,
             "adjacent_chirp_context": {
                 "left_chirp_word_ms": chirp_words[left]["end_ms"] if left is not None else None,
