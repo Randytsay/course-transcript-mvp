@@ -265,7 +265,8 @@ def apply_review_bundle(
             raise ValueError("replacement must map to a CORRECT_CHIRP decision")
         if (index in replacement_ids
                 and candidate_by_index[index]["evidence"].get("kind")
-                    != "CHIRP_AUTHORITATIVE_REFUSED_SPAN"):
+                    not in {"CHIRP_AUTHORITATIVE_REFUSED_SPAN",
+                            "GEMINI_OVERLAP_SEAM_REVIEW"}):
             raise ValueError("ordinary candidate accepts one correction")
         reason = next(item["decision_reason"] for item in decisions
                       if item["candidate_index"] == index)

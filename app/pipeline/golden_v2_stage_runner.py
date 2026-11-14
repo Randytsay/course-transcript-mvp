@@ -224,15 +224,21 @@ def _correction_matches_candidate(
     if not evidence_ids or not source_bound_hashes:
         return False
     candidate_ids = candidate.get("chirp_evidence_ids", [])
-    if candidate.get("kind") == "CHIRP_AUTHORITATIVE_REFUSED_SPAN":
-        # The refused primary can cover 120s while one corrected word needs
-        # only a short, directly listened, timestamped replacement. Requiring
-        # the entire 120s candidate to form one SRT token makes legitimate
-        # corrections impossible under 6.5s/22-character cue limits.
-        # Every patched word must be contained in this exact SHA-bound
-        # candidate, with its original Chirp time and word evidence.
-        if (candidate.get("chirp_authoritative") is not True
-                or not isinstance(candidate_ids, list)
+    local_rescue = (
+        candidate.get("kind") == "CHIRP_AUTHORITATIVE_REFUSED_SPAN"
+        and candidate.get("chirp_authoritative") is True
+    ) or (
+        candidate.get("kind") == "GEMINI_OVERLAP_SEAM_REVIEW"
+        and candidate.get("chirp_authoritative") is False
+        and candidate.get("gemini_crosscheck") == "unresolved_audio_overlap"
+    )
+    if local_rescue:
+        # Refused-primary review pieces may cover 120s, and overlap-seam
+        # pieces may exceed 6.5s; neither should be one indivisible SRT
+        # replacement token. A human-reviewed correction can affect ONLY
+        # a directly evidenced, renderable local word span. The entire
+        # candidate remains pending until its review decision is explicit.
+        if (not isinstance(candidate_ids, list)
                 or not candidate_ids or len(candidate_ids) != len(set(candidate_ids))
                 or not set(evidence_ids).issubset(set(candidate_ids))
                 or type(candidate.get("source_time_start")) is not int
@@ -332,7 +338,10 @@ def complete_adjudication_or_hold(
     for patch in replacements:
         idx = patch["candidate_index"]
         if (idx in seen_corrections
-                and candidates[idx].get("kind") != "CHIRP_AUTHORITATIVE_REFUSED_SPAN"):
+                and candidates[idx].get("kind") not in {
+                    "CHIRP_AUTHORITATIVE_REFUSED_SPAN",
+                    "GEMINI_OVERLAP_SEAM_REVIEW",
+                }):
             raise V2Conflict("duplicate ordinary source-word correction")
         seen_corrections.add(idx)
     # Validate the actual renderer's source-bound word hashes and cue layout

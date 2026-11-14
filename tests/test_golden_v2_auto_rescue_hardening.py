@@ -315,6 +315,55 @@ class RefusedSpanLocalCorrectionsRegressionTests(_AutoRescueCase):
             review_reference="two-local-edits",confirm_listened=True)
         self.assertFalse(result.get("safe_publish_allowed",False))
 
+    def test_seam_over_6500ms_accepts_one_word_source_bound_correction(self):
+        from app.pipeline.golden_v2_review_bundle import apply_review_bundle
+        from app.pipeline.golden_v2_stage_runner import _correction_matches_candidate
+        f,bundle,_refused=self._ready_review()
+        seams=[item for item in bundle["candidate_snapshot"]
+               if item["evidence"]["kind"]=="GEMINI_OVERLAP_SEAM_REVIEW"
+               and item["evidence"]["chirp_evidence_ids"]]
+        self.assertTrue(seams)
+        candidate=seams[0]
+        evidence=candidate["evidence"]
+        self.assertGreater(
+            evidence["source_time_end"]-evidence["source_time_start"],6500)
+        i=next(i for i,w in enumerate(f["words"])
+               if w["start_ms"]==evidence["source_time_start"])
+        patch=self._patch(f,candidate,i,new_text="交")
+        self.assertTrue(_correction_matches_candidate(
+            correction=patch,candidate=evidence,
+            words=f["words"],source_sha=f["source_sha"]))
+        bundle["review_decisions"]=[{
+            "candidate_index":candidate["candidate_index"],
+            "status":"RESOLVED","decision":"CORRECT_CHIRP",
+            "reviewed_audio_window_ms":[
+                evidence["source_time_start"],evidence["source_time_end"]],
+            "decision_reason":"test-only seam audio review",
+        }]
+        bundle["replacements"]=[patch]
+        result=apply_review_bundle(
+            database=self.database,job_id=f["job_id"],
+            job_dir=f["job_dir"],
+            normalized_audio=f["job_dir"]/"normalized.flac",
+            bundle=bundle,reviewer="offline-reviewer",
+            review_reference="seam-local-edit",confirm_listened=True)
+        self.assertFalse(result.get("safe_publish_allowed",False))
+        self.assertFalse((f["job_dir"]/"golden-v2"/"final.srt").exists())
+
+    def test_seam_without_source_word_evidence_cannot_be_corrected(self):
+        from app.pipeline.golden_v2_stage_runner import _correction_matches_candidate
+        f,bundle,_refused=self._ready_review()
+        base=next(item["evidence"] for item in bundle["candidate_snapshot"]
+                  if item["evidence"]["kind"]=="GEMINI_OVERLAP_SEAM_REVIEW")
+        no_words={**base,"chirp_evidence_ids":[],
+                  "source_time_start":base["source_time_start"],
+                  "source_time_end":base["source_time_end"]}
+        correction=self._patch(f,
+             {"candidate_index":0},0)
+        self.assertFalse(_correction_matches_candidate(
+            correction=correction,candidate=no_words,
+            words=f["words"],source_sha=f["source_sha"]))
+
     def test_refused_subspan_rejects_tampered_word_evidence_and_overlaps(self):
         from app.pipeline.golden_v2_review_bundle import apply_review_bundle
         from app.pipeline.golden_v2_stage_runner import _correction_matches_candidate

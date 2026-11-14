@@ -337,3 +337,29 @@ Remedy:
   replacements. 257 related offline Golden V2 tests PASS.
 - Remaining human audio-completeness requirements and Golden QA
   gates are unchanged; no provider or Drive IO in these tests.
+
+## Latest Codex finding: renderable source corrections within overlap seams
+
+The overlap-seam review pieces may span 8s or more, exceeding the
+renderer 6.5s per corrected token. If Gemini and Chirp agree on a bad
+word in an overlap there may be no ordinary mismatch candidate;
+the seam review is the only valid source-bound correction authority.
+
+Fix:
+- Treat only explicit GEMINI_OVERLAP_SEAM_REVIEW candidates with
+  gemini_crosscheck=unresolved_audio_overlap and
+  chirp_authoritative=False as eligible for local Chirp-word
+  subspan edits, alongside the refused-span candidate kind.
+- For either rescue-specific candidate, every corrected Chirp word
+  must have a matching full-stream source-word SHA and be contained
+  in the original candidate's exact word hashes and time window.
+- Multiple nonoverlapping short word-level corrections can be
+  submitted against the same reviewed seam; ordinary (non-rescued)
+  comparisons still require their original single/exact correction.
+- A seam without Chirp word hashes remains uncorrectable and cannot
+  gain fabricated timestamps. Overlapping edits and oversized
+  corrected spans remain rejected by render_golden_v2.
+- Two new tests reproduce the 8-second seam and the no-word
+  fail-closed case. 259 relevant offline tests PASS.
+- There is no automated human listening assertion, no new model
+  call and no Golden QA or Drive-publishing authorization.
