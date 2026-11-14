@@ -274,20 +274,22 @@ class AutoRescueHookTests(_AutoRescueCase):
         now = datetime(2026, 11, 14, 8, 0, tzinfo=timezone.utc)
         result = run_auto_rescue_hook_cycle(
             database=self.database, artifact_root=self.root,
-            rescue_script=self._stub(marker), now=now)
+            rescue_script=self._stub(marker), now=now,
+            aggregate_cap_cents=1000)
         self.assertEqual(result["action"], "AUTO_RESCUE_HOOK_CYCLE_COMPLETE")
         self.assertEqual(len(result["spawned"]), 1)
         (spawned,) = result["spawned"]
         self.assertEqual(spawned["job_id"], fixture["job_id"])
         self.assertEqual(spawned["revision"], 2)
-        self.assertEqual(spawned["cap_cents"], 343)
+        self.assertEqual(spawned["cap_cents"], 1000)
+        self.assertEqual(spawned["approved_cents"], 343)
         (argv,) = self._spawned_argv(marker)
         self.assertEqual(argv[-1], "--submit")
         self.assertEqual(argv[argv.index("--job-id") + 1], fixture["job_id"])
         self.assertEqual(argv[argv.index("--source-sha") + 1],
                          fixture["source_sha"])
         self.assertEqual(argv[argv.index("--revision") + 1], "2")
-        self.assertEqual(argv[argv.index("--cap-cents") + 1], "343")
+        self.assertEqual(argv[argv.index("--cap-cents") + 1], "1000")
         self.assertEqual(argv[argv.index("--reference") + 1], AUTO_RESCUE_REFERENCE)
         state = json.loads((self.root / "auto-rescue-hook-state.json").read_text())
         self.assertEqual(state["jobs"][fixture["job_id"]]["attempts"], 1)
@@ -302,6 +304,7 @@ class AutoRescueHookTests(_AutoRescueCase):
             return run_auto_rescue_hook_cycle(
                 database=self.database, artifact_root=self.root,
                 rescue_script=stub, retry_interval_seconds=3600,
+                aggregate_cap_cents=1000,
                 now=start + timedelta(seconds=offset_seconds))
 
         self.assertEqual(len(cycle(0)["spawned"]), 1)
@@ -323,7 +326,7 @@ class AutoRescueHookTests(_AutoRescueCase):
         marker = Path(self.temp.name) / "spawned-argv.jsonl"
         result = run_auto_rescue_hook_cycle(
             database=self.database, artifact_root=self.root,
-            rescue_script=self._stub(marker),
+            rescue_script=self._stub(marker), aggregate_cap_cents=1000,
             now=datetime(2026, 11, 14, 8, 0, tzinfo=timezone.utc))
         self.assertEqual(result["action"], "AUTO_RESCUE_HOOK_CYCLE_COMPLETE")
         self.assertEqual(result["spawned"], [])
@@ -338,7 +341,7 @@ class AutoRescueHookTests(_AutoRescueCase):
         with self.assertRaises(V2Conflict):
             run_auto_rescue_hook_cycle(
                 database=self.database, artifact_root=self.root,
-                rescue_script=self._stub(marker),
+                rescue_script=self._stub(marker), aggregate_cap_cents=1000,
                 now=datetime(2026, 11, 14, 8, 0, tzinfo=timezone.utc))
         self.assertFalse(marker.exists())
 

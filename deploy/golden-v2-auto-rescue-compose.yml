@@ -30,3 +30,7 @@ services:
       - --artifact-root
       - /app/data/golden-v2
       - --enable-auto-rescue
+      - --aggregate-cap-cents
+      # Fail closed with 0 if the explicit aggregate budget is not configured.
+      # The original job's approval does NOT serve as the global ledger cap.
+      - ${V2_CHAT_AUTO_RESCUE_AGGREGATE_CAP_CENTS:-0}

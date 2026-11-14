@@ -18,6 +18,8 @@ import argparse
 import fcntl
 import json
 import os
+import sqlite3
+from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
 import signal
@@ -28,7 +30,9 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
+from app.jobs.golden_v2_ledger import (
+    GoldenV2Ledger, V2Conflict, approved_trial_exposure,
+)
 from app.jobs.golden_v2_read import list_v2_active_jobs
 from app.operations.runtime_heartbeat import write_service_heartbeat
 from app.pipeline.golden_v2_auto_rescue import inspect_auto_rescue_eligibility
@@ -124,13 +128,61 @@ def inspect_auto_rescue_candidates(
     }
 
 
+def _global_paid_budget_gate(database: Path, cap_cents: int) -> str | None:
+    """Read-only preflight; the rescue claim rechecks atomically under CAS.
+
+    Check the configured *aggregate* cap independently from the job owner
+    approval. This prevents predictable failed launches from consuming a
+    durable hook attempt.
+    """
+    uri = f"file:{Path(database).resolve().as_posix()}?mode=ro"
+    with closing(sqlite3.connect(uri, uri=True)) as db:
+        db.execute("PRAGMA query_only=ON")
+        db.execute("BEGIN")
+        unresolved = db.execute(
+            "SELECT 1 FROM v2_stages WHERE name IN "
+            "('gemini_primary','chirp_independent','third_optional') "
+            "AND state IN ('RUNNING','OUTCOME_UNKNOWN','OVER_BUDGET') LIMIT 1"
+        ).fetchone()
+        if unresolved:
+            return "UNRECONCILED_GLOBAL_PAID_STAGE"
+        if approved_trial_exposure(db) > cap_cents:
+            return "AGGREGATE_BUDGET_EXCEEDED"
+    return None
+
+
+def _prior_hook_dispatch_unresolved(
+    *, ledger: GoldenV2Ledger, state: dict[str, dict[str, object]],
+    exclude_job_id: str,
+) -> bool:
+    """Other attempts can hide an in-flight, not-yet-claimed paid POST."""
+    for prior_id, record in state.items():
+        if prior_id == exclude_job_id or not record.get("attempts"):
+            continue
+        # A completed, evidence-bound Chirp stage clears only this in-flight
+        # ambiguity, not the job's own per-job retry restriction.
+        try:
+            status = ledger.status(prior_id)
+            chirp = next(item for item in status["stages"]
+                         if item["name"] == "chirp_independent")
+        except (V2Conflict, KeyError, StopIteration, OSError):
+            return True
+        if chirp["state"] != "COMPLETE":
+            return True
+    return False
+
+
 def run_auto_rescue_hook_cycle(
     *, database: Path, artifact_root: Path, rescue_script: Path,
     max_attempts: int = DEFAULT_MAX_ATTEMPTS,
     retry_interval_seconds: int = DEFAULT_RETRY_INTERVAL_SECONDS,
     max_jobs: int = 100, now: datetime | None = None,
+    aggregate_cap_cents: int | None = None,
 ) -> dict[str, object]:
-    """Run one worker pass, spawning the rescue script for eligible jobs."""
+    """Run one worker pass, spawning at most one paid rescue per cycle."""
+    if (type(aggregate_cap_cents) is not int
+            or not 1 <= aggregate_cap_cents <= 100000):
+        raise ValueError("explicit independent aggregate cap required")
     if type(max_attempts) is not int or not 1 <= max_attempts <= 10:
         raise ValueError("hook attempt bound must be 1..10")
     if (type(retry_interval_seconds) is not int
@@ -161,13 +213,14 @@ def run_auto_rescue_hook_cycle(
             rescue_script=rescue_script, max_attempts=max_attempts,
             retry_interval_seconds=retry_interval_seconds,
             max_jobs=max_jobs, moment=moment,
+            aggregate_cap_cents=aggregate_cap_cents,
         )
 
 
 def _run_auto_rescue_hook_cycle_locked(
     *, database: Path, artifact_root: Path, rescue_script: Path,
     max_attempts: int, retry_interval_seconds: int, max_jobs: int,
-    moment: datetime,
+    moment: datetime, aggregate_cap_cents: int,
 ) -> dict[str, object]:
     result = run_v2_worker_pass(
         database=database, artifact_root=artifact_root,
@@ -182,12 +235,15 @@ def _run_auto_rescue_hook_cycle_locked(
     state = _load_state(artifact_root)
     spawned: list[dict[str, object]] = []
     deferred: list[dict[str, object]] = []
-    changed = False
     for item in result.get("outcomes", []):
         outcome = item.get("auto_rescue") or {}
         if not outcome.get("eligible"):
             continue
         job_id = item["job_id"]
+        if spawned:
+            deferred.append({"job_id": job_id,
+                             "reason": "RESCUE_ALREADY_LAUNCHED_THIS_CYCLE"})
+            continue
         record = state.get(job_id) or {"attempts": 0}
         attempts = record.get("attempts", 0)
         if not isinstance(attempts, int) or attempts < 0:
@@ -225,7 +281,25 @@ def _run_auto_rescue_hook_cycle_locked(
             deferred.append({"job_id": job_id, "reason": "NO_LONGER_ELIGIBLE",
                              "detail": fresh.get("reason")})
             continue
+        if _prior_hook_dispatch_unresolved(
+                ledger=ledger, state=state, exclude_job_id=job_id):
+            deferred.append({
+                "job_id": job_id,
+                "reason": "PREVIOUS_HOOK_LAUNCH_RECONCILIATION_REQUIRED",
+            })
+            continue
+        budget_block = _global_paid_budget_gate(
+            database, aggregate_cap_cents)
+        if budget_block:
+            deferred.append({"job_id": job_id, "reason": budget_block,
+                             "aggregate_cap_cents": aggregate_cap_cents})
+            continue
         status = ledger.status(job_id)
+        if (type(status.get("approved_cents")) is not int
+                or status["approved_cents"] <= 0):
+            deferred.append({"job_id": job_id,
+                             "reason": "JOB_APPROVAL_MISSING"})
+            continue
         stamp = moment.strftime("%Y%m%dT%H%M%SZ")
         log_dir = artifact_root / LOG_DIRNAME
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -236,6 +310,8 @@ def _run_auto_rescue_hook_cycle_locked(
             "phase": "LAUNCH_INTENT_UNCERTAIN",
             "revision": status["revision"],
             "source_sha256": status["source_sha"],
+            "job_approved_cents": status["approved_cents"],
+            "aggregate_cap_cents": aggregate_cap_cents,
             "last_log": str(log_path),
         }
         # Durable intent FIRST; on a crash, fail closed instead of spawning a
@@ -248,7 +324,7 @@ def _run_auto_rescue_hook_cycle_locked(
                  "--job-id", job_id,
                  "--source-sha", str(status["source_sha"]),
                  "--revision", str(status["revision"]),
-                 "--cap-cents", str(status["approved_cents"]),
+                 "--cap-cents", str(aggregate_cap_cents),
                  "--reference", AUTO_RESCUE_REFERENCE,
                  "--submit"],
                 stdout=log, stderr=subprocess.STDOUT,
@@ -257,10 +333,10 @@ def _run_auto_rescue_hook_cycle_locked(
         state[job_id]["phase"] = "PROCESS_LAUNCHED_RECONCILE_LEDGER"
         state[job_id]["last_pid"] = process.pid
         _save_state(artifact_root, state)
-        changed = True
         spawned.append({"job_id": job_id, "pid": process.pid,
                         "log": str(log_path), "revision": status["revision"],
-                        "cap_cents": status["approved_cents"]})
+                        "cap_cents": aggregate_cap_cents,
+                        "approved_cents": status["approved_cents"]})
     return {"action": "AUTO_RESCUE_HOOK_CYCLE_COMPLETE",
             "jobs_seen": result.get("jobs_seen"),
             "spawned": spawned, "deferred": deferred}
@@ -282,6 +358,9 @@ def main() -> int:
     )
     parser.add_argument("--poll-seconds", type=float, default=30)
     parser.add_argument("--max-jobs", type=int, default=100)
+    parser.add_argument(
+        "--aggregate-cap-cents", type=int, default=None,
+        help="explicit whole-ledger cap, independent of per-job approval")
     parser.add_argument("--max-attempts", type=int, default=DEFAULT_MAX_ATTEMPTS)
     parser.add_argument("--retry-interval-seconds", type=int,
                         default=DEFAULT_RETRY_INTERVAL_SECONDS)
@@ -308,6 +387,9 @@ def main() -> int:
         return 0
     if not args.enable_auto_rescue:
         parser.error("auto-rescue is disabled by default; use --dry-run for inspection")
+    if (args.aggregate_cap_cents is None
+            or not 1 <= args.aggregate_cap_cents <= 100000):
+        parser.error("live auto-rescue requires a separately configured aggregate cap")
     rescue_script = Path(__file__).resolve().parent / "golden_v2_independent_rescue.py"
     if not rescue_script.is_file():
         parser.error("independent rescue script is missing")
@@ -327,6 +409,7 @@ def main() -> int:
                     rescue_script=rescue_script, max_attempts=args.max_attempts,
                     retry_interval_seconds=args.retry_interval_seconds,
                     max_jobs=args.max_jobs,
+                    aggregate_cap_cents=args.aggregate_cap_cents,
                 )
             except Exception as exc:  # keep polling; --once reports the failure
                 result = {"action": "AUTO_RESCUE_HOOK_CYCLE_FAILED",

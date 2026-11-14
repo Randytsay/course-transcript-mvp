@@ -523,6 +523,7 @@ def _build_comparison_report(
         all_words = merged["words"]
         all_candidates = []
         window_reports = []
+        window_alignment_health = []
         full_chirp_offset = 0
         chirp_char_start = []
         for word in all_words:
@@ -540,6 +541,16 @@ def _build_comparison_report(
                 window["text"], [word for _, word in in_scope],
                 source_sha256=claim["source_sha"],
                 word_indices=[index for index, _ in in_scope])
+            # Assess alignment BEFORE rebasing to whole-audio character
+            # coordinates. A refused prefix is not a real text offset.
+            local_alignment = assess_alignment_health(
+                candidates=window_report["candidates"],
+                comparison=window_report, primary_coverage_ratio=1.0,
+                duration_ms=end_ms - start_ms,
+            )
+            window_alignment_health.append({
+                "window_index": window["index"], **local_alignment,
+            })
             char_offset = chirp_char_start[in_scope[0][0]]
             for candidate in window_report["candidates"]:
                 candidate["gemini_window_index"] = window["index"]
@@ -601,12 +612,45 @@ def _build_comparison_report(
         coverage = (
             primary["reference_timeline_extent_ratio"] if chirp_first else
             _primary_coverage_ratio(primary, merged.get("duration_ms")))
-    alignment = assess_alignment_health(
-        candidates=report.get("candidates") or [],
-        comparison=report,
-        primary_coverage_ratio=coverage,
-        duration_ms=merged.get("duration_ms"),
-    )
+    if is_partial:
+        # The combined candidate offsets are in DIFFERENT coordinate
+        # systems: the full Chirp timeline includes refused windows, while
+        # the available Gemini text omits them. Running the systematic
+        # offset heuristic globally manufactures spurious failures. Each
+        # STOP window was assessed locally above, with its original offset.
+        # Keep coverage checking global but compose the offset health only
+        # from independently validated window-local results.
+        alignment = assess_alignment_health(
+            candidates=[], comparison=report,
+            primary_coverage_ratio=coverage,
+            duration_ms=merged.get("duration_ms"),
+        )
+        reasons = set(alignment["reasons"])
+        for window_health in window_alignment_health:
+            reasons.update(window_health["reasons"])
+        sampled = sum(item["offset_sampled_count"]
+                      for item in window_alignment_health)
+        large = sum(item["large_offset_candidate_count"]
+                    for item in window_alignment_health)
+        alignment.update({
+            "status": "BLOCKED" if reasons else "PASS",
+            "reasons": sorted(reasons),
+            "candidate_count": len(report["candidates"]),
+            "offset_scope": "WINDOW_LOCAL",
+            "window_alignment_health": window_alignment_health,
+            "offset_sampled_count": sampled,
+            "large_offset_candidate_count": large,
+            "large_offset_ratio": round(large / sampled, 4) if sampled else 0.0,
+            "median_char_offset": None,
+            "unresolved_seam_count": len(seams),
+        })
+    else:
+        alignment = assess_alignment_health(
+            candidates=report.get("candidates") or [],
+            comparison=report,
+            primary_coverage_ratio=coverage,
+            duration_ms=merged.get("duration_ms"),
+        )
     report["alignment_health"] = alignment
     if alignment["status"] != "PASS":
         raise V2Conflict(

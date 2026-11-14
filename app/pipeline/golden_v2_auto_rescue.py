@@ -44,7 +44,18 @@ def inspect_auto_rescue_eligibility(
     if primary is None or primary.get("state") != "REVIEW_REQUIRED":
         return {"eligible": False, "reason": "PRIMARY_NOT_REVIEW_REQUIRED",
                 "primary_state": primary.get("state") if primary else None}
+    # This is an initial-claim eligibility check, not an attempt to recover
+    # an already paid/rescued stage. A later local-review hold can set the
+    # job back to NEEDS_REVIEW, while Gemini intentionally remains held.
+    # That must NOT look like a second eligible paid rescue.
+    if any(row["name"] != "gemini_primary"
+           and row["state"] != "PENDING" for row in state["stages"]):
+        return {"eligible": False,
+                "reason": "RESCUE_STAGE_ALREADY_STARTED_OR_DOWNSTREAM_ACTIVE"}
     try:
+        if ledger.independent_rescue_resumption(job_id) is not None:
+            return {"eligible": False,
+                    "reason": "EXISTING_RESCUE_RECONCILIATION_REQUIRED"}
         if ledger.chirp_windows(job_id):
             return {"eligible": False,
                     "reason": "EXISTING_CHIRP_OPERATION_RECONCILE"}

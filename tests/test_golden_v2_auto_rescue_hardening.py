@@ -2,6 +2,7 @@
 import hashlib
 import json
 import threading
+import sqlite3
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,8 +12,8 @@ from unittest.mock import patch
 from app.jobs.golden_v2_ledger import V2Conflict
 from app.pipeline.golden_v2_worker import run_v2_worker_pass
 from app.pipeline.golden_v2_paid_executor import run_paid_executor_pass
-from app.pipeline.golden_v2_stage_runner import _correction_matches_candidate
-from app.pipeline.golden_v2_partial_primary import refused_span_pieces
+from app.pipeline.golden_v2_stage_runner import _correction_matches_candidate, _build_comparison_report
+from app.pipeline.golden_v2_partial_primary import refused_span_pieces, build_partial_primary
 from app.providers.golden_v2_compare import compare_gemini_chirp, AlignmentNeedsReview
 from app.subtitles.golden_v2_render import _word_evidence
 from scripts.golden_v2_auto_rescue_hook import (
@@ -163,6 +164,148 @@ class RescueRecoveryRegressionTests(_AutoRescueCase):
         recover.assert_called_once()
 
 
+class CrossWindowAlignmentRegressionTests(_AutoRescueCase):
+    def _window_comparison(self, *, local_offset: int):
+        fixture = self.held(refused_window_index=1)
+        claim = claim_rescue(fixture, self.ledger)
+        merged = complete_chirp(fixture, self.ledger, claim)
+        partial = build_partial_primary(
+            ledger=self.ledger, job_id=fixture["job_id"],
+            job_dir=fixture["job_dir"])
+        stages = {x["name"]: x for x in self.ledger.status(fixture["job_id"])["stages"]}
+        def fake_compare(text, words, **kwargs):
+            later = words[0]["start_ms"] >= 5_380_000
+            candidates = []
+            if later:
+                for i in range(25):
+                    candidates.append({
+                        "kind": "TEXT_DISAGREEMENT",
+                        "chirp_char_range": [i*2, i*2+1],
+                        "gemini_char_range": [i*2+local_offset, i*2+local_offset+1],
+                        "source_time_start": words[i]["start_ms"],
+                        "source_time_end": words[i]["end_ms"],
+                        "comparison_status": "REVIEW_REQUIRED",
+                    })
+            return {
+                "kind": "golden_v2_primary_chirp_comparison",
+                "source_sha256": fixture["source_sha"],
+                "candidates": candidates,
+                "pending_review_count": len(candidates),
+                "exact_normalized_match": not candidates,
+                "similarity_ratio_not_accuracy": 1.0 if not candidates else 0.8,
+            }
+        with (patch("app.pipeline.golden_v2_stage_runner.compare_gemini_chirp",
+                    side_effect=fake_compare),
+              patch("app.pipeline.golden_v2_stage_runner.reference_comparison_hint",
+                    return_value=None)):
+            return _build_comparison_report(
+                primary_text=partial["assembled_text"], merged=merged,
+                primary=partial, claim={"job_id": fixture["job_id"],
+                    "source_sha": fixture["source_sha"]},
+                stages=stages, job_dir=fixture["job_dir"])
+
+    def test_refused_prefix_does_not_create_global_offset_false_positive(self):
+        report = self._window_comparison(local_offset=0)
+        self.assertEqual(report["alignment_health"]["status"], "PASS")
+        self.assertEqual(report["alignment_health"]["offset_scope"], "WINDOW_LOCAL")
+        self.assertEqual(len(report["alignment_health"]["window_alignment_health"]), 2)
+        self.assertGreaterEqual(report["pending_review_count"], 27)
+
+    def test_true_window_local_systematic_offset_is_still_blocked(self):
+        with self.assertRaisesRegex(V2Conflict, "systematic_reference_offset"):
+            self._window_comparison(local_offset=600)
+
+
+class AggregateBudgetRegressionTests(_AutoRescueCase):
+    def test_hook_uses_independent_global_budget_and_never_consumes_attempt_on_block(self):
+        first = self.held()
+        second = self.held()
+        marker = Path(self.temp.name) / "spawned-argv.jsonl"
+        stub = Path(self.temp.name) / "fake_rescue.py"
+        stub.write_text("import json,sys; open(%r,'a').write(json.dumps(sys.argv[1:])+'\\n')\n"
+                        % str(marker))
+        with patch("scripts.golden_v2_auto_rescue_hook.subprocess.Popen") as spawn:
+            blocked = run_auto_rescue_hook_cycle(
+                database=self.database, artifact_root=self.root,
+                rescue_script=stub, aggregate_cap_cents=343)
+        self.assertEqual(blocked["spawned"], [])
+        self.assertEqual(
+            [x["reason"] for x in blocked["deferred"]],
+            ["AGGREGATE_BUDGET_EXCEEDED", "AGGREGATE_BUDGET_EXCEEDED"])
+        self.assertFalse((self.root / "auto-rescue-hook-state.json").exists())
+        spawn.assert_not_called()
+        with patch("scripts.golden_v2_auto_rescue_hook.subprocess.Popen",
+                   return_value=SimpleNamespace(pid=4567)) as spawn:
+            resumed = run_auto_rescue_hook_cycle(
+                database=self.database, artifact_root=self.root,
+                rescue_script=stub, aggregate_cap_cents=1000)
+        self.assertEqual(len(resumed["spawned"]), 1)
+        self.assertEqual(resumed["spawned"][0]["cap_cents"], 1000)
+        self.assertEqual(resumed["spawned"][0]["approved_cents"], 343)
+        self.assertIn(
+            "RESCUE_ALREADY_LAUNCHED_THIS_CYCLE",
+            [x["reason"] for x in resumed["deferred"]])
+        self.assertEqual(
+            [call.args[0][call.args[0].index("--cap-cents")+1]
+             for call in spawn.call_args_list], ["1000"])
+
+    def test_already_completed_chirp_never_becomes_eligible_again(self):
+        from app.pipeline.golden_v2_auto_rescue import inspect_auto_rescue_eligibility
+        f = self.held()
+        claim = claim_rescue(f, self.ledger)
+        complete_chirp(f, self.ledger, claim)
+        with self.ledger._tx() as db:
+            db.execute(
+                "UPDATE v2_jobs SET status='NEEDS_REVIEW' WHERE id=?",
+                (f["job_id"],))
+        result = inspect_auto_rescue_eligibility(
+            ledger=self.ledger, job_id=f["job_id"],
+            job_dir=f["job_dir"])
+        self.assertFalse(result["eligible"])
+        self.assertEqual(
+            result["reason"],
+            "RESCUE_STAGE_ALREADY_STARTED_OR_DOWNSTREAM_ACTIVE")
+
+    def test_later_job_can_start_only_after_prior_chirp_is_complete(self):
+        first = self.held()
+        second = self.held()
+        stub = Path(self.temp.name) / "fake_rescue.py"
+        stub.write_text("# mocked, no provider\\n")
+        kwargs = dict(database=self.database, artifact_root=self.root,
+                      rescue_script=stub, aggregate_cap_cents=1000)
+        with patch("scripts.golden_v2_auto_rescue_hook.subprocess.Popen",
+                   return_value=SimpleNamespace(pid=1357)) as spawn:
+            initial = run_auto_rescue_hook_cycle(**kwargs)
+            self.assertEqual(len(initial["spawned"]), 1)
+            self.assertEqual(len(initial["deferred"]), 1)
+            pending = run_auto_rescue_hook_cycle(**kwargs)
+            self.assertEqual(pending["spawned"], [])
+            self.assertIn(
+                "PREVIOUS_HOOK_LAUNCH_RECONCILIATION_REQUIRED",
+                [x["reason"] for x in pending["deferred"]])
+            fixtures = {item["job_id"]: item for item in (first, second)}
+            launched_id = initial["spawned"][0]["job_id"]
+            remaining_id = next(job_id for job_id in fixtures if job_id != launched_id)
+            launched = fixtures[launched_id]
+            rescue_claim = claim_rescue(launched, self.ledger, cap_cents=1000)
+            complete_chirp(launched, self.ledger, rescue_claim)
+            after = run_auto_rescue_hook_cycle(**kwargs)
+            self.assertEqual(len(after["spawned"]), 1, after)
+            self.assertEqual(after["spawned"][0]["job_id"], remaining_id)
+            self.assertEqual(spawn.call_count, 2)
+
+    def test_live_hook_rejects_missing_aggregate_cap_before_any_intent(self):
+        f = self.held()
+        stub = Path(self.temp.name) / "fake_rescue.py"
+        stub.write_text("# no requests\n")
+        with self.assertRaises((ValueError, V2Conflict)):
+            run_auto_rescue_hook_cycle(
+                database=self.database, artifact_root=self.root,
+                rescue_script=stub)
+        self.assertFalse((self.root / "auto-rescue-hook-state.json").exists())
+        self.assertFalse((self.root / "auto-rescue-hook.lock").exists())
+
+
 class RescueHookCrashSafetyTests(_AutoRescueCase):
     def _script(self):
         path = Path(self.temp.name) / "unused_rescue.py"
@@ -188,7 +331,8 @@ class RescueHookCrashSafetyTests(_AutoRescueCase):
         f = self.held()
         kw = {"database": self.database, "artifact_root": self.root,
               "rescue_script": self._script(),
-              "now": datetime(2026, 11, 14, tzinfo=timezone.utc)}
+              "now": datetime(2026, 11, 14, tzinfo=timezone.utc),
+              "aggregate_cap_cents": 1000}
         with patch(
             "scripts.golden_v2_auto_rescue_hook.subprocess.Popen",
             side_effect=OSError("simulated fork failure"),
@@ -210,7 +354,8 @@ class RescueHookCrashSafetyTests(_AutoRescueCase):
         self.held()
         kw = {"database": self.database, "artifact_root": self.root,
               "rescue_script": self._script(),
-              "now": datetime(2026, 11, 14, tzinfo=timezone.utc)}
+              "now": datetime(2026, 11, 14, tzinfo=timezone.utc),
+              "aggregate_cap_cents": 1000}
         entered, release = threading.Event(), threading.Event()
         outputs = []
 
