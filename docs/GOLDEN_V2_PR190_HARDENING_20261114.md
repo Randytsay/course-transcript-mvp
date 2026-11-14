@@ -308,3 +308,32 @@ Fix:
 - 252 Golden V2 related offline tests PASS after the change.
 - No original media, provider calls, Drive writes, production Ledger
   changes or Golden QA PASS were generated.
+
+## Latest Codex finding: source-verified local corrections in long refused spans
+
+The existing refused-span candidate generator deliberately produces
+human-review windows bounded to 120 seconds. A prior candidate
+correction required replacing the entire multiword span in one
+indivisible SRT token, violating the renderer's per-cue 6.5s/22-char
+limits. This made short local corrections impossible and unnecessarily
+stranded valid human reviews.
+
+Remedy:
+- Only CHIRP_AUTHORITATIVE_REFUSED_SPAN candidates allow a corrected
+  contiguous SUBSPAN, where every source-bound Chirp word evidence SHA
+  is a verified subset of the immutable candidate's original word set
+  and its exact word time is bounded by the reviewed candidate.
+- Ordinary comparisons still require EXACT candidate word evidence,
+  keeping their serialized representation and correction contract.
+- One reviewed refused candidate may carry multiple nonoverlapping,
+  separately source-hashed short replacements. The renderer still
+  rejects overlapping words and oversized single corrected tokens.
+- Human decisions, full 120s listened audio bounds, candidate SHA,
+  source SHA, revision and reviewer reference remain required.
+  No auto-human listening attestation or publication PASS is synthesized.
+- Added five red/green tests: short local edit within 120s candidate,
+  two disjoint edits under one candidate, rejection of out-of-range
+  and forged source hashes, and rejection of oversized/overlapping
+  replacements. 257 related offline Golden V2 tests PASS.
+- Remaining human audio-completeness requirements and Golden QA
+  gates are unchanged; no provider or Drive IO in these tests.

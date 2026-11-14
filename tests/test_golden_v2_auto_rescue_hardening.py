@@ -219,6 +219,186 @@ class CrossWindowAlignmentRegressionTests(_AutoRescueCase):
             self._window_comparison(local_offset=600)
 
 
+class RefusedSpanLocalCorrectionsRegressionTests(_AutoRescueCase):
+    def _ready_review(self):
+        from app.pipeline.golden_v2_coordinator import run_ready_local
+        from app.pipeline.golden_v2_review_bundle import inspect_review_bundle
+        f = self.held()
+        rescue = claim_rescue(f, self.ledger)
+        complete_chirp(f, self.ledger, rescue)
+        action = run_ready_local(
+            ledger=self.ledger, job_id=f["job_id"], job_dir=f["job_dir"])
+        self.assertEqual(action[-1]["action"], "HUMAN_AUDIO_REVIEW_REQUIRED")
+        bundle = inspect_review_bundle(
+            database=self.database, job_id=f["job_id"], job_dir=f["job_dir"],
+            normalized_audio=f["job_dir"]/"normalized.flac")
+        candidates = [
+            item for item in bundle["candidate_snapshot"]
+            if item["evidence"]["kind"] == "CHIRP_AUTHORITATIVE_REFUSED_SPAN"
+        ]
+        self.assertTrue(candidates)
+        candidate = candidates[0]
+        self.assertGreater(
+            candidate["evidence"]["source_time_end"] -
+            candidate["evidence"]["source_time_start"], 6500)
+        return f, bundle, candidate
+
+    def _patch(self, f, candidate, word_index, new_text="校"):
+        from app.subtitles.golden_v2_render import _word_evidence
+        return {
+            "candidate_index": candidate["candidate_index"],
+            "start_word": word_index, "end_word": word_index+1,
+            "corrected_text": new_text,
+            "chirp_word_evidence_shas": [
+                _word_evidence(f["words"][word_index], word_index,
+                               f["source_sha"])
+            ]
+        }
+
+    def test_one_word_correction_inside_120s_refused_piece_is_renderable(self):
+        from app.pipeline.golden_v2_review_bundle import apply_review_bundle
+        from app.subtitles.golden_v2_render import render_golden_v2
+        f, bundle, candidate = self._ready_review()
+        evidence = candidate["evidence"]
+        idx = next(i for i,w in enumerate(f["words"])
+                   if w["start_ms"]==evidence["source_time_start"])
+        assert idx>=0
+        bundle["review_decisions"]=[{
+            "candidate_index": candidate["candidate_index"],
+            "status":"RESOLVED","decision":"CORRECT_CHIRP",
+            "reviewed_audio_window_ms":[
+                evidence["source_time_start"], evidence["source_time_end"]],
+            "decision_reason":"Local word checked against this test audio",
+        }]
+        bundle["replacements"]=[self._patch(f,candidate,idx)]
+        result=apply_review_bundle(
+            database=self.database,job_id=f["job_id"],
+            job_dir=f["job_dir"],
+            normalized_audio=f["job_dir"]/"normalized.flac",
+            bundle=bundle,reviewer="offline-human-simulation",
+            review_reference="offline-local-correction",
+            confirm_listened=True)
+        self.assertFalse(result.get("safe_publish_allowed",False))
+        self.assertFalse((f["job_dir"]/"golden-v2"/"final.srt").exists())
+        # Validates that a corrected source WORD remains a single
+        # renderable cue while the rest of the refused section is immutable.
+        rendered=render_golden_v2(
+            merged={"source_sha":f["source_sha"],
+                    "timing_authority":"chirp_3","words":f["words"]},
+            replacements=[{
+                **bundle["replacements"][0],
+                "source_sha256":f["source_sha"],"audio_evidence_checked":True,
+                "decision_reason":"Local word checked against this test audio"}])
+        self.assertIn("校",rendered["transcript"])
+
+    def test_multiple_disjoint_corrected_words_from_one_review_piece(self):
+        from app.pipeline.golden_v2_review_bundle import apply_review_bundle
+        f,bundle,candidate=self._ready_review()
+        evidence=candidate["evidence"]
+        i=next(i for i,w in enumerate(f["words"])
+               if w["start_ms"]==evidence["source_time_start"])
+        bundle["review_decisions"]=[{
+            "candidate_index":candidate["candidate_index"],
+            "status":"RESOLVED","decision":"CORRECT_CHIRP",
+            "reviewed_audio_window_ms":[
+                evidence["source_time_start"],evidence["source_time_end"]],
+            "decision_reason":"Two separate source-bound word corrections",
+        }]
+        bundle["replacements"]=[
+            self._patch(f,candidate,i,new_text="校"),
+            self._patch(f,candidate,i+1,new_text="訂"),
+        ]
+        result=apply_review_bundle(
+            database=self.database,job_id=f["job_id"],job_dir=f["job_dir"],
+            normalized_audio=f["job_dir"]/"normalized.flac",
+            bundle=bundle,reviewer="offline-reviewer",
+            review_reference="two-local-edits",confirm_listened=True)
+        self.assertFalse(result.get("safe_publish_allowed",False))
+
+    def test_refused_subspan_rejects_tampered_word_evidence_and_overlaps(self):
+        from app.pipeline.golden_v2_review_bundle import apply_review_bundle
+        from app.pipeline.golden_v2_stage_runner import _correction_matches_candidate
+        f,bundle,candidate=self._ready_review()
+        evidence=candidate["evidence"]
+        i=next(i for i,w in enumerate(f["words"])
+               if w["start_ms"]==evidence["source_time_start"])
+        verified=self._patch(f,candidate,i)
+        assert _correction_matches_candidate(
+            correction=verified,candidate=evidence,
+            words=f["words"],source_sha=f["source_sha"])
+        tampered=dict(verified,chirp_word_evidence_shas=["b"*64])
+        self.assertFalse(_correction_matches_candidate(
+            correction=tampered,candidate=evidence,
+            words=f["words"],source_sha=f["source_sha"]))
+        bundle["review_decisions"]=[{
+            "candidate_index":candidate["candidate_index"],
+            "status":"RESOLVED","decision":"CORRECT_CHIRP",
+            "reviewed_audio_window_ms":[
+                evidence["source_time_start"],evidence["source_time_end"]],
+            "decision_reason":"test-only overlapping correction",
+        }]
+        bundle["replacements"]=[
+            self._patch(f,candidate,i),
+            self._patch(f,candidate,i,new_text="重"),
+        ]
+        with self.assertRaisesRegex(V2Conflict,"unique audio/source-span evidence"):
+            apply_review_bundle(
+                database=self.database,job_id=f["job_id"],
+                job_dir=f["job_dir"],
+                normalized_audio=f["job_dir"]/"normalized.flac",
+                bundle=bundle,reviewer="offline-test",
+                review_reference="overlap-rejected",confirm_listened=True)
+        state=self.ledger.status(f["job_id"])
+        self.assertEqual(
+            next(x["state"] for x in state["stages"]
+                 if x["name"]=="adjudication"),"PENDING")
+
+    def test_large_piece_not_corrected_as_single_120s_render_cue(self):
+        from app.pipeline.golden_v2_review_bundle import apply_review_bundle
+        from app.subtitles.golden_v2_render import _word_evidence
+        f,bundle,candidate=self._ready_review()
+        evidence=candidate["evidence"]
+        included=[
+            i for i,w in enumerate(f["words"])
+            if evidence["source_time_start"] <= w["start_ms"] <
+               evidence["source_time_end"]
+        ]
+        bundle["review_decisions"]=[{
+            "candidate_index":candidate["candidate_index"],
+            "status":"RESOLVED","decision":"CORRECT_CHIRP",
+            "reviewed_audio_window_ms":[
+                evidence["source_time_start"],evidence["source_time_end"]],
+            "decision_reason":"test-only too large patch",
+        }]
+        bundle["replacements"]=[{
+            "candidate_index":candidate["candidate_index"],
+            "start_word":included[0],"end_word":included[-1]+1,
+            "corrected_text":"冗長字幕",
+            "chirp_word_evidence_shas":[_word_evidence(
+                f["words"][i],i,f["source_sha"]) for i in included],
+        }]
+        with self.assertRaisesRegex(V2Conflict,"single immutable Chirp span"):
+            apply_review_bundle(
+                database=self.database,job_id=f["job_id"],
+                job_dir=f["job_dir"],
+                normalized_audio=f["job_dir"]/"normalized.flac",
+                bundle=bundle,reviewer="offline-test",
+                review_reference="oversized-rejected",confirm_listened=True)
+
+    def test_refused_subspan_correction_outside_candidate_is_rejected(self):
+        from app.pipeline.golden_v2_stage_runner import _correction_matches_candidate
+        f,bundle,candidate=self._ready_review()
+        from app.subtitles.golden_v2_render import _word_evidence
+        correction={
+            **self._patch(f,candidate,0),
+            "source_sha256":f["source_sha"],
+            "audio_evidence_checked":True,
+            "decision_reason":"outside candidate",
+        }
+        self.assertFalse(_correction_matches_candidate(
+            correction=correction,candidate=candidate["evidence"],
+            words=f["words"],source_sha=f["source_sha"]))
+
 class AggregateBudgetRegressionTests(_AutoRescueCase):
     def test_hook_uses_independent_global_budget_and_never_consumes_attempt_on_block(self):
         first = self.held()

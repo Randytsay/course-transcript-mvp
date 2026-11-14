@@ -218,10 +218,29 @@ def _correction_matches_candidate(
         f"{source_sha}|{i}|{words[i]['word']}|"
         f"{words[i]['start_ms']}|{words[i]['end_ms']}"
     ).encode()).hexdigest() for i in range(start, end)]
-    return (bool(evidence_ids)
-            and sorted(candidate.get("chirp_evidence_ids", [])) == sorted(evidence_ids)
-            and correction.get("chirp_word_evidence_shas") == [
-                _word_evidence(words[i], i, source_sha) for i in range(start, end)])
+    source_bound_hashes = (
+        correction.get("chirp_word_evidence_shas") == [
+            _word_evidence(words[i], i, source_sha) for i in range(start, end)])
+    if not evidence_ids or not source_bound_hashes:
+        return False
+    candidate_ids = candidate.get("chirp_evidence_ids", [])
+    if candidate.get("kind") == "CHIRP_AUTHORITATIVE_REFUSED_SPAN":
+        # The refused primary can cover 120s while one corrected word needs
+        # only a short, directly listened, timestamped replacement. Requiring
+        # the entire 120s candidate to form one SRT token makes legitimate
+        # corrections impossible under 6.5s/22-character cue limits.
+        # Every patched word must be contained in this exact SHA-bound
+        # candidate, with its original Chirp time and word evidence.
+        if (candidate.get("chirp_authoritative") is not True
+                or not isinstance(candidate_ids, list)
+                or not candidate_ids or len(candidate_ids) != len(set(candidate_ids))
+                or not set(evidence_ids).issubset(set(candidate_ids))
+                or type(candidate.get("source_time_start")) is not int
+                or type(candidate.get("source_time_end")) is not int):
+            return False
+        return (candidate["source_time_start"] <= words[start]["start_ms"]
+                and words[end-1]["end_ms"] <= candidate["source_time_end"])
+    return sorted(candidate_ids) == sorted(evidence_ids)
 
 
 def complete_adjudication_or_hold(
@@ -305,9 +324,17 @@ def complete_adjudication_or_hold(
            if isinstance(p, dict)) or any(not isinstance(p, dict) for p in replacements):
         raise V2Conflict("invalid corrected candidate index")
     if {patch["candidate_index"] for patch in replacements} != corrected_indices:
-        raise V2Conflict("each corrected candidate requires exactly one source-word patch")
-    if len(replacements) != len(corrected_indices):
-        raise V2Conflict("duplicate source-word correction")
+        raise V2Conflict("each corrected candidate requires a source-word patch")
+    # An ordinary comparison remains one correction per candidate. A
+    # 120-second refused-span review may contain multiple DISJOINT local
+    # corrections, all of which the renderer checks against source words.
+    seen_corrections: set[int] = set()
+    for patch in replacements:
+        idx = patch["candidate_index"]
+        if (idx in seen_corrections
+                and candidates[idx].get("kind") != "CHIRP_AUTHORITATIVE_REFUSED_SPAN"):
+            raise V2Conflict("duplicate ordinary source-word correction")
+        seen_corrections.add(idx)
     # Validate the actual renderer's source-bound word hashes and cue layout
     # before a stage can reach COMPLETE; QA will independently re-validate.
     for patch in replacements:

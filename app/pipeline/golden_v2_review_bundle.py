@@ -261,8 +261,12 @@ def apply_review_bundle(
                          "corrected_text", "chirp_word_evidence_shas"}:
             raise ValueError("replacement contains unsupported fields")
         index = patch.get("candidate_index")
-        if type(index) is not int or index not in corrected or index in replacement_ids:
-            raise ValueError("replacement must map once to a CORRECT_CHIRP decision")
+        if type(index) is not int or index not in corrected:
+            raise ValueError("replacement must map to a CORRECT_CHIRP decision")
+        if (index in replacement_ids
+                and candidate_by_index[index]["evidence"].get("kind")
+                    != "CHIRP_AUTHORITATIVE_REFUSED_SPAN"):
+            raise ValueError("ordinary candidate accepts one correction")
         reason = next(item["decision_reason"] for item in decisions
                       if item["candidate_index"] == index)
         correction = {
@@ -279,8 +283,8 @@ def apply_review_bundle(
             raise ValueError("replacement does not match source-bound Chirp words")
         replacement_ids.add(index)
         replacements.append(correction)
-    if replacement_ids != corrected or len(replacements) != len(corrected):
-        raise ValueError("every CORRECT_CHIRP decision needs exactly one word replacement")
+    if replacement_ids != corrected:
+        raise ValueError("every CORRECT_CHIRP decision needs a word replacement")
 
     punctuation: dict[int, str] = {}
     for key, value in punctuation_in.items():
