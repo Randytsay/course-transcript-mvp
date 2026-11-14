@@ -380,6 +380,34 @@ class RescueHookCrashSafetyTests(_AutoRescueCase):
                 "PRIOR_LAUNCH_RECONCILIATION_REQUIRED")
             spawn.assert_called_once()
 
+    def test_spoofed_inherited_lock_fd_fails_before_any_provider_setup(self):
+        from scripts import golden_v2_independent_rescue as operator
+        import sys
+        fixture = self.held()
+        lock_path = self.root / "paid-executor.lock"
+        held_fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        spoof_fd = os.open(lock_path, os.O_RDWR)
+        try:
+            fcntl.flock(held_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            argv = [
+                "golden_v2_independent_rescue.py",
+                "--root", str(self.root),
+                "--job-id", fixture["job_id"],
+                "--source-sha", fixture["source_sha"],
+                "--revision", "2", "--cap-cents", "1000",
+                "--reference", "offline-test",
+                "--paid-dispatch-lock-fd", str(spoof_fd),
+                "--submit",
+            ]
+            with patch.object(sys, "argv", argv), patch.object(
+                operator, "paid_services", side_effect=AssertionError(
+                    "provider initialization must not be reached")):
+                with self.assertRaisesRegex(V2Conflict, "PAID_DISPATCH_BUSY"):
+                    operator.main()
+        finally:
+            os.close(spoof_fd)
+            os.close(held_fd)
+
     def test_normal_paid_executor_lock_defers_rescue_without_intent(self):
         self.held()
         stub = self._script()

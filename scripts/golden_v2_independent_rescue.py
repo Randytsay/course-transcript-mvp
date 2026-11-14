@@ -49,6 +49,14 @@ def main():
         if (not stat.S_ISREG(got.st_mode)
                 or (got.st_ino, got.st_dev) != (expected.st_ino, expected.st_dev)):
             raise V2Conflict('inherited dispatch fd does not match paid executor lock')
+        # File identity alone is not proof that the caller actually holds
+        # the paid dispatch lock. Re-acquiring on an already-locked shared
+        # open-file-description succeeds; a spoofed, unlocked fd cannot
+        # race a different process holding the real lock.
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise V2Conflict('PAID_DISPATCH_BUSY') from exc
     else:
         fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         try:

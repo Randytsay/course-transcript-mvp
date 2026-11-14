@@ -175,3 +175,12 @@ Restricted report is on the VPS at:
 - Source/live delivery --lock-root path also differs.
 - Historic config-hash still unmatched; five-service reconstruction
   must not be declared verified yet. Keep merge/deploy blocked.
+
+### Additional inherited-FD spoofing defense
+
+The child additionally attempts a nonblocking flock on the inherited
+descriptor after verifying the correct device/inode. An unlocked descriptor
+of the correct file cannot bypass a concurrent legitimate holder. The new
+negative regression mocks a locked regular Paid Executor while passing an
+unlocked descriptor of the same file; the script fails before initializing
+any paid provider. 110 focused offline Golden V2 tests passed.
