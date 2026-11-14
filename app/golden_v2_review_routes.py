@@ -11,6 +11,9 @@ from app.golden_v2_routes import _authorized_database, _authorized_write_databas
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.pipeline.golden_v2_primary_stage import finalize_reviewed_primary_overlaps
 from app.pipeline.golden_v2_stage_runner import complete_adjudication_or_hold
+from app.pipeline.golden_v2_review_bundle import (
+    inspect_review_bundle, verified_partial_review_route,
+)
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.pipeline.golden_v2_delivery import checked_outputs
 from app.pipeline.golden_v2_delivery import manifest_digest
@@ -120,6 +123,23 @@ def review_packet(job_id: str, authorization: str | None = Header(default=None))
     database=_authorized_database(authorization); job=job_directory(database,job_id)
     ledger=GoldenV2Ledger.open_existing(database); state=ledger.status(job_id)
     first=state['stages'][0]
+    stages_by_name={row['name']:row for row in state['stages']}
+    # Do not strand verified independent Chirp rescues at the earlier
+    # Gemini SAFETY hold. Validate immutable comparison/audio before
+    # exposing an adjudication packet to the authenticated owner.
+    if (stages_by_name.get('compare',{}).get('state')=='COMPLETE'
+            and first['state']=='REVIEW_REQUIRED'):
+        try:
+            packet=inspect_review_bundle(
+                database=database,job_id=job_id,job_dir=job,
+                normalized_audio=job/'normalized.flac')
+        except (ValueError,RuntimeError,OSError,KeyError) as exc:
+            raise HTTPException(status_code=409,
+                                detail='Rescue comparison evidence requires reconciliation') from exc
+        packet.pop('normalized_audio_path',None)
+        return {'kind':'ADJUDICATION_AUDIO_REVIEW','packet':packet,
+                'human_listening_required':True,
+                'reviewer_identity':os.environ.get('COURSE_TRANSCRIPT_V2_OWNER_ACTOR','')}
     if first['state']=='REVIEW_REQUIRED':
         try:
             packet=inspect_pending_overlaps(database=database,job_id=job_id,job_dir=job,normalized_audio=job/'normalized.flac')
@@ -221,11 +241,29 @@ def review_adjudication(job_id: str, body: AdjudicationReview, authorization: st
     try:
         state=ledger.status(job_id)
         comparison=next(s for s in state['stages'] if s['name']=='compare')
-        pending=next(s for s in state['stages'] if s['state'] not in {'COMPLETE','SKIPPED'})
+        stages_by_name={item['name']:item for item in state['stages']}
+        partial=verified_partial_review_route(
+            database=database,job_id=job_id,state=state,stages=stages_by_name)
+        if partial:
+            # The bundle reader re-verifies original refusal, source audio,
+            # Chirp timing and immutable comparison evidence. A generic
+            # REVIEW_REQUIRED primary without these receipts cannot pass.
+            packet=inspect_review_bundle(
+                database=database,job_id=job_id,job_dir=job,
+                normalized_audio=job/'normalized.flac')
+            if packet['comparison_evidence_sha256']!=body.comparison_sha256:
+                raise V2Conflict('review comparison evidence changed')
+        pending=next(s for s in state['stages']
+                     if s['state'] not in {'COMPLETE','SKIPPED'}
+                     and not (partial and s['name']=='gemini_primary'))
+        resume_hold=(pending['name']=='adjudication' and
+                     pending['state']=='REVIEW_REQUIRED' and
+                     state['status']=='NEEDS_REVIEW')
         if (state['revision']!=body.revision or state['source_sha']!=body.source_sha256 or
             comparison['state']!='COMPLETE' or comparison['evidence_sha']!=body.comparison_sha256 or
             state['mode']!='FLASH_CHIRP' or pending['name'] not in {'third_optional','adjudication'} or
-            pending['state']!='PENDING' or state['status'] not in {'PROCESSING','QUEUED'}):
+            not ((pending['state']=='PENDING' and state['status'] in {'PROCESSING','QUEUED'})
+                 or resume_hold)):
             raise V2Conflict('adjudication review state changed')
         # Validate the authenticated actor on every decision before a claim.
         if any(d.get('reviewer')!=actor or d.get('review_reference')!=body.review_reference or
@@ -235,7 +273,28 @@ def review_adjudication(job_id: str, body: AdjudicationReview, authorization: st
                  job_dir=job,decisions=body.decisions,replacements=body.replacements,
                  punctuation_after=body.punctuation_after,reviewer=actor,
                  review_reference=body.review_reference,validate_only=True)
-        claim=ledger.claim_next(job_id,worker_id='authenticated-chat-review',expected_revision=body.revision)
+        expected_revision=body.revision
+        if resume_hold:
+            # Every held local review gets its own immutable evidence. Verify
+            # the previous hold before reopening; never replay a provider.
+            previous_sha=pending.get('evidence_sha')
+            if not previous_sha:
+                raise V2Conflict('held adjudication lacks evidence')
+            folder=job/'golden-v2'
+            if folder.is_symlink() or not any(
+                    not path.is_symlink() and path.is_file()
+                    and file_sha256(path)==previous_sha
+                    for path in folder.glob('adjudication-review-*.json')):
+                raise V2Conflict('previous adjudication evidence is missing or changed')
+            ledger.resume_adjudication_review(
+                job_id,revision=body.revision,reviewer=actor,
+                review_reference=body.review_reference,
+                previous_evidence_sha=previous_sha)
+            expected_revision=body.revision+1
+        claim=ledger.claim_next(
+            job_id,worker_id='authenticated-chat-review',
+            expected_stage='adjudication',expected_revision=expected_revision,
+            expected_source_sha=body.source_sha256)
         if claim['stage']!='adjudication': raise V2Conflict('wrong review stage')
         return complete_adjudication_or_hold(ledger=ledger,claim=claim,job_dir=job,
                  decisions=body.decisions,replacements=body.replacements,punctuation_after=body.punctuation_after,

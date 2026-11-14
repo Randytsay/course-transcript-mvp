@@ -543,3 +543,255 @@ class RescueHookCrashSafetyTests(_AutoRescueCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PartialReviewEntryRegressionTests(_AutoRescueCase):
+    def set_up_review(self):
+        from app.pipeline.golden_v2_coordinator import run_ready_local
+        fixture = self.held()
+        claim = claim_rescue(fixture, self.ledger)
+        complete_chirp(fixture, self.ledger, claim)
+        actions = run_ready_local(
+            ledger=self.ledger, job_id=fixture["job_id"],
+            job_dir=fixture["job_dir"],
+        )
+        self.assertEqual(
+            [x["action"] for x in actions],
+            ["COMPARISON_COMPLETE", "HUMAN_AUDIO_REVIEW_REQUIRED"],
+        )
+        state = self.ledger.status(fixture["job_id"])
+        self.assertEqual(state["stages"][0]["state"], "REVIEW_REQUIRED")
+        return fixture, state
+
+    def test_partial_primary_can_export_evidence_bound_review_bundle(self):
+        from app.pipeline.golden_v2_review_bundle import inspect_review_bundle
+        fixture, state = self.set_up_review()
+        bundle = inspect_review_bundle(
+            database=self.database, job_id=fixture["job_id"],
+            job_dir=fixture["job_dir"],
+            normalized_audio=fixture["job_dir"] / "normalized.flac",
+        )
+        self.assertEqual(bundle["revision"], state["revision"])
+        self.assertEqual(bundle["source_sha256"], fixture["source_sha"])
+        self.assertEqual(
+            bundle["comparison_evidence_sha256"],
+            next(x["evidence_sha"] for x in state["stages"]
+                 if x["name"] == "compare"),
+        )
+        self.assertTrue(bundle["candidate_snapshot"])
+        self.assertEqual(bundle["whole_file_qa"], "UNVERIFIED")
+
+    def test_partial_primary_authenticated_review_packet_routes_to_candidates(self):
+        from app import golden_v2_review_routes as api
+        fixture, state = self.set_up_review()
+        with patch.object(api, "_authorized_database",
+                          return_value=self.database), \
+             patch.object(api, "job_directory",
+                          return_value=fixture["job_dir"]):
+            response = api.review_packet(fixture["job_id"],
+                                         authorization="test")
+        self.assertEqual(response["kind"], "ADJUDICATION_AUDIO_REVIEW")
+        self.assertTrue(response["human_listening_required"])
+        self.assertEqual(
+            response["packet"]["comparison_evidence_sha256"],
+            next(x["evidence_sha"] for x in state["stages"]
+                 if x["name"] == "compare"),
+        )
+
+    def test_partial_primary_authenticated_adjudication_is_claimable(self):
+        from app import golden_v2_review_routes as api
+        fixture, state = self.set_up_review()
+        comparison_sha = next(x["evidence_sha"] for x in state["stages"]
+                              if x["name"] == "compare")
+        body = api.AdjudicationReview(
+            revision=state["revision"], source_sha256=fixture["source_sha"],
+            comparison_sha256=comparison_sha, decisions=[],
+            review_reference="mock-listening-only", confirm_listened=True,
+            confirm=True,
+        )
+        # Mock the human listening operation: prove routing & claims only,
+        # never pretend that automated tests constitute listening evidence.
+        with patch.object(api, "_authorized_write_database",
+                          return_value=(self.database, "reviewer", None)), \
+             patch.object(api, "job_directory",
+                          return_value=fixture["job_dir"]), \
+             patch.object(api, "complete_adjudication_or_hold",
+                          side_effect=lambda **kw: {
+                              "stage": kw["claim"].get("stage", "validate_only"),
+                              "status": "MOCK_ONLY_NOT_GOLDEN",
+                          }):
+            result = api.review_adjudication(
+                fixture["job_id"], body, authorization="test")
+        self.assertEqual(result["stage"], "adjudication")
+        self.assertEqual(
+            next(x["state"] for x in self.ledger.status(fixture["job_id"])["stages"]
+                 if x["name"] == "adjudication"),
+            "RUNNING",
+        )
+        self.assertFalse((fixture["job_dir"]/"golden-v2"/"final.srt").exists())
+
+    def test_partial_review_bundle_import_preserves_human_review_hold(self):
+        from app.pipeline.golden_v2_review_bundle import (
+            inspect_review_bundle, apply_review_bundle,
+        )
+        fixture, state = self.set_up_review()
+        bundle = inspect_review_bundle(
+            database=self.database, job_id=fixture["job_id"],
+            job_dir=fixture["job_dir"],
+            normalized_audio=fixture["job_dir"] / "normalized.flac",
+        )
+        # Explicitly KEEP the first candidate unresolved; do not forge
+        # listening confirmation or manufacture an automated Golden pass.
+        bundle["review_decisions"] = [{
+            "candidate_index": 0,
+            "status": "REVIEW_REQUIRED",
+        }]
+        result = apply_review_bundle(
+            database=self.database, job_id=fixture["job_id"],
+            job_dir=fixture["job_dir"],
+            normalized_audio=fixture["job_dir"] / "normalized.flac",
+            bundle=bundle, reviewer="offline-test",
+            review_reference="explicit-unresolved-offline-review",
+            confirm_listened=True,
+        )
+        self.assertNotEqual(result.get("safe_publish_allowed"), True)
+        self.assertFalse((fixture["job_dir"]/"golden-v2"/"final.srt").exists())
+        latest = self.ledger.status(fixture["job_id"])
+        self.assertEqual(latest["status"], "NEEDS_REVIEW")
+        self.assertEqual(
+            next(x["state"] for x in latest["stages"]
+                 if x["name"] == "gemini_primary"),
+            "REVIEW_REQUIRED",
+        )
+        self.assertFalse(result["provider_calls_started"])
+        self.assertFalse(result["drive_mutation_started"])
+
+    def test_tampered_comparison_hash_rejected_before_review_claim(self):
+        from app import golden_v2_review_routes as api
+        from fastapi import HTTPException
+        fixture, state = self.set_up_review()
+        body = api.AdjudicationReview(
+            revision=state["revision"], source_sha256=fixture["source_sha"],
+            comparison_sha256="e"*64, decisions=[],
+            review_reference="offline-negative", confirm_listened=True,
+            confirm=True,
+        )
+        with patch.object(api, "_authorized_write_database",
+                          return_value=(self.database,"reviewer",None)), \
+             patch.object(api,"job_directory",
+                          return_value=fixture["job_dir"]):
+            with self.assertRaises(HTTPException) as caught:
+                api.review_adjudication(
+                    fixture["job_id"], body, authorization="test")
+        self.assertEqual(caught.exception.status_code,409)
+        self.assertEqual(
+            next(x["state"] for x in self.ledger.status(fixture["job_id"])["stages"]
+                 if x["name"]=="adjudication"),
+            "PENDING",
+        )
+
+    def _make_adjudication_review_hold(self):
+        from app.pipeline.golden_v2_review_bundle import (
+            inspect_review_bundle, apply_review_bundle,
+        )
+        fixture, _ = self.set_up_review()
+        bundle = inspect_review_bundle(
+            database=self.database, job_id=fixture["job_id"],
+            job_dir=fixture["job_dir"],
+            normalized_audio=fixture["job_dir"]/"normalized.flac",
+        )
+        bundle["review_decisions"] = [{
+            "candidate_index": 0, "status": "REVIEW_REQUIRED",
+        }]
+        apply_review_bundle(
+            database=self.database, job_id=fixture["job_id"],
+            job_dir=fixture["job_dir"],
+            normalized_audio=fixture["job_dir"]/"normalized.flac",
+            bundle=bundle, reviewer="offline-review",
+            review_reference="unresolved-test-case",
+            confirm_listened=True,
+        )
+        state=self.ledger.status(fixture["job_id"])
+        self.assertEqual(state["status"],"NEEDS_REVIEW")
+        held=next(x for x in state["stages"] if x["name"]=="adjudication")
+        self.assertEqual(held["state"],"REVIEW_REQUIRED")
+        return fixture,state,held
+
+    def test_partial_auth_review_can_resume_existing_review_hold(self):
+        from app import golden_v2_review_routes as api
+        fixture,state,held=self._make_adjudication_review_hold()
+        comparison=next(x for x in state["stages"] if x["name"]=="compare")
+        body=api.AdjudicationReview(
+            revision=state["revision"],source_sha256=fixture["source_sha"],
+            comparison_sha256=comparison["evidence_sha"],
+            decisions=[],review_reference="second-offline-review",
+            confirm_listened=True,confirm=True,
+        )
+        with patch.object(api,"_authorized_write_database",
+                          return_value=(self.database,"reviewer",None)), \
+             patch.object(api,"job_directory",return_value=fixture["job_dir"]), \
+             patch.object(api,"complete_adjudication_or_hold",
+                          side_effect=lambda **kw: {"stage":kw["claim"].get("stage"),
+                                                     "status":"MOCK_ONLY_NOT_GOLDEN"}):
+            response=api.review_adjudication(
+                fixture["job_id"],body,authorization="test")
+        self.assertEqual(response["stage"],"adjudication")
+        after=self.ledger.status(fixture["job_id"])
+        self.assertEqual(
+            next(x["state"] for x in after["stages"]
+                 if x["name"]=="adjudication"),"RUNNING")
+        self.assertEqual(after["revision"],state["revision"]+2)
+        with self.ledger._tx() as db:
+            recorded=db.execute(
+                "SELECT prior_evidence_sha FROM v2_review_resumptions "
+                "WHERE job_id=? AND stage_name='adjudication'",
+                (fixture["job_id"],)).fetchone()
+        self.assertEqual(recorded["prior_evidence_sha"],
+                         held["evidence_sha"])
+
+    def test_partial_auth_review_rejects_tampered_previous_hold(self):
+        from app import golden_v2_review_routes as api
+        from fastapi import HTTPException
+        fixture,state,held=self._make_adjudication_review_hold()
+        comparison=next(x for x in state["stages"] if x["name"]=="compare")
+        for path in (fixture["job_dir"]/"golden-v2").glob(
+                "adjudication-review-*.json"):
+            if hashlib.sha256(path.read_bytes()).hexdigest()==held["evidence_sha"]:
+                path.write_text('{"tampered":true}')
+        body=api.AdjudicationReview(
+            revision=state["revision"],source_sha256=fixture["source_sha"],
+            comparison_sha256=comparison["evidence_sha"],
+            decisions=[],review_reference="negative-offline-review",
+            confirm_listened=True,confirm=True,
+        )
+        with patch.object(api,"_authorized_write_database",
+                          return_value=(self.database,"reviewer",None)), \
+             patch.object(api,"job_directory",return_value=fixture["job_dir"]), \
+             patch.object(api,"complete_adjudication_or_hold",
+                          side_effect=lambda **kw: {"status":"MOCK_ONLY_NOT_GOLDEN"}):
+            with self.assertRaises(HTTPException) as caught:
+                api.review_adjudication(
+                    fixture["job_id"],body,authorization="test")
+        self.assertEqual(caught.exception.status_code,409)
+        self.assertEqual(self.ledger.status(fixture["job_id"])["revision"],
+                         state["revision"])
+        self.assertEqual(
+            next(x["state"] for x in
+                 self.ledger.status(fixture["job_id"])["stages"]
+                 if x["name"]=="adjudication"),"REVIEW_REQUIRED")
+
+    def test_unrecorded_rescue_never_opens_review_bundle(self):
+        from app.pipeline.golden_v2_review_bundle import inspect_review_bundle
+        fixture, _state = self.set_up_review()
+        with self.ledger._tx() as db:
+            db.execute(
+                "DELETE FROM v2_review_resumptions "
+                "WHERE job_id=? AND reviewer='trusted-operator-independent-rescue'",
+                (fixture["job_id"],),
+            )
+        with self.assertRaises(V2Conflict):
+            inspect_review_bundle(
+                database=self.database, job_id=fixture["job_id"],
+                job_dir=fixture["job_dir"],
+                normalized_audio=fixture["job_dir"] / "normalized.flac",
+            )

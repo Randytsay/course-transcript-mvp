@@ -218,3 +218,42 @@ once-only CLI and candidate-image-to-old-image rollback tests:
  /srv/ai-workspace/projects/golden-v2-audit-20261114/
 These offline tests do not authorize production deployment, main merge
 or a paid Chirp operation.
+
+## Final Codex review on 07672c5: rescued primary blocked both review entrypoints
+
+Codex found that the independent-rescue path could reach
+HUMAN_AUDIO_REVIEW_REQUIRED but could not export or submit a manual
+comparison review, because the immutable original Gemini primary remains
+REVIEW_REQUIRED. This was confirmed by three failing regression tests
+*before* the change (CLI bundle, authenticated GET, authenticated POST).
+
+Remedy:
+
+- Shared verified_partial_review_route verifies a FLASH_CHIRP job, held
+  Gemini primary, COMPLETED independent Chirp, COMPLETED comparison,
+  matching job/source/revision, and a recorded independent rescue.
+- The CLI bundle reader accepts that specific held primary as an
+  unresolved prior stage, while preserving the remaining predecessor
+  guards and binding all audio, comparison, Chirp and Gemini-refusal
+  evidence using the existing _bound_inputs validator.
+- Authenticated GET /review now exports the comparison audio-review
+  packet for that verified rescue, not the stale primary error packet.
+- Authenticated POST /review-adjudication skips only the evidenced
+  Gemini hold, and re-verifies the immutable comparison bundle before
+  revision/source-bound adjudication claim. No false audio receipt.
+- A human-acknowledged adjudication REVIEW_REQUIRED hold can be safely
+  resumed by the authenticated API as well as the CLI, after verifying
+  the prior immutable review hold artifact, source and revision.
+  No recognition stage is replayed.
+- Negative guards reject an unrecorded rescue, mismatched comparison
+  hash, and tampered previous review hold before a new claim.
+- Eight new focused tests demonstrate export, API GET/POST,
+  explicit unresolved review import and subsequent review hold
+  resumption. Synthetic audio remains test-only and does not represent
+  a real human listening receipt or Golden QA.
+- 249 relevant offline Golden V2 tests passed after the change in a
+  network-disabled test image; all code changes remain in the PR branch.
+
+Production roll-forward remains conditional on an exact five-service
+configuration diff, release safety gates, and explicit owner authorization.
+The changes above do not submit paid models or publish Drive artifacts.
