@@ -780,6 +780,62 @@ class PartialReviewEntryRegressionTests(_AutoRescueCase):
                  self.ledger.status(fixture["job_id"])["stages"]
                  if x["name"]=="adjudication"),"REVIEW_REQUIRED")
 
+    def test_completed_partial_adjudication_shows_downstream_evidence_not_review_hold(self):
+        from app import golden_v2_review_routes as api
+        fixture, _state = self.set_up_review()
+        # Simulate the already-verified operator review being complete.
+        # No synthetic human-listening assertion and no fake Golden pass.
+        claim = self.ledger.claim_next(
+            fixture["job_id"], worker_id="offline-finished-adjudication")
+        self.assertEqual(claim["stage"], "adjudication")
+        self.ledger.complete(claim, evidence_sha="c"*64, actual_cents=0)
+        state = self.ledger.status(fixture["job_id"])
+        self.assertEqual(
+            next(x["state"] for x in state["stages"]
+                 if x["name"]=="adjudication"),
+            "COMPLETE",
+        )
+        with patch.object(api, "_authorized_database",
+                          return_value=self.database), \
+             patch.object(api, "job_directory",
+                          return_value=fixture["job_dir"]):
+            packet = api.review_packet(
+                fixture["job_id"], authorization="test")
+        self.assertEqual(packet["kind"], "GOLDEN_EVIDENCE_REVIEW")
+        self.assertIn("engine-comparison.json", packet["reports"])
+        self.assertTrue(packet["human_listening_required"])
+
+    def test_completed_partial_qa_packet_is_downstream_not_primary(self):
+        from app import golden_v2_review_routes as api
+        fixture,_state=self.set_up_review()
+        adjud=self.ledger.claim_next(
+            fixture["job_id"],worker_id="offline-adjudication-complete")
+        self.assertEqual(adjud["stage"],"adjudication")
+        self.ledger.complete(adjud,evidence_sha="b"*64,actual_cents=0)
+        qa=self.ledger.claim_next(
+            fixture["job_id"],worker_id="offline-qa-complete")
+        self.assertEqual(qa["stage"],"golden_qa")
+        # Test-only QA evidence. Never claim that this represents a
+        # legitimate Golden PASS or an actual provider/audio review.
+        qa_doc={"schema":"test-only-qa-review-not-publishable",
+                "status":"BLOCKED","safe_publish_allowed":False}
+        path=fixture["job_dir"]/"golden-v2"/"golden-qa.json"
+        payload=json.dumps(qa_doc,sort_keys=True).encode()
+        path.write_bytes(payload)
+        self.ledger.complete(
+            qa,evidence_sha=hashlib.sha256(payload).hexdigest(),
+            actual_cents=0)
+        with patch.object(api,"_authorized_database",
+                          return_value=self.database), \
+             patch.object(api,"job_directory",
+                          return_value=fixture["job_dir"]):
+            packet=api.review_packet(
+                fixture["job_id"],authorization="test")
+        self.assertEqual(packet["kind"],"GOLDEN_EVIDENCE_REVIEW")
+        self.assertIn("golden-qa.json",packet["reports"])
+        self.assertFalse(
+            packet["reports"]["golden-qa.json"]["report"]["safe_publish_allowed"])
+
     def test_unrecorded_rescue_never_opens_review_bundle(self):
         from app.pipeline.golden_v2_review_bundle import inspect_review_bundle
         fixture, _state = self.set_up_review()

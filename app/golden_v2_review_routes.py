@@ -128,6 +128,8 @@ def review_packet(job_id: str, authorization: str | None = Header(default=None))
     # Gemini SAFETY hold. Validate immutable comparison/audio before
     # exposing an adjudication packet to the authenticated owner.
     if (stages_by_name.get('compare',{}).get('state')=='COMPLETE'
+            and stages_by_name.get('adjudication',{}).get('state')
+                in {'PENDING','REVIEW_REQUIRED'}
             and first['state']=='REVIEW_REQUIRED'):
         try:
             packet=inspect_review_bundle(
@@ -140,7 +142,9 @@ def review_packet(job_id: str, authorization: str | None = Header(default=None))
         return {'kind':'ADJUDICATION_AUDIO_REVIEW','packet':packet,
                 'human_listening_required':True,
                 'reviewer_identity':os.environ.get('COURSE_TRANSCRIPT_V2_OWNER_ACTOR','')}
-    if first['state']=='REVIEW_REQUIRED':
+    if (first['state']=='REVIEW_REQUIRED'
+            and not (stages_by_name.get('compare',{}).get('state')=='COMPLETE'
+                     and stages_by_name.get('adjudication',{}).get('state')=='COMPLETE')):
         try:
             packet=inspect_pending_overlaps(database=database,job_id=job_id,job_dir=job,normalized_audio=job/'normalized.flac')
             packet.pop('normalized_audio',None)

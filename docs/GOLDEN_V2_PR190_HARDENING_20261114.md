@@ -257,3 +257,26 @@ Remedy:
 Production roll-forward remains conditional on an exact five-service
 configuration diff, release safety gates, and explicit owner authorization.
 The changes above do not submit paid models or publish Drive artifacts.
+
+## Codex review at a769978: completed partial adjudication must show QA
+
+The authenticated GET /review handler previously prioritized the
+held Gemini primary even after the rescued job's adjudication had
+been completed. Calling inspect_review_bundle at that point would
+correctly refuse to manufacture a new review request, leaving the
+owner with a misleading 409 instead of the verified downstream
+comparison/Golden/acoustic evidence packet.
+
+- Limited the explicit ADJUDICATION_AUDIO_REVIEW path to comparison
+  COMPLETE with adjudication PENDING/REVIEW_REQUIRED.
+- Once comparison and adjudication are both COMPLETE, the original
+  Gemini REVIEW_REQUIRED state is no longer surfaced as the current
+  review entry; the existing downstream evidence route is used.
+- Added regressions for completed partial adjudication and completed
+  test-only Golden QA. The latter is explicitly BLOCKED, not a
+  synthetic publishable Golden PASS.
+- The earlier guards for partial adjudication PENDING, missing
+  independent rescue, tampered comparison and review hold remain.
+- Full relevant offline suite: 251 tests PASS. This does not
+  represent positive online provider/Drive publication or a
+  production deployment acceptance.
