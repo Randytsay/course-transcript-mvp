@@ -219,6 +219,61 @@ class CrossWindowAlignmentRegressionTests(_AutoRescueCase):
             self._window_comparison(local_offset=600)
 
 
+class EarlyRefusalPaidPreflightRegressionTests(_AutoRescueCase):
+    def _truncate_early_refusal(self, refused_index):
+        from app.pipeline.golden_v2_pricing import gemini_usage_cents
+        from app.pipeline.golden_v2_auto_rescue import inspect_auto_rescue_eligibility
+        fixture=self.held(refused_window_index=refused_index)
+        report_path=fixture["job_dir"]/"golden-v2"/"primary-stage.json"
+        doc=json.loads(report_path.read_text())
+        # Recorded planned windows include all three source intervals,
+        # but a real SAFETY refusal ends provider attempts early.
+        assert len(doc["windows"])==3
+        doc["window_evidence"]=doc["window_evidence"][:refused_index+1]
+        doc["assembled"]["text"]="\n\n".join(
+            json.loads((fixture["job_dir"]/"gemini-primary"/f"window-{i}.json").read_text())
+                .get("text","") for i in range(refused_index+1))
+        raw=[json.loads((fixture["job_dir"]/"gemini-primary"/f"window-{i}.json").read_text())
+             for i in range(refused_index+1)]
+        doc["actual_cents"]=gemini_usage_cents(raw)
+        payload=json.dumps(doc,ensure_ascii=False,sort_keys=True,separators=(",",":")).encode()
+        report_path.write_bytes(payload)
+        digest=hashlib.sha256(payload).hexdigest()
+        with self.ledger._tx() as db:
+            db.execute("UPDATE v2_stages SET evidence_sha=?,actual_cents=? "
+                       "WHERE job_id=? AND name='gemini_primary'",
+                       (digest,doc["actual_cents"],fixture["job_id"]))
+        return fixture,doc
+
+    def test_first_window_safety_refusal_does_not_launch_paid_chirp(self):
+        from app.pipeline.golden_v2_auto_rescue import inspect_auto_rescue_eligibility
+        from app.pipeline.golden_v2_primary_rescue import claim_independent_rescue
+        f,original=self._truncate_early_refusal(0)
+        inspected=inspect_auto_rescue_eligibility(
+            ledger=self.ledger,job_id=f["job_id"],job_dir=f["job_dir"])
+        self.assertFalse(inspected["eligible"])
+        self.assertEqual(inspected["reason"],"PRIMARY_SCOPE_NOT_RESCUABLE")
+        with self.assertRaisesRegex(V2Conflict,"primary.*scope|unattempted"):
+            claim_rescue(f,self.ledger)
+        self.assertEqual(
+            next(x["state"] for x in self.ledger.status(f["job_id"])["stages"]
+                 if x["name"]=="chirp_independent"),"PENDING")
+
+    def test_middle_window_refusal_cannot_omit_unattempted_suffix(self):
+        from app.pipeline.golden_v2_auto_rescue import inspect_auto_rescue_eligibility
+        from app.pipeline.golden_v2_primary_rescue import claim_independent_rescue
+        from app.pipeline.golden_v2_partial_primary import build_partial_primary
+        f,original=self._truncate_early_refusal(1)
+        inspected=inspect_auto_rescue_eligibility(
+            ledger=self.ledger,job_id=f["job_id"],job_dir=f["job_dir"])
+        self.assertFalse(inspected["eligible"])
+        self.assertEqual(inspected["reason"],"PRIMARY_SCOPE_NOT_RESCUABLE")
+        with self.assertRaisesRegex(V2Conflict,"primary.*scope|unattempted"):
+            claim_rescue(f,self.ledger)
+        self.assertEqual(
+            next(x["state"] for x in self.ledger.status(f["job_id"])["stages"]
+                 if x["name"]=="chirp_independent"),"PENDING")
+
 class RefusedSpanLocalCorrectionsRegressionTests(_AutoRescueCase):
     def _ready_review(self):
         from app.pipeline.golden_v2_coordinator import run_ready_local

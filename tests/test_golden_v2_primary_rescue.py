@@ -26,7 +26,13 @@ class IndependentRescueTests(unittest.TestCase):
             verify_authorization_and_live_source=lambda: True)
 
     def test_single_claim_preserves_primary_hold_cost_and_comparison_gate(self):
-        with patch('app.pipeline.golden_v2_primary_rescue.verify_primary_refusal', return_value=True):
+        # This unit fixture has no stored provider reports: bypass only
+        # both source-evidence verifiers to isolate the ledger claim state
+        # machine. End-to-end tests exercise both verifiers with real files.
+        with patch('app.pipeline.golden_v2_primary_rescue.verify_primary_refusal',
+                   return_value=True), patch(
+            'app.pipeline.golden_v2_primary_rescue.verify_rescuable_primary_scope',
+            return_value=None):
             claim = claim_independent_rescue(**self.args)
             self.ledger.assert_stage_claim(claim, stage='chirp_independent')
             with self.assertRaises(V2Conflict):

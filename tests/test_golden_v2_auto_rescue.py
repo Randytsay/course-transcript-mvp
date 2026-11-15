@@ -123,7 +123,9 @@ def build_held_job(root, ledger, *, block_reason="SAFETY", chirp_estimate=43,
                  "ready_for_chirp_comparison": False, "golden_approved": False}
     report = {"schema": "golden-v2-primary-stage-v1", "job_id": job,
               "source_sha256": sha, "source_lineage_sha256": sha,
-              "mode": "gemini_3_8_audio_first", "window_evidence": evidence,
+              "mode": "gemini_3_8_audio_first",
+              "windows": [item["identity"]["window"] for item in evidence],
+              "window_evidence": evidence,
               "assembled": assembled, "estimated_cents": gemini_estimate,
               "actual_cents": GEMINI_ACTUAL_CENTS, "ready_for_chirp": False,
               "golden_approved": False}

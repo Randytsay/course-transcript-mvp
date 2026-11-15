@@ -22,7 +22,9 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
-from app.pipeline.golden_v2_primary_rescue import verify_primary_refusal
+from app.pipeline.golden_v2_primary_rescue import (
+    verify_primary_refusal, verify_rescuable_primary_scope,
+)
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.providers.golden_v2_compare import _letters
 from app.providers.golden_v2_immutable import store_immutable_bytes
@@ -123,6 +125,10 @@ def build_partial_primary(*, ledger: GoldenV2Ledger, job_id: str,
         job_dir=job_dir, job_id=job_id, source_sha=state["source_sha"],
         evidence_sha=primary["evidence_sha"],
         actual_cents=primary["actual_cents"],
+    )
+    verify_rescuable_primary_scope(
+        job_dir=job_dir, job_id=job_id, source_sha=state["source_sha"],
+        evidence_sha=primary["evidence_sha"],
     )
     report_path = job_dir / "golden-v2" / "primary-stage.json"
     if report_path.is_symlink():
@@ -250,6 +256,12 @@ def load_partial_primary(*, job_dir: Path, job_id: str, source_sha: str,
             or not isinstance(partial.get("unresolved_seams"), list)
             or not isinstance(partial.get("refused_only_windows"), list)):
         raise V2Conflict("partial primary binding mismatch")
+    # Older derivatives predating the paid preflight must not allow a
+    # previously unattempted suffix to bypass mandatory audio review.
+    verify_rescuable_primary_scope(
+        job_dir=job_dir, job_id=job_id, source_sha=source_sha,
+        evidence_sha=original_evidence_sha,
+    )
     return partial
 
 

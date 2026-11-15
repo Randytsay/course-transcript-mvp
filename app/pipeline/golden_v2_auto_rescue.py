@@ -14,7 +14,9 @@ from typing import Any
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.jobs.golden_v2_read import read_auto_rescue_snapshot
-from app.pipeline.golden_v2_primary_rescue import verify_primary_refusal
+from app.pipeline.golden_v2_primary_rescue import (
+    verify_primary_refusal, verify_rescuable_primary_scope,
+)
 
 ELIGIBLE_REASON = "VERIFIED_SAFETY_REFUSAL"
 
@@ -72,6 +74,13 @@ def inspect_auto_rescue_eligibility(
         )
     except (V2Conflict, OSError, ValueError, KeyError, TypeError) as exc:
         return {"eligible": False, "reason": "PRIMARY_REFUSAL_NOT_VERIFIED",
+                "detail": str(exc)}
+    try:
+        verify_rescuable_primary_scope(
+            job_dir=job_dir, job_id=job_id, source_sha=state["source_sha"],
+            evidence_sha=primary["evidence_sha"])
+    except (V2Conflict, OSError, ValueError, KeyError, TypeError) as exc:
+        return {"eligible": False, "reason": "PRIMARY_SCOPE_NOT_RESCUABLE",
                 "detail": str(exc)}
     return {
         "eligible": True,

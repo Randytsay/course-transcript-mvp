@@ -363,3 +363,53 @@ Fix:
   fail-closed case. 259 relevant offline tests PASS.
 - There is no automated human listening assertion, no new model
   call and no Golden QA or Drive-publishing authorization.
+
+## November 16 P1/P2 early SAFETY refusal production safety gate
+
+Independent review of 7efcb1b identified two release-blocking issues:
+
+- P1: if Gemini stops at an early SAFETY refusal, its immutable
+  planned windows list may contain later UNATTEMPTED windows.
+  The old partial derivative only walked attempted window_evidence,
+  potentially omitting the suffix from mandatory audio review.
+- P2: if the first window is SAFETY refused, no comparable Gemini
+  STOP text exists, so a paid Chirp rescue could be claimed even
+  though the partial-primary builder cannot finish adjudication.
+
+### Immediate fail-closed repair
+
+verify_rescuable_primary_scope is a separate source-SHA- and
+primary-evidence-SHA-bound guard requiring:
+
+1. Every planned Gemini window has a corresponding attempted audit
+   in the exact original window order and identity.
+2. At least one successful STOP window exists AND assembled primary
+   text is nonempty.
+3. Missing/malformed planned window structure fails closed.
+
+The known-refusal verifier remains unchanged. This NEW guard is
+independently enforced in:
+
+- Provider-free auto-rescue eligibility, returning
+  PRIMARY_SCOPE_NOT_RESCUABLE before any launch intent.
+- Trusted transactional paid claim, before recording a resumption
+  or changing Chirp to RUNNING.
+- Partial-primary builder and immutable derivative reader, so older
+  claims cannot silently permit unattempted source audio.
+
+Explicit limitation: Early SAFETY with later unattempted suffix is
+deferred to manual review, not automatically rescued. This is an
+intentional safety constraint; later positive-path support must mark
+the entire suffix for mandatory bounded audio review and preserve
+the existing source QA/renderer gates. Gemini-only comparison
+coverage can never prove whole-source acoustic coverage.
+
+### Offline verification
+
+- Two new regressions: first-window SAFETY -> no paid Chirp claim;
+  middle-window SAFETY -> no skipped unattempted suffix.
+- Retained positive last-window SAFETY regression cases.
+- 132 core Golden V2 tests passed and 125 additional paid/delivery/
+  publication/backup tests passed in network-disabled containers.
+- No merge, deployment, billable provider calls, source media or
+  production Ledger mutation was performed by this change.
