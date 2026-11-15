@@ -136,6 +136,27 @@ class GCSV2StageTests(TestCase):
             self.upload()
         self.assertEqual(sum(x.upload_count for x in self.cloud.blobs.values()), 2)
 
+    def test_identical_gemini_and_chirp_clips_do_not_collide(self):
+        """Short, identical FLAC clips require distinct immutable stage objects."""
+        source_sha = file_sha256(self.source)
+        # Unit-test cloud object naming; owner grant verification is tested
+        # separately in this module's no-approval case.
+        checker = Mock()
+        self.claim = {"stage": "gemini_primary", "job_id": self.job,
+                      "source_sha": source_sha}
+        primary = self.upload(ledger=checker)
+        self.claim = {"stage": "chirp_independent", "job_id": self.job,
+                      "source_sha": source_sha}
+        chirp = self.upload(ledger=checker)
+        self.assertEqual(len(primary), len(chirp))
+        self.assertFalse({w["gcs_uri"] for w in primary} &
+                         {w["gcs_uri"] for w in chirp})
+        self.assertTrue(all("/gemini_primary/" in w["gcs_uri"] for w in primary))
+        self.assertTrue(all("/chirp_independent/" in w["gcs_uri"] for w in chirp))
+        self.assertEqual(len(self.cloud.blobs), len(primary) + len(chirp))
+        self.assertEqual(sum(obj.upload_count for obj in self.cloud.blobs.values()),
+                         len(primary) + len(chirp))
+
 
 if __name__ == "__main__":
     import unittest
