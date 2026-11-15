@@ -141,7 +141,7 @@ class GCSV2StageTests(TestCase):
         source_sha = file_sha256(self.source)
         # Unit-test cloud object naming; owner grant verification is tested
         # separately in this module's no-approval case.
-        checker = Mock()
+        checker = Mock(spec=["assert_upload_authorized", "register_window"])
         self.claim = {"stage": "gemini_primary", "job_id": self.job,
                       "source_sha": source_sha}
         primary = self.upload(ledger=checker)
