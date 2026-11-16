@@ -14,6 +14,7 @@ from app.jobs.drive_lock import drive_publish_lock
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.pipeline.golden_v2_ai_limited_closeout import (
     TIER, _sha, _wire, _check_file, finalize_readback, _schema,
+    prepare_limited_manifest,
 )
 from app.pipeline.golden_v2_delivery import DriveDeliveryGateway
 from app.pipeline.golden_v2_runtime_services import signed_grant
@@ -70,7 +71,7 @@ def publish_signed_ai_limited(
     state = ledger.status(job_id)
     if (state["revision"] != manifest["ledger_revision"] or
             state["source_sha"] != manifest["source_sha256"] or
-            state["status"] != "NEEDS_REVIEW"):
+            state["status"] != manifest["golden_job_status"]):
         raise V2Conflict("stale source or job revision")
     folder = job/"golden-v2"
     selected = []
@@ -86,6 +87,14 @@ def publish_signed_ai_limited(
     triage = _check_file(folder/manifest["source_triage_filename"],10_000_000)
     if _sha(triage)!=manifest["triage_sha256"]:
         raise V2Conflict("original unresolved QA evidence has changed")
+    if prepare_limited_manifest(
+        root=root, job_id=job_id,
+        srt_path=folder/manifest["source_srt_filename"],
+        txt_path=folder/manifest["source_txt_filename"],
+        triage_path=folder/manifest["source_triage_filename"],
+        remote_names=tuple(manifest["output_names"]),
+    ) != manifest:
+        raise V2Conflict("prepared comparison/source evidence changed")
     preflight = json.loads(_check_file(job/"source-preflight.json",262144))
     obs=preflight["drive_observation"]
     if (obs["file_id"]!=manifest["source_file_id"]

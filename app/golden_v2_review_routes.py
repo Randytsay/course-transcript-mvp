@@ -375,15 +375,24 @@ def authorize_ai_limited(job_id: str, body: AILimitedPublishApprovalRequest,
     _limited_enabled()
     job=job_directory(database,job_id)
     from app.pipeline.golden_v2_ai_limited_publication import _read_proposal
-    from app.pipeline.golden_v2_ai_limited_closeout import TIER
+    from app.pipeline.golden_v2_ai_limited_closeout import TIER, prepare_limited_manifest
     try:
         manifest=_read_proposal(database.parent,job_id,body.manifest_sha256)
         state=GoldenV2Ledger.open_existing(database).status(job_id)
         if (state['revision']!=body.revision or
                 state['revision']!=manifest['ledger_revision'] or
                 state['source_sha']!=manifest['source_sha256'] or
-                state['status']!='NEEDS_REVIEW'):
+                state['status']!=manifest['golden_job_status']):
             raise V2Conflict('approval revision or scope changed')
+        folder=job/'golden-v2'
+        if prepare_limited_manifest(
+            root=database.parent,job_id=job_id,
+            srt_path=folder/manifest['source_srt_filename'],
+            txt_path=folder/manifest['source_txt_filename'],
+            triage_path=folder/manifest['source_triage_filename'],
+            remote_names=tuple(manifest['output_names']),
+        )!=manifest:
+            raise V2Conflict('approval comparison/source evidence changed')
         # Google Drive metadata can advance without the source audio changing.
         # The authenticated grant pins the *current* revision and the exact
         # immutable preflight content MD5/size. This never approves content drift.

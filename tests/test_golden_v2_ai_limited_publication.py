@@ -88,6 +88,47 @@ class LimitedPublisherTests(AILimitedCloseoutTests):
                 lock_root=self.root,gateway=self.gateway,
             )
 
+    def test_processing_route_authorizes_signed_grant_without_listening_claim(self):
+        from app.golden_v2_review_routes import (
+            AILimitedPublishApprovalRequest, authorize_ai_limited,
+        )
+        self.processing_comparison()
+        manifest=self.proposal()
+        register_proposal(self.root,manifest)
+        preflight=json.loads((self.folder/'source-preflight.json').read_text())
+        preflight['original_md5_checksum']='unit-md5'
+        (self.folder/'source-preflight.json').write_text(json.dumps(preflight))
+        body=AILimitedPublishApprovalRequest(
+            manifest_sha256=manifest['manifest_sha256'],revision=9,
+            review_reference='explicit-owner-draft',confirm=True)
+        with (patch('app.golden_v2_review_routes._authorized_write_database',
+                    return_value=(self.root/'ledger.sqlite','owner@example.test',None)),
+              patch('app.golden_v2_review_routes._limited_enabled'),
+              patch('app.pipeline.golden_v2_delivery.DriveDeliveryGateway',
+                    return_value=self.gateway),
+              patch('app.golden_v2_review_routes.signed_grant',sign)):
+            result=authorize_ai_limited(self.job_id,body,authorization='test')
+        self.assertFalse(result['confirm_listened'])
+        self.assertFalse(result['golden_pass'])
+        self.assertEqual(self.ledger.status(self.job_id)['status'],'PROCESSING')
+
+    def test_processing_publishes_without_touching_existing_old_files(self):
+        self.processing_comparison()
+        self.manifest=self.proposal()
+        register_proposal(self.root,self.manifest)
+        self.grant['manifest_sha256']=self.manifest['manifest_sha256']
+        self.grant_path=self.grant_path.parent/(self.manifest['manifest_sha256']+'.json')
+        self.grant_path.write_text(json.dumps(sign(self.grant)))
+        self.gateway.files['old-srt']={'id':'old-srt','name':'lecture(舊).srt',
+            'parents':['lecture-parent'],'trashed':False}
+        self.gateway.files['old-txt']={'id':'old-txt','name':'lecture.txt',
+            'parents':['lecture-parent'],'trashed':False}
+        before={key:dict(self.gateway.files[key]) for key in ('old-srt','old-txt')}
+        result=self.publish()
+        self.assertEqual(result['golden_status_unchanged'],'PROCESSING')
+        self.assertEqual({key:self.gateway.files[key] for key in before},before)
+        self.assertEqual(self.gateway.count,2)
+
     def test_two_files_posted_readback_and_idempotent(self):
         out=self.publish()
         self.assertEqual(out['quality_tier'],TIER)

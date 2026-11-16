@@ -149,6 +149,115 @@ class AILimitedCloseoutTests(unittest.TestCase):
             readback_verifier=lambda *_:True))
         self.assertEqual(self.ledger.status(self.job_id)["status"],"NEEDS_REVIEW")
 
+    def processing_comparison(self, count=95):
+        chirp_raw=json.dumps({'schema':'golden-v2-chirp-merged-v1',
+            'job_id':self.job_id,'source_sha':self.sha,
+            'timing_authority':'chirp_3','words':[]}).encode()
+        chirp_sha=hashlib.sha256(chirp_raw).hexdigest()
+        (self.assets/'chirp-merged.json').write_bytes(chirp_raw)
+        comparison={"job_id":self.job_id,"source_sha256":self.sha,
+                    "primary_evidence_sha256":"d"*64,
+                    "chirp_evidence_sha256":chirp_sha,
+                    "chirp_timing_authority":True,
+                    "pending_review_count":count,
+                    "candidates":[{"kind":"TEXT_DISAGREEMENT","index":i}
+                                  for i in range(count)]}
+        raw=json.dumps(comparison).encode()
+        digest=hashlib.sha256(raw).hexdigest()
+        (self.assets/"engine-comparison.json").write_bytes(raw)
+        with sqlite3.connect(self.root/"ledger.sqlite") as db:
+            db.execute("UPDATE v2_jobs SET status='PROCESSING' WHERE id=?",(self.job_id,))
+            for name,sha in (("gemini_primary","d"*64),
+                             ("chirp_independent",chirp_sha),("compare",digest)):
+                db.execute("UPDATE v2_stages SET state='COMPLETE',evidence_sha=? "
+                           "WHERE job_id=? AND name=?",(sha,self.job_id,name))
+        return comparison
+
+    def test_processing_proposal_carries_every_unresolved_comparison_candidate(self):
+        comparison=self.processing_comparison()
+        manifest=self.proposal()
+        semantic=[item for item in manifest['open_items']
+                  if item.get('disposition')=='SEMANTIC_REVIEW']
+        self.assertEqual(len(semantic),95)
+        self.assertEqual([item['candidate_index'] for item in semantic],list(range(95)))
+        self.assertEqual([item['evidence'] for item in semantic],
+                         comparison['candidates'])
+        self.assertEqual(manifest['golden_job_status'],'PROCESSING')
+        self.assertEqual(manifest['golden_qa_claim'],'NOT_CLAIMED')
+        self.assertEqual(register_proposal(self.root,manifest)['state'],'PREPARED')
+        self.assertEqual(self.ledger.status(self.job_id)['status'],'PROCESSING')
+
+    def test_zero_acoustic_gaps_still_discloses_95_semantic_items(self):
+        self.processing_comparison()
+        self.qa.write_text(json.dumps({'job_id':self.job_id,
+            'srt_sha256':hashlib.sha256(self.srt.read_bytes()).hexdigest(),
+            'total_acoustic_gaps':0,'all_acoustic_gaps':[]}))
+        manifest=self.proposal()
+        self.assertEqual(manifest['acoustic_classification_counts'],{})
+        self.assertEqual(len(manifest['open_items']),95)
+        self.assertEqual(manifest['comparison_candidate_count'],95)
+
+    def test_processing_rejects_stale_loose_chirp_without_bound_version(self):
+        self.processing_comparison()
+        canonical=self.assets/'chirp-merged.json'
+        canonical.write_bytes(b'stale loose alias')
+        with self.assertRaises(V2Conflict):self.proposal()
+        bound_sha=self.ledger.status(self.job_id)['stages'][1]['evidence_sha']
+        chirp_raw=json.dumps({'schema':'golden-v2-chirp-merged-v1',
+            'job_id':self.job_id,'source_sha':self.sha,
+            'timing_authority':'chirp_3','words':[]}).encode()
+        (self.assets/f'chirp-merged-{bound_sha}.json').write_bytes(chirp_raw)
+        manifest=self.proposal()
+        self.assertEqual(manifest['chirp_merged_sha256'],bound_sha)
+        self.assertEqual(manifest['comparison_candidate_count'],95)
+
+    def test_processing_rejects_budget_exposure_above_approval(self):
+        self.processing_comparison()
+        with sqlite3.connect(self.root/'ledger.sqlite') as db:
+            db.execute("UPDATE v2_chirp_operations SET actual_cents=101 "
+                       "WHERE job_id=?",(self.job_id,))
+        with self.assertRaises(V2Conflict):self.proposal()
+
+    def test_processing_rejects_missing_or_forged_comparison(self):
+        self.processing_comparison()
+        path=self.assets/'engine-comparison.json'
+        path.unlink()
+        with self.assertRaises(V2Conflict):self.proposal()
+        self.processing_comparison()
+        comparison=json.loads(path.read_text())
+        comparison['primary_evidence_sha256']='f'*64
+        path.write_text(json.dumps(comparison))
+        with self.assertRaises(V2Conflict):self.proposal()
+
+    def test_processing_rejects_active_stage_and_unknown_operation(self):
+        self.processing_comparison()
+        with sqlite3.connect(self.root/'ledger.sqlite') as db:
+            db.execute("UPDATE v2_stages SET state='RUNNING' WHERE job_id=? "
+                       "AND name='adjudication'",(self.job_id,))
+        with self.assertRaises(V2Conflict):self.proposal()
+        with sqlite3.connect(self.root/'ledger.sqlite') as db:
+            db.execute("UPDATE v2_stages SET state='PENDING' WHERE job_id=? "
+                       "AND name='adjudication'",(self.job_id,))
+            db.execute("UPDATE v2_chirp_operations SET status='OUTCOME_UNKNOWN' "
+                       "WHERE job_id=?",(self.job_id,))
+        with self.assertRaises(V2Conflict):self.proposal()
+
+    def test_processing_registration_and_finalization_keep_golden_pending(self):
+        self.processing_comparison()
+        manifest=self.proposal()
+        register_proposal(self.root,manifest)
+        grant={'job_id':self.job_id,'manifest_sha256':manifest['manifest_sha256'],
+               'quality_tier':TIER,'source_sha256':self.sha,
+               'output_names':manifest['output_names'],'approve_delivery':True,
+               'actor':'owner','reference':'approval'}
+        remote=[{'name':name,'id':f'id{i}'} for i,name in enumerate(self.names)]
+        receipt=finalize_readback(root=self.root,manifest=manifest,remote_files=remote,
+            owner_grant=grant,signed_grant_verifier=lambda _:True,
+            readback_verifier=lambda *_:True)
+        self.assertEqual(receipt['golden_status_unchanged'],'PROCESSING')
+        self.assertEqual([s['state'] for s in self.ledger.status(self.job_id)['stages'][-2:]],
+                         ['PENDING','PENDING'])
+
     def test_no_fake_golden_or_human_flags(self):
         manifest=self.proposal()
         altered=dict(manifest)
