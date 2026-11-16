@@ -1,6 +1,7 @@
 """Authenticated, provider-free review entry; never invent listening receipts."""
 import json
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any, Literal
 
@@ -440,3 +441,111 @@ def publish_ai_limited(job_id: str, body: AILimitedPublishRequest,
         )
     except (ValueError,RuntimeError,OSError,KeyError) as exc:
         raise HTTPException(status_code=409,detail='AI-limited publication blocked; reconcile remote IDs before retry') from exc
+
+
+class AILimitedOldRevision(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    file_id: str=Field(min_length=1,max_length=180)
+    name: str=Field(min_length=5,max_length=180)
+    version: str=Field(min_length=1,max_length=80)
+    sha256: str=Field(pattern=r'^[0-9a-f]{64}$')
+    backup_name: str=Field(min_length=5,max_length=220)
+
+
+class AILimitedOldArchiveApproval(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    manifest_sha256: str=Field(pattern=r'^[0-9a-f]{64}$')
+    old_files: list[AILimitedOldRevision]=Field(min_length=2,max_length=2)
+    review_reference: str=Field(min_length=1,max_length=256)
+    confirm: Literal[True]
+
+
+@router.post('/jobs/{job_id}/ai-limited/authorize-old-archive')
+def authorize_ai_limited_old_archive(job_id: str, body: AILimitedOldArchiveApproval,
+                                      authorization: str | None=Header(default=None)):
+    database,actor,_=_authorized_write_database(authorization)
+    _limited_enabled()
+    job=job_directory(database,job_id)
+    from app.pipeline.golden_v2_ai_limited_old_archive import PURPOSE
+    from app.pipeline.golden_v2_ai_limited_closeout import _sha
+    from app.pipeline.golden_v2_delivery import DriveDeliveryGateway
+    from app.pipeline.golden_v2_revision_backup import verified_backup_plan
+    from app.jobs.drive_lock import drive_publish_lock
+    try:
+        with sqlite3.connect(database) as db:
+            db.row_factory=sqlite3.Row
+            row=db.execute('SELECT state,manifest_json,remote_receipt_json FROM '
+                'v2_ai_limited_deliveries WHERE job_id=? AND manifest_sha=?',
+                (job_id,body.manifest_sha256)).fetchone()
+        if not row or row['state']!='DELIVERED' or not row['remote_receipt_json']:
+            raise V2Conflict('delivery not verified')
+        manifest=json.loads(row['manifest_json'])
+        receipt=json.loads(row['remote_receipt_json'])
+        state=GoldenV2Ledger.open_existing(database).status(job_id)
+        if (manifest['manifest_sha256']!=body.manifest_sha256 or
+                manifest['job_id']!=job_id or
+                state['revision']!=manifest['ledger_revision'] or
+                state['source_sha']!=manifest['source_sha256'] or
+                state['status']!=manifest['golden_job_status'] or
+                receipt.get('readback_verified') is not True):
+            raise V2Conflict('delivery or source drift')
+        preflight=json.loads((job/'source-preflight.json').read_text())
+        obs=preflight['drive_observation']
+        if obs['file_id']!=manifest['source_file_id'] or preflight['source_sha256']!=state['source_sha']:
+            raise V2Conflict('source preflight drift')
+        gateway=DriveDeliveryGateway()
+        old=[x.model_dump() for x in body.old_files]
+        names={x['name']:{k:x[k] for k in ('file_id','version','sha256','backup_name')} for x in old}
+        if (len(names)!=2 or {Path(x['name']).suffix.lower() for x in old}!={'.srt','.txt'} or
+                set(names)&set(manifest['output_names'])):
+            raise V2Conflict('old revision selection invalid')
+        with drive_publish_lock(database.parent,preflight['drive_source_path']):
+            source=gateway.get(obs['file_id'])
+            if (not source or source.get('id')!=obs['file_id'] or source.get('trashed') or
+                    int(source.get('size',-1))!=int(obs['size_bytes']) or
+                    source.get('md5Checksum')!=obs.get('downloaded_md5',preflight.get('original_md5_checksum')) or
+                    len(source.get('parents',[]))!=1 or
+                    not str(source.get('version','')).isdigit() or
+                    int(source['version'])<int(obs['version'])):
+                raise V2Conflict('Drive source changed')
+            parent=source['parents'][0]
+            files=receipt['files']
+            expected=dict(zip(manifest['output_names'],(manifest['srt_sha256'],manifest['txt_sha256'])))
+            if len(files)!=2 or {x['name'] for x in files}!=set(expected):
+                raise V2Conflict('delivery receipt mismatch')
+            for item in files:
+                remote=gateway.get(item['id'])
+                if (not remote or remote.get('id')!=item['id'] or remote.get('name')!=item['name'] or
+                        remote.get('parents')!=[parent] or remote.get('trashed') or
+                        (remote.get('appProperties') or {}).get('golden_v2_job')!=job_id or
+                        _sha(gateway.readback(item['id']))!=expected[item['name']] or
+                        {x['id'] for x in gateway.named(parent,item['name'])}!={item['id']}):
+                    raise V2Conflict('new delivery changed')
+            if any(x['file_id'] in {obs['file_id']}|{f['id'] for f in files} for x in old):
+                raise V2Conflict('old selection overlaps source or delivery')
+            verified_backup_plan(gateway=gateway,parent=parent,
+                outputs={name:None for name in names},approved=names,saved_ids={})
+            payload={'purpose':PURPOSE,'job_id':job_id,
+                'manifest_sha256':body.manifest_sha256,'source_sha256':state['source_sha'],
+                'source_version_at_approval':str(source['version']),
+                'actor':actor,'reference':body.review_reference,'old_files':old}
+            path=job/'owner-ai-limited-old-archive-grant'/(body.manifest_sha256+'.json')
+            store_immutable_bytes(path,wire(signed_grant(payload)).encode())
+        return {'job_id':job_id,'state':'OLD_ARCHIVE_AUTHORIZED',
+                'manifest_sha256':body.manifest_sha256,'old_file_ids':[x['file_id'] for x in old]}
+    except (ValueError,RuntimeError,OSError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=409,detail='Exact old revisions or verified delivery changed') from exc
+
+
+@router.post('/jobs/{job_id}/ai-limited/archive-old')
+def archive_ai_limited_old(job_id: str, body: AILimitedPublishRequest,
+                            authorization: str | None=Header(default=None)):
+    database,_,_=_authorized_write_database(authorization)
+    _limited_enabled()
+    job_directory(database,job_id)
+    from app.pipeline.golden_v2_ai_limited_old_archive import archive_signed_old_revisions
+    try:
+        return archive_signed_old_revisions(root=database.parent,job_id=job_id,
+            manifest_sha=body.manifest_sha256,lock_root=database.parent)
+    except (ValueError,RuntimeError,OSError,KeyError,sqlite3.Error) as exc:
+        raise HTTPException(status_code=409,detail='Old revision archive blocked; reconcile exact IDs') from exc
