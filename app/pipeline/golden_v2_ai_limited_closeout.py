@@ -14,6 +14,7 @@ from pathlib import Path
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.subtitles.editor_hardened import parse_srt_strict
+from app.providers.golden_v2_versioned_artifacts import resolve_versioned
 
 SCHEMA = "golden-v2-limited-ai-delivery-v1"
 TIER = "AI_REVIEWED_WITH_OPEN_ITEMS_NOT_GOLDEN"
@@ -58,6 +59,71 @@ def _schema(db: sqlite3.Connection) -> None:
                "ON v2_ai_limited_deliveries(job_id) WHERE state='DELIVERED'")
 
 
+def _processing_comparison(root: Path, job_id: str, state: dict) -> tuple[str, list]:
+    """Read ledger-bound comparison without changing any Golden stage."""
+    stages = {row["name"]: row for row in state["stages"]}
+    if (state["status"] != "PROCESSING" or state["mode"] != "FLASH_CHIRP"
+            or any(stages[name]["state"] != "COMPLETE" or
+                   not stages[name]["evidence_sha"]
+                   for name in ("gemini_primary", "chirp_independent", "compare"))
+            or stages["third_optional"]["state"] not in {"PENDING", "SKIPPED"}
+            or stages["adjudication"]["state"] != "PENDING"
+            or stages["golden_qa"]["state"] != "PENDING"
+            or any(row["state"] in {"RUNNING", "OUTCOME_UNKNOWN"}
+                   for row in state["stages"])):
+        raise V2Conflict("processing provider/compare stages not safely complete")
+    digest = stages["compare"]["evidence_sha"]
+    chirp_sha = stages["chirp_independent"]["evidence_sha"]
+    chirp_path = resolve_versioned(root / "jobs" / job_id / "golden-v2" /
+                                  "chirp-merged.json", chirp_sha)
+    chirp = json.loads(_check_file(chirp_path, 20_000_000))
+    if (not isinstance(chirp, dict) or
+            chirp.get("job_id") != job_id or
+            chirp.get("schema") != "golden-v2-chirp-merged-v1" or
+            chirp.get("timing_authority") != "chirp_3" or
+            chirp.get("source_sha") != state["source_sha"] or
+            not isinstance(chirp.get("words"), list)):
+        raise V2Conflict("ledger-bound Chirp merge evidence invalid")
+    path = resolve_versioned(root / "jobs" / job_id / "golden-v2" /
+                             "engine-comparison.json", digest)
+    raw = _check_file(path, 10_000_000)
+    comparison = json.loads(raw)
+    if not isinstance(comparison, dict):
+        raise V2Conflict("comparison evidence must be an object")
+    candidates = comparison.get("candidates")
+    if (comparison.get("job_id") != job_id or
+            comparison.get("source_sha256") != state["source_sha"] or
+            comparison.get("primary_evidence_sha256") != stages["gemini_primary"]["evidence_sha"] or
+            comparison.get("chirp_evidence_sha256") != stages["chirp_independent"]["evidence_sha"] or
+            comparison.get("chirp_timing_authority") is not True or
+            not isinstance(candidates, list) or
+            not all(isinstance(c, dict) for c in candidates) or
+            type(comparison.get("pending_review_count")) is not int or
+            comparison["pending_review_count"] != len(candidates)):
+        raise V2Conflict("comparison does not match completed provider evidence")
+    return digest, candidates
+
+
+def _eligible(root: Path, job_id: str, state: dict) -> tuple[str | None, list]:
+    if state["status"] not in {"PROCESSING", "NEEDS_REVIEW"} or state.get("approved_cents") is None:
+        raise V2Conflict("only approved provider jobs can be proposed")
+    # No unfinished or unaccounted operation, regardless of job status.
+    operations = GoldenV2Ledger.open_existing(root / "ledger.sqlite").chirp_windows(job_id)
+    if not operations or any(row["status"] != "DONE" or
+                             row["source_sha"] != state["source_sha"] or
+                             not row["result_sha"] or row["actual_cents"] is None
+                             for row in operations):
+        raise V2Conflict("unfinished, charged unknown or missing provider receipt")
+    if (state["known_actual_cents"] > state["approved_cents"] or
+            any(row["actual_cents"] < 0 for row in operations)):
+        raise V2Conflict("provider spend exceeds approved budget")
+    if state["status"] == "PROCESSING":
+        digest, candidates = _processing_comparison(root, job_id, state)
+    else:
+        digest, candidates = None, []
+    return digest, candidates
+
+
 def prepare_limited_manifest(
     *, root: Path, job_id: str, srt_path: Path, txt_path: Path,
     triage_path: Path, remote_names: tuple[str, str],
@@ -69,9 +135,7 @@ def prepare_limited_manifest(
     root = Path(root)
     ledger = GoldenV2Ledger.open_existing(root / "ledger.sqlite")
     state = ledger.status(job_id)
-    if (state["status"] != "NEEDS_REVIEW"
-            or state.get("approved_cents") is None):
-        raise V2Conflict("only verified paid jobs held for review can be proposed")
+    comparison_sha, candidates = _eligible(root, job_id, state)
     jobdir = root / "jobs" / job_id
     if not jobdir.is_dir() or jobdir.is_symlink():
         raise V2Conflict("invalid local job directory")
@@ -89,11 +153,6 @@ def prepare_limited_manifest(
     if source_sha != state["source_sha"] or preflight.get("source_sha256") != source_sha:
         raise V2Conflict("normalized audio is not job source")
     operations = ledger.chirp_windows(job_id)
-    if not operations or any(row["status"] != "DONE" or
-                             not row["result_sha"] or
-                             row["actual_cents"] is None
-                             for row in operations):
-        raise V2Conflict("unfinished, charged unknown or missing provider receipt")
     if (not isinstance(remote_names, tuple) or len(remote_names) != 2
             or not all(isinstance(n, str) and _NAME.fullmatch(n) for n in remote_names)
             or remote_names[0] == remote_names[1]
@@ -129,7 +188,12 @@ def prepare_limited_manifest(
     manifest = {
         "schema": SCHEMA, "quality_tier": TIER, "job_id": job_id,
         "ledger_revision": state["revision"],
-        "golden_job_status": "NEEDS_REVIEW",
+        "golden_job_status": state["status"],
+        "comparison_sha256": comparison_sha,
+        "chirp_merged_sha256": (next(s["evidence_sha"] for s in state["stages"]
+                                     if s["name"] == "chirp_independent")
+                                if comparison_sha else None),
+        "comparison_candidate_count": len(candidates),
         "golden_qa_claim": "NOT_CLAIMED",
         "human_listening_claim": "NOT_CLAIMED",
         "source_sha256": source_sha,
@@ -148,6 +212,11 @@ def prepare_limited_manifest(
             if g["acoustic_disposition"] == "REVIEW" or
             (g["acoustic_disposition"] == "SPEECH_CONFIRMED" and
              g["classification"] != "ALREADY_HAS_SRT_TEXT_CHECK_SEMANTIC")
+        ] + [
+            {"candidate_index": i, "candidate_sha256": _sha(_wire(candidate)),
+             "evidence": candidate,
+             "disposition": "SEMANTIC_REVIEW", "classification": "UNRESOLVED_COMPARISON"}
+            for i, candidate in enumerate(candidates)
         ],
         "output_names": list(remote_names),
         "source_srt_filename": Path(srt_path).name,
@@ -174,10 +243,20 @@ def register_proposal(root: Path, manifest: dict) -> dict:
     digest = canonical.pop("manifest_sha256", None)
     if digest != _sha(_wire(canonical)) or canonical.get("publication_granted") is not False:
         raise V2Conflict("forged or altered proposal manifest")
+    folder = Path(root) / "jobs" / canonical["job_id"] / "golden-v2"
+    rebuilt = prepare_limited_manifest(
+        root=Path(root), job_id=canonical["job_id"],
+        srt_path=folder / canonical["source_srt_filename"],
+        txt_path=folder / canonical["source_txt_filename"],
+        triage_path=folder / canonical["source_triage_filename"],
+        remote_names=tuple(canonical["output_names"]),
+    )
+    if rebuilt != manifest:
+        raise V2Conflict("proposal differs from current immutable evidence")
     state = ledger.status(canonical["job_id"])
     if (state["revision"] != canonical["ledger_revision"] or
             state["source_sha"] != canonical["source_sha256"] or
-            state["status"] != "NEEDS_REVIEW"):
+            state["status"] != canonical["golden_job_status"]):
         raise V2Conflict("stale Golden ledger revision / source")
     with ledger._tx() as db:
         _schema(db)
@@ -188,7 +267,7 @@ def register_proposal(root: Path, manifest: dict) -> dict:
         if (locked_job is None or
                 locked_job["revision"] != canonical["ledger_revision"] or
                 locked_job["source_sha"] != canonical["source_sha256"] or
-                locked_job["status"] != "NEEDS_REVIEW"):
+                locked_job["status"] != canonical["golden_job_status"]):
             raise V2Conflict("concurrent Golden job revision changed")
         delivered = db.execute(
             "SELECT manifest_sha FROM v2_ai_limited_deliveries "
@@ -261,13 +340,13 @@ def finalize_readback(
         if (row is None or row["manifest_json"] != _wire(manifest).decode()
                 or job is None or job["source_sha"] != manifest["source_sha256"]
                 or job["revision"] != manifest["ledger_revision"]
-                or job["status"] != "NEEDS_REVIEW"):
+                or job["status"] != manifest["golden_job_status"]):
             raise V2Conflict("stale or mismatched prepared delivery")
         receipt = {"schema": SCHEMA, "quality_tier": TIER,
                    "job_id": manifest["job_id"], "manifest_sha256": digest,
                    "files": remote_files, "readback_verified": True,
                    "owner_grant_sha256": _sha(_wire(owner_grant)),
-                   "golden_status_unchanged": "NEEDS_REVIEW"}
+                   "golden_status_unchanged": manifest["golden_job_status"]}
         saved = _wire(receipt).decode()
         if row["state"] == "DELIVERED":
             if row["remote_receipt_json"] != saved:
