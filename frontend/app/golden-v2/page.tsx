@@ -17,6 +17,11 @@ export default async function Page() {
   }
   return (
     <AppShell title="Golden V2" description="來源版本、辨識階段與核准記錄">
+      {process.env.COURSE_TRANSCRIPT_V2_PAID_CONSOLE_ENABLED === "true" && (
+        <p style={{ margin: "12px 0", fontWeight: 700 }}>
+          <a href="/golden-v2/paid">進入付費核准管理台（≥1 小時／US$100 上限）</a>
+        </p>
+      )}
       <GoldenV2AdminPage />
     </AppShell>
   );
