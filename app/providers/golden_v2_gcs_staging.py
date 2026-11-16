@@ -64,7 +64,13 @@ def upload_approved_clips(
         digest = str(row.get("clip_sha256", ""))
         if len(digest) != 64 or file_sha256(path) != digest or path.stat().st_size != row.get("clip_bytes"):
             raise AudioStagingError("local staged clip was changed")
-        key = f"{object_prefix}/{claim['job_id']}/{source_sha}/{i:04d}-{digest}.flac"
+        # The exact same FLAC can be needed by Gemini and Chirp for short audio.
+        # Stage-specific metadata cannot share a single immutable GCS object.
+        # Preserve existing historical objects; only new uploads use this key.
+        key = (
+            f"{object_prefix}/{claim['job_id']}/{source_sha}/"
+            f"{claim['stage']}/{i:04d}-{digest}.flac"
+        )
         candidate = {
             "index": i,
             "start_seconds": row["start_seconds"],
