@@ -35,3 +35,32 @@ services:
       - ${V2_CHAT_DATA_DIR:-/opt/course-transcript-v2-chat/data}:/app/data
       - ${V2_CHAT_DRIVE_CONFIG:-/home/ubuntu/.config/rclone/rclone.conf}:/run/secrets/rclone.conf:ro
     command: ["python", "scripts/golden_v2_batch_intake_daemon.py"]
+
+  # Opt-in only. Cloudflare Tunnel/Access must protect the loopback endpoint.
+  # Next.js also independently checks signed Access JWT and allowed email.
+  owner-console:
+    profiles: ["owner-console"]
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        VCS_REF: ${V2_CHAT_RELEASE_SHA:?exact release SHA required}
+    image: course-transcript-v2-owner-console:${V2_CHAT_RELEASE_SHA:?exact release SHA required}
+    restart: unless-stopped
+    env_file:
+      - ${V2_CHAT_OWNER_CONSOLE_ENV_FILE:?protected console env file required}
+    environment:
+      NODE_ENV: production
+      API_INTERNAL_BASE_URL: http://api:8000
+      COURSE_TRANSCRIPT_V2_PAID_CONSOLE_ONLY: "true"
+    ports:
+      - "127.0.0.1:8817:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 35s

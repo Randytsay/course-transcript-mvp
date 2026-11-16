@@ -10,6 +10,7 @@ import os
 import re
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import nullcontext
 from typing import Literal
 import sqlite3
 
@@ -28,6 +29,8 @@ from app.providers.golden_v2_immutable import store_immutable_bytes
 from app.providers.golden_v2_audio_staging import file_sha256
 from app.pipeline.golden_v2_quote_intake import wire
 from app.jobs.golden_v2_ledger import GoldenV2Ledger
+from app.pipeline.golden_v2_paid_console import (scope_prefix, snapshot as paid_console_snapshot,
+    owner_batch_lock, check_paid_approval)
 
 app = FastAPI(title="Golden Transcript V2 Chat Entry", docs_url=None, redoc_url=None, openapi_url=None)
 allowed = {
@@ -125,6 +128,19 @@ def quote_status(quote_id: str, authorization: str | None = Header(default=None)
     return result
 
 
+@app.get('/api/v1/golden-v2/paid-console')
+def paid_console_status(authorization: str | None = Header(default=None)):
+    """Private read-only approval queue, not a paid grant or billing invoice."""
+    database = _authorized_database(authorization)
+    prefix = scope_prefix()
+    if prefix is None:
+        raise HTTPException(status_code=404, detail="Owner paid console not enabled")
+    try:
+        return paid_console_snapshot(database, prefix)
+    except (V2Conflict, sqlite3.Error, OSError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="Trusted paid console evidence unavailable") from exc
+
+
 class PaidGrantRequest(BaseModel):
     model_config = ConfigDict(extra='forbid')
     revision: StrictInt = Field(ge=0)
@@ -143,6 +159,7 @@ def authorize_paid(job_id: str, body: PaidGrantRequest, authorization: str | Non
     if not re.fullmatch(r'v2p_[0-9a-f]{32}',job_id) or body.approved_cents > ceiling:
         raise HTTPException(status_code=422,detail='Invalid or over-cap paid grant')
     job = database.parent/'jobs'/job_id
+    prefix = scope_prefix()
     try:
         quote_path = job/'trusted-quote.json'
         if job.is_symlink() or quote_path.is_symlink() or file_sha256(quote_path) != body.quote_sha256:
@@ -156,10 +173,20 @@ def authorize_paid(job_id: str, body: PaidGrantRequest, authorization: str | Non
         state = ledger.status(job_id)
         if state['source_sha'] != body.source_sha256 or state['revision'] != body.revision or state['status'] != 'AWAITING_APPROVAL':
             raise V2Conflict('reviewed job state changed; query status')
-        grant = {**body.model_dump(exclude={'confirm'}),'job_id':job_id,'actor':actor}
-        store_immutable_bytes(job/'owner-paid-grant.json',wire(signed_grant(grant)).encode())
-        ledger.approve(job_id,revision=body.revision,approved_cents=body.approved_cents,
-                       reference=body.reference,actor=actor)
+        # All officially signed grants for this owner batch share one lock.
+        # Do not redirect blocked ChatGPT tool calls to this API: the caller
+        # still needs the separately protected Owner write credential.
+        context = owner_batch_lock(database.parent) if prefix else nullcontext()
+        with context:
+            if prefix and quote.get('drive_source',{}).get('source_path','').startswith(prefix):
+                check_paid_approval(
+                    database, prefix, job_id, body.approved_cents,
+                    body.source_sha256, body.quote_sha256,
+                )
+            grant = {**body.model_dump(exclude={'confirm'}),'job_id':job_id,'actor':actor}
+            store_immutable_bytes(job/'owner-paid-grant.json',wire(signed_grant(grant)).encode())
+            ledger.approve(job_id,revision=body.revision,approved_cents=body.approved_cents,
+                           reference=body.reference,actor=actor)
         return {'job_id':job_id,'status':'QUEUED','revision':body.revision+1,
                 'source_sha256':body.source_sha256,'approved_cents':body.approved_cents}
     except (V2Conflict,ValueError,sqlite3.Error) as exc:
@@ -208,6 +235,18 @@ def auto_folder_authorize(job_id: str,body: AutoFolderAuthorizeRequest,
     database,actor,ceiling=_authorized_write_database(authorization)
     if os.environ.get('COURSE_TRANSCRIPT_V2_PAID_API_ENABLED','').lower()!='true':
         raise HTTPException(status_code=409,detail='Paid API disabled; no automatic submission')
+    # The legacy 6-dollar-per-folder route does not enforce the owner's
+    # 3600-second batch restriction or shared US$100 ceiling. Fail closed.
+    prefix = scope_prefix()
+    if prefix:
+        quote_path = database.parent/'jobs'/job_id/'trusted-quote.json'
+        if quote_path.is_file() and not quote_path.is_symlink():
+            try:
+                candidate = json.loads(quote_path.read_text())
+                if str(candidate.get('drive_source',{}).get('source_path','')).startswith(prefix):
+                    raise HTTPException(status_code=409, detail="Use paid console batch policy")
+            except (json.JSONDecodeError, OSError, TypeError, KeyError) as exc:
+                raise HTTPException(status_code=503, detail="Trusted quote unavailable") from exc
     from app.pipeline.golden_v2_auto_six import auto_authorize_quote
     try:
         return auto_authorize_quote(root=database.parent,actor=actor,job_id=job_id,

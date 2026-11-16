@@ -33,6 +33,20 @@ export function proxy(request: NextRequest) {
     request.headers.get("host") ||
     request.headers.get("x-forwarded-host") ||
     request.nextUrl.hostname;
+  // Dedicated V2 console intentionally cannot reach V1 review/admin routes
+  // or the generic /api/v1 reverse proxy, even though its server has Owner
+  // credentials. This restriction does not apply to the V1 frontend stack.
+  if (process.env.COURSE_TRANSCRIPT_V2_PAID_CONSOLE_ONLY === "true") {
+    const path = request.nextUrl.pathname;
+    const allowed = path === "/" || path === "/golden-v2/paid"
+      || path === "/api/golden-v2/paid-console"
+      || path === "/api/golden-v2/paid-console/authorize"
+      || path === "/favicon.ico"
+      || path === "/images/cisheng-lotus-seal.png";
+    if (!allowed) return new NextResponse("Not Found", {
+      status: 404, headers: { "Cache-Control":"no-store" },
+    });
+  }
   const action = classifyReviewHostRequest(
     hostname,
     request.nextUrl.pathname,
