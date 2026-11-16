@@ -132,6 +132,35 @@ class DiscoveryTests(unittest.TestCase):
         self.pages[0]['files'].append({**self.items[FILE], 'id': 'other0123456789'})
         with self.assertRaises(DriveApiError): preview_drive_link(LINK)
 
+    def test_unrelated_native_doc_with_slash_does_not_block_mp3_preview(self):
+        native = {'id': 'native_document012345', 'name': '抗氧化保健 (講師：蔡金宏/King)',
+                  'mimeType': 'application/vnd.google-apps.document', 'parents': [FOLDER]}
+        self.items[native['id']] = native
+        self.pages[1]['files'].append(native)
+        folder = preview_drive_link(LINK)
+        direct = preview_drive_link(f'https://drive.google.com/file/d/{FILE}/view')
+        self.assertEqual(folder['files'], [SOURCE])
+        self.assertEqual(direct['files'], [SOURCE])
+
+    def test_unrelated_native_doc_with_wrong_parent_still_fails_closed(self):
+        native = {'id': 'native_document012345', 'name': '講師/King',
+                  'mimeType': 'application/vnd.google-apps.document',
+                  'parents': ['outside_parent0123']}
+        self.pages[1]['files'].append(native)
+        with self.assertRaises(DriveApiError):
+            preview_drive_link(LINK)
+        with self.assertRaises(DriveApiError):
+            preview_drive_link(f'https://drive.google.com/file/d/{FILE}/view')
+
+    def test_unsafe_media_sibling_name_still_fails_closed(self):
+        sibling = {'id': 'unsafe_media0123456', 'name': '講師/King.mp3',
+                   'mimeType': 'audio/mpeg', 'parents': [FOLDER]}
+        self.pages[1]['files'].append(sibling)
+        with self.assertRaises(DriveApiError):
+            preview_drive_link(LINK)
+        with self.assertRaises(DriveApiError):
+            preview_drive_link(f'https://drive.google.com/file/d/{FILE}/view')
+
     def test_unsafe_name_shortcuts_and_file_identity_change_fail(self):
         self.items[FOLDER]['name'] = '../bad'
         with self.assertRaises(DriveApiError): preview_drive_link(LINK)
