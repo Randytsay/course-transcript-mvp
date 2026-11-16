@@ -170,11 +170,18 @@ def preview_drive_link(link: str, *, recursive: bool = False, mp3_only: bool = F
                 entries += 1
                 if entries > max_entries or not isinstance(item, dict):
                     raise drive.DriveApiError("Drive 清單超過項目限制或格式無效")
-                name = _name(item)
                 child_id = str(item.get("id") or "")
                 parents = item.get("parents")
                 if not re.fullmatch(_ID, child_id) or not isinstance(parents, list) or folder_id not in parents:
                     raise drive.DriveApiError("Drive 清單來源不一致")
+                # Native Google documents are neither media nor supported references.
+                # Ignore their display names only after verifying their Drive ancestry:
+                # a harmless title such as "講師/King" must not block an MP3 sibling.
+                mime_type = str(item.get("mimeType", ""))
+                if mime_type.startswith("application/vnd.google-apps.") and mime_type != drive._FOLDER_MIME:
+                    skipped += 1
+                    continue
+                name = _name(item)
                 if name in names and names[name] != child_id:
                     raise drive.DriveApiError("Drive 同一資料夾有重複名稱，無法安全選取")
                 names[name] = child_id
@@ -230,10 +237,14 @@ def preview_drive_link(link: str, *, recursive: bool = False, mp3_only: bool = F
                 entries += 1
                 if entries > max_entries or not isinstance(item, dict):
                     raise drive.DriveApiError("Drive 參考逐字稿清單超過限制")
-                name = _name(item)
                 if (item.get('parents') != [parent_id]
                         or not re.fullmatch(_ID, str(item.get('id') or ''))):
                     raise drive.DriveApiError("Drive 參考逐字稿父目錄不一致")
+                # Native Docs/Sheets/shortcuts are not accepted reference artifacts.
+                # Do not parse their unrelated titles as filesystem paths.
+                if str(item.get('mimeType', '')).startswith('application/vnd.google-apps.'):
+                    continue
+                name = _name(item)
                 remember_reference(item, parent_id, _join(parent_path, name))
             token = payload.get('nextPageToken')
             if not token:
