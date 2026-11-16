@@ -133,7 +133,7 @@ class DiscoveryTests(unittest.TestCase):
         with self.assertRaises(DriveApiError): preview_drive_link(LINK)
 
     def test_unrelated_native_doc_with_slash_does_not_block_mp3_preview(self):
-        native = {'id': 'native_document012345', 'name': '抗氧化保健 (講師：蔡金宏/King)',
+        native = {'id': 'native_document012345', 'name': '課程講師/EnglishName',
                   'mimeType': 'application/vnd.google-apps.document', 'parents': [FOLDER]}
         self.items[native['id']] = native
         self.pages[1]['files'].append(native)
