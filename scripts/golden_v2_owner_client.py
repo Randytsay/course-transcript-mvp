@@ -60,7 +60,7 @@ def main() -> int:
         ri.add_argument('--request-file',type=Path); ri.add_argument('--request-stdin',action='store_true')
     ai_status=sub.add_parser('ai-limited-status')
     ai_status.add_argument('job_id')
-    for action in ['ai-limited-prepare','ai-limited-authorize-publication','ai-limited-publish']:
+    for action in ['ai-limited-prepare','ai-limited-authorize-publication','ai-limited-publish','ai-limited-authorize-old-archive','ai-limited-archive-old']:
         entry=sub.add_parser(action)
         entry.add_argument('job_id')
         request=entry.add_mutually_exclusive_group(required=True)
@@ -76,7 +76,7 @@ def main() -> int:
             raise ValueError
     except ValueError:
         parser.error("Owner API requires an HTTPS origin or private loopback/container origin")
-    write = args.action in {"auto-budget-configure","auto-budget-authorize","create-batch", "approve-job", 'quote', 'authorize-paid','review-overlaps','review-adjudication','authorize-publication','ai-limited-prepare','ai-limited-authorize-publication','ai-limited-publish'}
+    write = args.action in {"auto-budget-configure","auto-budget-authorize","create-batch", "approve-job", 'quote', 'authorize-paid','review-overlaps','review-adjudication','authorize-publication','ai-limited-prepare','ai-limited-authorize-publication','ai-limited-publish','ai-limited-authorize-old-archive','ai-limited-archive-old'}
     token = os.environ.get("COURSE_TRANSCRIPT_V2_WRITE_TOKEN" if write else "COURSE_TRANSCRIPT_V2_STATUS_TOKEN", "")
     if len(token) < 32:
         parser.error("Required scoped owner token is not configured")

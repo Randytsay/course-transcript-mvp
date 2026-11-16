@@ -59,8 +59,13 @@ def verified_backup_plan(*, gateway: Any, parent: str, outputs: dict,
         stem = name[:-len(suffix)] if suffix else name
         required_backup = stem + "(舊)" + suffix
         dated_backup = bool(re.fullmatch(
+            re.escape(stem) + r"\(舊\)-[0-9]{8}T[0-9]{6}Z" + re.escape(suffix),
+            backup_name)) if isinstance(backup_name, str) else False
+        # Keep accepting already-signed legacy timestamp plans during retry.
+        legacy_dated_backup = bool(re.fullmatch(
             re.escape(stem) + r"\(舊-[0-9]{8}T[0-9]{6}Z\)" + re.escape(suffix),
             backup_name)) if isinstance(backup_name, str) else False
+        dated_backup = dated_backup or legacy_dated_backup
         if (dated_backup and not gateway.named(parent, required_backup)):
             raise V2Conflict("timestamped backup requires an existing (舊) collision")
         if (not all(isinstance(x, str) and x for x in
