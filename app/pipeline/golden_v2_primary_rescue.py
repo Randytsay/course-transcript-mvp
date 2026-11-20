@@ -135,6 +135,54 @@ def verify_primary_refusal(*, job_dir, job_id, source_sha, evidence_sha, actual_
     return True
 
 
+
+def verify_rescuable_primary_scope(
+    *, job_dir, job_id, source_sha, evidence_sha,
+) -> None:
+    """Pre-paid fail-closed guard for the supported partial-primary workflow.
+
+    The planned windows must ALL have source-bound provider audit receipts,
+    and at least one window must provide comparable Gemini text. An early
+    SAFETY refusal stops the Gemini runner, leaving a planned suffix with no
+    audit. The current partial reviewer cannot adjudicate that suffix:
+    paying for Chirp now could strand or silently omit it. Do not spend.
+    A separate review-only, full-audio path may later support that case.
+    """
+    root = Path(job_dir)
+    path = root / "golden-v2" / "primary-stage.json"
+    if path.is_symlink() or not path.is_file() or file_sha256(path) != evidence_sha:
+        raise V2Conflict("primary rescue scope evidence missing or changed")
+    try:
+        report = json.loads(path.read_text(encoding="utf-8"))
+        planned = report["windows"]
+        attempted = report["window_evidence"]
+        assembled = report["assembled"]
+        if (report.get("job_id") != job_id
+                or report.get("source_sha256") != source_sha
+                or not isinstance(planned, list)
+                or not isinstance(attempted, list)
+                or not isinstance(assembled, dict)
+                or not planned
+                or len(planned) != len(attempted)):
+            raise V2Conflict("primary rescue scope includes unattempted windows")
+        matched_success = 0
+        for index, (window, item) in enumerate(zip(planned, attempted)):
+            if (not isinstance(window, dict)
+                    or not isinstance(item, dict)
+                    or type(window.get("index")) is not int
+                    or window["index"] != index
+                    or not isinstance(item.get("identity"), dict)
+                    or item["identity"].get("window") != window):
+                raise V2Conflict("primary rescue scope window audit mismatch")
+            if item.get("finish_reason") in {"STOP", "FINISH_REASON_STOP"}:
+                matched_success += 1
+        if (matched_success == 0
+                or not isinstance(assembled.get("text"), str)
+                or not assembled["text"].strip()):
+            raise V2Conflict("primary rescue scope has no comparable Gemini text")
+    except (OSError, ValueError, TypeError, KeyError, IndexError) as exc:
+        raise V2Conflict("primary rescue scope is malformed or unattempted") from exc
+
 def claim_independent_rescue(*, ledger, job_id, job_dir, revision,
                              source_sha, cap_cents, reference,
                              verify_authorization_and_live_source):
@@ -166,6 +214,9 @@ def claim_independent_rescue(*, ledger, job_id, job_dir, revision,
             raise V2Conflict('aggregate exposure exceeds cap')
         verify_primary_refusal(job_dir=job_dir, job_id=job_id, source_sha=source_sha,
                                evidence_sha=primary['evidence_sha'], actual_cents=primary['actual_cents'])
+        verify_rescuable_primary_scope(
+            job_dir=job_dir, job_id=job_id, source_sha=source_sha,
+            evidence_sha=primary['evidence_sha'])
         token = secrets.token_urlsafe(32)
         db.execute("INSERT INTO v2_review_resumptions VALUES(?,?,?,?,?,?,?)",
                    (job_id, 'chirp_independent', primary['evidence_sha'],

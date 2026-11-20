@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
-from app.jobs.golden_v2_read import get_v2_status
+from app.jobs.golden_v2_read import get_v2_status, read_auto_rescue_snapshot
 from app.pipeline.golden_v2_stage_runner import (
     _bound_inputs, _canonical_sha, _correction_matches_candidate,
     complete_adjudication_or_hold,
@@ -21,6 +21,33 @@ from app.providers.golden_v2_versioned_artifacts import resolve_versioned
 from app.subtitles.golden_v2_render import render_golden_v2
 
 REVIEW_SCHEMA = "golden-v2-audio-review-bundle-v1"
+
+
+def verified_partial_review_route(
+    *, database: Path, job_id: str, state: dict[str, Any],
+    stages: dict[str, dict[str, Any]],
+) -> bool:
+    """An independently claimed SAFETY-refusal rescue can enter review.
+
+    This is only a *routing* preflight. inspect_review_bundle subsequently
+    calls _bound_inputs, which rechecks immutable provider/refusal/Chirp
+    evidence and the corresponding comparison before exposing candidates.
+    No automatic listening attestation or Golden QA success is implied.
+    """
+    if (state.get("mode") != "FLASH_CHIRP"
+            or stages.get("gemini_primary", {}).get("state") != "REVIEW_REQUIRED"
+            or stages.get("chirp_independent", {}).get("state") != "COMPLETE"
+            or stages.get("compare", {}).get("state") != "COMPLETE"
+            or state.get("status") not in {"PROCESSING", "NEEDS_REVIEW"}):
+        return False
+    snapshot = read_auto_rescue_snapshot(database, job_id=job_id)
+    return bool(
+        snapshot
+        and snapshot["id"] == job_id
+        and snapshot["source_sha"] == state["source_sha"]
+        and snapshot["revision"] == state["revision"]
+        and snapshot["independent_rescue_recorded"]
+    )
 
 
 def inspect_review_bundle(
@@ -40,8 +67,11 @@ def inspect_review_bundle(
         raise V2Conflict("job is not waiting for audio-grounded adjudication")
     if state["status"] == "NEEDS_REVIEW" and review_stage["state"] != "REVIEW_REQUIRED":
         raise V2Conflict("job review hold belongs to another stage")
+    partial_review = verified_partial_review_route(
+        database=database, job_id=job_id, state=state, stages=stages)
     for name in ("gemini_primary", "chirp_independent", "compare"):
-        if stages[name]["state"] != "COMPLETE":
+        if stages[name]["state"] != "COMPLETE" and not (
+                name == "gemini_primary" and partial_review):
             raise V2Conflict(f"required evidence stage is unresolved: {name}")
 
     unresolved_prior = [
@@ -49,11 +79,13 @@ def inspect_review_bundle(
         if row["ord"] < review_stage["ord"]
         and row["state"] not in {"COMPLETE", "SKIPPED"}
     ]
-    if unresolved_prior and not (
-        unresolved_prior == ["third_optional"]
-        and state["mode"] == "FLASH_CHIRP"
-        and stages["third_optional"]["state"] == "PENDING"
-    ):
+    allowed_prior = (
+        ["gemini_primary"] if partial_review else []
+    )
+    if (state["mode"] == "FLASH_CHIRP"
+            and stages["third_optional"]["state"] == "PENDING"):
+        allowed_prior.append("third_optional")
+    if unresolved_prior != allowed_prior:
         raise V2Conflict("a prior stage is not complete: " + ", ".join(unresolved_prior))
 
     audio_path = Path(normalized_audio or (job_dir / "normalized.flac"))
@@ -229,8 +261,13 @@ def apply_review_bundle(
                          "corrected_text", "chirp_word_evidence_shas"}:
             raise ValueError("replacement contains unsupported fields")
         index = patch.get("candidate_index")
-        if type(index) is not int or index not in corrected or index in replacement_ids:
-            raise ValueError("replacement must map once to a CORRECT_CHIRP decision")
+        if type(index) is not int or index not in corrected:
+            raise ValueError("replacement must map to a CORRECT_CHIRP decision")
+        if (index in replacement_ids
+                and candidate_by_index[index]["evidence"].get("kind")
+                    not in {"CHIRP_AUTHORITATIVE_REFUSED_SPAN",
+                            "GEMINI_OVERLAP_SEAM_REVIEW"}):
+            raise ValueError("ordinary candidate accepts one correction")
         reason = next(item["decision_reason"] for item in decisions
                       if item["candidate_index"] == index)
         correction = {
@@ -247,8 +284,8 @@ def apply_review_bundle(
             raise ValueError("replacement does not match source-bound Chirp words")
         replacement_ids.add(index)
         replacements.append(correction)
-    if replacement_ids != corrected or len(replacements) != len(corrected):
-        raise ValueError("every CORRECT_CHIRP decision needs exactly one word replacement")
+    if replacement_ids != corrected:
+        raise ValueError("every CORRECT_CHIRP decision needs a word replacement")
 
     punctuation: dict[int, str] = {}
     for key, value in punctuation_in.items():

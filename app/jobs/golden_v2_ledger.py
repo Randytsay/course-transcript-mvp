@@ -405,6 +405,14 @@ class GoldenV2Ledger:
                 if row["state"] in {"COMPLETE", "SKIPPED"}:
                     continue
                 if row["state"] != "PENDING":
+                    # A held Gemini primary is routed around, not completed,
+                    # once its verified refusal has been rescued to Chirp.
+                    # The comparison still re-verifies the refusal and the
+                    # partial derivative before any candidate is produced.
+                    if (row["name"] == "gemini_primary"
+                            and row["state"] == "REVIEW_REQUIRED"
+                            and self._partial_mode_open(db, job_id)):
+                        continue
                     raise V2Conflict(f"stage {row['name']} unresolved: {row['state']}")
                 if row["name"] == "third_optional" and self._skip_third(db, job):
                     db.execute(
@@ -471,9 +479,28 @@ class GoldenV2Ledger:
             if (job["status"] != "PROCESSING" or job["revision"] != expected_revision
                     or target is None or target["state"] != "RUNNING"):
                 raise V2Conflict("local recovery revision, job or stage changed")
-            if any(row["state"] not in {"COMPLETE", "SKIPPED"}
-                   for row in rows if row["ord"] < target["ord"]):
-                raise V2Conflict("preceding stage still unresolved")
+            unresolved = [row for row in rows if row["ord"] < target["ord"]
+                        and row["state"] not in {"COMPLETE", "SKIPPED"}]
+            if unresolved:
+                # In verified partial mode the Gemini stage stays held.
+                # Every downstream *local-only* stage is recoverable after
+                # the same recorded rescue and completed Chirp evidence.
+                by_name = {row["name"]: row for row in rows}
+                partial_ok = (
+                    stage in {"compare", "adjudication", "golden_qa"}
+                    and len(unresolved) == 1
+                    and unresolved[0]["name"] == "gemini_primary"
+                    and unresolved[0]["state"] == "REVIEW_REQUIRED"
+                    and by_name["chirp_independent"]["state"] == "COMPLETE"
+                    and db.execute(
+                        "SELECT 1 FROM v2_review_resumptions WHERE job_id=? "
+                        "AND stage_name='chirp_independent' "
+                        "AND reviewer='trusted-operator-independent-rescue' LIMIT 1",
+                        (job_id,),
+                    ).fetchone() is not None
+                )
+                if not partial_ok:
+                    raise V2Conflict("preceding stage still unresolved")
             try:
                 timestamp = datetime.fromisoformat(target["updated_at"])
                 age = (datetime.now(timezone.utc) - timestamp).total_seconds()
@@ -1917,3 +1944,41 @@ class GoldenV2Ledger:
             job["spent_cents"] = job["known_actual_cents"]
             job["spent_basis"] = "RECONCILED_PROVIDER_USAGE_NOT_FINAL_INVOICE"
             return job
+
+    def independent_rescue_resumption(self, job_id: str) -> dict[str, Any] | None:
+        """Return the recorded independent-rescue resumption, if any.
+
+        Read-only. The row is written by claim_independent_rescue with
+        reviewer 'trusted-operator-independent-rescue'; its presence is the
+        durable proof that a verified SAFETY refusal was claimed for Chirp.
+        """
+        with self._tx() as db:
+            self._job(db, job_id)
+            row = db.execute(
+                "SELECT * FROM v2_review_resumptions WHERE job_id=? "
+                "AND stage_name='chirp_independent' "
+                "AND reviewer='trusted-operator-independent-rescue' "
+                "ORDER BY from_revision DESC LIMIT 1",
+                (job_id,),
+            ).fetchone()
+            return dict(row) if row is not None else None
+
+    def _partial_mode_open(self, db: sqlite3.Connection, job_id: str) -> bool:
+        """True when a held primary may be routed around, never completed.
+
+        Requires a recorded independent rescue plus completed Chirp evidence.
+        The comparison itself still re-verifies the refusal and the partial
+        derivative; this only opens the claim routing.
+        """
+        chirp = db.execute(
+            "SELECT state FROM v2_stages WHERE job_id=? AND name='chirp_independent'",
+            (job_id,),
+        ).fetchone()
+        if chirp is None or chirp["state"] != "COMPLETE":
+            return False
+        return db.execute(
+            "SELECT 1 FROM v2_review_resumptions WHERE job_id=? "
+            "AND stage_name='chirp_independent' "
+            "AND reviewer='trusted-operator-independent-rescue' LIMIT 1",
+            (job_id,),
+        ).fetchone() is not None

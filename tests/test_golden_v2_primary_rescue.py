@@ -26,7 +26,13 @@ class IndependentRescueTests(unittest.TestCase):
             verify_authorization_and_live_source=lambda: True)
 
     def test_single_claim_preserves_primary_hold_cost_and_comparison_gate(self):
-        with patch('app.pipeline.golden_v2_primary_rescue.verify_primary_refusal', return_value=True):
+        # This unit fixture has no stored provider reports: bypass only
+        # both source-evidence verifiers to isolate the ledger claim state
+        # machine. End-to-end tests exercise both verifiers with real files.
+        with patch('app.pipeline.golden_v2_primary_rescue.verify_primary_refusal',
+                   return_value=True), patch(
+            'app.pipeline.golden_v2_primary_rescue.verify_rescuable_primary_scope',
+            return_value=None):
             claim = claim_independent_rescue(**self.args)
             self.ledger.assert_stage_claim(claim, stage='chirp_independent')
             with self.assertRaises(V2Conflict):
@@ -36,8 +42,21 @@ class IndependentRescueTests(unittest.TestCase):
         self.assertEqual(state['stages'][0]['actual_cents'], 24)
         self.assertEqual(state['stages'][0]['evidence_sha'], 'b'*64)
         self.ledger.complete(claim, evidence_sha='c'*64, actual_cents=50)
+        # The claim routing opens to compare once a rescue is recorded and
+        # Chirp is complete, but the comparison gate now lives at the
+        # evidence layer instead of the claim layer: this fixture has no
+        # verified partial primary evidence, so completing the comparison
+        # must fail closed instead of bypassing review. The held primary
+        # itself is never completed.
+        compare_claim = self.ledger.claim_next(
+            self.job, worker_id='partial-compare')
+        self.assertEqual(compare_claim['stage'], 'compare')
+        from app.pipeline.golden_v2_stage_runner import complete_comparison
         with self.assertRaises(V2Conflict):
-            self.ledger.claim_next(self.job, worker_id='cannot-bypass-review')
+            complete_comparison(ledger=self.ledger, claim=compare_claim,
+                                job_dir=self.args['job_dir'])
+        self.assertEqual(self.ledger.status(self.job)['stages'][0]['state'],
+                         'REVIEW_REQUIRED')
 
     def test_failed_verification_has_no_mutation(self):
         before = self.ledger.status(self.job)

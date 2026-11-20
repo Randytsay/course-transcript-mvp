@@ -58,6 +58,16 @@ def run_paid_executor_pass(*, database: Path, artifact_root: Path,
                 local = run_ready_local(ledger=ledger, job_id=job_id, job_dir=job_dir, worker_id=worker_id)
                 state = ledger.status(job_id)
                 pending = next((s for s in state['stages'] if s['state'] not in {'COMPLETE', 'SKIPPED'}), None)
+                # A verified SAFETY rescue keeps Gemini REVIEW_REQUIRED.
+                # Poll only already-claimed Chirp operations, never submit
+                # a new operation through this special recovery route.
+                by_name = {s['name']: s for s in state['stages']}
+                chirp = by_name.get('chirp_independent')
+                if (pending and pending['name'] == 'gemini_primary'
+                        and pending['state'] == 'REVIEW_REQUIRED'
+                        and chirp and chirp['state'] == 'RUNNING'
+                        and ledger.independent_rescue_resumption(job_id) is not None):
+                    pending = chirp
                 if not pending or state['status'] not in {'QUEUED', 'PROCESSING'}:
                     outcomes.append({'job_id': job_id, 'action': local[-1]['action']})
                     continue

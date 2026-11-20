@@ -16,11 +16,15 @@ from typing import Any
 from app.jobs.golden_v2_ledger import GoldenV2Ledger, V2Conflict
 from app.providers.golden_v2_acoustic_qa import inspect_v2_acoustic
 from app.providers.golden_v2_audio_staging import file_sha256
-from app.providers.golden_v2_compare import compare_gemini_chirp
+from app.providers.golden_v2_compare import compare_gemini_chirp, _letters
 from app.providers.golden_v2_final_gate import validate_golden_v2
 from app.subtitles.golden_v2_render import render_golden_v2
 from app.providers.golden_v2_versioned_artifacts import resolve_versioned, write_versioned
 from app.pipeline.golden_v2_alignment_health import assess_alignment_health
+from app.pipeline.golden_v2_partial_primary import (
+    PARTIAL_PRIMARY_SCHEMA, build_partial_primary, partial_primary_coverage,
+    refused_span_pieces, word_in_refused_span,
+)
 from app.pipeline.golden_v2_review_evidence import require_real_review_evidence
 from app.pipeline.golden_v2_chirp_first_reference import read_chirp_first_reference
 from app.pipeline.golden_v2_reference_companion import reference_comparison_hint
@@ -155,6 +159,26 @@ def _bound_inputs(*, ledger: GoldenV2Ledger, claim: dict[str, Any],
         primary_filename = (
             f"primary-stage-reviewed-{stages['gemini_primary']['evidence_sha']}.json"
         )
+    if (primary_filename == "primary-stage.json"
+            and original_data.get("ready_for_chirp") is False):
+        # Partial primary: the held Gemini stage never completes, but its
+        # STOP windows are comparable evidence once a verified SAFETY refusal
+        # has been rescued to Chirp. The derivative is SHA-bound to the
+        # original report; the original stays REVIEW_REQUIRED and untouched.
+        if stages["gemini_primary"]["state"] != "REVIEW_REQUIRED":
+            raise V2Conflict("held primary cannot enter comparison without review")
+        partial = build_partial_primary(
+            ledger=ledger, job_id=claim["job_id"], job_dir=job_dir)
+        merged = _checked_stage_artifact(
+            job_dir=job_dir, filename="chirp-merged.json",
+            stage=stages["chirp_independent"], claim=claim, raw_digest=True)
+        text = partial["assembled_text"]
+        if (merged.get("schema") != "golden-v2-chirp-merged-v1"
+                or merged.get("timing_authority") != "chirp_3"
+                or not isinstance(merged.get("words"), list)
+                or not isinstance(text, str) or not text.strip()):
+            raise V2Conflict("partial primary and Chirp evidence required")
+        return text, merged, stages, partial
     primary = _checked_stage_artifact(
         job_dir=job_dir, filename=primary_filename,
         stage=stages["gemini_primary"], claim=claim)
@@ -194,10 +218,35 @@ def _correction_matches_candidate(
         f"{source_sha}|{i}|{words[i]['word']}|"
         f"{words[i]['start_ms']}|{words[i]['end_ms']}"
     ).encode()).hexdigest() for i in range(start, end)]
-    return (bool(evidence_ids)
-            and sorted(candidate.get("chirp_evidence_ids", [])) == sorted(evidence_ids)
-            and correction.get("chirp_word_evidence_shas") == [
-                _word_evidence(words[i], i, source_sha) for i in range(start, end)])
+    source_bound_hashes = (
+        correction.get("chirp_word_evidence_shas") == [
+            _word_evidence(words[i], i, source_sha) for i in range(start, end)])
+    if not evidence_ids or not source_bound_hashes:
+        return False
+    candidate_ids = candidate.get("chirp_evidence_ids", [])
+    local_rescue = (
+        candidate.get("kind") == "CHIRP_AUTHORITATIVE_REFUSED_SPAN"
+        and candidate.get("chirp_authoritative") is True
+    ) or (
+        candidate.get("kind") == "GEMINI_OVERLAP_SEAM_REVIEW"
+        and candidate.get("chirp_authoritative") is False
+        and candidate.get("gemini_crosscheck") == "unresolved_audio_overlap"
+    )
+    if local_rescue:
+        # Refused-primary review pieces may cover 120s, and overlap-seam
+        # pieces may exceed 6.5s; neither should be one indivisible SRT
+        # replacement token. A human-reviewed correction can affect ONLY
+        # a directly evidenced, renderable local word span. The entire
+        # candidate remains pending until its review decision is explicit.
+        if (not isinstance(candidate_ids, list)
+                or not candidate_ids or len(candidate_ids) != len(set(candidate_ids))
+                or not set(evidence_ids).issubset(set(candidate_ids))
+                or type(candidate.get("source_time_start")) is not int
+                or type(candidate.get("source_time_end")) is not int):
+            return False
+        return (candidate["source_time_start"] <= words[start]["start_ms"]
+                and words[end-1]["end_ms"] <= candidate["source_time_end"])
+    return sorted(candidate_ids) == sorted(evidence_ids)
 
 
 def complete_adjudication_or_hold(
@@ -281,9 +330,20 @@ def complete_adjudication_or_hold(
            if isinstance(p, dict)) or any(not isinstance(p, dict) for p in replacements):
         raise V2Conflict("invalid corrected candidate index")
     if {patch["candidate_index"] for patch in replacements} != corrected_indices:
-        raise V2Conflict("each corrected candidate requires exactly one source-word patch")
-    if len(replacements) != len(corrected_indices):
-        raise V2Conflict("duplicate source-word correction")
+        raise V2Conflict("each corrected candidate requires a source-word patch")
+    # An ordinary comparison remains one correction per candidate. A
+    # 120-second refused-span review may contain multiple DISJOINT local
+    # corrections, all of which the renderer checks against source words.
+    seen_corrections: set[int] = set()
+    for patch in replacements:
+        idx = patch["candidate_index"]
+        if (idx in seen_corrections
+                and candidates[idx].get("kind") not in {
+                    "CHIRP_AUTHORITATIVE_REFUSED_SPAN",
+                    "GEMINI_OVERLAP_SEAM_REVIEW",
+                }):
+            raise V2Conflict("duplicate ordinary source-word correction")
+        seen_corrections.add(idx)
     # Validate the actual renderer's source-bound word hashes and cue layout
     # before a stage can reach COMPLETE; QA will independently re-validate.
     for patch in replacements:
@@ -483,17 +543,150 @@ def _build_comparison_report(
     stage wrote. The gate is re-applied here deliberately: QA must not accept
     a comparison that the compare stage would now refuse.
     """
-    report = compare_gemini_chirp(
-        primary_text, merged["words"], source_sha256=claim["source_sha"])
+    is_partial = primary.get("schema") == PARTIAL_PRIMARY_SCHEMA
     chirp_first = primary.get("schema") == "golden-v2-chirp-first-reference-v1"
-    alignment = assess_alignment_health(
-        candidates=report.get("candidates") or [],
-        comparison=report,
-        primary_coverage_ratio=(
+    if is_partial:
+        # Compare each immutable Gemini STOP window against its own temporal
+        # Chirp slice. Never concatenate overlapping Gemini windows for the
+        # diff: that would duplicate the same spoken 10 seconds and can
+        # manufacture false omissions. Seam decisions still require audio.
+        refused = primary.get("refused_windows") or []
+        stop_windows = primary.get("stop_windows") or []
+        seams = primary.get("unresolved_seams") or []
+        refused_only = primary.get("refused_only_windows") or []
+        if not refused or not stop_windows:
+            raise V2Conflict("partial primary has no source-bound windows")
+        all_words = merged["words"]
+        all_candidates = []
+        window_reports = []
+        window_alignment_health = []
+        full_chirp_offset = 0
+        chirp_char_start = []
+        for word in all_words:
+            chirp_char_start.append(full_chirp_offset)
+            full_chirp_offset += len(_letters(str(word.get("word", ""))))
+        gemini_char_offset = 0
+        for window in stop_windows:
+            start_ms = round(float(window["start_seconds"]) * 1000)
+            end_ms = round(float(window["end_seconds"]) * 1000)
+            in_scope = [(i, word) for i, word in enumerate(all_words)
+                        if start_ms <= word["start_ms"] < end_ms]
+            if not in_scope:
+                raise V2Conflict("STOP window has no matched Chirp time span")
+            window_report = compare_gemini_chirp(
+                window["text"], [word for _, word in in_scope],
+                source_sha256=claim["source_sha"],
+                word_indices=[index for index, _ in in_scope])
+            # Assess alignment BEFORE rebasing to whole-audio character
+            # coordinates. A refused prefix is not a real text offset.
+            local_alignment = assess_alignment_health(
+                candidates=window_report["candidates"],
+                comparison=window_report, primary_coverage_ratio=1.0,
+                duration_ms=end_ms - start_ms,
+            )
+            window_alignment_health.append({
+                "window_index": window["index"], **local_alignment,
+            })
+            char_offset = chirp_char_start[in_scope[0][0]]
+            for candidate in window_report["candidates"]:
+                candidate["gemini_window_index"] = window["index"]
+                if candidate["chirp_char_range"] is not None:
+                    candidate["chirp_char_range"] = [
+                        char_offset + value for value in candidate["chirp_char_range"]]
+                if candidate["gemini_char_range"] is not None:
+                    candidate["gemini_char_range"] = [
+                        gemini_char_offset + value for value in candidate["gemini_char_range"]]
+                all_candidates.append(candidate)
+            gemini_char_offset += len(_letters(window["text"]))
+            window_reports.append(window_report)
+        pieces, spans = refused_span_pieces(
+            words=all_words, refused_windows=refused_only,
+            source_sha256=claim["source_sha"])
+        # Treat every overlap as an independent, bounded human audio-review
+        # candidate. Never infer where a Gemini window's 10-second tail begins
+        # in character offsets when the provider supplied no word times.
+        seam_windows = [
+            {"start_seconds": item["start_ms"] / 1000.0,
+             "end_seconds": item["end_ms"] / 1000.0}
+            for item in seams
+        ]
+        seam_pieces, _ = refused_span_pieces(
+            words=all_words, refused_windows=seam_windows,
+            source_sha256=claim["source_sha"])
+        for item in seam_pieces:
+            item.update({
+                "kind": "GEMINI_OVERLAP_SEAM_REVIEW",
+                "gemini_crosscheck": "unresolved_audio_overlap",
+                "chirp_authoritative": False,
+            })
+        all_candidates.extend(pieces)
+        all_candidates.extend(seam_pieces)
+        report = {
+            "kind": "golden_v2_primary_chirp_comparison",
+            "source_sha256": claim["source_sha"],
+            "acoustic_coverage": "NOT_DETERMINED_BY_TEXT_DIFF",
+            "exact_normalized_match": (
+                not all_candidates and
+                all(item["exact_normalized_match"] for item in window_reports)),
+            "similarity_ratio_not_accuracy": (
+                sum(item["similarity_ratio_not_accuracy"] for item in window_reports)
+                / len(window_reports)),
+            "pending_review_count": len(all_candidates),
+            "candidates": all_candidates,
+            "unaligned_long_spans": sum(
+                item["kind"] == "UNANCHORED_LONG_SPAN" for item in all_candidates),
+            "alignment_method": "source_bound_window_scoped_temporal_diff",
+            "chirp_timing_authority": True,
+            "auto_publish_authorized": False,
+            "unresolved_seam_reviews": seams,
+            "comparable_window_count": len(window_reports),
+        }
+        coverage = partial_primary_coverage(primary)
+    else:
+        report = compare_gemini_chirp(
+            primary_text, merged["words"], source_sha256=claim["source_sha"])
+        coverage = (
             primary["reference_timeline_extent_ratio"] if chirp_first else
-            _primary_coverage_ratio(primary, merged.get("duration_ms"))),
-        duration_ms=merged.get("duration_ms"),
-    )
+            _primary_coverage_ratio(primary, merged.get("duration_ms")))
+    if is_partial:
+        # The combined candidate offsets are in DIFFERENT coordinate
+        # systems: the full Chirp timeline includes refused windows, while
+        # the available Gemini text omits them. Running the systematic
+        # offset heuristic globally manufactures spurious failures. Each
+        # STOP window was assessed locally above, with its original offset.
+        # Keep coverage checking global but compose the offset health only
+        # from independently validated window-local results.
+        alignment = assess_alignment_health(
+            candidates=[], comparison=report,
+            primary_coverage_ratio=coverage,
+            duration_ms=merged.get("duration_ms"),
+        )
+        reasons = set(alignment["reasons"])
+        for window_health in window_alignment_health:
+            reasons.update(window_health["reasons"])
+        sampled = sum(item["offset_sampled_count"]
+                      for item in window_alignment_health)
+        large = sum(item["large_offset_candidate_count"]
+                    for item in window_alignment_health)
+        alignment.update({
+            "status": "BLOCKED" if reasons else "PASS",
+            "reasons": sorted(reasons),
+            "candidate_count": len(report["candidates"]),
+            "offset_scope": "WINDOW_LOCAL",
+            "window_alignment_health": window_alignment_health,
+            "offset_sampled_count": sampled,
+            "large_offset_candidate_count": large,
+            "large_offset_ratio": round(large / sampled, 4) if sampled else 0.0,
+            "median_char_offset": None,
+            "unresolved_seam_count": len(seams),
+        })
+    else:
+        alignment = assess_alignment_health(
+            candidates=report.get("candidates") or [],
+            comparison=report,
+            primary_coverage_ratio=coverage,
+            duration_ms=merged.get("duration_ms"),
+        )
     report["alignment_health"] = alignment
     if alignment["status"] != "PASS":
         raise V2Conflict(
@@ -516,6 +709,19 @@ def _build_comparison_report(
         "reference_is_acoustic_evidence": False,
         "chirp_evidence_sha256": stages["chirp_independent"]["evidence_sha"],
     })
+    if is_partial:
+        # The 0.98 coverage gate above applied to the comparison scope only;
+        # say so in the report, and mark which spans only Chirp can vouch for.
+        report.update({
+            "partial_primary": True,
+            "refused_windows": primary["refused_windows"],
+            "comparison_scope_seconds": primary["comparison_scope_seconds"],
+            "comparison_scope": "GEMINI_SUCCESS_WINDOWS_TIME_SCOPED",
+            "refused_only_windows": primary["refused_only_windows"],
+            "unresolved_seams": primary["unresolved_seams"],
+            "partial_primary_evidence_sha256": primary["evidence_sha256"],
+            "chirp_authoritative_spans": spans,
+        })
     hint = reference_comparison_hint(
         job_dir=job_dir, job_id=claim['job_id'], source_sha=claim['source_sha'],
         chirp_words=merged['words'])
