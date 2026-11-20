@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+fail() { echo "ERROR: $*" >&2; exit 1; }
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON_HANDLER="$SCRIPT_DIR/golden_v2_chat_deploy.py"
+
+# Default-deny wrapper conforming to webcodex-deploy invocation:
+# webcodex-deploy invokes: $HANDLER $SHA
+if [[ "$#" -eq 1 && "$1" =~ ^[0-9a-f]{40}$ ]]; then
+  # Direct invocation from webcodex-deploy attempting deploy
+  # In Stage-0, mutating actions are fail-closed.
+  echo "== Golden V2 Governed Deployment Handler =="
+  echo "Target SHA: $1"
+  echo "Stage-0 Status: DEFAULT_DENY (Deploy preparation only)"
+  echo "Executing read-only deployment plan preflight..."
+  python3 "$PYTHON_HANDLER" "$1" --subcommand plan
+  echo ""
+  fail "STAGE0_DEFAULT_DENY: Handler is inactive for production mutation pending separate Owner Gate-A rollout authorization."
+fi
+
+exec python3 "$PYTHON_HANDLER" "$@"
